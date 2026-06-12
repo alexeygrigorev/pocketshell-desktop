@@ -43,7 +43,15 @@
   },
   "extensionEnabledApiProposals": {},
   "builtInExtensions": [],
-  "defaultChatAgent": {},
+  "defaultChatAgent": {
+    "extensionId": "GitHub.copilot",
+    "chatExtensionId": "GitHub.copilot-chat",
+    "provider": {
+      "default": { "id": "github", "name": "GitHub" },
+      "enterprise": { "id": "github-enterprise", "name": "GitHub Enterprise" }
+    },
+    "providerScopes": []
+  },
   "trustedExtensionAuthAccess": {},
   "builtInExtensionsEnabledWithAutoUpdates": [],
   "sessionsWindowAllowedExtensions": [],

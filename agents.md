@@ -66,6 +66,8 @@ Build strategy (from research, 2026-06-12):
 - **Extension compiles**: 0 errors, output at correct path
 - **App launches**: Under Xvfb, 12s no crash, "Synchronizing built-in extensions..." appears
 - **Backend fixes applied**: ConnectConfig (not ConnectConfiguration), non-null assertions, unused imports removed
+- **Extension features complete**: edit/delete hosts, context menus, terminal profile host picker, open remote file, keyPath input
+- **Build pipeline fixed**: extension npm deps installed in build-extension.sh and dev.sh
 
 ### What does NOT exist yet:
 - Extension activation verified in running app (extension host logs inconclusive under Xvfb)
@@ -98,8 +100,8 @@ Build strategy (from research, 2026-06-12):
 | #29 | v0.1.0 release tag and GitHub release | Open — blocked by #30, #33 |
 | #28 | Windows zip build | Open — CI workflow written, needs test run |
 
-### Latest commit: `2573f79` (2026-06-12)
-Track extension source in git, fix blockers (sql.js, async init, FK removal)
+### Latest commit: `33744a1` (2026-06-12)
+Complete extension features — host management, context menus, WASM fix, build pipeline fix
 
 ### Recently closed issues (#1-#27):
 These tracked backend module scaffolding (connection manager, SFTP client, etc.).

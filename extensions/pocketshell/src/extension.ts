@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { ConnectionService } from './connection-service';
 import { SshPseudoterminal } from './ssh-terminal';
 import { SftpFsProvider } from './sftp-fs-provider';
@@ -20,7 +21,12 @@ import type { Host, NewHost } from './backend/ssh/data/host-store';
  *   - Commands: connect, addHost, disconnect, editHost, deleteHost, openRemoteFile
  */
 export function activate(context: vscode.ExtensionContext): void {
+	// Storage dir follows VS Code's user-data-dir (--user-data-dir in dev)
+	const storageDir = context.globalStorageUri.fsPath;
+	fs.mkdirSync(storageDir, { recursive: true });
+
 	const service = ConnectionService.getInstance();
+	service.setStorageDir(storageDir);
 
 	// -- Terminal profile provider -----------------------------------------------
 

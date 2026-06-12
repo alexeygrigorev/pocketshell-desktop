@@ -77,6 +77,10 @@ else
 	info "Extension already compiled."
 fi
 
+# --- Dev data directory (all config/logs/cache in one place) ---
+DEV_DATA_DIR="$PROJECT_ROOT/.dev-data"
+mkdir -p "$DEV_DATA_DIR"
+
 # --- Launch ---
-info "Launching PocketShell..."
-exec ./scripts/code.sh "$@"
+info "Launching PocketShell (data in $DEV_DATA_DIR)..."
+exec ./scripts/code.sh --user-data-dir "$DEV_DATA_DIR" "$@"

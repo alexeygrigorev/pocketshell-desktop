@@ -45,3 +45,6 @@ release/
 
 # Claude / agent artifacts
 .claude/
+
+# Dev data (logs, config, storage — set via --user-data-dir)
+.dev-data/

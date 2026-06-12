@@ -28,6 +28,16 @@ export class ConnectionService {
 	}
 
 	/**
+	 * Set the storage directory for the host database.
+	 * Must be called before the first store access (i.e. during activate()).
+	 */
+	setStorageDir(storageDir: string): void {
+		this._storageDir = storageDir;
+	}
+
+	private _storageDir: string | undefined;
+
+	/**
 	 * Lazily initialize the host store. Returns a promise that resolves to
 	 * the store, or undefined if initialization failed (native module load
 	 * failure, SQL error, etc.). Caches the result so only one attempt is made.
@@ -36,7 +46,10 @@ export class ConnectionService {
 		if (this._hostStorePromise) {
 			return this._hostStorePromise;
 		}
-		this._hostStorePromise = initStore().catch(err => {
+		const dbPath = this._storageDir
+			? path.join(this._storageDir, 'hosts.db')
+			: undefined;
+		this._hostStorePromise = initStore(dbPath).catch(err => {
 			console.error('[PocketShell] Failed to initialize host database:', err);
 			return undefined;
 		});
