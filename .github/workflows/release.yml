@@ -13,7 +13,7 @@ on:
 env:
   # Pin to specific VS Code commit (post-1.124.2 main tip).
   # Changing this invalidates the base cache and triggers a full rebuild.
-  VSCODE_REF: 037f7fbe037f7fbe
+  VSCODE_REF: 037f7fbe03f78896c841adfd57aea4e0c85ccbc7
 
 jobs:
   build:
@@ -77,8 +77,8 @@ jobs:
           mkdir -p vendor
           git clone --depth=1 https://github.com/microsoft/vscode.git vendor/vscode
           cd vendor/vscode
-          git fetch --depth=1 origin ${{ env.VSCODE_REF }}
-          git checkout ${{ env.VSCODE_REF }}
+          git fetch --depth=1 origin "${{ env.VSCODE_REF }}"
+          git checkout FETCH_HEAD
 
       - name: Install VS Code dependencies
         if: steps.cache-base.outputs.cache-hit != 'true'
