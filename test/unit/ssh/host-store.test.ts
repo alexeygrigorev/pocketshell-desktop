@@ -1,31 +1,25 @@
 /**
  * Unit tests for HostStore.
  *
- * Uses in-memory SQLite so no file system artifacts are left behind.
+ * Uses in-memory sql.js so no file system artifacts are left behind.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import Database from 'better-sqlite3';
+import initSqlJs from 'sql.js';
 import { HostStore } from '../../../src/ssh/data/host-store';
-import { KeyStore } from '../../../src/ssh/data/key-store';
+import type { Database as SqlJsDatabase } from 'sql.js';
 
-function createTestDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  return db;
+async function createTestDb(): Promise<SqlJsDatabase> {
+  const SQL = await initSqlJs();
+  return new SQL.Database();
 }
 
 describe('HostStore', () => {
-  let db: Database.Database;
   let hostStore: HostStore;
-  let keyStore: KeyStore;
 
-  beforeEach(() => {
-    db = createTestDb();
-    // Initialize key store first (hosts table references ssh_keys)
-    keyStore = new KeyStore(db, '/tmp/test-keys');
-    hostStore = new HostStore(db);
+  beforeEach(async () => {
+    const db = await createTestDb();
+    hostStore = new HostStore(db, ':memory:');
   });
 
   describe('empty store', () => {
@@ -40,15 +34,12 @@ describe('HostStore', () => {
 
   describe('add', () => {
     it('inserts a host and returns an id', () => {
-      // Create a key first
-      const keyId = insertTestKey(db);
-
       const id = hostStore.add({
         name: 'My Server',
         hostname: '192.168.1.100',
         port: 22,
         username: 'admin',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -59,14 +50,12 @@ describe('HostStore', () => {
     });
 
     it('stores all fields correctly', () => {
-      const keyId = insertTestKey(db);
-
       const id = hostStore.add({
         name: 'Test Host',
         hostname: 'example.com',
         port: 2222,
         username: 'testuser',
-        keyId,
+        keyPath: '~/.ssh/id_ed25519',
         maxAutoPort: 20000,
         skipPortsBelow: 500,
         scanIntervalSec: 10,
@@ -79,7 +68,7 @@ describe('HostStore', () => {
       expect(host.hostname).toBe('example.com');
       expect(host.port).toBe(2222);
       expect(host.username).toBe('testuser');
-      expect(host.keyId).toBe(keyId);
+      expect(host.keyPath).toBe('~/.ssh/id_ed25519');
       expect(host.maxAutoPort).toBe(20000);
       expect(host.skipPortsBelow).toBe(500);
       expect(host.scanIntervalSec).toBe(10);
@@ -89,14 +78,12 @@ describe('HostStore', () => {
     });
 
     it('defaults nullable fields to null', () => {
-      const keyId = insertTestKey(db);
-
       const id = hostStore.add({
         name: 'Defaults',
         hostname: 'host',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -115,14 +102,12 @@ describe('HostStore', () => {
 
   describe('list', () => {
     it('returns hosts ordered by name', () => {
-      const keyId = insertTestKey(db);
-
       hostStore.add({
         name: 'Zebra',
         hostname: 'z.example.com',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -134,7 +119,7 @@ describe('HostStore', () => {
         hostname: 'a.example.com',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -150,14 +135,12 @@ describe('HostStore', () => {
 
   describe('listEnabled', () => {
     it('returns only enabled hosts', () => {
-      const keyId = insertTestKey(db);
-
       hostStore.add({
         name: 'Enabled',
         hostname: 'e.example.com',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -169,7 +152,7 @@ describe('HostStore', () => {
         hostname: 'd.example.com',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -184,14 +167,12 @@ describe('HostStore', () => {
 
   describe('get', () => {
     it('returns host by id', () => {
-      const keyId = insertTestKey(db);
-
       const id = hostStore.add({
         name: 'Fetch Me',
         hostname: 'fetch.example.com',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -206,14 +187,12 @@ describe('HostStore', () => {
 
   describe('update', () => {
     it('updates an existing host', () => {
-      const keyId = insertTestKey(db);
-
       const id = hostStore.add({
         name: 'Before',
         hostname: 'before.example.com',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -247,7 +226,7 @@ describe('HostStore', () => {
         hostname: 'ghost.example.com',
         port: 22,
         username: 'user',
-        keyId: 1,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -273,14 +252,12 @@ describe('HostStore', () => {
 
   describe('delete', () => {
     it('deletes a host by id', () => {
-      const keyId = insertTestKey(db);
-
       const id = hostStore.add({
         name: 'Delete Me',
         hostname: 'del.example.com',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -298,14 +275,12 @@ describe('HostStore', () => {
 
   describe('touchConnected', () => {
     it('updates lastConnectedAt timestamp', () => {
-      const keyId = insertTestKey(db);
-
       const id = hostStore.add({
         name: 'Touch',
         hostname: 'touch.example.com',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -325,15 +300,13 @@ describe('HostStore', () => {
 
   describe('CRUD cycle', () => {
     it('full create-read-update-delete cycle', () => {
-      const keyId = insertTestKey(db);
-
       // Create
       const id = hostStore.add({
         name: 'Cycle',
         hostname: 'cycle.example.com',
         port: 22,
         username: 'user',
-        keyId,
+        keyPath: '~/.ssh/id_rsa',
         maxAutoPort: 10000,
         skipPortsBelow: 1000,
         scanIntervalSec: 5,
@@ -357,18 +330,3 @@ describe('HostStore', () => {
     });
   });
 });
-
-// ---------------------------------------------------------------------------
-// Helper: insert a test SSH key to satisfy FK constraints
-// ---------------------------------------------------------------------------
-
-function insertTestKey(db: Database.Database): number {
-  const now = Date.now();
-  const result = db
-    .prepare(
-      `INSERT INTO ssh_keys (name, private_key_path, fingerprint, has_passphrase, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    )
-    .run('test-key', '/tmp/test-key', 'sha256:abc123', 0, now);
-  return Number(result.lastInsertRowid);
-}

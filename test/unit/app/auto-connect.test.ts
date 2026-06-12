@@ -20,7 +20,7 @@ function makeHost(overrides: Partial<Host> = {}): Host {
     hostname: 'test.example.com',
     port: 22,
     username: 'testuser',
-    keyId: 1,
+    keyPath: '~/.ssh/id_rsa',
     maxAutoPort: 10000,
     skipPortsBelow: 1000,
     scanIntervalSec: 5,

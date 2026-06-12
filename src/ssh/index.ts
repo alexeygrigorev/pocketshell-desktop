@@ -5,7 +5,7 @@
  */
 
 // Data layer
-export { HostStore, initStore } from './data/host-store';
+export { HostStore, initStore, createHostStore } from './data/host-store';
 export type { Host, NewHost } from './data/host-store';
 
 export {

@@ -2,11 +2,14 @@
  * SQLite-backed host storage for PocketShell Desktop.
  *
  * Provides CRUD operations for SSH host entries. Each host stores connection
- * parameters (hostname, port, username, keyId), bootstrap/probe cache fields,
+ * parameters (hostname, port, username, keyPath), bootstrap/probe cache fields,
  * and timestamps.
+ *
+ * Uses sql.js (pure WASM SQLite) instead of better-sqlite3 to avoid
+ * native module ABI mismatches with Electron's extension host.
  */
 
-import Database from 'better-sqlite3';
+import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -22,7 +25,7 @@ export interface Host {
   hostname: string;
   port: number;
   username: string;
-  keyId: number;
+  keyPath: string;
 
   // Port-forwarding defaults
   maxAutoPort: number;
@@ -82,7 +85,7 @@ CREATE TABLE IF NOT EXISTS hosts (
   hostname                    TEXT    NOT NULL,
   port                        INTEGER NOT NULL DEFAULT 22,
   username                    TEXT    NOT NULL,
-  key_id                      INTEGER NOT NULL,
+  key_path                    TEXT    NOT NULL,
 
   max_auto_port               INTEGER NOT NULL DEFAULT 10000,
   skip_ports_below            INTEGER NOT NULL DEFAULT 1000,
@@ -104,12 +107,8 @@ CREATE TABLE IF NOT EXISTS hosts (
   usage_command_override      TEXT,
 
   claude_profiles_json        TEXT,
-  codex_profiles_json         TEXT,
-
-  FOREIGN KEY (key_id) REFERENCES ssh_keys(id) ON DELETE CASCADE
+  codex_profiles_json         TEXT
 );
-
-CREATE INDEX IF NOT EXISTS idx_hosts_key_id ON hosts(key_id);
 `;
 
 // ---------------------------------------------------------------------------
@@ -123,7 +122,7 @@ interface HostRow {
   hostname: string;
   port: number;
   username: string;
-  key_id: number;
+  key_path: string;
   max_auto_port: number;
   skip_ports_below: number;
   scan_interval_sec: number;
@@ -151,7 +150,7 @@ function rowToHost(row: HostRow): Host {
     hostname: row.hostname,
     port: row.port,
     username: row.username,
-    keyId: row.key_id,
+    keyPath: row.key_path,
     maxAutoPort: row.max_auto_port,
     skipPortsBelow: row.skip_ports_below,
     scanIntervalSec: row.scan_interval_sec,
@@ -184,82 +183,97 @@ function rowToHost(row: HostRow): Host {
 // ---------------------------------------------------------------------------
 
 export class HostStore {
-  constructor(private db: Database.Database) {
-    // Enable foreign keys and ensure tables exist
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
-    db.exec(CREATE_TABLE_SQL);
+  private dbPath: string;
+
+  constructor(private db: SqlJsDatabase, dbPath: string) {
+    this.dbPath = dbPath;
+    this.db.run(CREATE_TABLE_SQL);
+  }
+
+  /** Persist the database to disk. Skipped for in-memory databases. */
+  private save(): void {
+    if (this.dbPath === ':memory:') return;
+    const data = this.db.export();
+    fs.writeFileSync(this.dbPath, Buffer.from(data));
   }
 
   /** Return all hosts ordered by name. */
   list(): Host[] {
-    const rows = this.db
-      .prepare(
-        `SELECT *
-         FROM hosts
-         ORDER BY name`,
-      )
-      .all() as HostRow[];
-    return rows.map(rowToHost);
+    const results = this.db.exec('SELECT * FROM hosts ORDER BY name');
+    if (results.length === 0) return [];
+    const cols = results[0].columns;
+    return results[0].values.map(row => rowToHost(mapRow(cols, row)));
   }
 
   /** Return a single host by id, or undefined if not found. */
   get(id: number): Host | undefined {
-    const row = this.db
-      .prepare(`SELECT * FROM hosts WHERE id = ?`)
-      .get(id) as HostRow | undefined;
-    return row ? rowToHost(row) : undefined;
+    const stmt = this.db.prepare('SELECT * FROM hosts WHERE id = ?');
+    stmt.bind([id]);
+    try {
+      if (stmt.step()) {
+        const cols = stmt.getColumnNames();
+        const values = stmt.get();
+        return rowToHost(mapRow(cols, values));
+      }
+      return undefined;
+    } finally {
+      stmt.free();
+    }
   }
 
   /** Insert a new host. Returns the auto-generated id. */
   add(host: NewHost): number {
     const now = Date.now();
-    const result = this.db
-      .prepare(
-        `INSERT INTO hosts (
-          name, hostname, port, username, key_id,
-          max_auto_port, skip_ports_below, scan_interval_sec, enabled,
-          created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+    this.db.run(
+      `INSERT INTO hosts (
+        name, hostname, port, username, key_path,
+        max_auto_port, skip_ports_below, scan_interval_sec, enabled,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
         host.name,
         host.hostname,
         host.port,
         host.username,
-        host.keyId,
+        host.keyPath,
         host.maxAutoPort,
         host.skipPortsBelow,
         host.scanIntervalSec,
         host.enabled ? 1 : 0,
         now,
-      );
-    return Number(result.lastInsertRowid);
+      ],
+    );
+    // Get the last inserted rowid
+    const result = this.db.exec('SELECT last_insert_rowid() as id');
+    const id = result[0].values[0][0] as number;
+    this.save();
+    return id;
   }
 
   /** Update an existing host. Returns true if a row was updated. */
   update(host: Host): boolean {
-    const result = this.db
-      .prepare(
-        `UPDATE hosts SET
-          name = ?, hostname = ?, port = ?, username = ?, key_id = ?,
-          max_auto_port = ?, skip_ports_below = ?, scan_interval_sec = ?, enabled = ?,
-          last_connected_at = ?,
-          tmux_installed = ?, last_bootstrap_at = ?,
-          pocketshell_installed = ?, pocketshell_last_detected_at = ?,
-          pocketshell_cli_version = ?, pocketshell_expected_cli_version = ?,
-          pocketshell_version_compatible = ?,
-          pocketshell_daemon_running = ?, pocketshell_daemon_enabled = ?,
-          usage_command_override = ?,
-          claude_profiles_json = ?, codex_profiles_json = ?
-        WHERE id = ?`,
-      )
-      .run(
+    const before = this.get(host.id);
+    if (!before) return false;
+
+    this.db.run(
+      `UPDATE hosts SET
+        name = ?, hostname = ?, port = ?, username = ?, key_path = ?,
+        max_auto_port = ?, skip_ports_below = ?, scan_interval_sec = ?, enabled = ?,
+        last_connected_at = ?,
+        tmux_installed = ?, last_bootstrap_at = ?,
+        pocketshell_installed = ?, pocketshell_last_detected_at = ?,
+        pocketshell_cli_version = ?, pocketshell_expected_cli_version = ?,
+        pocketshell_version_compatible = ?,
+        pocketshell_daemon_running = ?, pocketshell_daemon_enabled = ?,
+        usage_command_override = ?,
+        claude_profiles_json = ?, codex_profiles_json = ?
+      WHERE id = ?`,
+      [
         host.name,
         host.hostname,
         host.port,
         host.username,
-        host.keyId,
+        host.keyPath,
         host.maxAutoPort,
         host.skipPortsBelow,
         host.scanIntervalSec,
@@ -282,30 +296,60 @@ export class HostStore {
         host.claudeProfilesJson,
         host.codexProfilesJson,
         host.id,
-      );
-    return result.changes > 0;
+      ],
+    );
+    this.save();
+    return true;
   }
 
   /** Delete a host by id. Returns true if a row was deleted. */
   delete(id: number): boolean {
-    const result = this.db.prepare('DELETE FROM hosts WHERE id = ?').run(id);
-    return result.changes > 0;
+    const before = this.get(id);
+    if (!before) return false;
+
+    this.db.run('DELETE FROM hosts WHERE id = ?', [id]);
+    this.save();
+    return true;
   }
 
   /** Update the lastConnectedAt timestamp for a host. */
   touchConnected(id: number): void {
-    this.db
-      .prepare('UPDATE hosts SET last_connected_at = ? WHERE id = ?')
-      .run(Date.now(), id);
+    this.db.run(
+      'UPDATE hosts SET last_connected_at = ? WHERE id = ?',
+      [Date.now(), id],
+    );
+    this.save();
   }
 
   /** Return all enabled hosts. */
   listEnabled(): Host[] {
-    const rows = this.db
-      .prepare(`SELECT * FROM hosts WHERE enabled = 1 ORDER BY name`)
-      .all() as HostRow[];
-    return rows.map(rowToHost);
+    const results = this.db.exec('SELECT * FROM hosts WHERE enabled = 1 ORDER BY name');
+    if (results.length === 0) return [];
+    const cols = results[0].columns;
+    return results[0].values.map(row => rowToHost(mapRow(cols, row)));
   }
+
+  /** Close the database (call when done to free WASM memory). */
+  close(): void {
+    this.save();
+    this.db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Row mapping helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a sql.js result row (parallel columns + values arrays) to a
+ * column-name-keyed object.
+ */
+function mapRow(columns: string[], values: (string | number | null | Uint8Array)[]): HostRow {
+  const obj: Record<string, string | number | null | Uint8Array> = {};
+  for (let i = 0; i < columns.length; i++) {
+    obj[columns[i]] = values[i];
+  }
+  return obj as unknown as HostRow;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,19 +359,36 @@ export class HostStore {
 /**
  * Initialize the host store.
  *
+ * sql.js requires async WASM initialization, so this function is async.
+ *
  * @param dbPath - Path to the SQLite database file.
  *   Defaults to `~/.pocketshell/hosts.db`.
  * @returns A `HostStore` instance ready for use.
  */
-export function initStore(dbPath?: string): HostStore {
+export async function initStore(dbPath?: string): Promise<HostStore> {
   const resolvedPath =
     dbPath ?? path.join(os.homedir(), '.pocketshell', 'hosts.db');
 
   // Ensure parent directory exists
   fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
 
-  const db = new Database(resolvedPath);
-  db.exec(CREATE_TABLE_SQL);
+  const SQL = await initSqlJs();
 
-  return new HostStore(db);
+  let db: SqlJsDatabase;
+  if (fs.existsSync(resolvedPath)) {
+    const buffer = fs.readFileSync(resolvedPath);
+    db = new SQL.Database(buffer);
+  } else {
+    db = new SQL.Database();
+  }
+
+  return new HostStore(db, resolvedPath);
+}
+
+/**
+ * Create a HostStore from an existing sql.js Database instance.
+ * Used for testing with in-memory databases.
+ */
+export function createHostStore(db: SqlJsDatabase, dbPath?: string): HostStore {
+  return new HostStore(db, dbPath ?? ':memory:');
 }

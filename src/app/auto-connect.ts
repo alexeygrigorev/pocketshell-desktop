@@ -157,7 +157,7 @@ export class AutoConnectService {
       host: host.hostname,
       port: host.port,
       user: host.username,
-      key: { type: 'path', file: `~/.ssh/id_key_${host.keyId}` },
+      key: { type: 'path', file: host.keyPath },
       knownHosts: { type: 'acceptAll' },
     };
   }

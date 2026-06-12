@@ -40,6 +40,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
+    "sql.js": "^1.14.1",
     "sshpk": "^1.18.0"
   }
 }

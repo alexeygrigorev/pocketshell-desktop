@@ -58,13 +58,19 @@ Build strategy (from research, 2026-06-12):
   - `src/ui/`, `src/editor/`, etc. — UI module stubs
 - `vendor/vscode/` — VS Code v1.125.0 cloned, deps installed (2.1G node_modules)
 - `vendor/vscode/product.json` — PocketShell branding applied
-- `scripts/build-base.sh` — Full VS Code base build (not tested yet)
-- `scripts/build-extension.sh` — Fast extension rebuild (not tested yet)
-- `.github/workflows/release.yml` — CI with Windows build job commented out
+- `scripts/build-base.sh` — Dev/production VS Code base build (supports --production flag)
+- `scripts/build-extension.sh` — Fast extension-only rebuild (~500ms)
+- `scripts/dev.sh` — One-command dev launch (check base, compile extension, launch)
+- `.github/workflows/release.yml` — CI with Windows zip build + release workflow
+- **SSH backend verified**: SshClient loads, connects to localhost:22, executes commands, disconnects cleanly (standalone test)
+- **Extension compiles**: 0 errors, output at correct path
+- **App launches**: Under Xvfb, 12s no crash, "Synchronizing built-in extensions..." appears
+- **Backend fixes applied**: ConnectConfig (not ConnectConfiguration), non-null assertions, unused imports removed
 
 ### What does NOT exist yet:
-- A working app that connects to SSH and shows a terminal (app compiles and launches but not verified with SSH)
-- Windows zip build
+- Extension activation verified in running app (extension host logs inconclusive under Xvfb)
+- End-to-end SSH terminal in the app UI (connect, show terminal, type commands)
+- Windows zip build tested (CI workflow written but not run)
 - E2E tests
 
 ### NO MILESTONES — we use issues only. All 6 milestones were deleted.
@@ -86,11 +92,14 @@ Build strategy (from research, 2026-06-12):
 | # | Title | Status |
 |---|-------|--------|
 | #33 | Working Windows application (EPIC) | Open — the master tracking issue |
-| #30 | Create PocketShell built-in extension for VS Code fork | Open — implementer agent running |
-| #31 | Strip down VS Code to essential extensions | Open |
-| #32 | Fast build pipeline: pre-built base + incremental extension | Open |
-| #29 | v0.1.0 release tag and GitHub release | Open — blocked by #30-#33 |
-| #28 | Windows installer and cross-platform packaging | Open — blocked by working app |
+| #30 | Create PocketShell built-in extension for VS Code fork | Open — code exists, compiles, needs activation verification |
+| #31 | Strip down VS Code to essential extensions | **Done** — 89 stripped, 7 kept, compilations 46→5 |
+| #32 | Fast build pipeline: pre-built base + incremental extension | **Done** — build-base.sh, build-extension.sh, dev.sh all work |
+| #29 | v0.1.0 release tag and GitHub release | Open — blocked by #30, #33 |
+| #28 | Windows zip build | Open — CI workflow written, needs test run |
+
+### Latest commit: `eb245cd` (2026-06-12)
+Build infrastructure, extension fixes, Windows CI workflow
 
 ### Recently closed issues (#1-#27):
 These tracked backend module scaffolding (connection manager, SFTP client, etc.).

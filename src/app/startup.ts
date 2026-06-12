@@ -45,7 +45,7 @@ export async function initializeApp(options?: {
   settings.load();
 
   // 2. Host database
-  const hostStore = initStore(options?.dbPath);
+  const hostStore = await initStore(options?.dbPath);
 
   // 3. Connection manager
   const connectionManager = new ConnectionManager();
