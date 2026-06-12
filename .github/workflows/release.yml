@@ -84,19 +84,19 @@ jobs:
         if: steps.cache-base.outputs.cache-hit != 'true'
         shell: bash
         run: cd vendor/vscode && npm install
-        timeout-minutes: 30
+        timeout-minutes: 60
 
       - name: Compile VS Code core
         if: steps.cache-base.outputs.cache-hit != 'true'
         shell: bash
         run: cd vendor/vscode && npm run gulp compile
-        timeout-minutes: 30
+        timeout-minutes: 60
 
       - name: Download Electron
         if: steps.cache-base.outputs.cache-hit != 'true'
         shell: bash
         run: cd vendor/vscode && npm run electron
-        timeout-minutes: 10
+        timeout-minutes: 20
 
       # === EXTENSION BUILD (runs every time) ===
 
