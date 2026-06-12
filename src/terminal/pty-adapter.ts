@@ -12,7 +12,6 @@
  */
 
 import type { SshShell } from '../ssh/connection/ssh-client';
-import type { TerminalOptions } from './types';
 
 // ---------------------------------------------------------------------------
 // Types

@@ -22,9 +22,65 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+  build-windows:
+    name: Build Windows zip
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Clone VS Code source
+        shell: bash
+        run: |
+          mkdir -p vendor
+          git clone --depth=1 https://github.com/microsoft/vscode.git vendor/vscode
+
+      - name: Apply PocketShell branding
+        shell: bash
+        run: cp product.json vendor/vscode/product.json
+
+      - name: Install VS Code dependencies
+        shell: bash
+        run: cd vendor/vscode && npm install
+        timeout-minutes: 30
+
+      - name: Production build (win32-x64)
+        shell: bash
+        run: bash scripts/build-base.sh --production --platform win32 --arch x64
+        timeout-minutes: 60
+
+      - name: Compile PocketShell extension
+        shell: bash
+        run: bash scripts/build-extension.sh
+
+      - name: Zip build output
+        shell: pwsh
+        run: |
+          $outputDir = "vendor\VSCode-win32-x64"
+          if (!(Test-Path $outputDir)) {
+            # build-base.sh logs say .build/ but gulp puts output alongside repo
+            Write-Error "Build output not found at $outputDir"
+            Get-ChildItem vendor -Directory | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+          $zipName = "pocketshell-${{ github.ref_name }}-windows-x64.zip"
+          Compress-Archive -Path "$outputDir\*" -DestinationPath $zipName
+          Write-Host "Created $zipName ($((Get-Item $zipName).Length / 1MB) MB)"
+
+      - name: Upload Windows zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketshell-${{ github.ref_name }}-windows-x64
+          path: pocketshell-${{ github.ref_name }}-windows-x64.zip
+          if-no-files-found: error
+
   release:
     name: Create release
-    needs: test
+    needs: [test, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -33,6 +89,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Download Windows zip
+        uses: actions/download-artifact@v4
+        with:
+          name: pocketshell-${{ github.ref_name }}-windows-x64
+          path: release-assets/
 
       - name: Generate version
         id: version
@@ -50,33 +112,4 @@ jobs:
         with:
           body_path: docs/release-notes-v0.1.0.md
           generate_release_notes: false
-
-  # ── Windows build (uncomment when Electron app shell is ready) ─────────
-  # build-windows:
-  #   name: Build Windows installer
-  #   needs: test
-  #   runs-on: windows-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version: "24"
-  #
-  #     - name: Install dependencies
-  #       run: npm ci
-  #
-  #     - name: Build
-  #       run: npm run build
-  #       shell: bash
-  #
-  #     - name: Package Windows installer
-  #       run: npm run package -- --target win32-x64
-  #       shell: bash
-  #
-  #     - name: Upload installer
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: pocketshell-${{ github.ref_name }}-windows-x64
-  #         path: dist/*.exe
-  #         if-no-files-found: error
+          files: release-assets/*.zip

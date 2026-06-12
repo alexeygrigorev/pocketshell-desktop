@@ -1,24 +1,19 @@
 # PocketShell Desktop
 
-Desktop fork of [PocketShell](https://github.com/alexeygrigorev/pocketshell) —
-a terminal-first, agent-aware SSH client. Cross-platform (Windows first).
+**Read [agents.md](agents.md) first** — it contains the critical project state
+that survives context compaction: architecture decisions, what exists, open issues,
+hard-won lessons, and user preferences.
 
 ## Key docs
 
-- [docs/plan.md](docs/plan.md) — v0.1.0 plan, architecture, phases
+- [agents.md](agents.md) — **Source of truth** for project state and context
 - [process.md](process.md) — orchestrator/implementer/reviewer process
-- [agents.md](agents.md) — agent role definitions
+- [docs/plan.md](docs/plan.md) — v0.1.0 plan, architecture
 
-## Tech stack
+## Quick rules
 
-VS Code fork (TypeScript) + ssh2 + tmux -CC + Monaco + Playwright E2E.
-
-## Working model
-
-Same three-actor process as PocketShell Android: orchestrator + implementer +
-reviewer. See [process.md](process.md) for the full playbook.
-
-## v0.1.0 goal
-
-Works on Windows end-to-end with all critical features from the mobile app.
-All major scenarios E2E tested against a Docker SSH fixture.
+- All output in English
+- Config directory: `~/.zlaude/` (NOT `~/.claude/`)
+- No "Co-Authored-By: Claude" in commits
+- Follow the three-actor process from process.md
+- Don't claim done until it actually works (launches, connects, shows terminal)

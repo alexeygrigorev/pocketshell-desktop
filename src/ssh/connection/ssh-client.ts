@@ -10,7 +10,8 @@
  * Includes connection pooling with coalescing and idle TTL.
  */
 
-import { Client, ClientChannel, ConnectConfiguration, SFTPWrapper } from 'ssh2';
+import { Client, SFTPWrapper } from 'ssh2';
+import type { ConnectConfig } from 'ssh2';
 import * as fs from 'fs';
 import * as stream from 'stream';
 
@@ -142,7 +143,7 @@ export class SshClient implements SshConnection {
       client.on('ready', onReady);
 
       // Build connect config
-      const connectConfig: ConnectConfiguration = {
+      const connectConfig: ConnectConfig = {
         host: params.host,
         port: params.port,
         username: params.user,

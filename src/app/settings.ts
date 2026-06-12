@@ -61,7 +61,7 @@ export class SettingsStore {
     } catch {
       this.cache = { ...DEFAULT_SETTINGS };
     }
-    return this.cache;
+    return this.cache!;
   }
 
   /**

@@ -144,7 +144,7 @@ export class SshTerminalBackend {
       this.cleanup();
     });
 
-    this.adapter.onError((error) => {
+    this.adapter.onError((_error) => {
       // On error, treat as exit with code 1
       this.onExitEmitter.fire({ exitCode: 1 });
       this.cleanup();

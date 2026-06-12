@@ -4,6 +4,22 @@ PocketShell Desktop uses the same three-actor process as PocketShell Android:
 orchestrator + implementer + reviewer. This file adapts the Android process for
 desktop/Electron development.
 
+## Parallelism
+
+The orchestrator dispatches **multiple implementer/research agents in parallel**
+whenever possible. Independent issues should not wait for each other. The
+orchestrator tracks each agent and processes results as they complete.
+
+Typical parallel dispatch patterns:
+- Multiple implementers on non-overlapping files (e.g., #31 strip extensions
+  + #32 update build scripts)
+- Research agents alongside implementers (e.g., investigate pre-build while
+  fixing compilation errors)
+- Reviewer agents for completed implementers while other implementers are still running
+
+Rule: agents must not touch the same files. If overlap is unavoidable, run
+them sequentially instead.
+
 ## Non-Negotiable Loop
 
 Every issue moves through this state machine:

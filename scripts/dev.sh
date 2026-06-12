@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#
+# dev.sh — Launch PocketShell in development mode.
+#
+# Compiles the extension if needed, then launches the app.
+# The VS Code base must already be built (run build-base.sh first).
+#
+# Usage:
+#   bash scripts/dev.sh              # launch
+#   bash scripts/dev.sh --verbose    # forward args to code.sh
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VSCODE_DIR="$PROJECT_ROOT/vendor/vscode"
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+info() { echo -e "${GREEN}[INFO]${NC} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+
+# --- Sanity checks ---
+if [[ ! -d "$VSCODE_DIR" ]]; then
+	echo "ERROR: VS Code source not found at $VSCODE_DIR"
+	echo "Run: bash scripts/build-base.sh"
+	exit 1
+fi
+
+if [[ ! -d "$VSCODE_DIR/node_modules" ]]; then
+	echo "ERROR: VS Code dependencies not installed."
+	echo "Run: bash scripts/build-base.sh"
+	exit 1
+fi
+
+cd "$VSCODE_DIR"
+
+# --- Compile extension if out/ is missing ---
+if [[ ! -d "extensions/pocketshell/out" ]]; then
+	info "Compiling PocketShell extension..."
+	npm run gulp compile-extension:pocketshell 2>/dev/null || {
+		warn "Gulp task failed, falling back to direct tsc..."
+		npx tsc -p extensions/pocketshell/tsconfig.json
+	}
+else
+	info "Extension already compiled."
+fi
+
+# --- Launch ---
+info "Launching PocketShell..."
+exec ./scripts/code.sh "$@"
