@@ -34,6 +34,24 @@ if [[ ! -d "$VSCODE_DIR/node_modules" ]]; then
 	exit 1
 fi
 
+# --- Sync extension source into vendor/vscode ---
+SOURCE_DIR="$PROJECT_ROOT/extensions/pocketshell"
+EXTENSION_DIR="$VSCODE_DIR/extensions/pocketshell"
+
+if [[ ! -d "$SOURCE_DIR" ]]; then
+	echo "ERROR: Extension source not found at $SOURCE_DIR"
+	exit 1
+fi
+
+info "Syncing extension source to $EXTENSION_DIR..."
+mkdir -p "$EXTENSION_DIR"
+rsync -a --delete \
+	--exclude='node_modules/' \
+	--exclude='out/' \
+	--exclude='package-lock.json' \
+	--exclude='tsconfig.tsbuildinfo' \
+	"$SOURCE_DIR/" "$EXTENSION_DIR/"
+
 cd "$VSCODE_DIR"
 
 # --- Compile extension if out/ is missing ---

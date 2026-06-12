@@ -1,0 +1,75 @@
+{
+	"name": "pocketshell",
+	"displayName": "PocketShell",
+	"description": "Terminal-first, agent-aware SSH client",
+	"publisher": "pocketshell",
+	"version": "0.1.0",
+	"license": "MIT",
+	"engines": {
+		"vscode": "^1.70.0"
+	},
+	"main": "./out/extension",
+	"categories": [
+		"Other"
+	],
+	"extensionKind": [
+		"ui",
+		"workspace"
+	],
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"contributes": {
+		"terminal": {
+			"profiles": [
+				{
+					"id": "pocketshell.ssh",
+					"title": "PocketShell SSH"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "pocketshell.connect",
+				"title": "PocketShell: Connect to Host"
+			},
+			{
+				"command": "pocketshell.addHost",
+				"title": "PocketShell: Add Host"
+			},
+			{
+				"command": "pocketshell.disconnect",
+				"title": "PocketShell: Disconnect"
+			}
+		],
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "pocketshell",
+					"title": "PocketShell",
+					"icon": "$(remote)"
+				}
+			]
+		},
+		"views": {
+			"pocketshell": [
+				{
+					"id": "pocketshell.hosts",
+					"name": "SSH Hosts",
+					"icon": "$(server)"
+				}
+			]
+		}
+	},
+	"devDependencies": {
+		"@types/node": "^24.13.2"
+	},
+	"scripts": {
+		"compile": "gulp compile-extension:pocketshell",
+		"watch": "gulp watch-extension:pocketshell"
+	},
+	"dependencies": {
+		"sql.js": "^1.14.1",
+		"ssh2": "^1.17.0"
+	}
+}

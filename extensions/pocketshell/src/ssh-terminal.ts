@@ -1,0 +1,87 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) PocketShell. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import * as vscode from 'vscode';
+import { SshTerminalBackend } from './backend/terminal/ssh-terminal-backend';
+import type { SshConnection } from './backend/ssh/connection/ssh-client';
+
+/**
+ * VS Code Pseudoterminal backed by an SSH session.
+ *
+ * Bridges VS Code's terminal widget with the PocketShell SshTerminalBackend,
+ * forwarding keystrokes to the remote PTY and rendering remote output in the
+ * VS Code terminal panel.
+ */
+export class SshPseudoterminal implements vscode.Pseudoterminal {
+	private readonly writeEmitter = new vscode.EventEmitter<string>();
+	private readonly closeEmitter = new vscode.EventEmitter<number>();
+	private backend: SshTerminalBackend | undefined;
+
+	readonly onDidWrite: vscode.Event<string> = this.writeEmitter.event;
+	readonly onDidClose: vscode.Event<number> = this.closeEmitter.event;
+
+	constructor(
+		private readonly connection: SshConnection,
+		private readonly hostName: string,
+	) {}
+
+	/**
+	 * Called by VS Code when the terminal is opened.
+	 *
+	 * Creates and starts the SSH terminal backend, wiring up events.
+	 */
+	async open(_initialDimensions: vscode.TerminalDimensions | undefined): Promise<void> {
+		this.backend = new SshTerminalBackend(this.connection, {
+			name: this.hostName,
+			cols: _initialDimensions?.columns,
+			rows: _initialDimensions?.rows,
+		});
+
+		// Wire backend output -> VS Code terminal
+		this.backend.onData((data: string) => {
+			this.writeEmitter.fire(data);
+		});
+
+		// Wire backend exit -> VS Code terminal close
+		this.backend.onExit(({ exitCode }: { exitCode: number }) => {
+			this.closeEmitter.fire(exitCode);
+		});
+
+		try {
+			await this.backend.start();
+		} catch (err) {
+			this.writeEmitter.fire(`\r\n\x1b[31mFailed to start SSH terminal: ${err}\x1b[0m\r\n`);
+			this.closeEmitter.fire(1);
+		}
+	}
+
+	/**
+	 * Called by VS Code when the terminal is closed by the user.
+	 */
+	close(): void {
+		if (this.backend) {
+			this.backend.kill();
+			this.backend = undefined;
+		}
+	}
+
+	/**
+	 * Called by VS Code when the user types in the terminal.
+	 */
+	handleInput(data: string): void {
+		if (this.backend) {
+			this.backend.write(data);
+		}
+	}
+
+	/**
+	 * Called by VS Code when the terminal is resized.
+	 */
+	setDimensions(dimensions: vscode.TerminalDimensions): void {
+		if (this.backend) {
+			this.backend.resize(dimensions.columns, dimensions.rows);
+		}
+	}
+}

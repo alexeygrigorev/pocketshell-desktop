@@ -18,10 +18,11 @@ GREEN='\033[0;32m'
 NC='\033[0m'
 info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 
+SOURCE_DIR="$PROJECT_ROOT/extensions/pocketshell"
 EXTENSION_DIR="$VSCODE_DIR/extensions/pocketshell"
 
-if [[ ! -d "$EXTENSION_DIR" ]]; then
-	echo "ERROR: Extension not found at $EXTENSION_DIR"
+if [[ ! -d "$SOURCE_DIR" ]]; then
+	echo "ERROR: Extension source not found at $SOURCE_DIR"
 	exit 1
 fi
 
@@ -29,6 +30,16 @@ if [[ ! -d "$VSCODE_DIR/node_modules" ]]; then
 	echo "ERROR: VS Code dependencies not installed. Run build-base.sh first."
 	exit 1
 fi
+
+# --- Sync extension source into vendor/vscode ---
+info "Syncing extension source to $EXTENSION_DIR..."
+mkdir -p "$EXTENSION_DIR"
+rsync -a --delete \
+	--exclude='node_modules/' \
+	--exclude='out/' \
+	--exclude='package-lock.json' \
+	--exclude='tsconfig.tsbuildinfo' \
+	"$SOURCE_DIR/" "$EXTENSION_DIR/"
 
 info "Compiling PocketShell extension..."
 cd "$VSCODE_DIR"
