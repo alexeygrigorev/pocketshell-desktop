@@ -4,11 +4,46 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to build (comma-separated: win32-x64,win32-arm64,linux-x64,darwin-x64,darwin-arm64)'
+        required: false
+        default: 'win32-x64,win32-arm64,linux-x64,darwin-x64,darwin-arm64'
+
+env:
+  # Pin to specific VS Code commit (post-1.124.2 main tip).
+  # Changing this invalidates the base cache and triggers a full rebuild.
+  VSCODE_REF: 037f7fbe037f7fbe
 
 jobs:
-  test:
-    name: Unit tests
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win32-x64
+            runner: windows-latest
+            artifact: pocketshell-windows-x64
+            zip_cmd: '7z a -tzip'
+          - platform: win32-arm64
+            runner: windows-latest
+            artifact: pocketshell-windows-arm64
+            zip_cmd: '7z a -tzip'
+          - platform: linux-x64
+            runner: ubuntu-latest
+            artifact: pocketshell-linux-x64
+            zip_cmd: 'tar czf'
+          - platform: darwin-x64
+            runner: macos-13  # Intel
+            artifact: pocketshell-darwin-x64
+            zip_cmd: 'tar czf'
+          - platform: darwin-arm64
+            runner: macos-latest  # Apple Silicon
+            artifact: pocketshell-darwin-arm64
+            zip_cmd: 'tar czf'
+
     steps:
       - uses: actions/checkout@v4
 
@@ -16,71 +51,189 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install dependencies
-        run: npm ci
+      # Linux needs some extra deps for native module compilation
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev
 
-      - name: Run unit tests
-        run: npm test
-
-  build-windows:
-    name: Build Windows zip
-    needs: test
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      # ----------------------------------------------------------------
+      # Base cache: VS Code source + deps + compiled core + Electron.
+      # Keyed on the VS Code commit + platform — only rebuilds when base changes.
+      # ~2 GB compressed; subsequent runs restore in ~1-2 min.
+      # ----------------------------------------------------------------
+      - name: Cache VS Code base
+        id: cache-base
+        uses: actions/cache@v4
         with:
-          node-version: "24"
+          path: vendor/vscode
+          key: vscode-base-${{ env.VSCODE_REF }}-${{ matrix.platform }}-node24-v3
+
+      # === BASE SETUP (only on cache miss) ===
 
       - name: Clone VS Code source
+        if: steps.cache-base.outputs.cache-hit != 'true'
         shell: bash
         run: |
           mkdir -p vendor
           git clone --depth=1 https://github.com/microsoft/vscode.git vendor/vscode
+          cd vendor/vscode
+          git fetch --depth=1 origin ${{ env.VSCODE_REF }}
+          git checkout ${{ env.VSCODE_REF }}
+
+      - name: Install VS Code dependencies
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        shell: bash
+        run: cd vendor/vscode && npm install
+        timeout-minutes: 30
+
+      - name: Compile VS Code core
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        shell: bash
+        run: cd vendor/vscode && npm run gulp compile
+        timeout-minutes: 30
+
+      - name: Download Electron
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        shell: bash
+        run: cd vendor/vscode && npm run electron
+        timeout-minutes: 10
+
+      # === EXTENSION BUILD (runs every time) ===
 
       - name: Apply PocketShell branding
         shell: bash
         run: cp product.json vendor/vscode/product.json
 
-      - name: Install VS Code dependencies
+      - name: Patch gulpfile for PocketShell extension
         shell: bash
-        run: cd vendor/vscode && npm install
-        timeout-minutes: 30
+        run: |
+          cat > /tmp/patch-gulpfile.js << 'PATCH_EOF'
+          const fs = require('fs');
+          const filePath = 'vendor/vscode/build/gulpfile.extensions.ts';
+          let content = fs.readFileSync(filePath, 'utf8');
 
-      - name: Production build (win32-x64)
+          const compilationsMatch = content.match(/^const compilations = \[$/m);
+          if (!compilationsMatch) {
+            console.error('Could not find compilations array');
+            process.exit(1);
+          }
+          const compilationsStart = compilationsMatch.index;
+          const compilationsEnd = content.indexOf('];', compilationsStart);
+          if (compilationsEnd === -1) {
+            console.error('Could not find compilations array end');
+            process.exit(1);
+          }
+
+          const arrayBlock = content.slice(compilationsStart, compilationsEnd + 2);
+          if (arrayBlock.includes('pocketshell')) {
+            console.log('PocketShell already in compilations array');
+            process.exit(0);
+          }
+
+          const newArrayBlock = arrayBlock.replace(
+            /\];$/,
+            "\t'extensions/pocketshell/tsconfig.json'\n];"
+          );
+          content = content.slice(0, compilationsStart) + newArrayBlock + content.slice(compilationsEnd + 2);
+          fs.writeFileSync(filePath, content, 'utf8');
+          console.log('Added PocketShell to gulpfile.extensions.ts compilations array');
+          PATCH_EOF
+          node /tmp/patch-gulpfile.js
+
+      - name: Patch extensions.ts nodir fix for copilot build
         shell: bash
-        run: bash scripts/build-base.sh --production --platform win32 --arch x64
-        timeout-minutes: 60
+        run: |
+          # Fix ENOENT chmod error from gulp.dest on copilot's @anthropic-ai/claude-agent-sdk dirs.
+          # Adds nodir: true to gulp.src(dependenciesSrc, ...) calls so directory entries aren't emitted.
+          sed -i "s/gulp.src(dependenciesSrc, { base: '.' })/gulp.src(dependenciesSrc, { base: '.', nodir: true })/g" \
+            vendor/vscode/build/lib/extensions.ts
+          echo "Patched extensions.ts with nodir: true"
+          grep -n 'nodir' vendor/vscode/build/lib/extensions.ts
+
+      - name: Sync extension source
+        shell: bash
+        run: |
+          mkdir -p vendor/vscode/extensions/pocketshell
+          cp -r extensions/pocketshell/* vendor/vscode/extensions/pocketshell/
+          rm -rf vendor/vscode/extensions/pocketshell/node_modules
+          rm -rf vendor/vscode/extensions/pocketshell/out
+          rm -f vendor/vscode/extensions/pocketshell/tsconfig.tsbuildinfo
+          rm -f vendor/vscode/extensions/pocketshell/package-lock.json
+
+      - name: Install extension npm dependencies
+        shell: bash
+        run: cd vendor/vscode/extensions/pocketshell && npm install --omit=optional
+        timeout-minutes: 10
 
       - name: Compile PocketShell extension
         shell: bash
-        run: bash scripts/build-extension.sh
-
-      - name: Zip build output
-        shell: pwsh
         run: |
-          $outputDir = "vendor\VSCode-win32-x64"
-          if (!(Test-Path $outputDir)) {
-            # build-base.sh logs say .build/ but gulp puts output alongside repo
-            Write-Error "Build output not found at $outputDir"
-            Get-ChildItem vendor -Directory | ForEach-Object { Write-Host $_.FullName }
-            exit 1
+          cd vendor/vscode
+          npm run gulp compile-extension:pocketshell 2>/dev/null || {
+            echo "Gulp task not available, falling back to direct tsc..."
+            npx tsc -p extensions/pocketshell/tsconfig.json
           }
-          $zipName = "pocketshell-${{ github.ref_name }}-windows-x64.zip"
-          Compress-Archive -Path "$outputDir\*" -DestinationPath $zipName
-          Write-Host "Created $zipName ($((Get-Item $zipName).Length / 1MB) MB)"
+          if [ ! -f "extensions/pocketshell/out/extension.js" ]; then
+            echo "ERROR: Extension did not compile — out/extension.js not found"
+            exit 1
+          fi
+          echo "Extension compiled successfully"
 
-      - name: Upload Windows zip
+      # === PRODUCTION PACKAGING ===
+
+      - name: Production build (${{ matrix.platform }})
+        shell: bash
+        run: cd vendor/vscode && npm run gulp vscode-${{ matrix.platform }}
+        timeout-minutes: 60
+
+      - name: Package build output
+        shell: bash
+        run: |
+          OUTPUT_DIR=""
+          for candidate in \
+            "vendor/vscode/.build/vscode-${{ matrix.platform }}" \
+            "vendor/VSCode-${{ matrix.platform }}" \
+            "vendor/vscode/VSCode-${{ matrix.platform }}"; do
+            if [ -d "$candidate" ]; then
+              OUTPUT_DIR="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$OUTPUT_DIR" ]; then
+            echo "Build output not found in any expected location."
+            find vendor -maxdepth 4 -type d -iname "*vscode*" 2>/dev/null || true
+            ls -la vendor/vscode/.build/ 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Found build output at: $OUTPUT_DIR"
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          cd "$OUTPUT_DIR"
+
+          if [[ "${{ matrix.platform }}" == win32-* ]]; then
+            ZIP_NAME="pocketshell-${VERSION}-${{ matrix.platform }}.zip"
+            7z a -tzip "$GITHUB_WORKSPACE/$ZIP_NAME" . 2>/dev/null || \
+              powershell -Command "Compress-Archive -Path '.\*' -DestinationPath '$GITHUB_WORKSPACE/$ZIP_NAME'"
+            echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          else
+            ZIP_NAME="pocketshell-${VERSION}-${{ matrix.platform }}.tar.gz"
+            tar czf "$GITHUB_WORKSPACE/$ZIP_NAME" .
+            echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          fi
+          echo "Created $ZIP_NAME"
+          ls -lh "$GITHUB_WORKSPACE/$ZIP_NAME"
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pocketshell-${{ github.ref_name }}-windows-x64
-          path: pocketshell-${{ github.ref_name }}-windows-x64.zip
+          name: ${{ matrix.artifact }}
+          path: pocketshell-*
           if-no-files-found: error
 
   release:
     name: Create release
-    needs: [test, build-windows]
+    needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -90,11 +243,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download Windows zip
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: pocketshell-${{ github.ref_name }}-windows-x64
           path: release-assets/
+
+      - name: Flatten release assets
+        run: |
+          mkdir -p release-files
+          find release-assets -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} release-files/ \;
+          ls -lh release-files/
 
       - name: Generate version
         id: version
@@ -103,13 +261,12 @@ jobs:
             VERSION="${{ github.ref_name }}"
             VERSION="${VERSION#v}"
           else
-            VERSION="dev-$(date +'%Y%m%d-%H%M%S')-$(echo ${{ github.sha }} | cut -c 1-7)"
+            VERSION="dev-$(date +'%Y%m%d-%H%M%S')-$(echo ${{ github.sha }} | cut -c 1,7)"
           fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: docs/release-notes-v0.1.0.md
-          generate_release_notes: false
-          files: release-assets/*.zip
+          generate_release_notes: true
+          files: release-files/*

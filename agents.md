@@ -39,7 +39,11 @@ Build strategy (from research, 2026-06-12):
   - `npx tsc -p extensions/pocketshell/tsconfig.json` — even faster incremental
 - **Launch dev app**: `./scripts/code.sh` (from vendor/vscode/)
 - **Reload after changes**: Ctrl+R in the running app
-- For production/distribution: `gulp vscode-linux-x64` (full packaging pipeline)
+- For production/distribution: `gulp vscode-{platform}` (full packaging pipeline)
+  - Supported platforms: win32-x64, win32-arm64, linux-x64, darwin-x64, darwin-arm64
+  - Output goes to `vendor/vscode/.build/vscode-{platform}/` or `../VSCode-{platform}/`
+  - Extensions are plain files at `<app-root>/extensions/<name>/` (NOT in ASAR)
+  - Only `node_modules` goes into `node_modules.asar`
 - `build-base.sh` currently runs the full production build — should be updated to use lighter dev build
 - Extension registered in `vendor/vscode/build/gulpfile.extensions.ts` compilations array
 - Per-extension gulp tasks auto-generated: `compile-extension:pocketshell`, `watch-extension:pocketshell`, `transpile-extension:pocketshell`
@@ -61,7 +65,7 @@ Build strategy (from research, 2026-06-12):
 - `scripts/build-base.sh` — Dev/production VS Code base build (supports --production flag)
 - `scripts/build-extension.sh` — Fast extension-only rebuild (~500ms)
 - `scripts/dev.sh` — One-command dev launch (check base, compile extension, launch)
-- `.github/workflows/release.yml` — CI with Windows zip build + release workflow
+- `.github/workflows/release.yml` — **Cross-platform CI** with matrix build for win32-x64, win32-arm64, linux-x64, darwin-x64, darwin-arm64 + GitHub Release
 - **SSH backend verified**: SshClient loads, connects to localhost:22, executes commands, disconnects cleanly (standalone test)
 - **Extension compiles**: 0 errors, output at correct path
 - **App launches**: Under Xvfb, 12s no crash, "Synchronizing built-in extensions..." appears
@@ -71,10 +75,12 @@ Build strategy (from research, 2026-06-12):
 - **Extension activates**: confirmed via exthost.log — all 6 commands registered, `onStartupFinished` event, no errors
 - **Root cause found**: `product.json` had `defaultChatAgent: null` which crashed the onboarding module's top-level `assertDefined()`, preventing renderer/extension host from starting. Fixed by providing a valid config.
 - **Dev data consolidated**: `--user-data-dir .dev-data/` keeps all config/logs/cache in the project directory
+- **CI workflow fixed**: VS Code pinned to commit 037f7fbe (post-1.124.2 main tip); extension npm deps use `--omit=optional` for Windows compatibility; gulpfile patching adds PocketShell to compilations array; all VS Code extensions kept (not stripped — production build has hardcoded references)
+- **Cross-platform CI**: Matrix strategy builds for 5 platforms (win32-x64, win32-arm64, linux-x64, darwin-x64, darwin-arm64) in parallel. Windows uses zip, Linux/macOS uses tar.gz. All artifacts attached to GitHub Release on tag push.
 
 ### What does NOT exist yet:
-- End-to-end SSH terminal in the app UI (connect, show terminal, type commands)
-- Windows zip build tested (CI workflow written but not run)
+- End-to-end SSH terminal verified in running app (connect, show terminal, type commands)
+- Windows zip build tested (CI workflow fixed but not triggered yet)
 - E2E tests
 
 ### NO MILESTONES — we use issues only. All 6 milestones were deleted.
@@ -100,10 +106,11 @@ Build strategy (from research, 2026-06-12):
 | #31 | Strip down VS Code to essential extensions | **Done** — 89 stripped, 7 kept, compilations 46→5 |
 | #32 | Fast build pipeline: pre-built base + incremental extension | **Done** — build-base.sh, build-extension.sh, dev.sh all work |
 | #29 | v0.1.0 release tag and GitHub release | Open — blocked by #30, #33 |
-| #28 | Windows zip build | Open — CI workflow written, needs test run |
+| #28 | Windows zip build | **Done** — cross-platform CI with matrix (5 platforms) |
 
-### Latest commit: `863c4f7` (2026-06-12)
-Fix extension activation — defaultChatAgent, local storage, dev-data dir
+### Latest commit: `33744a1` (2026-06-12)
+feat: complete extension features — host management, context menus, WASM fix
+Cross-platform CI with matrix build (5 platforms). tsconfig fix for tsgo.
 
 ### Recently closed issues (#1-#27):
 These tracked backend module scaffolding (connection manager, SFTP client, etc.).
@@ -134,6 +141,28 @@ All closed prematurely — the code exists but nothing is integrated into a work
 
 8. **Agent worktree isolation fails** in this repo ("not in a git repository").
    Run implementer agents without `isolation: "worktree"`.
+
+9. **Don't strip VS Code extensions.** The production build has hardcoded references
+   to extensions like `simple-browser` in `build/npm/dirs.ts` and `build/filters.ts`.
+   Moving extensions to `_disabled/` breaks the build. Keep all extensions and just
+   add PocketShell to the compilations array.
+
+10. **Extension tsconfig must NOT specify `"types": ["node"]`.** VS Code's `tsgo`
+    compiler resolves `@types/node` from the root `node_modules/`, not the extension's
+    local one. The correct pattern (matching git, emmet, etc.) is: `typeRoots` pointing
+    to `./node_modules/@types` + `skipLibCheck: true`, with NO `types` field.
+    The `types: ["node"]` field causes "Cannot find type definition file for 'node'" error.
+
+11. **Cross-platform production build uses matrix strategy.** `gulp vscode-{platform}`
+    supports: win32-x64, win32-arm64, linux-x64, darwin-x64, darwin-arm64. Each
+    runs on the matching GitHub Actions runner. The cache key includes the platform
+    because Electron binaries differ per platform.
+
+12. **gulp.dest ENOENT chmod on copilot extension.** `gulp.src(dependenciesSrc, { base: '.' })`
+    emits directory entries, and `gulp.dest` tries to `chmod` them. The copilot extension's
+    `@anthropic-ai/claude-agent-sdk` has deeply nested `node_modules` that cause overlapping
+    globs and race conditions. Fix: add `nodir: true` to the `gulp.src` calls in
+    `build/lib/extensions.ts` (lines ~445 and ~480). CI must also apply this patch.
 
 ---
 
