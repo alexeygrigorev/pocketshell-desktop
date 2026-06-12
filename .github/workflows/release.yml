@@ -9,26 +9,10 @@ env:
   NODE_VERSION: "24"
 
 jobs:
-  # ── Build per platform ────────────────────────────────────────────────
-  build:
-    name: Build (${{ matrix.target }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: win32-x64
-            runner: windows-latest
-            ext: zip
-          - target: darwin-arm64
-            runner: macos-latest
-            ext: zip
-          - target: darwin-x64
-            runner: macos-13
-            ext: zip
-          - target: linux-x64
-            runner: ubuntu-latest
-            ext: tar.gz
+  # ── Run unit tests first ──────────────────────────────────────────────
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +23,48 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+  # ── Build and package per platform ────────────────────────────────────
+  build:
+    name: Build and package (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            runner: windows-latest
+            ext: exe
+          - target: darwin-arm64
+            runner: macos-latest
+            ext: dmg
+          - target: darwin-x64
+            runner: macos-13
+            ext: dmg
+          - target: linux-x64
+            runner: ubuntu-latest
+            ext: AppImage
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Linux needs extra deps for electron-builder
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools rpm
 
       - name: Clone VS Code (shallow)
         run: |
@@ -58,7 +84,7 @@ jobs:
         run: npm run build
         shell: bash
 
-      - name: Package
+      - name: Package with electron-builder
         run: npm run package -- --target ${{ matrix.target }}
         shell: bash
 
@@ -66,8 +92,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pocketshell-${{ matrix.target }}
-          path: dist/pocketshell-${{ matrix.target }}.${{ matrix.ext }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
           retention-days: 5
+          if-no-files-found: warn
 
   # ── Create GitHub Release ─────────────────────────────────────────────
   release:
@@ -78,6 +109,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -88,8 +121,23 @@ jobs:
       - name: List artifacts
         run: find artifacts/ -type f | sort
 
+      - name: Generate release notes
+        id: notes
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "## What's Changed" > release-notes.md
+            echo "" >> release-notes.md
+            git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" >> release-notes.md
+          else
+            echo "## Initial Release" > release-notes.md
+          fi
+          cat release-notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: release-notes.md
+          generate_release_notes: false
           files: artifacts/**/*

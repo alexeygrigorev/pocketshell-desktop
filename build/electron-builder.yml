@@ -1,0 +1,122 @@
+# electron-builder configuration for PocketShell Desktop
+# https://www.electron.build/configuration/configuration
+
+appId: com.pocketshell.app
+productName: PocketShell
+copyright: Copyright (c) 2026 PocketShell contributors
+
+# Read version from package.json
+buildVersion: ${version}
+
+directories:
+  output: dist
+  buildResources: build
+
+# Input — the VS Code Electron build output
+# electron-builder expects the compiled app in a directory
+files:
+  - from: "vendor/vscode/.build/electron"
+    to: "."
+    filter:
+      - "**/*"
+  - from: "vendor/vscode/out"
+    to: "out"
+    filter:
+      - "**/*"
+  # Extra resources
+  - from: product.json
+    to: "resources/app/product.json"
+  - from: LICENSE
+    to: "resources/app/LICENSE.txt"
+
+extraResources:
+  - from: product.json
+    to: product.json
+  - from: LICENSE
+    to: LICENSE.txt
+
+# ── Windows (NSIS installer) ────────────────────────────────────────────
+win:
+  icon: build/icons/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  installerIcon: build/icons/icon.ico
+  uninstallerIcon: build/icons/icon.ico
+  installerHeaderIcon: build/icons/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: PocketShell
+  artifactName: pocketshell-${version}-setup.${ext}
+  # File associations
+  fileAssociations:
+    - ext: pocketshell
+      name: PocketShell Session
+      description: PocketShell SSH session file
+      icon: build/icons/icon.ico
+
+# ── macOS (DMG) ─────────────────────────────────────────────────────────
+mac:
+  icon: build/icons/icon.icns
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  entitlements: null
+  entitlementsInherit: null
+
+dmg:
+  title: "${productName} ${version}"
+  icon: build/icons/icon.icns
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 180
+    - x: 400
+      y: 180
+      type: link
+      path: /Applications
+  artifactName: pocketshell-${version}.${ext}
+
+# ── Linux (AppImage + deb) ──────────────────────────────────────────────
+linux:
+  icon: build/icons/icon.png
+  category: Development
+  target:
+    - target: AppImage
+      arch:
+        - x64
+        - arm64
+    - target: deb
+      arch:
+        - x64
+  maintainer: PocketShell contributors
+  vendor: PocketShell
+  synopsis: Terminal-first, agent-aware desktop SSH client
+  artifactName: pocketshell-${version}.${ext}
+
+appImage:
+  artifactName: pocketshell-${version}.${ext}
+
+deb:
+  depends:
+    - libnotify4
+    - libxtst6
+    - libnss3
+  artifactName: pocketshell-${version}-amd64.${ext}
+
+# ── Publish ─────────────────────────────────────────────────────────────
+# Releases are handled by the GitHub Actions workflow directly via
+# softprops/action-gh-release, so we disable electron-builder's publisher.
+publish: null

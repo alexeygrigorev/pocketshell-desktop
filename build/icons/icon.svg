@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- PocketShell placeholder icon -->
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f3460"/>
+      <stop offset="100%" stop-color="#533483"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect x="16" y="16" width="480" height="480" rx="96" ry="96" fill="url(#bg)"/>
+  <!-- Terminal window -->
+  <rect x="64" y="96" width="384" height="320" rx="16" ry="16" fill="url(#accent)" stroke="#e94560" stroke-width="3"/>
+  <!-- Title bar dots -->
+  <circle cx="100" cy="128" r="10" fill="#e94560"/>
+  <circle cx="132" cy="128" r="10" fill="#f5a623"/>
+  <circle cx="164" cy="128" r="10" fill="#4ecdc4"/>
+  <!-- Terminal prompt lines -->
+  <text x="96" y="200" font-family="monospace" font-size="36" fill="#4ecdc4">$</text>
+  <rect x="128" y="184" width="160" height="8" rx="4" fill="#4ecdc4" opacity="0.8"/>
+  <text x="96" y="260" font-family="monospace" font-size="36" fill="#e94560">&gt;</text>
+  <rect x="128" y="244" width="120" height="8" rx="4" fill="#e94560" opacity="0.8"/>
+  <text x="96" y="320" font-family="monospace" font-size="36" fill="#f5a623">#</text>
+  <rect x="128" y="304" width="200" height="8" rx="4" fill="#f5a623" opacity="0.8"/>
+  <!-- Cursor blink -->
+  <rect x="128" y="364" width="32" height="8" rx="4" fill="#ffffff" opacity="0.6"/>
+  <!-- Shell symbol (PS) -->
+  <text x="368" y="420" font-family="sans-serif" font-weight="bold" font-size="48" fill="#e94560" text-anchor="middle" opacity="0.3">PS</text>
+</svg>

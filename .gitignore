@@ -8,7 +8,9 @@ vendor/vscode-*/
 # Build output
 dist/
 out/
-build/
+build/*
+!build/electron-builder.yml
+!build/icons/
 
 # IDE
 .vscode/*

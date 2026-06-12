@@ -16,7 +16,7 @@
     "test:e2e:headed": "npx playwright test --headed",
     "test:docker:up": "docker compose -f test/fixtures/docker/docker-compose.yml up -d --build",
     "test:docker:down": "docker compose -f test/fixtures/docker/docker-compose.yml down -v",
-    "package": "echo \"packaging not configured yet\""
+    "package": "bash scripts/package.sh"
   },
   "repository": {
     "type": "git",
