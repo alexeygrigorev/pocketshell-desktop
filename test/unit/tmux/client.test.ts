@@ -1,0 +1,289 @@
+/**
+ * Client integration tests with mock stream
+ *
+ * Uses event-driven coordination instead of setTimeout for reliability.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { TmuxClient, type SshChannel } from '../../../src/tmux/client';
+import type { StreamReader } from '../../../src/tmux/stream';
+
+// ---------------------------------------------------------------------------
+// Mock SSH channel
+// ---------------------------------------------------------------------------
+
+class MockStdoutReader implements StreamReader {
+  private chunks: (Buffer | null)[] = [];
+  private idx = 0;
+  private waiting: ((chunk: Buffer | null) => void)[] = [];
+
+  /** Push a line (auto-appends LF) */
+  pushLine(line: string): void {
+    this.pushChunk(Buffer.from(line + '\n', 'utf-8'));
+  }
+
+  /** Push raw bytes */
+  pushChunk(chunk: Buffer | null): void {
+    if (this.waiting.length > 0) {
+      const resolve = this.waiting.shift()!;
+      resolve(chunk);
+    } else {
+      this.chunks.push(chunk);
+    }
+  }
+
+  /** Signal EOF */
+  pushEof(): void {
+    this.pushChunk(null);
+  }
+
+  async read(): Promise<Buffer | null> {
+    if (this.chunks.length > 0) {
+      return this.chunks.shift()!;
+    }
+    return new Promise<Buffer | null>((resolve) => {
+      this.waiting.push(resolve);
+    });
+  }
+}
+
+class MockSshChannel implements SshChannel {
+  stdoutReader = new MockStdoutReader();
+  written: Buffer[] = [];
+  closed = false;
+  private writeWaiters: (() => void)[] = [];
+
+  async write(data: Buffer): Promise<void> {
+    this.written.push(data);
+    // Notify any waiters
+    for (const w of this.writeWaiters) w();
+    this.writeWaiters = [];
+  }
+
+  getStdoutReader(): StreamReader {
+    return this.stdoutReader;
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    this.stdoutReader.pushEof();
+  }
+
+  /** Wait until at least N writes have occurred */
+  async waitForWrites(n: number, timeoutMs = 2000): Promise<void> {
+    if (this.written.length >= n) return;
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${n} writes`)), timeoutMs);
+      const check = () => {
+        if (this.written.length >= n) {
+          clearTimeout(timer);
+          resolve();
+        } else {
+          // Only re-register if not already registered
+          if (!this.writeWaiters.includes(check)) {
+            this.writeWaiters.push(check);
+          }
+        }
+      };
+      check();
+    });
+  }
+}
+
+/**
+ * Helper: wait for a condition to become true, checking after each tick.
+ */
+async function waitFor(
+  condition: () => boolean,
+  timeoutMs = 2000,
+): Promise<void> {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('Timed out waiting for condition');
+    }
+    await new Promise(r => setTimeout(r, 10));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('TmuxClient', () => {
+  let channel: MockSshChannel;
+  let client: TmuxClient;
+
+  beforeEach(() => {
+    channel = new MockSshChannel();
+    client = new TmuxClient({
+      sessionName: 'test-session',
+      commandTimeoutMs: 2000,
+    });
+  });
+
+  it('connects and sends spawn command', async () => {
+    const connectPromise = client.connect(channel);
+
+    // Push initial tmux notifications
+    channel.stdoutReader.pushLine('%session-changed $0 test-session');
+    channel.stdoutReader.pushLine('%window-add @0');
+    channel.stdoutReader.pushLine('%layout-change @0 b25d,80x24,0,0,0');
+    channel.stdoutReader.pushLine('%output %0 hello');
+
+    await connectPromise;
+
+    // Wait for events to be processed
+    await waitFor(() => client.getState().activeSessionId === '$0');
+
+    // Verify spawn command was written
+    expect(channel.written.length).toBe(1);
+    const written = channel.written[0].toString('utf-8');
+    expect(written).toContain("tmux -CC new-session -A -s 'test-session'");
+    expect(written.endsWith('\n')).toBe(true);
+
+    // Verify state was updated
+    const state = client.getState();
+    expect(state.activeSessionId).toBe('$0');
+    expect(state.sessions.get('$0')!.name).toBe('test-session');
+    expect(state.sessions.get('$0')!.windows.has('@0')).toBe(true);
+
+    await client.close();
+  });
+
+  it('sends a command and receives response', async () => {
+    await client.connect(channel);
+
+    // Simulate initial notifications
+    channel.stdoutReader.pushLine('%session-changed $0 test-session');
+    channel.stdoutReader.pushLine('%window-add @0');
+
+    // Wait for initial state
+    await waitFor(() => client.getState().activeSessionId === '$0');
+
+    // Send command
+    const cmdPromise = client.listSessions();
+
+    // Wait for the command write to go out
+    await channel.waitForWrites(2); // spawn + list-sessions
+
+    // Push response
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('test-session: 1 windows (created ...) [80x24]');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+
+    const response = await cmdPromise;
+    expect(response.number).toBe(1);
+    expect(response.output.length).toBe(1);
+    expect(response.output[0]).toContain('test-session');
+    expect(response.isError).toBe(false);
+
+    await client.close();
+  });
+
+  it('subscribes to pane output', async () => {
+    await client.connect(channel);
+
+    const received: Uint8Array[] = [];
+    const sub = client.onOutput('%0', (data) => {
+      received.push(data);
+    });
+
+    channel.stdoutReader.pushLine('%session-changed $0 test-session');
+    channel.stdoutReader.pushLine('%window-add @0');
+
+    // Push output events
+    channel.stdoutReader.pushLine('%output %0 hello');
+    channel.stdoutReader.pushLine('%output %0 world');
+
+    // Wait for output events to be processed
+    await waitFor(() => received.length >= 2, 2000);
+
+    expect(received.length).toBe(2);
+    expect(Buffer.from(received[0]).toString('utf-8')).toBe('hello');
+    expect(Buffer.from(received[1]).toString('utf-8')).toBe('world');
+
+    sub.unsubscribe();
+
+    // After unsubscribe, should not receive more
+    channel.stdoutReader.pushLine('%output %0 more');
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(received.length).toBe(2);
+
+    await client.close();
+  });
+
+  it('subscribes to state changes', async () => {
+    await client.connect(channel);
+
+    const states: unknown[] = [];
+    const sub = client.onStateChange((state) => {
+      states.push(state);
+    });
+
+    channel.stdoutReader.pushLine('%session-changed $0 test-session');
+    await waitFor(() => states.length >= 1);
+
+    channel.stdoutReader.pushLine('%window-add @0');
+    await waitFor(() => states.length >= 2);
+
+    expect(states.length).toBeGreaterThanOrEqual(2);
+
+    sub.unsubscribe();
+    await client.close();
+  });
+
+  it('escapes session names with single quotes', async () => {
+    const quotedClient = new TmuxClient({
+      sessionName: "it's here",
+      commandTimeoutMs: 2000,
+    });
+
+    await quotedClient.connect(channel);
+
+    // Push initial notifications so the stream processes something
+    channel.stdoutReader.pushLine("%session-changed $0 it's here");
+    await waitFor(() => quotedClient.getState().activeSessionId === '$0');
+
+    const written = channel.written[0].toString('utf-8');
+    expect(written).toContain("it'\\''s here");
+
+    await quotedClient.close();
+  });
+
+  it('serializes commands (one at a time)', async () => {
+    await client.connect(channel);
+
+    channel.stdoutReader.pushLine('%session-changed $0 test-session');
+    await waitFor(() => client.getState().activeSessionId === '$0');
+
+    // Send two commands — they queue because client serializes
+    const cmd1 = client.sendCommand('list-sessions');
+    const cmd2 = client.sendCommand('list-windows');
+
+    // Only the first command should be written immediately
+    await channel.waitForWrites(2); // spawn + list-sessions
+
+    // Respond to first
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('session data');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+
+    const resp1 = await cmd1;
+    expect(resp1.output).toEqual(['session data']);
+
+    // Now second command should be written
+    await channel.waitForWrites(3); // spawn + list-sessions + list-windows
+
+    // Respond to second
+    channel.stdoutReader.pushLine('%begin 1700000001 2 0');
+    channel.stdoutReader.pushLine('window data');
+    channel.stdoutReader.pushLine('%end 1700000001 2 0');
+
+    const resp2 = await cmd2;
+    expect(resp2.output).toEqual(['window data']);
+
+    await client.close();
+  });
+});
