@@ -13,6 +13,7 @@ ARG PS_VERSION=0.0.0
 ENV PS_VERSION=$PS_VERSION
 
 RUN adduser -D -s /bin/sh testuser && \
+    passwd -u testuser && \
     mkdir -p /home/testuser/.ssh && \
     ssh-keygen -A
 

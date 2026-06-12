@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 
+# VS Code source (cloned at build time)
+vendor/vscode/
+vendor/vscode-*/
+
 # Build output
 dist/
 out/
@@ -27,6 +31,8 @@ npm-debug.log*
 
 # Testing
 coverage/
+test-results/
+playwright-report/
 
 # Electron
 release/

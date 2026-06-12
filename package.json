@@ -1,0 +1,37 @@
+{
+  "name": "pocketshell-desktop",
+  "version": "1.0.0",
+  "description": "A terminal-first, agent-aware desktop SSH client for the developer workstation you already use — a desktop companion to [PocketShell Android](https://github.com/alexeygrigorev/pocketshell).",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "test"
+  },
+  "scripts": {
+    "lint": "echo \"lint not configured yet\"",
+    "test": "echo \"unit tests not configured yet\"",
+    "build": "bash scripts/build.sh",
+    "test:e2e": "npx playwright test",
+    "test:e2e:headed": "npx playwright test --headed",
+    "test:docker:up": "docker compose -f test/fixtures/docker/docker-compose.yml up -d --build",
+    "test:docker:down": "docker compose -f test/fixtures/docker/docker-compose.yml down -v",
+    "package": "echo \"packaging not configured yet\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexeygrigorev/pocketshell-desktop.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/alexeygrigorev/pocketshell-desktop/issues"
+  },
+  "homepage": "https://github.com/alexeygrigorev/pocketshell-desktop#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "ssh2": "^1.17.0",
+    "typescript": "^6.0.3"
+  }
+}

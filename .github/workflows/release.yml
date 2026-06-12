@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  # ── Build per platform ────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            runner: windows-latest
+            ext: zip
+          - target: darwin-arm64
+            runner: macos-latest
+            ext: zip
+          - target: darwin-x64
+            runner: macos-13
+            ext: zip
+          - target: linux-x64
+            runner: ubuntu-latest
+            ext: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Clone VS Code (shallow)
+        run: |
+          if [ ! -d vendor/vscode/.git ]; then
+            git clone --depth 1 https://github.com/microsoft/vscode.git vendor/vscode
+          fi
+        shell: bash
+
+      - name: Apply branding
+        shell: bash
+        run: |
+          if [ -f product.json ]; then
+            cp product.json vendor/vscode/product.json
+          fi
+
+      - name: Build
+        run: npm run build
+        shell: bash
+
+      - name: Package
+        run: npm run package -- --target ${{ matrix.target }}
+        shell: bash
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketshell-${{ matrix.target }}
+          path: dist/pocketshell-${{ matrix.target }}.${{ matrix.ext }}
+          retention-days: 5
+
+  # ── Create GitHub Release ─────────────────────────────────────────────
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: pocketshell-*
+
+      - name: List artifacts
+        run: find artifacts/ -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/**/*

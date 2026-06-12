@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  # ── Lint ──────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+  # ── Build ─────────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Clone VS Code (shallow)
+        run: |
+          if [ ! -d vendor/vscode/.git ]; then
+            git clone --depth 1 https://github.com/microsoft/vscode.git vendor/vscode
+          fi
+        shell: bash
+
+      - name: Apply branding
+        shell: bash
+        run: |
+          if [ -f product.json ]; then
+            cp product.json vendor/vscode/product.json
+          fi
+
+      - name: Build
+        run: npm run build
+        shell: bash
+
+  # ── Unit tests ────────────────────────────────────────────────────────
+  test-unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
+
+  # ── E2E tests ─────────────────────────────────────────────────────────
+  test-e2e:
+    name: E2E tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Build Docker fixture
+        working-directory: test/fixtures/docker
+        run: docker compose build
+
+      - name: Start Docker fixture
+        working-directory: test/fixtures/docker
+        run: docker compose up -d --wait
+
+      - name: Wait for fixture healthy
+        working-directory: test/fixtures/docker
+        run: |
+          timeout 60 bash -c '
+            until docker compose ps | grep -q "healthy"; do
+              echo "Waiting for fixture to be healthy..."
+              sleep 2
+            done
+            echo "Fixture is healthy"
+          '
+
+      - name: Run E2E tests
+        run: npx playwright test
+        env:
+          SSH_HOST: localhost
+          SSH_PORT: 2222
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14
+
+      - name: Collect Docker logs on failure
+        if: failure()
+        working-directory: test/fixtures/docker
+        run: docker compose logs
+
+      - name: Tear down fixture
+        if: always()
+        working-directory: test/fixtures/docker
+        run: docker compose down -v
