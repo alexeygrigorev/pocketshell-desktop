@@ -1,0 +1,7 @@
+Port 22
+PermitRootLogin no
+PubkeyAuthentication yes
+PasswordAuthentication no
+AllowTcpForwarding yes
+GatewayPorts no
+X11Forwarding no

@@ -1,0 +1,12 @@
+#!/bin/sh
+case "${1:-}" in
+  --version) printf 'uv fixture 0.0.0\n' ;;
+  tool)
+    shift
+    case "${1:-}" in
+      install) printf 'installed fixture tool %s\n' "${2:-unknown}" ;;
+      *) printf 'uv fixture: unknown tool subcommand\n' ;;
+    esac
+    ;;
+  *) printf 'uv fixture\n' ;;
+esac

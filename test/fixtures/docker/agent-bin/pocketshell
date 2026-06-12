@@ -1,0 +1,126 @@
+#!/bin/sh
+set -eu
+
+FIXDIR="/opt/pocketshell-agent-fixtures"
+VERSION="${PS_VERSION:-0.0.0}"
+
+case "${1:-}" in
+  --version)
+    printf '%s\n' "$VERSION"
+    ;;
+  usage)
+    if [ "${2:-}" = "--json" ]; then
+      cat "$FIXDIR/pocketshell-usage.ndjson"
+    else
+      cat "$FIXDIR/pocketshell-usage.ndjson"
+    fi
+    ;;
+  sessions)
+    shift
+    case "${1:-}" in
+      list) cat "$FIXDIR/pocketshell-sessions-list.txt" ;;
+      :*)  printf 'Created and attached to session %s\n' "${1#:}" ;;
+      [0-9]*)
+        sessions="claude-main codex opencode-lab"
+        idx=1
+        for s in $sessions; do
+          if [ "$idx" = "$1" ]; then printf 'Attached to session %s\n' "$s"; exit 0; fi
+          idx=$((idx + 1))
+        done
+        printf 'Unknown session index %s\n' "$1" >&2; exit 1 ;;
+      *)
+        case "$1" in
+          claude-main|codex|opencode-lab) printf 'Attached to session %s\n' "$1" ;;
+          *) printf 'Created and attached to session %s\n' "$1" ;;
+        esac ;;
+    esac
+    ;;
+  jobs)
+    shift
+    case "${1:-}" in
+      list) cat "$FIXDIR/pocketshell-jobs-list.txt" ;;
+      add) shift; printf 'Created job 4\n' ;;
+      edit) shift; printf 'Updated job %s\n' "${1:-1}" ;;
+      remove) shift; printf 'Removed job %s\n' "${1:-1}" ;;
+      *) printf 'Unknown jobs subcommand\n' >&2; exit 1 ;;
+    esac
+    ;;
+  agent-log)
+    # Parse --engine, --session, --tail, --json, --cwd
+    engine=""
+    session=""
+    json=0
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --engine) engine="$2"; shift 2 ;;
+        --session) session="$2"; shift 2 ;;
+        --json) json=1; shift ;;
+        --tail) shift 2 ;;
+        --cwd) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    case "$engine" in
+      claude) dir="$HOME/.claude/projects/-workspace-pocketshell"; file="pocketshell-claude.jsonl" ;;
+      codex) dir="$HOME/.codex/sessions/2026/05/22"; file="pocketshell-codex.jsonl" ;;
+      opencode) dir="$HOME/.local/share/opencode"; file="pocketshell-rows.jsonl" ;;
+      *) printf 'Unknown engine: %s\n' "$engine" >&2; exit 1 ;;
+    esac
+    if [ "$json" = "1" ]; then
+      count=$(wc -l < "$dir/$file" 2>/dev/null || echo 0)
+      printf '{"count":%s,"engine":"%s","path":"%s/%s","session":"%s"}\n' "$count" "$engine" "$dir" "$file" "$session"
+    else
+      cat "$dir/$file" 2>/dev/null || true
+    fi
+    ;;
+  agent)
+    shift
+    kind="$1"; shift
+    dir=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --dir) dir="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [ -n "$dir" ]; then cd "$dir" 2>/dev/null || true; fi
+    exec "$kind" "$@"
+    ;;
+  repos)
+    shift
+    case "${1:-}" in
+      list) printf '/home/testuser/git/pocketshell\n/home/testuser/git/test-project\n' ;;
+      *) printf '[]\n' ;;
+    esac
+    ;;
+  env)
+    shift
+    case "${1:-}" in
+      list) printf 'API_KEY=***\nDATABASE_URL=sqlite:///test.db\n' ;;
+      *) printf 'ok\n' ;;
+    esac
+    ;;
+  logs)
+    shift
+    case "${1:-}" in
+      tail) printf '{"ts":"2026-01-01T00:00:00Z","kind":"agent","msg":"fixture log entry"}\n' ;;
+      path) printf '/home/testuser/.local/state/pocketshell/logs/agent-20260101.jsonl\n' ;;
+      *) printf '{"ts":"2026-01-01T00:00:00Z","kind":"agent","msg":"fixture log entry"}\n' ;;
+    esac
+    ;;
+  hooks)
+    shift
+    case "${1:-}" in
+      install) printf 'Hooks installed for claude, codex, opencode\n' ;;
+      uninstall) printf 'Hooks removed\n' ;;
+      status) printf 'claude: installed\ncodex: not installed\nopencode: not installed\n' ;;
+      events) printf '{"ts":"2026-01-01T00:00:00Z","engine":"claude","state":"idle"}\n' ;;
+      *) printf 'Unknown hooks subcommand\n' >&2; exit 1 ;;
+    esac
+    ;;
+  *)
+    printf 'pocketshell fixture: unknown command %s\n' "${1:-}" >&2
+    exit 1
+    ;;
+esac

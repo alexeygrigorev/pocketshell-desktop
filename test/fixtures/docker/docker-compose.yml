@@ -1,0 +1,15 @@
+services:
+  agents:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "2222:22"
+    healthcheck:
+      test: ["CMD", "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2",
+             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+             "-i", "/root/test_key", "testuser@localhost", "true"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 5s

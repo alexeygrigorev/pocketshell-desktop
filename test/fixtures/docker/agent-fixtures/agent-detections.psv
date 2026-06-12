@@ -1,0 +1,4 @@
+engine|session|pane|pid|cwd|detected_at
+claude|pocketshell-claude|0|12345|/home/testuser/git/pocketshell|2026-01-01T00:00:00Z
+codex|pocketshell-codex|1|12346|/home/testuser/git/pocketshell|2026-01-01T00:01:00Z
+opencode|pocketshell-rows|2|12347|/home/testuser/git/test-project|2026-01-01T00:02:00Z

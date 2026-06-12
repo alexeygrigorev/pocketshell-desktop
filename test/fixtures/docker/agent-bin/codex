@@ -1,0 +1,5 @@
+#!/bin/sh
+case "${1:-}" in
+  --version) printf 'Codex fixture 0.0.0\n' ;;
+  *)          printf 'Codex fixture: live provider calls disabled.\n' ;;
+esac

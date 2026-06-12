@@ -1,0 +1,5 @@
+#!/bin/sh
+case "${1:-}" in
+  --version) printf 'Claude Code fixture 0.0.0\n' ;;
+  *)          printf 'Claude Code fixture: live provider calls disabled.\n' ;;
+esac

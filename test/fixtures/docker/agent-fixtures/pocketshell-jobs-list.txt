@@ -1,0 +1,3 @@
+1  fix-auth-bug       TODO     Implement JWT token refresh        claude     2026-01-01 00:00
+2  add-tests          WIP      Add integration tests for login     codex      2026-01-01 00:01
+3  refactor-api       TODO     Refactor API to use FastAPI         opencode   2026-01-01 00:02

@@ -1,0 +1,4 @@
+{"ts":"2026-01-01T00:00:00Z","engine":"claude","model":"sonnet","in":1200,"out":340,"cost_usd":0.012}
+{"ts":"2026-01-01T00:01:00Z","engine":"claude","model":"opus","in":5400,"out":1200,"cost_usd":0.087}
+{"ts":"2026-01-01T00:02:00Z","engine":"codex","model":"codex-1","in":800,"out":200,"cost_usd":0.005}
+{"ts":"2026-01-01T00:03:00Z","engine":"opencode","model":"gemini-2.5-pro","in":3200,"out":900,"cost_usd":0.034}
