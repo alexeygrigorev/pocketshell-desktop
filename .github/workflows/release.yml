@@ -1,15 +1,11 @@
-name: Release
+name: Build
 
 on:
   push:
-    tags:
-      - "v*"
-
-env:
-  NODE_VERSION: "24"
+    tags: ["v*"]
+  workflow_dispatch:
 
 jobs:
-  # ── Run unit tests first ──────────────────────────────────────────────
   test:
     name: Unit tests
     runs-on: ubuntu-latest
@@ -18,8 +14,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          node-version: "24"
 
       - name: Install dependencies
         run: npm ci
@@ -27,84 +22,11 @@ jobs:
       - name: Run unit tests
         run: npm test
 
-  # ── Build and package per platform ────────────────────────────────────
-  build:
-    name: Build and package (${{ matrix.target }})
-    runs-on: ${{ matrix.runner }}
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: win32-x64
-            runner: windows-latest
-            ext: exe
-          - target: darwin-arm64
-            runner: macos-latest
-            ext: dmg
-          - target: darwin-x64
-            runner: macos-13
-            ext: dmg
-          - target: linux-x64
-            runner: ubuntu-latest
-            ext: AppImage
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      # Linux needs extra deps for electron-builder
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools rpm
-
-      - name: Clone VS Code (shallow)
-        run: |
-          if [ ! -d vendor/vscode/.git ]; then
-            git clone --depth 1 https://github.com/microsoft/vscode.git vendor/vscode
-          fi
-        shell: bash
-
-      - name: Apply branding
-        shell: bash
-        run: |
-          if [ -f product.json ]; then
-            cp product.json vendor/vscode/product.json
-          fi
-
-      - name: Build
-        run: npm run build
-        shell: bash
-
-      - name: Package with electron-builder
-        run: npm run package -- --target ${{ matrix.target }}
-        shell: bash
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pocketshell-${{ matrix.target }}
-          path: |
-            dist/*.exe
-            dist/*.dmg
-            dist/*.AppImage
-            dist/*.deb
-          retention-days: 5
-          if-no-files-found: warn
-
-  # ── Create GitHub Release ─────────────────────────────────────────────
   release:
     name: Create release
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: build
     permissions:
       contents: write
     steps:
@@ -112,32 +34,49 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts/
-          pattern: pocketshell-*
-
-      - name: List artifacts
-        run: find artifacts/ -type f | sort
-
-      - name: Generate release notes
-        id: notes
+      - name: Generate version
+        id: version
         run: |
-          # Get the previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            echo "## What's Changed" > release-notes.md
-            echo "" >> release-notes.md
-            git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" >> release-notes.md
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
           else
-            echo "## Initial Release" > release-notes.md
+            VERSION="dev-$(date +'%Y%m%d-%H%M%S')-$(echo ${{ github.sha }} | cut -c 1-7)"
           fi
-          cat release-notes.md
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release-notes.md
+          body_path: docs/release-notes-v0.1.0.md
           generate_release_notes: false
-          files: artifacts/**/*
+
+  # ── Windows build (uncomment when Electron app shell is ready) ─────────
+  # build-windows:
+  #   name: Build Windows installer
+  #   needs: test
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: "24"
+  #
+  #     - name: Install dependencies
+  #       run: npm ci
+  #
+  #     - name: Build
+  #       run: npm run build
+  #       shell: bash
+  #
+  #     - name: Package Windows installer
+  #       run: npm run package -- --target win32-x64
+  #       shell: bash
+  #
+  #     - name: Upload installer
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: pocketshell-${{ github.ref_name }}-windows-x64
+  #         path: dist/*.exe
+  #         if-no-files-found: error
