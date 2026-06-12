@@ -52,6 +52,18 @@ rsync -a --delete \
 	--exclude='tsconfig.tsbuildinfo' \
 	"$SOURCE_DIR/" "$EXTENSION_DIR/"
 
+# --- Install extension npm dependencies ---
+if [[ ! -d "$EXTENSION_DIR/node_modules" || -z "$(ls -A "$EXTENSION_DIR/node_modules" 2>/dev/null)" ]]; then
+	info "Installing extension npm dependencies..."
+	cd "$EXTENSION_DIR"
+	npm install --production || {
+		echo "ERROR: npm install failed for extension dependencies"
+		exit 1
+	}
+else
+	info "Extension node_modules already present, skipping npm install."
+fi
+
 cd "$VSCODE_DIR"
 
 # --- Compile extension if out/ is missing ---

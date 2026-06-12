@@ -82,13 +82,37 @@ export class ConnectionService {
 		return store.add(host);
 	}
 
+	/**
+	 * Update an existing host.
+	 * @throws Error if the host store is not available.
+	 */
+	async updateHost(host: Host): Promise<boolean> {
+		const store = await this.ensureStore();
+		if (!store) {
+			throw new Error('Database not available');
+		}
+		return store.update(host);
+	}
+
+	/**
+	 * Delete a host by id.
+	 * @throws Error if the host store is not available.
+	 */
+	async deleteHost(id: number): Promise<boolean> {
+		const store = await this.ensureStore();
+		if (!store) {
+			throw new Error('Database not available');
+		}
+		return store.delete(id);
+	}
+
 	// -- Connection operations --------------------------------------------------
 
 	/**
-	 * Connect to a host using default key path (~/.ssh/id_rsa).
+	 * Connect to a host using its stored keyPath.
 	 *
 	 * For v0.1.0, this uses a simple authentication model:
-	 *   - Key: ~/.ssh/id_rsa
+	 *   - Key: host.keyPath (expanded ~ to home dir)
 	 *   - knownHosts: acceptAll
 	 */
 	async connect(hostId: number): Promise<SshConnection> {
@@ -98,13 +122,16 @@ export class ConnectionService {
 			throw new Error(`Host not found: ${hostId}`);
 		}
 
-		const defaultKeyPath = path.join(os.homedir(), '.ssh', 'id_rsa');
+		// Expand ~ to home directory
+		const expandedKeyPath = host.keyPath.startsWith('~')
+			? path.join(os.homedir(), host.keyPath.slice(1))
+			: host.keyPath;
 
 		const params: SshConnectParams = {
 			host: host.hostname,
 			port: host.port,
 			user: host.username,
-			key: { type: 'path', file: defaultKeyPath },
+			key: { type: 'path', file: expandedKeyPath },
 			knownHosts: { type: 'acceptAll' },
 		};
 

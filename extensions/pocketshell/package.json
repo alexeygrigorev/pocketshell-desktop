@@ -40,8 +40,44 @@
 			{
 				"command": "pocketshell.disconnect",
 				"title": "PocketShell: Disconnect"
+			},
+			{
+				"command": "pocketshell.editHost",
+				"title": "PocketShell: Edit Host"
+			},
+			{
+				"command": "pocketshell.deleteHost",
+				"title": "PocketShell: Delete Host"
+			},
+			{
+				"command": "pocketshell.openRemoteFile",
+				"title": "PocketShell: Open Remote File"
 			}
 		],
+		"menus": {
+			"view/item/context": [
+				{
+					"command": "pocketshell.connect",
+					"when": "view == pocketshell.hosts && viewItem == disconnectedHost",
+					"group": "inline"
+				},
+				{
+					"command": "pocketshell.disconnect",
+					"when": "view == pocketshell.hosts && viewItem == connectedHost",
+					"group": "inline"
+				},
+				{
+					"command": "pocketshell.editHost",
+					"when": "view == pocketshell.hosts",
+					"group": "1_manage"
+				},
+				{
+					"command": "pocketshell.deleteHost",
+					"when": "view == pocketshell.hosts",
+					"group": "1_manage"
+				}
+			]
+		},
 		"viewsContainers": {
 			"activitybar": [
 				{

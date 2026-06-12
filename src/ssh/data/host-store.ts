@@ -372,7 +372,10 @@ export async function initStore(dbPath?: string): Promise<HostStore> {
   // Ensure parent directory exists
   fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
 
-  const SQL = await initSqlJs();
+  const SQL = await initSqlJs({
+    locateFile: (file: string) =>
+      path.join(__dirname, '..', '..', '..', 'node_modules', 'sql.js', 'dist', file),
+  });
 
   let db: SqlJsDatabase;
   if (fs.existsSync(resolvedPath)) {

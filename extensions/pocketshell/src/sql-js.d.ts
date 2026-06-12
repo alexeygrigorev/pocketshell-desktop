@@ -26,11 +26,15 @@ declare module 'sql.js' {
     values: (string | number | null | Uint8Array)[][];
   }
 
+  export interface SqlJsConfig {
+    locateFile?: (file: string) => string;
+  }
+
   export interface SqlJsStatic {
     Database: new (data?: ArrayLike<number> | Buffer) => Database;
   }
 
-  export type InitSqlJs = () => Promise<SqlJsStatic>;
+  export type InitSqlJs = (config?: SqlJsConfig) => Promise<SqlJsStatic>;
   const initSqlJs: InitSqlJs;
   export default initSqlJs;
 }
