@@ -68,9 +68,11 @@ Build strategy (from research, 2026-06-12):
 - **Backend fixes applied**: ConnectConfig (not ConnectConfiguration), non-null assertions, unused imports removed
 - **Extension features complete**: edit/delete hosts, context menus, terminal profile host picker, open remote file, keyPath input
 - **Build pipeline fixed**: extension npm deps installed in build-extension.sh and dev.sh
+- **Extension activates**: confirmed via exthost.log — all 6 commands registered, `onStartupFinished` event, no errors
+- **Root cause found**: `product.json` had `defaultChatAgent: null` which crashed the onboarding module's top-level `assertDefined()`, preventing renderer/extension host from starting. Fixed by providing a valid config.
+- **Dev data consolidated**: `--user-data-dir .dev-data/` keeps all config/logs/cache in the project directory
 
 ### What does NOT exist yet:
-- Extension activation verified in running app (extension host logs inconclusive under Xvfb)
 - End-to-end SSH terminal in the app UI (connect, show terminal, type commands)
 - Windows zip build tested (CI workflow written but not run)
 - E2E tests
@@ -100,8 +102,8 @@ Build strategy (from research, 2026-06-12):
 | #29 | v0.1.0 release tag and GitHub release | Open — blocked by #30, #33 |
 | #28 | Windows zip build | Open — CI workflow written, needs test run |
 
-### Latest commit: `33744a1` (2026-06-12)
-Complete extension features — host management, context menus, WASM fix, build pipeline fix
+### Latest commit: `863c4f7` (2026-06-12)
+Fix extension activation — defaultChatAgent, local storage, dev-data dir
 
 ### Recently closed issues (#1-#27):
 These tracked backend module scaffolding (connection manager, SFTP client, etc.).
