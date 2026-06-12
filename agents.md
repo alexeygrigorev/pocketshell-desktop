@@ -98,8 +98,8 @@ Build strategy (from research, 2026-06-12):
 | #29 | v0.1.0 release tag and GitHub release | Open — blocked by #30, #33 |
 | #28 | Windows zip build | Open — CI workflow written, needs test run |
 
-### Latest commit: `eb245cd` (2026-06-12)
-Build infrastructure, extension fixes, Windows CI workflow
+### Latest commit: `2573f79` (2026-06-12)
+Track extension source in git, fix blockers (sql.js, async init, FK removal)
 
 ### Recently closed issues (#1-#27):
 These tracked backend module scaffolding (connection manager, SFTP client, etc.).
@@ -170,7 +170,7 @@ All closed prematurely — the code exists but nothing is integrated into a work
 
 - **VS Code fork** (TypeScript) — `vendor/vscode/`
 - **ssh2** — SSH/SFTP connections
-- **better-sqlite3** — Local storage (host configs)
+- **sql.js** — Local storage (host configs, pure WASM SQLite)
 - **tmux -CC** — Terminal session management
 - **Monaco** — Code editor (comes with VS Code)
 - **Playwright** — E2E tests
@@ -182,13 +182,14 @@ All closed prematurely — the code exists but nothing is integrated into a work
 
 | Path | Purpose |
 |------|---------|
-| `vendor/vscode/` | VS Code v1.125.0 source |
+| `vendor/vscode/` | VS Code v1.125.0 source (gitignored, cloned at build time) |
 | `vendor/vscode/product.json` | PocketShell branding |
-| `vendor/vscode/extensions/pocketshell/` | Our extension (being created) |
+| `extensions/pocketshell/` | Extension source (tracked in git, synced to vendor/) |
+| `vendor/vscode/extensions/pocketshell/` | Extension build dir (synced from `extensions/`) |
 | `vendor/vscode/build/gulpfile.extensions.ts` | Extension compilation registry |
 | `vendor/vscode/extensions/tsconfig.base.json` | Base tsconfig for all extensions |
 | `src/` | Our backend modules (SSH, SFTP, tmux, etc.) |
 | `scripts/build-base.sh` | Full VS Code base build |
-| `scripts/build-extension.sh` | Fast extension-only rebuild |
+| `scripts/build-extension.sh` | Sync + fast extension rebuild |
 | `process.md` | Three-actor process definition |
-| `.github/workflows/release.yml` | CI (Windows build commented out) |
+| `.github/workflows/release.yml` | CI (Windows zip build + release) |
