@@ -2,133 +2,170 @@
 
 All notable changes to PocketShell Desktop are documented in this file.
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-06-12
+> **Scope note.** The modules described below were built and unit-tested in
+> `src/`. For v0.1.0, only the **connect + terminal + basic SFTP** foundation is
+> wired into the extension and verified end-to-end (on Linux). The agent-aware,
+> tmux, remote-file-editor, command-palette, and utility-panel modules exist in
+> source but are **deferred** to later releases. Each section is tagged
+> accordingly.
 
-### Phase 1: Connection & Terminal
+## [Unreleased]
 
-#### SSH Connection Management
-- **Classes:** `SshClient`, `ConnectionManager`, `ConnectionPool`, `HostStore`, `KeyStore`
-- **Description:** Full SSH lifecycle management using the `ssh2` library. Host CRUD with persistent storage (`HostStore`), Ed25519/RSA key management (`KeyStore`), connection pooling, automatic reconnect on failure, and SSH config file parsing for importing existing host definitions.
-- **Tests:** 4 test files (`host-store`, `key-store`, `ssh-client`, `ssh-config-parser`)
+### Deferred (built, not yet wired into the extension)
 
-#### Auto-Connect
-- **Classes:** `AutoConnectService`
-- **Description:** Connects to the configured default host on application startup. Reads the last-used host from `SettingsStore` and initiates the SSH session automatically.
-- **Tests:** 2 test files (`auto-connect`, `settings`)
+The following subsystems are implemented and unit-tested in `src/`, but are not
+part of the v0.1.0 release. They are the v0.2+ roadmap:
 
-#### Integrated Terminal
-- **Classes:** `TerminalManager`, `SshTerminalBackend`, `PtyAdapter`
-- **Description:** Terminal emulation backed by an SSH PTY channel. Input keystrokes are forwarded over SSH; output is rendered through xterm.js. Supports resize events, terminal themes, and copy/paste.
-- **Tests:** 3 test files (`ssh-terminal-backend`, `ssh-terminal-integration`, `terminal-manager`)
+- tmux control mode (`-CC` protocol) — `TmuxClient`, `TmuxEventStream`,
+  `TmuxSessionManager`.
+- Remote file editor (Monaco over SFTP) — `DocumentManager`, `RemoteDocument`,
+  `RemoteSaveManager`.
+- Agent awareness — `AgentDetector`, conversation parsers, `AgentMessenger`,
+  `ReplyQueue`, slash command palette, `HookManager`.
+- Git repository browsing via `pocketshell repos`.
+- Command palette and utility panels (usage, jobs, env, logs, bootstrap).
 
-#### tmux Control Mode Client
-- **Classes:** `TmuxClient`, `TmuxEventStream`, `TmuxSessionManager`
-- **Description:** Full tmux `-CC` control mode protocol implementation. Parses the tmux wire protocol (notifications, layout changes, output), maintains session/window/pane state, and provides a snapshot builder for rendering the tmux session tree. Supports session creation, window splitting, pane navigation, and detach.
-- **Tests:** 7 test files (`client`, `parser`, `state`, `stream`, `snapshot-builder`, `tmux-session-integration`, `tmux-session-manager`)
+### Pending
 
-#### Command Registry
-- **Classes:** `CommandRegistry`, `CommandChipRegistry`
-- **Description:** Central command registration system. Binds commands to keybindings, provides discoverable command chips for the UI, and generates keybinding entries for the editor.
-- **Tests:** 4 test files (`chips`, `command-registry`, `keybinding-generator`, `snippets`)
+- Windows and macOS release builds verified by a green `release.yml` run (#28).
+- A committed integration test capturing the connect→terminal flow (#30).
+- First green cross-platform production build (#35).
 
-### Phase 2: Remote File Access
+## [0.1.0] - 2026-06-13
 
-#### SFTP File Browser
-- **Classes:** `FileBrowser`, `SftpClient`, `RemoteFileWatcher`
-- **Description:** Browse the remote filesystem over SFTP. Directory listing with file type/size/permissions, file watching for change notifications, and recursive directory traversal. SFTP connections are pooled and reused.
-- **Tests:** 4 test files (`file-browser`, `file-watcher`, `sftp-client`, `sftp-integration`)
+### Summary
 
-#### Remote File Editor
-- **Classes:** `DocumentManager`, `RemoteDocument`, `RemoteSaveManager`
-- **Description:** View and edit remote files in Monaco Editor. Documents are loaded over SFTP, tracked for dirty state, and saved back to the remote host. Language detection based on file extension and content heuristics.
-- **Tests:** 4 test files (`document-manager`, `language-detection`, `remote-document`, `save-manager`)
+**Connect + terminal foundation.** v0.1.0 is the first release of PocketShell
+Desktop, a VS Code fork that turns the editor into a terminal-first SSH client.
 
-#### Git Repository Browser
-- **Classes:** `GitClient`, `PocketShellRepos`
-- **Description:** Execute git commands over SSH to browse repository status, log, branches, and blame. Integrates with the `pocketshell repos` command for discovering git repositories on the remote host. Parsers for git status, log, branch, and blame output.
-- **Tests:** 7 test files (`blame-parser`, `branch-parser`, `git-client`, `git-integration`, `log-parser`, `pocketshell-repos`, `status-parser`)
+What ships and is **verified end-to-end on Linux**:
 
-### Phase 3: Agent Awareness
+- SSH connection management — host CRUD, connect by password/key, run remote
+  commands, clean disconnect.
+- Integrated terminal — a VS Code terminal backed by an SSH PTY channel, with
+  resize forwarding.
+- Basic SFTP — remote filesystem access.
 
-#### Agent Detection
-- **Classes:** `AgentDetector`, `PocketshellAgentDetector`
-- **Description:** Detects running AI coding agents (Claude Code, Codex, OpenCode) in tmux panes by inspecting process lists and pane titles. Fires events when agents start and stop.
-- **Tests:** 2 test files (`agent-detector`, `pocketshell-detector`)
+What is **redesigned but not yet proven**:
 
-#### Conversation View
-- **Classes:** `SessionReader`, conversation parsers (Claude, Codex, OpenCode)
-- **Description:** Reads agent conversation logs from the remote host. Parses JSONL and structured log formats for each supported agent. Displays human/assistant message pairs in a conversation panel.
-- **Tests:** 4 test files (`claude-parser`, `codex-parser`, `opencode-parser`, `session-reader`)
+- The release build pipeline (#35) is split into `prepare-base` (builds & caches
+  the VS Code fork base) → `build` (compiles the extension + production
+  packaging) → `release` (GitHub Release on tag). Reviewed and committed; not
+  yet verified by a green release run. Windows and macOS builds are unverified.
 
-#### Agent Reply
-- **Classes:** `AgentMessenger`, `ReplyQueue`
-- **Description:** Send replies to agent conversations from the conversation panel. Messages are queued and delivered over the SSH channel to the agent's stdin.
-- **Tests:** 2 test files (`agent-messenger`, `reply-queue`)
+### Added — VS Code fork setup
 
-#### Slash Command Palette
-- **Classes:** `SlashCommandPalette`, `FuzzyMatcher`
-- **Description:** Agent-aware command palette for slash commands. Includes built-in agent commands, config commands, and session commands. Fuzzy matching for command discovery.
-- **Tests:** 3 test files (`builtin-commands`, `command-palette`, `fuzzy-matcher`)
+- Cloned VS Code at a pinned commit (`037f7fbe…`) as the editor base.
+- PocketShell added as a built-in extension registered in
+  `gulpfile.extensions.ts`.
+- Product branding applied via `product.json` (name, application name, quality,
+  data dirs `~/.pocketshell/` and `~/.pocketshell-shared/`).
+- Fast extension-only build (`scripts/build-extension.sh`, ~500ms) and one-command
+  dev launch (`scripts/dev.sh`).
 
-#### Agent Hooks
-- **Classes:** `HookManager`
-- **Description:** Install, manage, and report status of agent hook scripts on the remote host. Hooks allow custom behavior when agents start, stop, or produce output.
-- **Tests:** 1 test file (`hook-manager`)
+### Added — SSH connect + terminal + SFTP (verified on Linux)
 
-### Phase 4: PocketShell Integration
+- `src/ssh/` — `SshClient`, `ConnectionManager`, `ConnectionPool`, `HostStore`
+  (SQLite via `sql.js`), `KeyStore`. SSH lifecycle over `ssh2`: host CRUD,
+  Ed25519/RSA key management, connection pooling, auto-reconnect, SSH config
+  import.
+- `src/terminal/` — `TerminalManager`, `SshTerminalBackend`, `PtyAdapter`.
+  Terminal backed by an SSH PTY channel with resize forwarding.
+- `src/files/` — `SftpClient`, `FileBrowser`, `RemoteFileWatcher`. Remote
+  filesystem access over SFTP.
+- Extension host activation verified: all commands register, `onStartupFinished`
+  fires, no errors. Connect→terminal flow verified by a live test run inside the
+  real extension host against a Docker SSH fixture (3/3 passing).
 
-#### Usage Panel
-- **Classes:** `UsageClient`
-- **Description:** Integrates with `pocketshell usage` to display token and cost usage for AI agent sessions. Parses NDJSON usage output.
-- **Tests:** 2 test files (`usage-client`, `usage-parser`)
+### Added — CI
 
-#### Jobs Management
-- **Classes:** `JobsClient`
-- **Description:** Integrates with `pocketshell jobs` to list, monitor, and manage background agent jobs on the remote host.
-- **Tests:** 2 test files (`jobs-client`, `jobs-parser`)
+- GitHub Actions CI on push to `main` and on PRs: lint, unit tests, and E2E
+  tests against a Docker SSH fixture. **CI is green.**
+- Cross-platform `release.yml` with a matrix across Linux, Windows, and macOS.
+- Per-step `timeout-minutes` so a hang fails fast instead of running 6 hours.
 
-#### Environment Management
-- **Classes:** `EnvClient`
-- **Description:** Integrates with `pocketshell env` to view and manage environment variables for agent sessions.
-- **Tests:** 1 test file (`env-client`)
+### Changed — release build pipeline (#35)
 
-#### Logs Viewer
-- **Classes:** `LogsClient`
-- **Description:** Integrates with `pocketshell logs` to stream and display agent session logs.
-- **Tests:** 2 test files (`logs-client`, `log-parser`)
+- `release.yml` split into three jobs:
+  1. **`prepare-base`** — clones VS Code, `npm install`, `gulp compile`, downloads
+     Electron; caches the compiled base under
+     `vscode-{REF}-{platform}-base-v2`.
+  2. **`build`** — restores the base with `fail-on-cache-miss: true`, applies
+     PocketShell branding, syncs and compiles the extension, runs
+     `gulp vscode-{platform}`, and packages the output.
+  3. **`release`** — attaches the platform artifacts to a GitHub Release on `v*`
+     tag push.
+- This fixes the prior 6-hour timeout, where the cold VS Code compile never
+  finished and so the cache was never written (catch-22).
 
-#### Bootstrap Helper
-- **Classes:** `BootstrapManager`, `VersionChecker`
-- **Description:** Detects whether the `pocketshell` CLI is installed on the remote host, checks version compatibility, and assists with installation or upgrade.
-- **Tests:** 2 test files (`bootstrap-manager`, `version-checker`)
+### Added — backend modules (built and unit-tested; deferred from the extension)
 
-### Phase 5: Polish & Release
+The modules below are implemented and covered by unit tests, but are **not wired
+into the v0.1.0 extension**. They are recorded here for completeness and are the
+v0.2+ roadmap.
 
-#### UI Theme
-- **Classes:** `ThemeManager`
-- **Description:** Dense dark theme optimized for terminal-first workflows. Custom color palette, status bar indicators (connection status dots), and PocketShell branding elements.
-- **Tests:** 3 test files (`branding`, `status-dots`, `theme-manager`)
+#### Phase 1 — Connection & Terminal (extension-wired subset above; the rest below is deferred)
 
-#### Settings Panel
-- **Classes:** `SettingsPanel`, `SettingsSection`
-- **Description:** Settings UI with schema-driven sections for SSH hosts, terminal preferences, tmux configuration, and agent integration options. Settings are serialized to the application data directory.
-- **Tests:** 4 test files (`settings-panel`, `settings-schema`, `settings-section`, `settings-serializer`)
+- tmux Control Mode Client — `TmuxClient`, `TmuxEventStream`, `TmuxSessionManager`.
+  Full tmux `-CC` protocol: parses the wire protocol, maintains
+  session/window/pane state, snapshot builder for rendering. (7 test files.)
+- Command Registry — `CommandRegistry`, `CommandChipRegistry`. (4 test files.)
 
-#### E2E Test Suite
-- **Description:** Playwright E2E tests running against a Docker SSH fixture with pre-configured agent stubs. Covers all critical user scenarios: connection lifecycle, auto-connect, terminal interaction, file browsing, agent detection, utility commands, and bootstrap.
-- **Tests:** 8 spec files (`smoke`, `connection-lifecycle`, `auto-connect`, `terminal`, `files`, `agent-detection`, `utility`, `bootstrap`)
+#### Phase 2 — Remote File Access (SFTP browsing is wired; the editor/git below are deferred)
 
-#### CI/CD Pipeline
-- **Description:** GitHub Actions CI runs on every push to `main` and every PR. Jobs: lint, build (Windows/macOS/Linux matrix), unit tests, E2E tests against Docker fixture. Release workflow triggers on `v*` tags, builds platform-specific installers, and creates a GitHub Release.
+- Remote File Editor — `DocumentManager`, `RemoteDocument`, `RemoteSaveManager`.
+  Monaco editing over SFTP, dirty-state tracking, language detection. (4 test files.)
+- Git Repository Browser — `GitClient`, `PocketShellRepos`. git status/log/branch/blame
+  over SSH and `pocketshell repos` discovery. (7 test files.)
 
-### Test Summary
+#### Phase 3 — Agent Awareness (all deferred)
 
-| Category | Files | Test Cases |
-|----------|-------|------------|
-| Unit tests (Vitest) | 73 | 865 |
-| E2E tests (Playwright) | 8 | 89 |
-| **Total** | **81** | **954** |
+- Agent Detection — `AgentDetector`, `PocketshellAgentDetector`. Detects Claude
+  Code, Codex, OpenCode in tmux panes. (2 test files.)
+- Conversation View — `SessionReader` + parsers for Claude/Codex/OpenCode logs. (4 test files.)
+- Agent Reply — `AgentMessenger`, `ReplyQueue`. (2 test files.)
+- Slash Command Palette — `SlashCommandPalette`, `FuzzyMatcher`. (3 test files.)
+- Agent Hooks — `HookManager`. (1 test file.)
 
+#### Phase 4 — PocketShell Integration (all deferred)
+
+- Usage Panel — `UsageClient` (`pocketshell usage`). (2 test files.)
+- Jobs Management — `JobsClient` (`pocketshell jobs`). (2 test files.)
+- Environment Management — `EnvClient` (`pocketshell env`). (1 test file.)
+- Logs Viewer — `LogsClient` (`pocketshell logs`). (2 test files.)
+- Bootstrap Helper — `BootstrapManager`, `VersionChecker`. (2 test files.)
+
+#### Phase 5 — Polish (partially deferred)
+
+- UI Theme — `ThemeManager`. Dense dark theme, status-bar indicators. (3 test files.)
+- Settings Panel — `SettingsPanel`, `SettingsSection`. (4 test files.)
+- E2E Test Suite — Playwright specs against a Docker SSH fixture. (9 spec files.)
+
+### Test summary
+
+Counts below are derived from the repo at this release (`find test/unit -name
+'*.test.ts'`, `find test/e2e -name '*.spec.ts'`). "Test Cases" = the number of
+`it(...)` / `test(...)` / `test.skip(...)` declarations, comment lines excluded;
+1 `it.each(...)` table-driven case in `jobs-parser.test.ts` counts as 1
+declaration.
+
+| Category | Files | Test Cases (declarations) |
+|----------|-------|---------------------------|
+| Unit tests (Vitest) | 67 | 876 |
+| E2E tests (Playwright) | 9 | 81 (78 active + 3 `test.skip`) |
+| **Total** | **76** | **957** |
+
+### Known limitations
+
+- Linux-only end-to-end verification; Windows/macOS builds unverified.
+- Cross-platform build pipeline (#35) committed but not yet proven by a green
+  release run.
+- Agent-aware, tmux, remote-file-editor, command-palette, and utility-panel
+  modules are deferred.
+- No auto-update; single SSH connection at a time; English only; single theme.
+
+[Unreleased]: https://github.com/alexeygrigorev/pocketshell-desktop/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/alexeygrigorev/pocketshell-desktop/releases/tag/v0.1.0

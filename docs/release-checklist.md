@@ -1,94 +1,110 @@
 # Release Checklist — v0.1.0
 
-Pre-release checklist for PocketShell Desktop v0.1.0. Based on the release criteria defined in [plan.md](plan.md).
+Operational checklist for cutting the v0.1.0 release. It matches the current
+`release.yml` flow (issue #35), which is split into **`prepare-base`** →
+**`build`** → **`release`**. See [release-notes-v0.1.0.md](release-notes-v0.1.0.md)
+for what ships and [CHANGELOG.md](../CHANGELOG.md) for the full record.
 
-## Release Criteria
+> **Reality check.** As of this writing the connect→terminal flow is verified on
+> Linux, and CI is green for lint/unit/E2E. The cross-platform release build has
+> **not** yet produced a green run. Use this checklist for the first real tag
+> push; expect to debug at least one platform.
 
-### Connection & Terminal
+## 0. Pre-flight
 
-- [ ] App launches on Windows and auto-connects to configured host
-- [ ] SSH connection succeeds with password and key-based authentication
-- [ ] Host CRUD works: add, edit, delete, list hosts
-- [ ] SSH config file import works
-- [ ] Integrated terminal renders output and forwards input
-- [ ] Terminal resize events propagate correctly
-- [ ] tmux control mode client connects and parses session state
-- [ ] tmux sessions, windows, and panes render correctly
-- [ ] tmux session creation, window splitting, pane navigation work
-- [ ] tmux detach and re-attach work
+- [ ] `main` is green on CI (lint, unit, E2E).
+- [ ] The connect→terminal flow still works locally on Linux (launch via
+      `scripts/dev.sh`, connect to a host, open a terminal).
+- [ ] `VSCODE_REF` in `.github/workflows/release.yml` points at the intended
+      VS Code commit.
+- [ ] `product.json` has correct PocketShell branding and `quality: stable`.
+- [ ] `package.json` version is `0.1.0`.
+- [ ] `CHANGELOG.md` `[0.1.0]` section is finalized (date, summary, limitations).
 
-### Remote File Access
+## 1. Warm the base cache (optional but recommended)
 
-- [ ] File browser works: can navigate remote filesystem, view/edit files
-- [ ] Directory listing shows file type, size, and permissions
-- [ ] File viewer displays file contents in Monaco Editor (read-only mode)
-- [ ] File editor saves changes back to remote host via SFTP
-- [ ] File watcher detects remote file changes
-- [ ] Git repository browsing works via `pocketshell repos`
-- [ ] Git status, log, branch, and blame commands parse correctly
+The `prepare-base` job is the slow, cacheable step: it clones VS Code, runs
+`npm install`, `gulp compile`, and downloads Electron, then caches the result
+under `vscode-{VSCODE_REF}-{platform}-base-v2`.
 
-### Agent Awareness
+- [ ] Trigger `release.yml` via **`workflow_dispatch`** (Actions tab → "Build" →
+      "Run workflow"). This runs `prepare-base` and `build` but **not** `release`
+      (release only fires on a `v*` tag).
+- [ ] Confirm the three `prepare-base` jobs (linux-x64, win32-x64, darwin-arm64)
+      succeed and write the `*-base-v2` caches.
+- [ ] Confirm the `build` jobs restore the base (`fail-on-cache-miss: true`) and
+      produce artifacts.
 
-- [ ] Agent detection works: Claude Code detected in tmux pane
-- [ ] Codex and OpenCode agents also detected
-- [ ] Conversation view works: can read agent conversation
-- [ ] Conversation parsers handle all supported agent log formats
-- [ ] Reply-in-place works: can send a message to the agent
-- [ ] Reply queue delivers messages in order
-- [ ] Slash command palette discovers and executes agent commands
-- [ ] Fuzzy matching finds commands by partial input
-- [ ] Agent hooks can be installed and their status checked
+Warming the cache ahead of the tagged release avoids the cold-compile path
+during the real run. If you skip this, the tagged run will do the cold compile
+itself — it just takes longer.
 
-### PocketShell Integration
+### Cache caveats
 
-- [ ] `pocketshell usage` output parses and displays correctly
-- [ ] `pocketshell jobs` lists and manages remote jobs
-- [ ] `pocketshell env` shows environment variables
-- [ ] `pocketshell logs` streams and displays session logs
-- [ ] Bootstrap detects if `pocketshell` CLI is installed on remote host
-- [ ] Bootstrap assists with CLI installation or upgrade
-- [ ] Version checker flags incompatible CLI versions
+- **Force a base rebuild** (corrupted base, dependency bump, or just to be safe):
+  bump the cache key suffix in `release.yml` from `base-v2` to `base-v3` for both
+  the `prepare-base` write and the `build` read. The old caches age out on their
+  own.
+- **Eventual-consistency spurious miss.** GitHub's cache backend is eventually
+  consistent. A cache written by `prepare-base` is rarely invisible to `build`
+  in the *same* run, producing a spurious `fail-on-cache-miss` failure. This
+  heals on re-run: simply re-run the failed `build` job and the cache will be
+  found.
 
-### Testing
+## 2. Cut the tag
 
-- [ ] All unit tests pass (`npm test`)
-- [ ] All critical E2E scenarios pass against Docker fixture (`npx playwright test`)
-- [ ] Docker SSH fixture builds and starts cleanly
+Pushing a `v*` tag triggers the full `release.yml`: `prepare-base` → `build` →
+`release` (the `release` job runs only on a tag ref).
 
-### CI
+1. [ ] Tag: `git tag -a v0.1.0 -m "PocketShell Desktop v0.1.0"`
+2. [ ] Push the tag: `git push origin v0.1.0`
+3. [ ] Confirm the **Build** workflow triggered on the tag (Actions tab).
 
-- [ ] CI green on Windows (`windows-latest`)
-- [ ] CI green on macOS (`macos-latest`, `macos-13`)
-- [ ] CI green on Linux (`ubuntu-latest`)
-- [ ] E2E tests pass in CI against Docker fixture
+## 3. Watch the build
 
-### Distribution
+- [ ] `prepare-base` jobs hit the `*-base-v2` cache (cache-hit) for all three
+      platforms. If any miss, the job cold-compiles — let it finish (this is the
+      slow path, up to ~150 min budgeted).
+- [ ] `build` jobs restore the base, apply branding, compile the extension, and
+      run `gulp vscode-{platform}` for linux-x64, win32-x64, darwin-arm64.
+- [ ] Each `build` job uploads an artifact
+      (`pocketshell-linux-x64`, `pocketshell-windows-x64`, `pocketshell-darwin-arm64`).
+- [ ] If a `build` job fails with `fail-on-cache-miss` right after `prepare-base`
+      wrote the cache, **re-run the failed job** (eventual-consistency; see above)
+      before debugging further.
 
-- [ ] Windows installer produced (`.exe` or `.msi`)
-- [ ] macOS build produced (`.dmg` for arm64 and x64)
-- [ ] Linux build produced (`.tar.gz` or `.deb`)
+## 4. Verify the release
 
-## Version Bump
+- [ ] The `release` job runs and creates a GitHub Release for tag `v0.1.0`.
+- [ ] Three platform artifacts are attached:
+      - `pocketshell-v0.1.0-linux-x64.tar.gz`
+      - `pocketshell-v0.1.0-win32-x64.zip`
+      - `pocketshell-v0.1.0-darwin-arm64.tar.gz`
+- [ ] Edit the GitHub Release body and paste the contents of
+      [release-notes-v0.1.0.md](release-notes-v0.1.0.md).
+- [ ] Mark the release as "latest".
+- [ ] Confirm each asset's download link works.
 
-- [ ] Update `package.json` version to `0.1.0`
-- [ ] Verify `product.json` has correct branding and quality `stable`
-- [ ] Update `CHANGELOG.md` with release date
-- [ ] Verify all docs reference correct version
+## 5. Smoke-test the Linux artifact (verified platform)
 
-## Tag and Release
+- [ ] Download `pocketshell-v0.1.0-linux-x64.tar.gz`.
+- [ ] Extract and launch `pocketshell`.
+- [ ] Add a host, connect over SSH.
+- [ ] Open a terminal; confirm prompt, echo, and command output.
+- [ ] Disconnect and quit cleanly.
 
-1. [ ] Commit version bump: `git commit -m "chore: bump version to 0.1.0"`
-2. [ ] Create annotated tag: `git tag -a v0.1.0 -m "PocketShell Desktop v0.1.0"`
-3. [ ] Push commit: `git push origin main`
-4. [ ] Push tag: `git push origin v0.1.0`
-5. [ ] Verify CI release workflow triggers on the tag
-6. [ ] Verify all four platform builds succeed (win32-x64, darwin-arm64, darwin-x64, linux-x64)
-7. [ ] Verify GitHub Release is created with artifacts attached
-8. [ ] Edit GitHub Release body with release notes from [release-notes-v0.1.0.md](release-notes-v0.1.0.md)
-9. [ ] Mark the release as latest
+## 6. Smoke-test Windows + macOS (targeted, not yet verified)
 
-## Post-Release
+These are stretch goals for the first release. If a platform's artifact is
+broken, that is expected on the first run — record it as a follow-up rather than
+blocking the Linux-verified release.
 
-- [ ] Verify download links work on the GitHub Release page
-- [ ] Test installer on a clean Windows machine
-- [ ] Announce release (if applicable)
+- [ ] Windows: unzip, launch `pocketshell.exe`, connect, open a terminal.
+- [ ] macOS: extract, launch, connect, open a terminal.
+
+## 7. Post-release
+
+- [ ] Close issue #29 (v0.1.0 release).
+- [ ] Open follow-ups for any platform that did not build or run cleanly
+      (e.g. Windows build #28).
+- [ ] Update [agents.md](../agents.md) "Current State" with the release result.
