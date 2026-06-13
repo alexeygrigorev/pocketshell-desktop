@@ -1,8 +1,13 @@
 # PocketShell Desktop
 
+> **Read the docs in this order: [CLAUDE.md](CLAUDE.md) → [agents.md](agents.md) → [process.md](process.md).**
+> agents.md is the source of truth for project state; **process.md defines the mandatory
+> three-actor process** (orchestrator plans → implementer writes code/tests → reviewer
+> approves → orchestrator verifies & merges) that governs every change. Do not skip it.
+
 **Read [agents.md](agents.md) first** — it contains the critical project state
 that survives context compaction: architecture decisions, what exists, open issues,
-hard-won lessons, and user preferences.
+hard-won lessons, and user preferences. **Then read [process.md](process.md).**
 
 ## Key docs
 

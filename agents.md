@@ -3,6 +3,12 @@
 This file is the **compaction-surviving source of truth** for project context.
 CLAUDE.md reads from here. Keep this file updated as things change.
 
+> ⚠️ **Before any work, read [process.md](process.md).** The three-actor process
+> (orchestrator plans & dispatches → implementer writes code/tests in isolation →
+> reviewer approves → orchestrator verifies & merges) is **mandatory for every issue**.
+> No shortcuts, no direct implementation by the orchestrator.
+> Doc chain: CLAUDE.md → agents.md → process.md.
+
 ---
 
 ## Project: PocketShell Desktop
