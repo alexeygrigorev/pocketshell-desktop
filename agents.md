@@ -45,6 +45,12 @@ Build strategy (from research, 2026-06-12):
   - Extensions are plain files at `<app-root>/extensions/<name>/` (NOT in ASAR)
   - Only `node_modules` goes into `node_modules.asar`
 - `build-base.sh` currently runs the full production build — should be updated to use lighter dev build
+- **CI release build (`release.yml`, decision #35)**: pre-build & cache the VS Code fork
+  base ourselves, then build only the extension per release (don't recompile all of
+  VSCode every release). Split into `prepare-base` (clones + installs + `gulp compile`
+  + electron, saves a `vscode-{REF}-{platform}-base-v2` cache) + `build` (restores it
+  with `fail-on-cache-miss: true`, then branding + extension + `gulp vscode-{platform}`)
+  + `release`. See lesson 14.
 - Extension registered in `vendor/vscode/build/gulpfile.extensions.ts` compilations array
 - Per-extension gulp tasks auto-generated: `compile-extension:pocketshell`, `watch-extension:pocketshell`, `transpile-extension:pocketshell`
 
@@ -106,13 +112,15 @@ Build strategy (from research, 2026-06-12):
 | #30 | Create PocketShell built-in extension for VS Code fork | **Done in substance** — activates, connects, opens terminal in running app. Lacks a committed integration test. |
 | #31 | Strip down VS Code to essential extensions | **Done** — 89 stripped, 7 kept, compilations 46→5 |
 | #32 | Fast build pipeline: pre-built base + incremental extension | **Done** — build-base.sh, build-extension.sh, dev.sh all work |
-| #29 | v0.1.0 release tag and GitHub release | Open — blocked by #30, #33 |
-| #28 | Windows zip build | **Done** — cross-platform CI with matrix (5 platforms) |
+| #35 | Build strategy: pre-build & cache the VS Code fork base | **Implemented** — release.yml split into prepare-base (caches compiled base) + build (uses cache, builds extension + packages) + release. Reviewer-approved; unverified by a real run yet. |
+| #29 | v0.1.0 release tag and GitHub release | Open — blocked by #30, #33, #35 |
+| #28 | Windows zip build | Addressed by #35 (split + cache). Cross-platform matrix intact; not yet verified by a green run. |
 
-### Latest commit: `de6619e` (2026-06-13)
-ci: validate extension compile (not full VS Code build). Fixed 3 E2E failures
-(files.spec ×2, utility.spec ×1). CI green except cold-cache build job (one-time).
-**End-to-end connect→terminal VERIFIED in running app (EPIC #33/#30).**
+### Latest commit (2026-06-13): ci: split release build into cached base + extension build
+Pre-build the VS Code fork base ourselves and cache it (`base-v2`); releases only
+compile/package the extension. Fixes the 6h timeout (cold compile never finished → cache
+never written catch-22). Reviewer-approved; unverified by a real run yet.
+Run `git log --oneline -1` for the hash. **End-to-end connect→terminal VERIFIED (EPIC #33/#30).**
 
 ### Recently closed issues (#1-#27):
 These tracked backend module scaffolding (connection manager, SFTP client, etc.).
@@ -173,6 +181,18 @@ All closed prematurely — the code exists but nothing is integrated into a work
     launches but connect never verified" persisted locally. Fix: ensure ample free disk
     space, re-run `node build/lib/electron.ts` (it checksum-validates), and sanity-check
     the binary size after download.
+
+14. **Release build strategy: pre-build & cache the VS Code fork base.** Don't recompile
+    all of VS Code on every release. `release.yml` is split into `prepare-base` (clones +
+    `npm install` + `gulp compile` + electron, saves a `vscode-{REF}-{platform}-base-v2`
+    cache) and `build` (restores it with `fail-on-cache-miss: true`, then branding +
+    extension + production packaging) + `release`. This fixes the 6h timeout where the cold
+    compile never finished and the cache was never written (catch-22). To force a base
+    rebuild later (same VSCODE_REF, corrupted base), bump the key `-base-v2` → `-base-v3`
+    or delete the cache manually. Caveat: GitHub's cache backend is eventually consistent —
+    a freshly-written cache can rarely be invisible to the `build` job in the same run,
+    causing a spurious `fail-on-cache-miss`; a re-run heals it. Per-step `timeout-minutes`
+    make a hang fail fast instead of eating 6h. Decision documented in #35.
 
 ---
 

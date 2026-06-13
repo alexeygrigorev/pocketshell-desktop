@@ -9,9 +9,74 @@ env:
   VSCODE_REF: 037f7fbe03f78896c841adfd57aea4e0c85ccbc7
 
 jobs:
+  prepare-base:
+    name: Prepare base (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-latest
+          - platform: win32-x64
+            runner: windows-latest
+          - platform: darwin-arm64
+            runner: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev
+
+      # ── Cache compiled VS Code base ───────────────────────
+      - name: Cache VS Code base
+        id: cache-base
+        uses: actions/cache@v4
+        with:
+          path: vendor/vscode
+          key: vscode-${{ env.VSCODE_REF }}-${{ matrix.platform }}-base-v2
+
+      # ── Clone + install + compile (cache miss only) ───────
+      - name: Clone VS Code source
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          mkdir -p vendor
+          git clone --depth=1 https://github.com/microsoft/vscode.git vendor/vscode
+          cd vendor/vscode
+          git fetch --depth=1 origin "${{ env.VSCODE_REF }}"
+          git checkout FETCH_HEAD
+
+      - name: Install VS Code dependencies
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        timeout-minutes: 50
+        shell: bash
+        run: cd vendor/vscode && npm install
+
+      - name: Compile VS Code core
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        timeout-minutes: 45
+        shell: bash
+        run: cd vendor/vscode && npm run gulp compile
+
+      - name: Download Electron
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        timeout-minutes: 15
+        shell: bash
+        run: cd vendor/vscode && npm run electron
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: prepare-base
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -36,39 +101,14 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev
 
-      # ── Cache full VS Code source + deps ───────────────────
+      # ── Restore compiled VS Code base (must be present) ───
       - name: Cache VS Code base
         id: cache-base
         uses: actions/cache@v4
         with:
           path: vendor/vscode
-          key: vscode-${{ env.VSCODE_REF }}-${{ matrix.platform }}-v1
-
-      # ── Clone + install (cache miss only) ──────────────────
-      - name: Clone VS Code source
-        if: steps.cache-base.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          mkdir -p vendor
-          git clone --depth=1 https://github.com/microsoft/vscode.git vendor/vscode
-          cd vendor/vscode
-          git fetch --depth=1 origin "${{ env.VSCODE_REF }}"
-          git checkout FETCH_HEAD
-
-      - name: Install VS Code dependencies
-        if: steps.cache-base.outputs.cache-hit != 'true'
-        shell: bash
-        run: cd vendor/vscode && npm install
-
-      - name: Compile VS Code core
-        if: steps.cache-base.outputs.cache-hit != 'true'
-        shell: bash
-        run: cd vendor/vscode && npm run gulp compile
-
-      - name: Download Electron
-        if: steps.cache-base.outputs.cache-hit != 'true'
-        shell: bash
-        run: cd vendor/vscode && npm run electron
+          key: vscode-${{ env.VSCODE_REF }}-${{ matrix.platform }}-base-v2
+          fail-on-cache-miss: true
 
       # ── PocketShell extension (every run) ──────────────────
       - name: Apply PocketShell branding
@@ -124,6 +164,7 @@ jobs:
 
       # ── Production build ───────────────────────────────────
       - name: Production build (${{ matrix.platform }})
+        timeout-minutes: 60
         shell: bash
         run: cd vendor/vscode && npm run gulp vscode-${{ matrix.platform }}
 
