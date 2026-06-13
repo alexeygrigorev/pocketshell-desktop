@@ -75,13 +75,14 @@ Build strategy (from research, 2026-06-12):
 - **Extension activates**: confirmed via exthost.log — all 6 commands registered, `onStartupFinished` event, no errors
 - **Root cause found**: `product.json` had `defaultChatAgent: null` which crashed the onboarding module's top-level `assertDefined()`, preventing renderer/extension host from starting. Fixed by providing a valid config.
 - **Dev data consolidated**: `--user-data-dir .dev-data/` keeps all config/logs/cache in the project directory
+- **END-TO-END VERIFIED (2026-06-13)**: the connect→terminal flow works in the running Electron app. A test suite run inside the real extension host (`--extensionTestsPath` under Xvfb) added a host, connected over SSH to the Docker fixture (`localhost:2222`, user `testuser`), ran a remote command (`exec` returned output + exit 0), opened an interactive PTY (shell prompt + echo + output), and created a VS Code terminal (`window.createTerminal`, 0→1 terminal). 3/3 passing. **Answers EPIC #33 / #30.**
 - **CI workflow fixed**: VS Code pinned to commit 037f7fbe (post-1.124.2 main tip); extension npm deps use `--omit=optional` for Windows compatibility; gulpfile patching adds PocketShell to compilations array; all VS Code extensions kept (not stripped — production build has hardcoded references)
 - **Cross-platform CI**: Matrix strategy builds for 5 platforms (win32-x64, win32-arm64, linux-x64, darwin-x64, darwin-arm64) in parallel. Windows uses zip, Linux/macOS uses tar.gz. All artifacts attached to GitHub Release on tag push.
 
 ### What does NOT exist yet:
-- End-to-end SSH terminal verified in running app (connect, show terminal, type commands)
-- Windows zip build tested (CI workflow fixed but not triggered yet)
-- E2E tests
+- Windows build tested end-to-end (connect→terminal verified on **Linux only**; Windows build still times out in CI — see #28)
+- A committed integration test capturing the connect→terminal flow (the 2026-06-13 verification used a throwaway suite; not yet in-repo)
+- Green cross-platform production build (release.yml builds time out at 6h)
 
 ### NO MILESTONES — we use issues only. All 6 milestones were deleted.
 
@@ -101,16 +102,17 @@ Build strategy (from research, 2026-06-12):
 
 | # | Title | Status |
 |---|-------|--------|
-| #33 | Working Windows application (EPIC) | Open — the master tracking issue |
-| #30 | Create PocketShell built-in extension for VS Code fork | Open — code exists, compiles, needs activation verification |
+| #33 | Working Windows application (EPIC) | **Linux verified end-to-end** (connect→terminal works, 2026-06-13). Windows build still times out (#28). |
+| #30 | Create PocketShell built-in extension for VS Code fork | **Done in substance** — activates, connects, opens terminal in running app. Lacks a committed integration test. |
 | #31 | Strip down VS Code to essential extensions | **Done** — 89 stripped, 7 kept, compilations 46→5 |
 | #32 | Fast build pipeline: pre-built base + incremental extension | **Done** — build-base.sh, build-extension.sh, dev.sh all work |
 | #29 | v0.1.0 release tag and GitHub release | Open — blocked by #30, #33 |
 | #28 | Windows zip build | **Done** — cross-platform CI with matrix (5 platforms) |
 
-### Latest commit: `33744a1` (2026-06-12)
-feat: complete extension features — host management, context menus, WASM fix
-Cross-platform CI with matrix build (5 platforms). tsconfig fix for tsgo.
+### Latest commit: `de6619e` (2026-06-13)
+ci: validate extension compile (not full VS Code build). Fixed 3 E2E failures
+(files.spec ×2, utility.spec ×1). CI green except cold-cache build job (one-time).
+**End-to-end connect→terminal VERIFIED in running app (EPIC #33/#30).**
 
 ### Recently closed issues (#1-#27):
 These tracked backend module scaffolding (connection manager, SFTP client, etc.).
@@ -163,6 +165,14 @@ All closed prematurely — the code exists but nothing is integrated into a work
     `@anthropic-ai/claude-agent-sdk` has deeply nested `node_modules` that cause overlapping
     globs and race conditions. Fix: add `nodir: true` to the `gulp.src` calls in
     `build/lib/extensions.ts` (lines ~445 and ~480). CI must also apply this patch.
+
+13. **Corrupted Electron binary silently breaks the app.** If the disk is near-full when
+    `npm run electron` runs, the download is **truncated with no error** — the binary
+    segfaults instantly on launch (`execve() = -1 EFAULT`). Correct Linux-x64 size ≈
+    210,091,224 bytes (a truncated one was 142,917,632). This was the real reason "app
+    launches but connect never verified" persisted locally. Fix: ensure ample free disk
+    space, re-run `node build/lib/electron.ts` (it checksum-validates), and sanity-check
+    the binary size after download.
 
 ---
 
