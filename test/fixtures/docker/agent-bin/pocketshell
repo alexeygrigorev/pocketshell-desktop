@@ -19,7 +19,7 @@ case "${1:-}" in
     shift
     case "${1:-}" in
       list) cat "$FIXDIR/pocketshell-sessions-list.txt" ;;
-      :*)  printf 'Created and attached to session %s\n' "${1#:}" ;;
+      :*)  printf 'Created and attached to session %s\n' "$1" ;;
       [0-9]*)
         sessions="claude-main codex opencode-lab"
         idx=1

@@ -12,6 +12,9 @@ concurrency:
 
 env:
   NODE_VERSION: "24"
+  # VS Code core is upstream; pin the exact commit we build against.
+  # Must match release.yml.
+  VSCODE_REF: 037f7fbe03f78896c841adfd57aea4e0c85ccbc7
 
 jobs:
   # ── Lint ──────────────────────────────────────────────────────────────
@@ -30,14 +33,13 @@ jobs:
 
       - run: npm run lint
 
-  # ── Build ─────────────────────────────────────────────────────────────
+  # ── Build (extension compile only) ────────────────────────────────────
+  # VS Code core is upstream — the only thing CI validates per-push is that
+  # the PocketShell extension compiles. The full core compile + production
+  # packaging happens in release.yml on tag pushes and is NOT repeated here.
   build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+    name: Build (extension)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -46,26 +48,86 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: Clone VS Code (shallow)
+      - name: Install Linux build deps
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev
+
+      # ── Cache VS Code source + deps (keyed by pinned ref) ──────────────
+      # Includes node_modules and the patched gulpfile/extensions.ts so cache
+      # hits skip the slow clone+install+patch steps on every run.
+      - name: Cache VS Code base
+        id: cache-base
+        uses: actions/cache@v4
+        with:
+          path: vendor/vscode
+          key: vscode-${{ env.VSCODE_REF }}-ext-compile-v1
+
+      # ── Clone + install + patch (cache miss only) ──────────────────────
+      - name: Clone VS Code source
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        shell: bash
         run: |
-          if [ ! -d vendor/vscode/.git ]; then
-            git clone --depth 1 https://github.com/microsoft/vscode.git vendor/vscode
-          fi
-        shell: bash
+          mkdir -p vendor
+          git clone --depth=1 https://github.com/microsoft/vscode.git vendor/vscode
+          cd vendor/vscode
+          git fetch --depth=1 origin "${{ env.VSCODE_REF }}"
+          git checkout FETCH_HEAD
 
-      - name: Apply branding
+      - name: Install VS Code dependencies
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        shell: bash
+        run: cd vendor/vscode && npm install
+
+      - name: Patch gulpfile for PocketShell extension
+        if: steps.cache-base.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          if [ -f product.json ]; then
-            cp product.json vendor/vscode/product.json
-          fi
+          cat > /tmp/patch-gulpfile.js << 'PATCH_EOF'
+          const fs = require('fs');
+          const filePath = 'vendor/vscode/build/gulpfile.extensions.ts';
+          let content = fs.readFileSync(filePath, 'utf8');
+          const compilationsMatch = content.match(/^const compilations = \[$/m);
+          if (!compilationsMatch) { process.exit(1); }
+          const compilationsStart = compilationsMatch.index;
+          const compilationsEnd = content.indexOf('];', compilationsStart);
+          if (compilationsEnd === -1) { process.exit(1); }
+          const arrayBlock = content.slice(compilationsStart, compilationsEnd + 2);
+          if (arrayBlock.includes('pocketshell')) { process.exit(0); }
+          const newArrayBlock = arrayBlock.replace(/\];$/, "\t'extensions/pocketshell/tsconfig.json'\n];");
+          content = content.slice(0, compilationsStart) + newArrayBlock + content.slice(compilationsEnd + 2);
+          fs.writeFileSync(filePath, content, 'utf8');
+          PATCH_EOF
+          node /tmp/patch-gulpfile.js
 
-      - name: Build
-        run: npm run build
+      - name: Patch extensions.ts nodir fix
+        if: steps.cache-base.outputs.cache-hit != 'true'
         shell: bash
+        run: |
+          sed -i "s/gulp.src(dependenciesSrc, { base: '.' })/gulp.src(dependenciesSrc, { base: '.', nodir: true })/g" \
+            vendor/vscode/build/lib/extensions.ts
+
+      # ── PocketShell extension (every run) ──────────────────────────────
+      - name: Sync extension source
+        shell: bash
+        run: |
+          mkdir -p vendor/vscode/extensions/pocketshell
+          cp -r extensions/pocketshell/* vendor/vscode/extensions/pocketshell/
+          rm -rf vendor/vscode/extensions/pocketshell/node_modules
+          rm -rf vendor/vscode/extensions/pocketshell/out
+          rm -f vendor/vscode/extensions/pocketshell/tsconfig.tsbuildinfo
+
+      - name: Install extension npm dependencies
+        shell: bash
+        run: cd vendor/vscode/extensions/pocketshell && npm install --omit=optional
+
+      - name: Compile PocketShell extension
+        shell: bash
+        run: |
+          cd vendor/vscode
+          npm run gulp compile-extension:pocketshell 2>/dev/null || \
+            npx tsc -p extensions/pocketshell/tsconfig.json
+          test -f extensions/pocketshell/out/extension.js
 
   # ── Unit tests ────────────────────────────────────────────────────────
   test-unit:

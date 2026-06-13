@@ -32,7 +32,10 @@ test.describe('File browser E2E tests', () => {
     expect(result.exitCode).toBe(0);
     // Home directory should at least contain . and .. entries and common dotfiles
     expect(result.stdout).toContain('total ');
-    expect(result.stdout).toMatch(/\b\.\b/); // current dir entry
+    // Current dir (.) and parent dir (..) entries — match a line whose final
+    // filename column is exactly "." or ".." (avoids matching ".claude", etc.)
+    expect(result.stdout).toMatch(/\s\.\s*$/m);   // current dir entry
+    expect(result.stdout).toMatch(/\s\.\.\s*$/m); // parent dir entry
     // The entrypoint seeds git/ and .claude/ dirs
     expect(result.stdout).toContain('git');
     expect(result.stdout).toContain('.claude');
@@ -220,10 +223,14 @@ test.describe('File browser E2E tests', () => {
     expect(result.exitCode).toBe(0);
     const lines = result.stdout.trim().split('\n');
     expect(lines.length).toBeGreaterThanOrEqual(1);
-    // Each line should be valid JSON
+    // Each line should be valid JSON. Claude CLI session logs use Format A
+    // (see src/agents/conversation/parsers/claude-parser.ts): each entry is
+    //   { "type": "...", "message": { "role": "user"|"assistant", ... }, "ts": "..." }
+    // so the role lives under message.role.
     for (const line of lines) {
       const parsed = JSON.parse(line);
-      expect(parsed).toHaveProperty('role');
+      const role = parsed.message?.role ?? parsed.role;
+      expect(role).toBeDefined();
     }
   });
 });
