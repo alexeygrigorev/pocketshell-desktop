@@ -12,7 +12,9 @@ jobs:
   prepare-base:
     name: Prepare base (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 150
+    # Must accommodate the sum of per-step timeouts on a cold cache miss:
+    # clone 10 + install 120 + compile 45 + electron 15 = 190 min.
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -56,9 +58,9 @@ jobs:
 
       - name: Install VS Code dependencies
         if: steps.cache-base.outputs.cache-hit != 'true'
-        timeout-minutes: 50
+        timeout-minutes: 120
         shell: bash
-        run: cd vendor/vscode && npm install
+        run: cd vendor/vscode && npm install --foreground-scripts --no-audit --no-fund
 
       - name: Compile VS Code core
         if: steps.cache-base.outputs.cache-hit != 'true'
