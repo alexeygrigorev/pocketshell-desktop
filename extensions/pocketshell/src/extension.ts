@@ -9,6 +9,8 @@ import { ConnectionService } from './connection-service';
 import { SshPseudoterminal } from './ssh-terminal';
 import { SftpFsProvider } from './sftp-fs-provider';
 import { HostTreeProvider } from './host-tree-provider';
+import { pickHost, resolveHostId, getOrConnect } from './host-picking';
+import { FEATURES, type FeatureDeps } from './feature';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
 
 /**
@@ -59,26 +61,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 
 			// Connect if not already connected
-			let conn = service.getConnection(host.id);
-			if (!conn) {
-				try {
-					await vscode.window.withProgress(
-						{
-							location: vscode.ProgressLocation.Notification,
-							title: vscode.l10n.t('Connecting to {0}...', host.name || host.hostname),
-							cancellable: false,
-						},
-						() => service.connect(host.id),
-					);
-					conn = service.getConnection(host.id);
-				} catch (err) {
-					vscode.window.showErrorMessage(
-						vscode.l10n.t('Failed to connect to {0}: {1}', host.name || host.hostname, String(err)),
-					);
-					return undefined;
-				}
-			}
-
+			const conn = await getOrConnect(service, host.id);
 			if (!conn) {
 				return undefined;
 			}
@@ -119,7 +102,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Connect to a host (optionally passed hostId from tree item click)
 	context.subscriptions.push(
 		vscode.commands.registerCommand('pocketshell.connect', async (element?: Host | number) => {
-			const id = typeof element === 'number' ? element : element?.id ?? await pickHost(service);
+			const id = await resolveHostId(service, element, { connectedOnly: false });
 			if (id === undefined) {
 				return;
 			}
@@ -131,36 +114,19 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 
 			// Check if already connected
-			let conn = service.getConnection(id);
+			const conn = await getOrConnect(service, id);
 			if (!conn) {
-				try {
-					await vscode.window.withProgress(
-						{
-							location: vscode.ProgressLocation.Notification,
-							title: vscode.l10n.t('Connecting to {0}...', host.name || host.hostname),
-							cancellable: false,
-						},
-						() => service.connect(id),
-					);
-					conn = service.getConnection(id);
-				} catch (err) {
-					vscode.window.showErrorMessage(
-						vscode.l10n.t('Failed to connect to {0}: {1}', host.name || host.hostname, String(err)),
-					);
-					return;
-				}
+				return;
 			}
 
 			// Open terminal
-			if (conn) {
-				const pty = new SshPseudoterminal(conn, host.name || host.hostname);
-				const terminal = vscode.window.createTerminal({
-					name: `PocketShell: ${host.name || host.hostname}`,
-					pty,
-					iconPath: new vscode.ThemeIcon('remote'),
-				});
-				terminal.show();
-			}
+			const pty = new SshPseudoterminal(conn, host.name || host.hostname);
+			const terminal = vscode.window.createTerminal({
+				name: `PocketShell: ${host.name || host.hostname}`,
+				pty,
+				iconPath: new vscode.ThemeIcon('remote'),
+			});
+			terminal.show();
 
 			// Refresh tree to show updated status
 			treeProvider.refresh();
@@ -248,7 +214,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Disconnect from a host
 	context.subscriptions.push(
 		vscode.commands.registerCommand('pocketshell.disconnect', async (element?: Host | number) => {
-			const id = typeof element === 'number' ? element : element?.id ?? await pickConnectedHost(service);
+			const id = await resolveHostId(service, element, { connectedOnly: true });
 			if (id === undefined) {
 				return;
 			}
@@ -447,58 +413,17 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 	);
 
+	// -- Feature modules (auto-registered) -------------------------------------
+	const deps: FeatureDeps = { refreshTrees: () => treeProvider.refresh() };
+	for (const feature of FEATURES) {
+		for (const disposable of feature.register(service, context, deps)) {
+			context.subscriptions.push(disposable);
+		}
+	}
+
 	// -- Cleanup on deactivate ---------------------------------------------------
 
 	context.subscriptions.push({
 		dispose: () => service.dispose(),
 	});
-}
-
-/**
- * Show a quick-pick to select a host from all configured hosts.
- * Returns the host id, or undefined if cancelled.
- */
-async function pickHost(service: ConnectionService): Promise<number | undefined> {
-	const hosts = await service.getHosts();
-	if (hosts.length === 0) {
-		vscode.window.showWarningMessage(vscode.l10n.t('No hosts configured. Use "PocketShell: Add Host" first.'));
-		return undefined;
-	}
-
-	const items = hosts.map(host => ({
-		label: host.name || host.hostname,
-		description: `${host.username}@${host.hostname}:${host.port}`,
-		hostId: host.id,
-	}));
-
-	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: vscode.l10n.t('Select a host'),
-	});
-
-	return picked?.hostId;
-}
-
-/**
- * Show a quick-pick to select from currently connected hosts.
- * Returns the host id, or undefined if cancelled.
- */
-async function pickConnectedHost(service: ConnectionService): Promise<number | undefined> {
-	const hosts = await service.getHosts();
-	const connected = hosts.filter(h => service.getConnection(h.id) !== null);
-	if (connected.length === 0) {
-		vscode.window.showWarningMessage(vscode.l10n.t('No active connections.'));
-		return undefined;
-	}
-
-	const items = connected.map(host => ({
-		label: host.name || host.hostname,
-		description: `${host.username}@${host.hostname}:${host.port}`,
-		hostId: host.id,
-	}));
-
-	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: vscode.l10n.t('Select a host to disconnect'),
-	});
-
-	return picked?.hostId;
 }
