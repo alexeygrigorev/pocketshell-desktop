@@ -219,8 +219,8 @@ function hostLabel(hostId: number): string {
 
 /** QuickPick item carrying a directory entry or a navigation action. */
 type BrowseItem =
-	| (vscode.QuickPickItem & { kind: 'entry'; entry: RemoteFileEntry })
-	| (vscode.QuickPickItem & { kind: 'up' | 'refresh' | 'open' });
+	| (vscode.QuickPickItem & { action: 'entry'; entry: RemoteFileEntry })
+	| (vscode.QuickPickItem & { action: 'up' | 'refresh' | 'open' });
 
 /**
  * Drive a {@link FileBrowser} from `startPath` with a QuickPick UI. The user
@@ -246,25 +246,25 @@ async function browseLoop(
 
 		if (browser.currentPath !== '/') {
 			items.push({
-				kind: 'up',
+				action: 'up',
 				label: '$(arrow-up) Up to parent',
 				description: vscode.l10n.t('Go up one level'),
 			});
 		}
 		items.push({
-			kind: 'refresh',
+			action: 'refresh',
 			label: '$(refresh) Refresh',
 			description: vscode.l10n.t('Reload this directory'),
 		});
 		items.push({
-			kind: 'open',
+			action: 'open',
 			label: '$(folder-opened) Open by path…',
 			description: vscode.l10n.t('Enter an absolute path'),
 		});
 
 		for (const e of browser.currentEntries) {
 			items.push({
-				kind: 'entry',
+				action: 'entry',
 				label: e.isDirectory ? `$(folder) ${e.name}` : `$(file) ${e.name}`,
 				description: e.isDirectory ? 'directory' : formatSize(e.size),
 				entry: e,
@@ -280,7 +280,7 @@ async function browseLoop(
 			return; // cancelled
 		}
 
-		switch (picked.kind) {
+		switch (picked.action) {
 			case 'up':
 				await browser.goUp();
 				continue;
