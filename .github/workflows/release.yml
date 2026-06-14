@@ -13,7 +13,7 @@ jobs:
     name: Prepare base (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     # Must accommodate the sum of per-step timeouts on a cold cache miss:
-    # clone 10 + install 120 + compile 45 + electron 15 = 190 min.
+    # clone 10 + install 60 + compile 45 + electron 15 = 130 min.
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -56,10 +56,16 @@ jobs:
           git fetch --depth=1 origin "${{ env.VSCODE_REF }}"
           git checkout FETCH_HEAD
 
+      # Skip Playwright browser + Electron postinstall downloads: they stall on the
+      # runner and aren't needed for production packaging (gulp vscode-{platform}).
+      # Electron is fetched in the dedicated "Download Electron" step below.
       - name: Install VS Code dependencies
         if: steps.cache-base.outputs.cache-hit != 'true'
-        timeout-minutes: 120
+        timeout-minutes: 60
         shell: bash
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: cd vendor/vscode && npm install --foreground-scripts --no-audit --no-fund
 
       - name: Compile VS Code core
