@@ -147,8 +147,9 @@ jobs:
       - name: Patch extensions.ts nodir fix
         shell: bash
         run: |
-          sed -i "s/gulp.src(dependenciesSrc, { base: '.' })/gulp.src(dependenciesSrc, { base: '.', nodir: true })/g" \
+          sed -i.bak "s/gulp.src(dependenciesSrc, { base: '.' })/gulp.src(dependenciesSrc, { base: '.', nodir: true })/g" \
             vendor/vscode/build/lib/extensions.ts
+          rm -f vendor/vscode/build/lib/extensions.ts.bak
 
       - name: Sync extension source
         shell: bash

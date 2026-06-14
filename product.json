@@ -55,7 +55,7 @@
   "trustedExtensionAuthAccess": {},
   "builtInExtensionsEnabledWithAutoUpdates": [],
   "sessionsWindowAllowedExtensions": [],
-  "quality": "stable",
+  "quality": "",
   "documentationUrl": "https://github.com/alexeygrigorev/pocketshell-desktop#readme",
   "removeTelemetry": true
 }
