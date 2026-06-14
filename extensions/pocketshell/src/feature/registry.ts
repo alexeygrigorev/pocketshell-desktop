@@ -13,6 +13,9 @@ import { USAGE_FEATURE } from './usage';
 import { AGENT_DETECT_FEATURE } from './agent-detect';
 import { EDITOR_FEATURE } from './editor';
 import { TERMINAL_FEATURE } from './terminal';
+import { HOOKS_FEATURE } from './hooks';
+import { REPLY_FEATURE } from './reply';
+import { FILES_FEATURE } from './files';
 
 // Each wired feature appends itself here (one import + one array element per batch).
 export const FEATURES: FeatureRegistration[] = [
@@ -25,4 +28,7 @@ export const FEATURES: FeatureRegistration[] = [
 	AGENT_DETECT_FEATURE,
 	EDITOR_FEATURE,
 	TERMINAL_FEATURE,
+	HOOKS_FEATURE,
+	REPLY_FEATURE,
+	FILES_FEATURE,
 ];

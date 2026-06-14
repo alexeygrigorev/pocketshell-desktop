@@ -186,6 +186,65 @@
 				"title": "Terminal: Close Session",
 				"category": "PocketShell",
 				"icon": "$(trash)"
+			},
+			{
+				"command": "pocketshell.hooks.status",
+				"title": "Hooks: Status",
+				"category": "PocketShell",
+				"icon": "$(extensions)"
+			},
+			{
+				"command": "pocketshell.hooks.list",
+				"title": "Hooks: List",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.hooks.add",
+				"title": "Hooks: Add",
+				"category": "PocketShell",
+				"icon": "$(add)"
+			},
+			{
+				"command": "pocketshell.hooks.remove",
+				"title": "Hooks: Remove",
+				"category": "PocketShell",
+				"icon": "$(trash)"
+			},
+			{
+				"command": "pocketshell.reply.send",
+				"title": "Reply: Send",
+				"category": "PocketShell",
+				"icon": "$(send)"
+			},
+			{
+				"command": "pocketshell.reply.queue",
+				"title": "Reply: Queue",
+				"category": "PocketShell",
+				"icon": "$(checklist)"
+			},
+			{
+				"command": "pocketshell.reply.status",
+				"title": "Reply: Queue Status",
+				"category": "PocketShell",
+				"icon": "$(info)"
+			},
+			{
+				"command": "pocketshell.files.browse",
+				"title": "Files: Browse",
+				"category": "PocketShell",
+				"icon": "$(folder)"
+			},
+			{
+				"command": "pocketshell.files.watch",
+				"title": "Files: Watch Directory",
+				"category": "PocketShell",
+				"icon": "$(eye)"
+			},
+			{
+				"command": "pocketshell.files.stopWatch",
+				"title": "Files: Stop Watching",
+				"category": "PocketShell",
+				"icon": "$(eye-closed)"
 			}
 		],
 		"menus": {
