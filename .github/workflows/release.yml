@@ -22,7 +22,7 @@ jobs:
           - platform: linux-x64
             runner: ubuntu-latest
           - platform: win32-x64
-            runner: windows-latest
+            runner: windows-2022
           - platform: darwin-arm64
             runner: macos-latest
 
@@ -66,6 +66,7 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cd vendor/vscode && npm install --foreground-scripts --no-audit --no-fund
 
       - name: Compile VS Code core
@@ -93,7 +94,7 @@ jobs:
             runner: ubuntu-latest
             artifact: pocketshell-linux-x64
           - platform: win32-x64
-            runner: windows-latest
+            runner: windows-2022
             artifact: pocketshell-windows-x64
           - platform: darwin-arm64
             runner: macos-latest
