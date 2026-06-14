@@ -52,6 +52,23 @@
 			{
 				"command": "pocketshell.openRemoteFile",
 				"title": "PocketShell: Open Remote File"
+			},
+			{
+				"command": "pocketshell.git.status",
+				"title": "Git: Status",
+				"category": "PocketShell",
+				"icon": "$(git-branch)"
+			},
+			{
+				"command": "pocketshell.git.branches",
+				"title": "Git: Branches",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.git.pull",
+				"title": "Git: Pull",
+				"category": "PocketShell",
+				"icon": "$(repo-pull)"
 			}
 		],
 		"menus": {

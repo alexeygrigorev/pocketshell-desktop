@@ -4,6 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { FeatureRegistration } from './manifest';
+import { GIT_FEATURE } from './git';
 
 // Each wired feature appends itself here (one import + one array element per batch).
-export const FEATURES: FeatureRegistration[] = [];
+export const FEATURES: FeatureRegistration[] = [
+	GIT_FEATURE,
+];
