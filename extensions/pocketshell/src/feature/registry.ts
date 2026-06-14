@@ -10,6 +10,9 @@ import { BOOTSTRAP_FEATURE } from './bootstrap';
 import { ENV_FEATURE } from './env';
 import { LOGS_FEATURE } from './logs';
 import { USAGE_FEATURE } from './usage';
+import { AGENT_DETECT_FEATURE } from './agent-detect';
+import { EDITOR_FEATURE } from './editor';
+import { TERMINAL_FEATURE } from './terminal';
 
 // Each wired feature appends itself here (one import + one array element per batch).
 export const FEATURES: FeatureRegistration[] = [
@@ -19,4 +22,7 @@ export const FEATURES: FeatureRegistration[] = [
 	ENV_FEATURE,
 	LOGS_FEATURE,
 	USAGE_FEATURE,
+	AGENT_DETECT_FEATURE,
+	EDITOR_FEATURE,
+	TERMINAL_FEATURE,
 ];

@@ -139,6 +139,53 @@
 				"command": "pocketshell.usage.provider",
 				"title": "Usage: By Provider",
 				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.agent.detect",
+				"title": "Agent: Detect on Host",
+				"category": "PocketShell",
+				"icon": "$(robot)"
+			},
+			{
+				"command": "pocketshell.agent.showDetected",
+				"title": "Agent: Show Detected",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.editor.open",
+				"title": "Editor: Open Remote Document",
+				"category": "PocketShell",
+				"icon": "$(go-to-file)"
+			},
+			{
+				"command": "pocketshell.editor.save",
+				"title": "Editor: Save",
+				"category": "PocketShell",
+				"icon": "$(save)"
+			},
+			{
+				"command": "pocketshell.editor.revert",
+				"title": "Editor: Revert",
+				"category": "PocketShell",
+				"icon": "$(discard)"
+			},
+			{
+				"command": "pocketshell.terminal.new",
+				"title": "Terminal: New Session",
+				"category": "PocketShell",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "pocketshell.terminal.list",
+				"title": "Terminal: List Sessions",
+				"category": "PocketShell",
+				"icon": "$(list-tree)"
+			},
+			{
+				"command": "pocketshell.terminal.close",
+				"title": "Terminal: Close Session",
+				"category": "PocketShell",
+				"icon": "$(trash)"
 			}
 		],
 		"menus": {
