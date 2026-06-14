@@ -10,8 +10,8 @@
 import { EventEmitter } from 'events';
 import { TmuxEventStream, type StreamReader } from './stream';
 import type { ControlEvent, CommandResponse, CaptureWithCursor } from './events';
-import type { TmuxState, TmuxPane, TmuxSession, TmuxWindow } from './state';
-import { emptyState, applyEvent, allPanes, upsertPane } from './state';
+import type { TmuxState, TmuxPane } from './state';
+import { emptyState, applyEvent, upsertPane } from './state';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,7 +43,6 @@ type StateChangeCallback = (state: TmuxState) => void;
 
 const DEFAULT_SESSION_NAME = 'pocketshell';
 const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
-const BEST_EFFORT_LATE_RESPONSE_DRAIN_MS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Shell quoting
@@ -73,7 +72,6 @@ export class TmuxClient extends EventEmitter {
   );
   private connected = false;
   private commandTimeoutMs: number;
-  private readerLoop: Promise<void> | null = null;
 
   constructor(private options: TmuxClientOptions) {
     super();
@@ -110,7 +108,7 @@ export class TmuxClient extends EventEmitter {
     cmd += '\n';
 
     // Start reader loop (before writing, to avoid missing notifications)
-    this.readerLoop = this.stream.run();
+    void this.stream.run();
 
     // Write spawn command
     await this.channel.write(Buffer.from(cmd, 'utf-8'));
@@ -183,7 +181,7 @@ export class TmuxClient extends EventEmitter {
    * Resize a pane.
    * Reference: section 12
    */
-  async resizePane(paneId: string, width: number, height: number): Promise<void> {
+  async resizePane(_paneId: string, width: number, height: number): Promise<void> {
     // Report client size
     await this.enqueueCommand(`refresh-client -C ${width}x${height}`);
   }

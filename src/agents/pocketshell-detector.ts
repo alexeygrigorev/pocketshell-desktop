@@ -102,6 +102,10 @@ export class PocketshellAgentDetector {
       results.map(async (agent): Promise<DetectedAgent> => {
         if (!agent.isInstalled) return agent;
 
+        if (agent.type === AgentType.Unknown) {
+          return agent;
+        }
+
         // Try to get version via direct binary probe
         try {
           const meta = AGENT_METADATA[agent.type];

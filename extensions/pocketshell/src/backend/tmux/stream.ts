@@ -11,7 +11,7 @@
 
 import { EventEmitter } from 'events';
 import { parseLine } from './parser';
-import type { ControlEvent, CommandResponse } from './events';
+import type { CommandResponse } from './events';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -20,7 +20,6 @@ import type { ControlEvent, CommandResponse } from './events';
 const LF = 0x0A;
 const CR = 0x0D;
 const DEFAULT_LINE_BUFFER = 4096;
-const READ_CHUNK_SIZE = 8192;
 
 // ---------------------------------------------------------------------------
 // Types

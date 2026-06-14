@@ -6,7 +6,8 @@
 import * as vscode from 'vscode';
 import type { ConnectionService } from '../../connection-service';
 import { resolveHostId, getOrConnect } from '../../host-picking';
-import { TmuxClient, type CommandResponse } from '../../backend/tmux/client';
+import { TmuxClient } from '../../backend/tmux/client';
+import type { CommandResponse } from '../../backend/tmux';
 import { SshShellBridge } from '../../backend/tmux/ssh-shell-bridge';
 import type { FeatureDeps } from '../manifest';
 

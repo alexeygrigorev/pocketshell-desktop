@@ -37,7 +37,6 @@ const CR = 0x0D;
 
 // Pre-encoded ASCII byte sequences
 const OUTPUT_PREFIX = Buffer.from('%output ');
-const PERCENT_BYTE = Buffer.from('%');
 
 // ---------------------------------------------------------------------------
 // DCS normalization
