@@ -172,6 +172,28 @@ jobs:
             npx tsc -p extensions/pocketshell/tsconfig.json
           test -f extensions/pocketshell/out/extension.js
 
+      - name: Add Windows SDK to PATH (signtool.exe)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # VS Code's patchWin32DependenciesTask spawns signtool.exe to verify/strip
+          # Authenticode signatures on bundled native dependencies. signtool.exe ships
+          # with the Windows SDK but is not on PATH by default. Discover the installed
+          # SDK version dynamically and put its x64 bin on PATH for the gulp build
+          # (mirrors VS Code's own CI in build/azure-pipelines/win32/steps/...yml).
+          $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
+          $sdkBin = Get-ChildItem -Path $sdkRoot -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' -and (Test-Path (Join-Path $_.FullName 'x64\signtool.exe')) } |
+                    Sort-Object Name -Descending |
+                    Select-Object -First 1
+          if (-not $sdkBin) {
+            Write-Error "Windows SDK with x64\signtool.exe not found under $sdkRoot"
+            exit 1
+          }
+          $x64 = Join-Path $sdkBin.FullName 'x64'
+          Add-Content -Path $env:GITHUB_PATH -Value $x64
+          Write-Host "Added $x64 to GITHUB_PATH"
+
       # ── Production build ───────────────────────────────────
       - name: Production build (${{ matrix.platform }})
         timeout-minutes: 60
