@@ -16,6 +16,9 @@ import { TERMINAL_FEATURE } from './terminal';
 import { HOOKS_FEATURE } from './hooks';
 import { REPLY_FEATURE } from './reply';
 import { FILES_FEATURE } from './files';
+import { POCKETSHELL_DETECT_FEATURE } from './pocketshell-detect';
+import { PALETTE_FEATURE } from './palette';
+import { TMUX_FEATURE } from './tmux';
 
 // Each wired feature appends itself here (one import + one array element per batch).
 export const FEATURES: FeatureRegistration[] = [
@@ -26,9 +29,12 @@ export const FEATURES: FeatureRegistration[] = [
 	LOGS_FEATURE,
 	USAGE_FEATURE,
 	AGENT_DETECT_FEATURE,
+	POCKETSHELL_DETECT_FEATURE,
 	EDITOR_FEATURE,
 	TERMINAL_FEATURE,
+	TMUX_FEATURE,
 	HOOKS_FEATURE,
 	REPLY_FEATURE,
 	FILES_FEATURE,
+	PALETTE_FEATURE,
 ];

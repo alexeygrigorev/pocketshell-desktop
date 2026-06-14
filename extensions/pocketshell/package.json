@@ -245,6 +245,64 @@
 				"title": "Files: Stop Watching",
 				"category": "PocketShell",
 				"icon": "$(eye-closed)"
+			},
+			{
+				"command": "pocketshell.pocketshell.detect",
+				"title": "PocketShell: Detect on Host",
+				"category": "PocketShell",
+				"icon": "$(search)"
+			},
+			{
+				"command": "pocketshell.pocketshell.status",
+				"title": "PocketShell: Show Status",
+				"category": "PocketShell",
+				"icon": "$(info)"
+			},
+			{
+				"command": "pocketshell.pocketshell.install",
+				"title": "PocketShell: Install/Upgrade",
+				"category": "PocketShell",
+				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "pocketshell.palette.open",
+				"title": "Open Slash Command Palette",
+				"category": "PocketShell",
+				"icon": "$(symbol-text)"
+			},
+			{
+				"command": "pocketshell.palette.listCommands",
+				"title": "List Registered Commands",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.palette.registerCommand",
+				"title": "Register Command",
+				"category": "PocketShell",
+				"icon": "$(add)"
+			},
+			{
+				"command": "pocketshell.tmux.list",
+				"title": "Tmux: List Sessions",
+				"category": "PocketShell",
+				"icon": "$(list-tree)"
+			},
+			{
+				"command": "pocketshell.tmux.new",
+				"title": "Tmux: New Session",
+				"category": "PocketShell",
+				"icon": "$(add)"
+			},
+			{
+				"command": "pocketshell.tmux.send",
+				"title": "Tmux: Send Keys",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.tmux.detach",
+				"title": "Tmux: Detach",
+				"category": "PocketShell",
+				"icon": "$(debug-disconnect)"
 			}
 		],
 		"menus": {
