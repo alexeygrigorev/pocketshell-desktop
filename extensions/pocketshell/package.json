@@ -69,6 +69,76 @@
 				"title": "Git: Pull",
 				"category": "PocketShell",
 				"icon": "$(repo-pull)"
+			},
+			{
+				"command": "pocketshell.jobs.list",
+				"title": "Jobs: List",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.jobs.logs",
+				"title": "Jobs: Logs",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.jobs.cancel",
+				"title": "Jobs: Cancel",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.bootstrap.status",
+				"title": "Bootstrap: Status",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.bootstrap.install",
+				"title": "Bootstrap: Install",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.bootstrap.upgrade",
+				"title": "Bootstrap: Upgrade",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.env.list",
+				"title": "Env: List",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.env.set",
+				"title": "Env: Set",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.env.unset",
+				"title": "Env: Unset",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.logs.show",
+				"title": "Logs: Show",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.logs.tail",
+				"title": "Logs: Tail",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.logs.clear",
+				"title": "Logs: Clear",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.usage.show",
+				"title": "Usage: Show",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.usage.provider",
+				"title": "Usage: By Provider",
+				"category": "PocketShell"
 			}
 		],
 		"menus": {

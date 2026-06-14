@@ -5,8 +5,18 @@
 
 import type { FeatureRegistration } from './manifest';
 import { GIT_FEATURE } from './git';
+import { JOBS_FEATURE } from './jobs';
+import { BOOTSTRAP_FEATURE } from './bootstrap';
+import { ENV_FEATURE } from './env';
+import { LOGS_FEATURE } from './logs';
+import { USAGE_FEATURE } from './usage';
 
 // Each wired feature appends itself here (one import + one array element per batch).
 export const FEATURES: FeatureRegistration[] = [
 	GIT_FEATURE,
+	JOBS_FEATURE,
+	BOOTSTRAP_FEATURE,
+	ENV_FEATURE,
+	LOGS_FEATURE,
+	USAGE_FEATURE,
 ];
