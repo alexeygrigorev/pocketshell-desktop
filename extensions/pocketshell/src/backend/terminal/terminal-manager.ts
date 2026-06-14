@@ -17,6 +17,8 @@ import type { SshConnection } from '../ssh/connection/ssh-client';
 import { SshTerminalBackend } from './ssh-terminal-backend';
 import type { TerminalOptions, SshTerminal } from './types';
 
+export type { SshTerminal };
+
 // ---------------------------------------------------------------------------
 // ID generation
 // ---------------------------------------------------------------------------

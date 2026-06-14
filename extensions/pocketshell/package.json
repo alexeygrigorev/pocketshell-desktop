@@ -303,6 +303,29 @@
 				"title": "Tmux: Detach",
 				"category": "PocketShell",
 				"icon": "$(debug-disconnect)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.showTree",
+				"title": "Tmux UI: Show Session Tree",
+				"category": "PocketShell",
+				"icon": "$(list-tree)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.newSession",
+				"title": "Tmux UI: New Session",
+				"category": "PocketShell",
+				"icon": "$(add)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.splitPane",
+				"title": "Tmux UI: Split Pane",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.tmux-ui.capturePane",
+				"title": "Tmux UI: Capture Pane",
+				"category": "PocketShell",
+				"icon": "$(eye)"
 			}
 		],
 		"menus": {
