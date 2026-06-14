@@ -194,6 +194,28 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $x64
           Write-Host "Added $x64 to GITHUB_PATH"
 
+      - name: Prune non-win32 native modules
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -e
+          # VS Code's patchWin32DependenciesTask runs rcedit on every **/*.node in
+          # the packaged output. The built-in copilot extension's @anthropic-ai/
+          # claude-agent-sdk vendors audio-capture.node for ALL platforms; the
+          # darwin/linux variants are Mach-O/ELF, not Windows PEs, so rcedit fails
+          # ("Unable to load file", e.g. arm64-darwin/audio-capture.node). Delete
+          # non-win32 .node variants at the source so they never reach the output.
+          # Patterns cover both {plat}-{arch} and {arch}-{plat} orderings.
+          cd vendor/vscode
+          mapfile -t victims < <(find extensions -type f -name '*.node' \( -path '*darwin*' -o -path '*linux*' \) | sort)
+          if [ ${#victims[@]} -gt 0 ]; then
+            printf '%s\n' "${victims[@]}"
+            rm -f -- "${victims[@]}"
+            echo "Pruned ${#victims[@]} non-win32 .node file(s)"
+          else
+            echo "No non-win32 .node files found"
+          fi
+
       # ── Production build ───────────────────────────────────
       - name: Production build (${{ matrix.platform }})
         timeout-minutes: 60
