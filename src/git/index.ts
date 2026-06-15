@@ -17,4 +17,8 @@ export type {
   GitPullResult,
   GitBlameLine,
   GitRepoInfo,
+  PocketShellRepoLocalInfo,
+  PocketShellRepoRemoteInfo,
+  PocketShellRepoEntry,
+  PocketShellRepoBrowserEntry,
 } from './types';

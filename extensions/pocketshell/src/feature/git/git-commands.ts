@@ -6,8 +6,14 @@
 import * as vscode from 'vscode';
 import type { ConnectionService } from '../../connection-service';
 import { resolveHostId, getOrConnect, resolveTargetPath } from '../../host-picking';
-import { GitClient } from '../../backend/git';
-import type { GitStatus, GitPullResult, GitCommit } from '../../backend/git';
+import { GitClient, PocketShellRepos } from '../../backend/git';
+import type {
+	GitStatus,
+	GitPullResult,
+	GitCommit,
+	PocketShellRepoBrowserEntry,
+	PocketShellRepoEntry,
+} from '../../backend/git';
 import type { FeatureDeps } from '../manifest';
 
 /**
@@ -27,6 +33,71 @@ export function registerGit(
 
 	const output = vscode.window.createOutputChannel('PocketShell Git');
 	disposables.push(output);
+
+	// -------------------------------------------------------------------------
+	// pocketshell.git.browse — read+pick+mutate: list, clone, open session
+	// -------------------------------------------------------------------------
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.git.browse', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: false });
+			if (hostId === undefined) {
+				return;
+			}
+			const conn = await getOrConnect(service, hostId);
+			if (conn === null) {
+				return;
+			}
+
+			const repos = new PocketShellRepos(conn);
+			let rows: PocketShellRepoBrowserEntry[];
+			try {
+				rows = await loadRepoBrowserRows(repos);
+			} catch (err) {
+				vscode.window.showErrorMessage(
+					vscode.l10n.t('Git repositories failed: {0}', String(err)),
+				);
+				return;
+			}
+
+			if (rows.length === 0) {
+				vscode.window.showInformationMessage(vscode.l10n.t('No GitHub or local repositories found.'));
+				return;
+			}
+
+			const picked = await vscode.window.showQuickPick(
+				rows.map((row) => toRepoPick(row)),
+				{ placeHolder: vscode.l10n.t('Choose a repository to open') },
+			);
+			if (!picked) {
+				return;
+			}
+
+			let repoPath = picked.row.path;
+			if (!repoPath) {
+				const cloneRoot = await pickCloneRoot(service, hostId);
+				if (cloneRoot === undefined) {
+					return;
+				}
+				try {
+					repoPath = await repos.clone(picked.row.fullName, cloneRoot);
+					deps.refreshTrees();
+					vscode.window.showInformationMessage(
+						vscode.l10n.t('Cloned {0}', picked.row.fullName),
+					);
+				} catch (err) {
+					vscode.window.showErrorMessage(
+						vscode.l10n.t('Git clone failed: {0}', String(err)),
+					);
+					return;
+				}
+			}
+
+			await vscode.commands.executeCommand('pocketshell.sessions.create', {
+				hostId,
+				path: repoPath,
+			});
+		}),
+	);
 
 	// -------------------------------------------------------------------------
 	// pocketshell.git.status — read: render working-tree status
@@ -196,6 +267,145 @@ export function registerGit(
 	);
 
 	return disposables;
+}
+
+async function loadRepoBrowserRows(repos: PocketShellRepos): Promise<PocketShellRepoBrowserEntry[]> {
+	let remote: PocketShellRepoEntry[] = [];
+	try {
+		remote = await repos.listRemote();
+	} catch (err) {
+		vscode.window.showWarningMessage(
+			vscode.l10n.t('GitHub repositories unavailable: {0}', String(err)),
+		);
+	}
+	const local = await repos.listLocal();
+	return mergeRepoEntries(remote, local);
+}
+
+function toRepoPick(row: PocketShellRepoBrowserEntry): vscode.QuickPickItem & { row: PocketShellRepoBrowserEntry } {
+	return {
+		label: row.fullName,
+		description: row.cloned ? vscode.l10n.t('Open') : vscode.l10n.t('Clone'),
+		detail: row.path ?? row.defaultBranch ?? row.remote?.htmlUrl,
+		row,
+	};
+}
+
+async function pickCloneRoot(
+	service: ConnectionService,
+	hostId: number,
+): Promise<string | undefined> {
+	const watchedFolders = await service.getWatchedFolders(hostId);
+	const roots = uniqueStrings([
+		'~/git',
+		...watchedFolders
+			.filter((folder) => folder.enabled)
+			.map((folder) => parentPath(folder.path)),
+	]);
+	const manual: vscode.QuickPickItem & { manual?: boolean; root?: string } = {
+		label: vscode.l10n.t('Enter Manually'),
+		description: vscode.l10n.t('Type a remote clone root'),
+		manual: true,
+	};
+	const picked = await vscode.window.showQuickPick([
+		...roots.map((root) => ({
+			label: root,
+			description: root === '~/git' ? vscode.l10n.t('Default clone root') : vscode.l10n.t('Watched folder parent'),
+			root,
+		})),
+		manual,
+	], {
+		placeHolder: vscode.l10n.t('Choose a clone root'),
+	});
+	if (!picked) {
+		return undefined;
+	}
+	return vscode.window.showInputBox({
+		prompt: vscode.l10n.t('Clone root'),
+		value: picked.manual ? '' : picked.root,
+		placeHolder: '~/git',
+		validateInput: (value: string) => value.trim() ? undefined : vscode.l10n.t('Clone root is required'),
+	});
+}
+
+function parentPath(path: string): string {
+	const trimmed = path.replace(/\/+$/, '');
+	const index = trimmed.lastIndexOf('/');
+	if (index <= 0) {
+		return trimmed || '/';
+	}
+	return trimmed.slice(0, index);
+}
+
+function uniqueStrings(values: string[]): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const value of values) {
+		if (!value || seen.has(value)) {
+			continue;
+		}
+		seen.add(value);
+		result.push(value);
+	}
+	return result;
+}
+
+function mergeRepoEntries(
+	remote: PocketShellRepoEntry[],
+	local: PocketShellRepoEntry[],
+): PocketShellRepoBrowserEntry[] {
+	const localByKey = new Map(local.map((entry) => [joinKey(entry), entry]));
+	const seen = new Set<string>();
+	const rows: PocketShellRepoBrowserEntry[] = [];
+
+	for (const entry of remote) {
+		const key = joinKey(entry);
+		seen.add(key);
+		const localMatch = localByKey.get(key);
+		rows.push({
+			fullName: key,
+			name: entry.name,
+			owner: entry.owner,
+			cloned: localMatch?.local !== undefined,
+			path: localMatch?.local?.path,
+			defaultBranch: entry.remote?.defaultBranch,
+			updatedAt: entry.remote?.updatedAt,
+			remote: entry.remote,
+		});
+	}
+
+	for (const entry of local) {
+		const key = joinKey(entry);
+		if (seen.has(key) || !entry.local) {
+			continue;
+		}
+		seen.add(key);
+		rows.push({
+			fullName: key,
+			name: entry.name,
+			owner: entry.owner,
+			cloned: true,
+			path: entry.local.path,
+			defaultBranch: entry.remote?.defaultBranch,
+			updatedAt: entry.remote?.updatedAt,
+			remote: entry.remote,
+		});
+	}
+
+	return rows.sort((a, b) => {
+		if (a.cloned !== b.cloned) {
+			return a.cloned ? -1 : 1;
+		}
+		const updated = (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '');
+		return updated !== 0 ? updated : a.name.localeCompare(b.name);
+	});
+}
+
+function joinKey(entry: PocketShellRepoEntry): string {
+	if (entry.fullName) {
+		return entry.fullName;
+	}
+	return entry.owner ? `${entry.owner}/${entry.name}` : entry.name;
 }
 
 // -----------------------------------------------------------------------------

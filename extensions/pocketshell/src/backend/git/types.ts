@@ -104,3 +104,38 @@ export interface GitRepoInfo {
   isDirty: boolean;
   remoteUrl?: string;
 }
+
+/** Local clone metadata returned by `pocketshell repos list --local --json`. */
+export interface PocketShellRepoLocalInfo {
+  path: string;
+  head?: string;
+}
+
+/** GitHub metadata returned by `pocketshell repos list --remote --json`. */
+export interface PocketShellRepoRemoteInfo {
+  defaultBranch?: string;
+  htmlUrl?: string;
+  sshUrl?: string;
+  updatedAt?: string;
+}
+
+/** Unified repo entry returned by the pocketshell helper. */
+export interface PocketShellRepoEntry {
+  owner?: string;
+  name: string;
+  fullName?: string;
+  local?: PocketShellRepoLocalInfo;
+  remote?: PocketShellRepoRemoteInfo;
+}
+
+/** Merged row for a GitHub repo and/or an existing local clone. */
+export interface PocketShellRepoBrowserEntry {
+  fullName: string;
+  name: string;
+  owner?: string;
+  cloned: boolean;
+  path?: string;
+  defaultBranch?: string;
+  updatedAt?: string;
+  remote?: PocketShellRepoRemoteInfo;
+}

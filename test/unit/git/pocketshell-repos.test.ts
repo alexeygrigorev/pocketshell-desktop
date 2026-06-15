@@ -115,6 +115,126 @@ describe('PocketShellRepos', () => {
       const repos = new PocketShellRepos(connection);
       await expect(repos.list()).rejects.toThrow('pocketshell repos list failed');
     });
+
+    it('merges remote GitHub repos with local cloned repos', async () => {
+      const { connection, calls } = createMockConnection((cmd) => {
+        if (cmd === 'pocketshell repos list --remote --json') {
+          return {
+            stdout: JSON.stringify([
+              {
+                owner: 'alice',
+                name: 'api',
+                full_name: 'alice/api',
+                local: null,
+                remote: {
+                  default_branch: 'main',
+                  html_url: 'https://github.com/alice/api',
+                  ssh_url: 'git@github.com:alice/api.git',
+                  updated_at: '2026-01-02T00:00:00Z',
+                },
+              },
+              {
+                owner: 'alice',
+                name: 'web',
+                full_name: 'alice/web',
+                local: null,
+                remote: { default_branch: 'main', updated_at: '2026-01-03T00:00:00Z' },
+              },
+            ]),
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        if (cmd === 'pocketshell repos list --local --json') {
+          return {
+            stdout: JSON.stringify([
+              {
+                owner: 'alice',
+                name: 'api',
+                full_name: 'alice/api',
+                local: { path: '/home/alice/git/api', head: 'main' },
+                remote: null,
+              },
+              {
+                owner: null,
+                name: 'internal',
+                full_name: null,
+                local: { path: '/home/alice/git/internal', head: 'main' },
+                remote: null,
+              },
+            ]),
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      });
+
+      const result = await new PocketShellRepos(connection).browse();
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          fullName: 'alice/api',
+          cloned: true,
+          path: '/home/alice/git/api',
+        }),
+        expect.objectContaining({
+          fullName: 'internal',
+          cloned: true,
+          path: '/home/alice/git/internal',
+        }),
+        expect.objectContaining({
+          fullName: 'alice/web',
+          cloned: false,
+          path: undefined,
+        }),
+      ]);
+      expect(calls.map((call) => call.command)).toContain('pocketshell repos list --remote --json');
+      expect(calls.map((call) => call.command)).toContain('pocketshell repos list --local --json');
+    });
+  });
+
+  describe('clone and open', () => {
+    it('clones into the selected root and returns the printed path', async () => {
+      const { connection, calls } = createMockConnection((cmd) => {
+        if (cmd.includes('pocketshell repos clone')) {
+          return {
+            stdout: '/home/alice/src/api\n',
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      });
+
+      const path = await new PocketShellRepos(connection).clone(
+        'alice/api',
+        "/home/alice/my repos",
+      );
+
+      expect(path).toBe('/home/alice/src/api');
+      expect(calls[0].command).toBe(
+        "pocketshell repos clone 'alice/api' --root '/home/alice/my repos' --protocol ssh",
+      );
+    });
+
+    it('opens an existing clone by repository full name', async () => {
+      const { connection, calls } = createMockConnection((cmd) => {
+        if (cmd.includes('pocketshell repos open')) {
+          return {
+            stdout: '/home/alice/git/api\n',
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      });
+
+      const path = await new PocketShellRepos(connection).open('alice/api');
+
+      expect(path).toBe('/home/alice/git/api');
+      expect(calls[0].command).toBe("pocketshell repos open 'alice/api'");
+    });
   });
 
   describe('register', () => {

@@ -171,6 +171,12 @@
 				"icon": "$(copy)"
 			},
 			{
+				"command": "pocketshell.git.browse",
+				"title": "Git: Browse Repositories",
+				"category": "PocketShell",
+				"icon": "$(repo)"
+			},
+			{
 				"command": "pocketshell.git.status",
 				"title": "Git: Status",
 				"category": "PocketShell",
@@ -704,6 +710,11 @@
 				},
 				{
 					"command": "pocketshell.connect",
+					"when": "view == pocketshell.hosts",
+					"group": "0_terminal"
+				},
+				{
+					"command": "pocketshell.git.browse",
 					"when": "view == pocketshell.hosts",
 					"group": "0_terminal"
 				},
