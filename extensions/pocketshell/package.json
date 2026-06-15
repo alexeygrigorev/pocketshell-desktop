@@ -364,6 +364,18 @@
 				"icon": "$(info)"
 			},
 			{
+				"command": "pocketshell.conversation.openActivePane",
+				"title": "Conversation: Open Active Pane",
+				"category": "PocketShell",
+				"icon": "$(comment-discussion)"
+			},
+			{
+				"command": "pocketshell.conversation.quoteReply",
+				"title": "Conversation: Quote Reply",
+				"category": "PocketShell",
+				"icon": "$(quote)"
+			},
+			{
 				"command": "pocketshell.files.browse",
 				"title": "Files: Browse",
 				"category": "PocketShell",
@@ -662,6 +674,11 @@
 					"command": "pocketshell.tmux-ui.detachTreeSession",
 					"when": "view == pocketshell.tmuxSessions",
 					"group": "2_session"
+				},
+				{
+					"command": "pocketshell.conversation.openActivePane",
+					"when": "view == pocketshell.tmuxSessions",
+					"group": "2_session"
 				}
 			],
 			"view/title": [
@@ -672,6 +689,10 @@
 				}
 			],
 			"terminal/context": [
+				{
+					"command": "pocketshell.conversation.openActivePane",
+					"group": "pocketshell_conversation"
+				},
 				{
 					"command": "pocketshell.usage.panel",
 					"group": "pocketshell_usage"
