@@ -35,6 +35,12 @@ export interface TmuxPaneInfo {
   mode: string;
   /** Current working directory reported by tmux, when available. */
   cwd: string | undefined;
+  /** Pane TTY reported by tmux, when available. */
+  tty: string | undefined;
+  /** Current foreground command reported by tmux, when available. */
+  currentCommand: string | undefined;
+  /** Pane process pid reported by tmux, when available. */
+  pid: number | undefined;
   /** Whether this pane has an active terminal attached */
   hasTerminal: boolean;
   /** Terminal ID if a terminal is attached, undefined otherwise */
@@ -90,4 +96,21 @@ export interface TmuxTreeSnapshot {
   activeWindowId: string | null;
   /** Active pane ID */
   activePaneId: string | null;
+}
+
+/** Action context for the active pane in a live tmux UI session. */
+export interface TmuxActivePaneMetadata {
+  id: string;
+  sessionId: string;
+  windowId: string;
+  tty: string | undefined;
+  cwd: string | undefined;
+  size: {
+    width: number;
+    height: number;
+  };
+  process: {
+    currentCommand: string | undefined;
+    pid: number | undefined;
+  };
 }

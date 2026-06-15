@@ -139,7 +139,7 @@ export function registerTmuxUi(
 	// pocketshell.tmux-ui.splitPane — mutate: split the active window's pane
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.tmux-ui.splitPane', async () => {
+		vscode.commands.registerCommand('pocketshell.tmux-ui.splitPane', async (element?: unknown) => {
 			const direction = await vscode.window.showQuickPick(
 				[
 					{ label: 'Vertical', value: 'vertical' as SplitDirection },
@@ -151,24 +151,20 @@ export function registerTmuxUi(
 				return;
 			}
 
-			const windowId = await vscode.window.showInputBox({
-				prompt: vscode.l10n.t('Target window id (e.g. @1)'),
-				validateInput: (v) =>
-					v.startsWith('@') ? undefined : vscode.l10n.t('Window id must start with @'),
-			});
-			if (windowId === undefined) {
-				return;
+			const target = findPaneTarget(registry, element);
+			try {
+				if (target) {
+					await target.entry.pty.splitPane(target.pane.id, direction.value);
+					return;
+				}
+				const entry = await resolveEntry(registry, element);
+				if (!entry) {
+					return;
+				}
+				await entry.pty.splitActivePane(direction.value);
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to split pane: {0}', String(err)));
 			}
-
-			const pane = await withSessionManager(service, `split-pane ${windowId}`, async (manager) => {
-				return manager.splitPane(windowId, direction.value);
-			});
-			if (pane === undefined) {
-				return;
-			}
-			vscode.window.showInformationMessage(
-				vscode.l10n.t('Split pane {0} ({1}x{2})', pane.id, pane.width, pane.height),
-			);
 		}),
 	);
 
@@ -269,6 +265,116 @@ export function registerTmuxUi(
 			} catch (err) {
 				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to split pane: {0}', String(err)));
 			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.captureTreePane', async (element?: unknown) => {
+			const target = await resolvePaneTarget(registry, element);
+			if (!target) {
+				return;
+			}
+			try {
+				const captured = await target.entry.pty.capturePane(target.pane.id);
+				output.appendLine(`# tmux capture-pane ${target.pane.id}`);
+				output.appendLine(captured);
+				output.appendLine('');
+				output.show(true);
+				return captured;
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to capture pane: {0}', String(err)));
+				return undefined;
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.captureActivePane', async (element?: unknown) => {
+			const entry = await resolveEntry(registry, element);
+			if (!entry) {
+				return undefined;
+			}
+			try {
+				const metadata = entry.pty.getActivePaneMetadata();
+				const captured = await entry.pty.captureActivePane();
+				output.appendLine(`# tmux capture-pane ${metadata?.id ?? 'active'}`);
+				output.appendLine(captured);
+				output.appendLine('');
+				output.show(true);
+				return captured;
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to capture active pane: {0}', String(err)));
+				return undefined;
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.sendTextToPane', async (element?: unknown) => {
+			const target = await resolvePaneTarget(registry, element);
+			if (!target) {
+				return;
+			}
+			const text = await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('Text to send to pane {0}', target.pane.id),
+				ignoreFocusOut: true,
+			});
+			if (text === undefined) {
+				return;
+			}
+			const submit = await vscode.window.showQuickPick(
+				[
+					{ label: 'Send text only', value: false },
+					{ label: 'Send text and Enter', value: true },
+				],
+				{ placeHolder: vscode.l10n.t('Send mode') },
+			);
+			if (submit === undefined) {
+				return;
+			}
+			try {
+				await target.entry.pty.sendTextToPane(target.pane.id, text, submit.value);
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to send text: {0}', String(err)));
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.sendKeysToPane', async (element?: unknown) => {
+			const target = await resolvePaneTarget(registry, element);
+			if (!target) {
+				return;
+			}
+			const value = await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('tmux key names for pane {0} (space separated)', target.pane.id),
+				value: 'Enter',
+				validateInput: validateTmuxKeyInput,
+				ignoreFocusOut: true,
+			});
+			if (value === undefined) {
+				return;
+			}
+			try {
+				await target.entry.pty.sendKeysToPane(target.pane.id, parseTmuxKeyInput(value));
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to send keys: {0}', String(err)));
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.resizeTreePane', async (element?: unknown) => {
+			const target = await resolvePaneTarget(registry, element);
+			if (!target) {
+				return;
+			}
+			const value = await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('Pane size as columns x rows'),
+				value: `${target.pane.width}x${target.pane.height}`,
+				validateInput: validatePaneSizeInput,
+			});
+			if (value === undefined) {
+				return;
+			}
+			const size = parsePaneSizeInput(value);
+			if (!size) {
+				return;
+			}
+			try {
+				await target.entry.pty.resizePane(target.pane.id, size.width, size.height);
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to resize pane: {0}', String(err)));
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.getActivePaneMetadata', async (element?: unknown) => {
+			const entry = await resolveEntry(registry, element);
+			return entry?.pty.getActivePaneMetadata();
 		}),
 		vscode.commands.registerCommand('pocketshell.tmux-ui.renameTreeItem', async (element?: unknown) => {
 			const target = await resolveRenameTarget(registry, element);
@@ -934,4 +1040,36 @@ function isTmuxTreeNode(node: Partial<TmuxTreeNode> | undefined): node is TmuxTr
 		return (node as Partial<TmuxTreePaneNode>).pane !== undefined;
 	}
 	return false;
+}
+
+function parseTmuxKeyInput(value: string): string[] {
+	return value.split(/\s+/).map((part) => part.trim()).filter(Boolean);
+}
+
+function validateTmuxKeyInput(value: string): string | undefined {
+	const keys = parseTmuxKeyInput(value);
+	if (keys.length === 0) {
+		return vscode.l10n.t('Enter at least one tmux key name.');
+	}
+	const unsafe = keys.find((key) => !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(key));
+	return unsafe ? vscode.l10n.t('Unsupported tmux key name: {0}', unsafe) : undefined;
+}
+
+function parsePaneSizeInput(value: string): { width: number; height: number } | undefined {
+	const match = value.trim().match(/^(\d+)\s*x\s*(\d+)$/i);
+	if (!match) {
+		return undefined;
+	}
+	const width = Number(match[1]);
+	const height = Number(match[2]);
+	if (!Number.isInteger(width) || !Number.isInteger(height) || width < 20 || height < 5) {
+		return undefined;
+	}
+	return { width, height };
+}
+
+function validatePaneSizeInput(value: string): string | undefined {
+	return parsePaneSizeInput(value)
+		? undefined
+		: vscode.l10n.t('Use columns x rows, for example 120x40.');
 }

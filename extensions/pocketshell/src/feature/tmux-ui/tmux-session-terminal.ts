@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import { TmuxClient } from '../../backend/tmux/client';
 import { SshShellBridge } from '../../backend/tmux/ssh-shell-bridge';
-import { ActivePaneTerminalController } from '../../backend/tmux-ui/active-pane-terminal';
+import { ActivePaneTerminalController, activePaneMetadata } from '../../backend/tmux-ui/active-pane-terminal';
 import type { ControlEvent } from '../../backend/tmux';
+import type { TmuxActivePaneMetadata } from '../../backend/tmux-ui/types';
 import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
 
 const DEFAULT_COLUMNS = 80;
@@ -98,6 +99,57 @@ export class TmuxSessionPseudoterminal implements vscode.Pseudoterminal {
     await this.refreshState();
   }
 
+  async splitActivePane(direction: 'horizontal' | 'vertical'): Promise<void> {
+    const pane = this.requireActivePane();
+    await this.splitPane(pane.id, direction);
+  }
+
+  async resizePane(paneId: string, width: number, height: number): Promise<void> {
+    await this.requireClient().resizePane(paneId, width, height);
+    await this.refreshState();
+  }
+
+  async resizeActivePane(width: number, height: number): Promise<void> {
+    const pane = this.requireActivePane();
+    await this.resizePane(pane.id, width, height);
+  }
+
+  async sendTextToPane(paneId: string, text: string, submit = false): Promise<void> {
+    const response = await this.requireClient().sendInput(paneId, submit ? `${text}\r` : text);
+    this.throwIfError(response, 'send text to pane');
+  }
+
+  async sendTextToActivePane(text: string, submit = false): Promise<void> {
+    const pane = this.requireActivePane();
+    await this.sendTextToPane(pane.id, text, submit);
+  }
+
+  async sendKeysToPane(paneId: string, keys: string[]): Promise<void> {
+    const response = await this.requireClient().sendKeyNames(paneId, keys);
+    this.throwIfError(response, 'send keys to pane');
+  }
+
+  async sendKeysToActivePane(keys: string[]): Promise<void> {
+    const pane = this.requireActivePane();
+    await this.sendKeysToPane(pane.id, keys);
+  }
+
+  async capturePane(paneId: string, scrollbackLines = 200): Promise<string> {
+    const result = await this.requireClient().captureWithCursor(paneId, Math.max(0, scrollbackLines));
+    this.throwIfError(result.capture, 'capture pane');
+    return result.capture.output.join('\n');
+  }
+
+  async captureActivePane(scrollbackLines = 200): Promise<string> {
+    const pane = this.requireActivePane();
+    return this.capturePane(pane.id, scrollbackLines);
+  }
+
+  getActivePaneMetadata(): TmuxActivePaneMetadata | undefined {
+    const state = this.client?.getState();
+    return state ? activePaneMetadata(state) : undefined;
+  }
+
   async renameSession(sessionId: string, name: string): Promise<void> {
     const response = await this.requireClient().renameSession(sessionId, name);
     this.throwIfError(response, 'rename session');
@@ -159,6 +211,14 @@ export class TmuxSessionPseudoterminal implements vscode.Pseudoterminal {
       throw new Error('tmux terminal is not ready yet');
     }
     return this.client;
+  }
+
+  private requireActivePane(): TmuxActivePaneMetadata {
+    const metadata = this.getActivePaneMetadata();
+    if (!metadata) {
+      throw new Error('No active tmux pane');
+    }
+    return metadata;
   }
 
   private throwIfError(response: { isError: boolean; output: string[] }, action: string): void {

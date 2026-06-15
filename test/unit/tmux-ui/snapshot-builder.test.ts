@@ -64,6 +64,7 @@ function buildTestState(): TmuxState {
   state = upsertPane(state, {
     id: '%0', sessionId: '$0', windowId: '@0',
     width: 80, height: 24, title: 'bash', mode: 'normal', cwd: '/home/alex/project',
+    tty: '/dev/pts/3', currentCommand: 'bash', pid: 4242,
   });
 
   state = upsertPane(state, {
@@ -163,6 +164,17 @@ describe('buildSnapshot', () => {
 
       const editorPanes = snapshot.sessions[0].windows[0].panes;
       expect(editorPanes.map(p => p.id)).toEqual(['%0', '%1']);
+    });
+
+    it('propagates pane diagnostics metadata', () => {
+      const state = buildTestState();
+      const snapshot = buildSnapshot(state, new Map());
+      const pane = snapshot.sessions[0].windows[0].panes[0];
+
+      expect(pane.cwd).toBe('/home/alex/project');
+      expect(pane.tty).toBe('/dev/pts/3');
+      expect(pane.currentCommand).toBe('bash');
+      expect(pane.pid).toBe(4242);
     });
 
     it('preserves window order from state', () => {

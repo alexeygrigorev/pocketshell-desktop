@@ -27,6 +27,12 @@ export interface TmuxPane {
   mode: string;
   /** Current working directory reported by tmux, when available. */
   cwd?: string;
+  /** Pane TTY reported by tmux, when available. */
+  tty?: string;
+  /** Current foreground command reported by tmux, when available. */
+  currentCommand?: string;
+  /** Pane process pid reported by tmux, when available. */
+  pid?: number;
 }
 
 /** A tmux window (tab) */

@@ -535,6 +535,41 @@
 				"icon": "$(eye)"
 			},
 			{
+				"command": "pocketshell.tmux-ui.captureTreePane",
+				"title": "Tmux UI: Capture Selected Pane",
+				"category": "PocketShell",
+				"icon": "$(eye)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.captureActivePane",
+				"title": "Tmux UI: Capture Active Pane",
+				"category": "PocketShell",
+				"icon": "$(eye)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.sendTextToPane",
+				"title": "Tmux UI: Send Text to Pane",
+				"category": "PocketShell",
+				"icon": "$(send)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.sendKeysToPane",
+				"title": "Tmux UI: Send Keys to Pane",
+				"category": "PocketShell",
+				"icon": "$(keyboard)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.resizeTreePane",
+				"title": "Tmux UI: Resize Pane",
+				"category": "PocketShell",
+				"icon": "$(screen-normal)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.getActivePaneMetadata",
+				"title": "Tmux UI: Get Active Pane Metadata",
+				"category": "PocketShell"
+			},
+			{
 				"command": "pocketshell.tmux-ui.forgetRestoreState",
 				"title": "Tmux UI: Forget Restore State",
 				"category": "PocketShell",
@@ -592,6 +627,26 @@
 					"command": "pocketshell.tmux-ui.splitTreePane",
 					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
 					"group": "0_create"
+				},
+				{
+					"command": "pocketshell.tmux-ui.captureTreePane",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "1_pane"
+				},
+				{
+					"command": "pocketshell.tmux-ui.sendTextToPane",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "1_pane"
+				},
+				{
+					"command": "pocketshell.tmux-ui.sendKeysToPane",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "1_pane"
+				},
+				{
+					"command": "pocketshell.tmux-ui.resizeTreePane",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "1_pane"
 				},
 				{
 					"command": "pocketshell.tmux-ui.renameTreeItem",

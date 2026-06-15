@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ActivePaneTerminalController, selectActivePane, type ActivePaneTerminalClient } from '../../../src/tmux-ui/active-pane-terminal';
+import { ActivePaneTerminalController, activePaneMetadata, selectActivePane, type ActivePaneTerminalClient } from '../../../src/tmux-ui/active-pane-terminal';
 import { emptyState, applyEvent, upsertPane } from '../../../src/tmux/state';
 import type { TmuxState } from '../../../src/tmux/state';
 import type { CommandResponse } from '../../../src/tmux/events';
@@ -20,6 +20,10 @@ function buildState(activePaneId: string): TmuxState {
     height: 24,
     title: 'one',
     mode: 'normal',
+    cwd: '/work/project',
+    tty: '/dev/pts/1',
+    currentCommand: 'bash',
+    pid: 1001,
   });
   state = upsertPane(state, {
     id: '%2',
@@ -38,6 +42,7 @@ class MockClient implements ActivePaneTerminalClient {
   detached = false;
   closed = false;
   inputs: { paneId: string; data: string }[] = [];
+  clientResizes: { width: number; height: number }[] = [];
   resizes: { paneId: string; width: number; height: number }[] = [];
   selectedPanes: { paneId: string; sessionId?: string; windowId?: string }[] = [];
   commands: string[] = [];
@@ -74,6 +79,14 @@ class MockClient implements ActivePaneTerminalClient {
   async sendInput(paneId: string, data: string): Promise<CommandResponse> {
     this.inputs.push({ paneId, data });
     return ok();
+  }
+
+  async sendKeyNames(_paneId: string, _keys: string[]): Promise<CommandResponse> {
+    return ok();
+  }
+
+  async resizeClient(width: number, height: number): Promise<void> {
+    this.clientResizes.push({ width, height });
   }
 
   async resizePane(paneId: string, width: number, height: number): Promise<void> {
@@ -129,6 +142,24 @@ describe('ActivePaneTerminalController', () => {
     expect(pane?.id).toBe('%1');
   });
 
+  it('builds active pane metadata for pane actions', () => {
+    expect(activePaneMetadata(buildState('%1'))).toEqual({
+      id: '%1',
+      sessionId: '$0',
+      windowId: '@0',
+      tty: '/dev/pts/1',
+      cwd: '/work/project',
+      size: {
+        width: 80,
+        height: 24,
+      },
+      process: {
+        currentCommand: 'bash',
+        pid: 1001,
+      },
+    });
+  });
+
   it('renders initial capture and streams only the current active pane', async () => {
     const client = new MockClient();
     const writes: string[] = [];
@@ -163,7 +194,7 @@ describe('ActivePaneTerminalController', () => {
     expect(writes).toEqual(['initial', '\r\n', '€']);
   });
 
-  it('sends input and resize to the active pane', async () => {
+  it('sends input to the active pane and reports terminal dimensions as client size', async () => {
     const client = new MockClient();
     const controller = new ActivePaneTerminalController(client, () => {});
 
@@ -172,7 +203,8 @@ describe('ActivePaneTerminalController', () => {
     controller.setDimensions(120, 40);
 
     expect(client.inputs).toEqual([{ paneId: '%1', data: 'ls\r' }]);
-    expect(client.resizes).toEqual([{ paneId: '%1', width: 120, height: 40 }]);
+    expect(client.clientResizes).toEqual([{ width: 120, height: 40 }]);
+    expect(client.resizes).toEqual([]);
   });
 
   it('selects a pane through tmux and switches streamed output', async () => {

@@ -360,19 +360,50 @@ describe('TmuxClient', () => {
 
     const written = channel.written[1].toString('utf-8');
     expect(written).toContain('#{pane_current_path}');
+    expect(written).toContain('#{pane_tty}');
+    expect(written).toContain('#{pane_current_command}');
+    expect(written).toContain('#{pane_pid}');
     expect(written).toContain('#{session_name}');
     expect(written).toContain('#{window_activity}');
     expect(written).toContain('#{pane_active}');
 
     channel.stdoutReader.pushLine('%begin 1700000000 1 0');
-    channel.stdoutReader.pushLine('%1\t@0\t$0\t120\t40\tserver\t0\t/home/alice/git/api\ttest-session\tmain\t1710000000\t1710000300\t1\t1');
+    channel.stdoutReader.pushLine('%1\t@0\t$0\t120\t40\tserver\t0\t/home/alice/git/api\ttest-session\tmain\t1710000000\t1710000300\t1\t1\t/dev/pts/7\tnode\t12345');
     channel.stdoutReader.pushLine('%end 1700000000 1 0');
 
     const state = await refresh;
     const pane = state.sessions.get('$0')?.windows.get('@0')?.panes.get('%1');
     expect(pane?.cwd).toBe('/home/alice/git/api');
+    expect(pane?.tty).toBe('/dev/pts/7');
+    expect(pane?.currentCommand).toBe('node');
+    expect(pane?.pid).toBe(12345);
     expect(state.activeWindowId).toBe('@0');
     expect(state.activePaneId).toBe('%1');
+
+    await client.close();
+  });
+
+  it('sends validated tmux key names to a quoted pane target', async () => {
+    await client.connect(channel);
+
+    const command = client.sendKeyNames('%1', ['Enter', 'C-c', 'PageDown']);
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    expect(written).toBe('send-keys -t "%1" Enter C-c PageDown\n');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('rejects unsafe tmux key names before writing a command', async () => {
+    await client.connect(channel);
+
+    await expect(client.sendKeyNames('%1', ['Enter', ';', 'display-message'])).rejects.toThrow('Unsafe tmux key name');
+    expect(channel.written).toHaveLength(1);
 
     await client.close();
   });
@@ -510,6 +541,26 @@ describe('TmuxClient', () => {
     channel.stdoutReader.pushLine('%begin 1700000000 1 0');
     channel.stdoutReader.pushLine('%end 1700000000 1 0');
     await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('reports client size separately from targeted pane resize', async () => {
+    await client.connect(channel);
+
+    const clientResize = client.resizeClient(120, 40);
+    await channel.waitForWrites(2);
+    expect(channel.written[1].toString('utf-8')).toBe('refresh-client -C 120x40\n');
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await clientResize;
+
+    const paneResize = client.resizePane('%7', 100, 30);
+    await channel.waitForWrites(3);
+    expect(channel.written[2].toString('utf-8')).toBe('resize-pane -t "%7" -x 100 -y 30\n');
+    channel.stdoutReader.pushLine('%begin 1700000001 2 0');
+    channel.stdoutReader.pushLine('%end 1700000001 2 0');
+    await paneResize;
 
     await client.close();
   });

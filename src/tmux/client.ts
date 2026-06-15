@@ -228,6 +228,21 @@ export class TmuxClient extends EventEmitter {
   }
 
   /**
+   * Send validated tmux key names to a pane.
+   */
+  async sendKeyNames(paneId: string, keys: string[]): Promise<CommandResponse> {
+    if (keys.length === 0) {
+      return { number: 0, output: [], isError: false };
+    }
+    for (const key of keys) {
+      if (!isSafeTmuxKeyName(key)) {
+        throw new Error(`Unsafe tmux key name: ${key}`);
+      }
+    }
+    return this.enqueueCommand(`send-keys -t ${quoteTmuxArg(paneId)} ${keys.join(' ')}`);
+  }
+
+  /**
    * Send literal text to a pane/session/window target, followed by Enter.
    */
   async sendKeysLiteral(target: string, text: string): Promise<CommandResponse> {
@@ -242,12 +257,18 @@ export class TmuxClient extends EventEmitter {
   }
 
   /**
+   * Report the attached client size to tmux.
+   */
+  async resizeClient(width: number, height: number): Promise<void> {
+    await this.enqueueCommand(`refresh-client -C ${width}x${height}`);
+  }
+
+  /**
    * Resize a pane.
    * Reference: section 12
    */
-  async resizePane(_paneId: string, width: number, height: number): Promise<void> {
-    // Report client size
-    await this.enqueueCommand(`refresh-client -C ${width}x${height}`);
+  async resizePane(paneId: string, width: number, height: number): Promise<void> {
+    await this.enqueueCommand(`resize-pane -t ${quoteTmuxArg(paneId)} -x ${width} -y ${height}`);
   }
 
   /**
@@ -269,7 +290,7 @@ export class TmuxClient extends EventEmitter {
    * Reference: section 12
    */
   async listPanes(): Promise<CommandResponse> {
-    const format = '#{pane_id}\\t#{window_id}\\t#{session_id}\\t#{pane_width}\\t#{pane_height}\\t#{pane_title}\\t#{pane_in_mode}\\t#{pane_current_path}\\t#{session_name}\\t#{window_name}\\t#{session_activity}\\t#{window_activity}\\t#{window_active}\\t#{pane_active}';
+    const format = '#{pane_id}\\t#{window_id}\\t#{session_id}\\t#{pane_width}\\t#{pane_height}\\t#{pane_title}\\t#{pane_in_mode}\\t#{pane_current_path}\\t#{session_name}\\t#{window_name}\\t#{session_activity}\\t#{window_activity}\\t#{window_active}\\t#{pane_active}\\t#{pane_tty}\\t#{pane_current_command}\\t#{pane_pid}';
     return this.enqueueCommand(`list-panes -a -F '${format}'`);
   }
 
@@ -562,6 +583,9 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
       ,
       windowActive,
       paneActive,
+      tty,
+      currentCommand,
+      pidStr,
     ] = parts;
     if (!paneId.startsWith('%')) continue;
     if (!windowId.startsWith('@')) continue;
@@ -571,6 +595,7 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
     const width = parseInt(widthStr, 10) || 80;
     const height = parseInt(heightStr, 10) || 24;
     const mode = inMode === '1' ? 'copy-mode' : 'normal';
+    const pid = parseOptionalInt(pidStr);
 
     current = ensureSessionWindow(current, {
       sessionId,
@@ -589,6 +614,9 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
       title,
       mode,
       cwd: cwd || undefined,
+      tty: tty || undefined,
+      currentCommand: currentCommand || undefined,
+      pid,
     };
 
     current = upsertPane(current, pane);
@@ -616,6 +644,18 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
     activeWindowId,
     activePaneId,
   };
+}
+
+function parseOptionalInt(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isSafeTmuxKeyName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value);
 }
 
 function ensureSessionWindow(

@@ -2,6 +2,7 @@ import { StringDecoder } from 'string_decoder';
 import type { CommandResponse } from '../tmux/events';
 import type { OutputSubscription } from '../tmux/client';
 import type { TmuxPane, TmuxState } from '../tmux/state';
+import type { TmuxActivePaneMetadata } from './types';
 
 export interface ActivePaneTerminalClient {
   getState(): TmuxState;
@@ -9,6 +10,8 @@ export interface ActivePaneTerminalClient {
   onStateChange(callback: (state: TmuxState) => void): { unsubscribe(): void };
   onOutput(paneId: string, callback: (data: Uint8Array) => void): OutputSubscription;
   sendInput(paneId: string, data: string): Promise<CommandResponse>;
+  sendKeyNames(paneId: string, keys: string[]): Promise<CommandResponse>;
+  resizeClient(width: number, height: number): Promise<void>;
   resizePane(paneId: string, width: number, height: number): Promise<void>;
   selectPane(paneId: string, sessionId?: string, windowId?: string): Promise<CommandResponse>;
   sendCommand(command: string): Promise<CommandResponse>;
@@ -53,7 +56,7 @@ export class ActivePaneTerminalController {
     if (this.disposed || !this.activePaneId) {
       return;
     }
-    void this.client.resizePane(this.activePaneId, width, height);
+    void this.client.resizeClient(width, height);
   }
 
   async detach(): Promise<void> {
@@ -184,6 +187,28 @@ export function selectActivePane(state: TmuxState): TmuxPane | undefined {
     }
   }
   return undefined;
+}
+
+export function activePaneMetadata(state: TmuxState): TmuxActivePaneMetadata | undefined {
+  const pane = selectActivePane(state);
+  if (!pane) {
+    return undefined;
+  }
+  return {
+    id: pane.id,
+    sessionId: pane.sessionId,
+    windowId: pane.windowId,
+    tty: pane.tty,
+    cwd: pane.cwd,
+    size: {
+      width: pane.width,
+      height: pane.height,
+    },
+    process: {
+      currentCommand: pane.currentCommand,
+      pid: pane.pid,
+    },
+  };
 }
 
 function findPane(state: TmuxState, paneId: string | null): TmuxPane | undefined {
