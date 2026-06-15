@@ -33,6 +33,7 @@ describe('SettingsStore', () => {
       expect(settings.lastHostId).toBeNull();
       expect(settings.restoreSessionOnStartup).toBe(true);
       expect(settings.sessionRestoreBehavior).toBe('ask');
+      expect(settings.portForwardRestoreActiveTunnels).toBe(true);
       expect(settings.theme).toBe('dark');
       expect(settings.diagnosticsEnabled).toBe(true);
       expect(settings.diagnosticsMaxEvents).toBe(500);
@@ -47,6 +48,7 @@ describe('SettingsStore', () => {
         lastHostId: 42,
         restoreSessionOnStartup: false,
         sessionRestoreBehavior: 'skip',
+        portForwardRestoreActiveTunnels: false,
         theme: 'light',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,
@@ -70,6 +72,7 @@ describe('SettingsStore', () => {
         lastHostId: 1,
         restoreSessionOnStartup: true,
         sessionRestoreBehavior: 'ask',
+        portForwardRestoreActiveTunnels: true,
         theme: 'dark',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,
@@ -80,6 +83,7 @@ describe('SettingsStore', () => {
         lastHostId: 2,
         restoreSessionOnStartup: true,
         sessionRestoreBehavior: 'restore-ready',
+        portForwardRestoreActiveTunnels: true,
         theme: 'system',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,
@@ -105,6 +109,7 @@ describe('SettingsStore', () => {
       expect(settings.lastHostId).toBeNull();
       expect(settings.restoreSessionOnStartup).toBe(true);
       expect(settings.sessionRestoreBehavior).toBe('ask');
+      expect(settings.portForwardRestoreActiveTunnels).toBe(true);
       expect(settings.theme).toBe('dark');
     });
 
@@ -141,6 +146,7 @@ describe('SettingsStore', () => {
         lastHostId: null,
         restoreSessionOnStartup: true,
         sessionRestoreBehavior: 'ask',
+        portForwardRestoreActiveTunnels: true,
         theme: 'dark',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,
@@ -157,6 +163,7 @@ describe('SettingsStore', () => {
         lastHostId: null,
         restoreSessionOnStartup: true,
         sessionRestoreBehavior: 'ask',
+        portForwardRestoreActiveTunnels: true,
         theme: 'dark',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,

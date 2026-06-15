@@ -14,6 +14,8 @@ export interface SavedPortForwardPanelMapping {
   name?: string;
   localHost?: string;
   localPort?: number;
+  lastLocalPort?: number;
+  restoreOnReconnect?: boolean;
   remoteHost: string;
   remotePort: number;
 }
@@ -66,6 +68,8 @@ export interface PortForwardPanelRow {
   canStop: boolean;
   canCopy: boolean;
   canOpen: boolean;
+  canToggleRestore: boolean;
+  restoreOnReconnect: boolean;
 }
 
 export interface PortForwardPanelStatus {
@@ -211,6 +215,8 @@ export function normalizeSavedPortForward(
     name: trimOptional(stringField(input, 'name')),
     localHost: stringField(input, 'localHost')?.trim() || DEFAULT_LOCAL_HOST,
     localPort: portField(input, 'localPort'),
+    lastLocalPort: portField(input, 'lastLocalPort'),
+    restoreOnReconnect: input.restoreOnReconnect === true,
     remoteHost,
     remotePort,
   };
@@ -291,6 +297,8 @@ th { color: var(--vscode-descriptionForeground); font-weight: 500; }
 .badge[data-tone="error"] { background: var(--vscode-inputValidation-errorBackground); color: var(--vscode-errorForeground); }
 .badge[data-tone="warning"] { background: var(--vscode-inputValidation-warningBackground); color: var(--vscode-notificationsWarningIcon-foreground); }
 .row-actions { display: flex; gap: 5px; flex-wrap: wrap; }
+.restore-toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+.restore-toggle input { width: auto; }
 @media (max-width: 820px) {
   .form { grid-template-columns: 1fr 1fr; }
   .form-actions { grid-column: 1 / -1; }
@@ -377,6 +385,13 @@ document.addEventListener('click', (event) => {
   }
   vscode.postMessage({ action, savedId: row.savedId, activeId: row.activeId });
 });
+document.addEventListener('change', (event) => {
+  const input = event.target.closest('input[data-action="toggle-restore"]');
+  if (!input) return;
+  const row = rowData(input);
+  if (!row?.savedId) return;
+  vscode.postMessage({ action: 'toggle-restore', savedId: row.savedId, restoreOnReconnect: input.checked === true });
+});
 window.addEventListener('load', () => setForm(initialForm));
 </script>
 </body>
@@ -417,6 +432,8 @@ function toPanelRow(
     canStop: active?.state === 'listening' || active?.state === 'starting',
     canCopy: Boolean(localUrl),
     canOpen: Boolean(localUrl),
+    canToggleRestore: Boolean(saved),
+    restoreOnReconnect: saved?.restoreOnReconnect === true,
   };
 }
 
@@ -454,6 +471,7 @@ function renderRowActions(row: PortForwardPanelRow): string {
     row.canOpen ? '<button type="button" class="secondary" data-action="open">Open</button>' : '',
     row.canEdit ? '<button type="button" class="secondary" data-action="edit">Edit</button>' : '',
     row.canDelete ? '<button type="button" class="secondary" data-action="delete">Delete</button>' : '',
+    row.canToggleRestore ? `<label class="restore-toggle"><input type="checkbox" data-action="toggle-restore"${row.restoreOnReconnect ? ' checked' : ''}>Restore</label>` : '',
   ];
   return buttons.filter(Boolean).join('');
 }

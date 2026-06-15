@@ -9,17 +9,25 @@ import type { ConnectionService } from '../../connection-service';
 import { getOrConnect, resolveHostId } from '../../host-picking';
 import type { FeatureDeps } from '../manifest';
 import {
+	PortForwardError,
 	PortForwardManager,
 	buildRemoteListeningPortsCommand,
+	buildPortForwardRestorePlan,
 	buildPortForwardPanelModel,
+	deleteSavedPortForward,
 	formatLocalUrl,
+	markSavedPortForwardStarted,
+	markSavedPortForwardStopped,
 	mergeDetectedPortCandidates,
 	normalizePortForwardOpenArgs,
-	normalizeSavedPortForward,
+	normalizeSavedPortForwardState,
 	parseRemoteListeningPorts,
 	renderPortForwardHtml,
 	remoteListeningPortsToCandidates,
 	resolveActivePortForwardLocalUrl,
+	savedMappingToStartSpec,
+	setSavedPortForwardRestore,
+	upsertSavedPortForward,
 	validatePortForwardInput,
 	type DetectedPortCandidate,
 	type DetectedPortProtocol,
@@ -27,6 +35,12 @@ import {
 	type PortForwardPanelStatus,
 	type SavedPortForwardPanelMapping,
 } from '../../backend/port-forwarding';
+import {
+	ConnectionEvent,
+	ConnectionState,
+	type StateChange,
+} from '../../backend/ssh/connection/connection-manager';
+import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
 
 interface PortForwardPanelEntry {
 	hostId: number;
@@ -42,6 +56,7 @@ interface PortForwardWebviewMessage {
 	form?: PortForwardFormState;
 	savedId?: string;
 	activeId?: string;
+	restoreOnReconnect?: boolean;
 }
 
 const SAVED_STATE_KEY_PREFIX = 'pocketshell.portForwarding.saved';
@@ -53,6 +68,7 @@ export function registerPortForwarding(
 ): vscode.Disposable[] {
 	const disposables: vscode.Disposable[] = [];
 	const panels = new Map<number, PortForwardPanelEntry>();
+	const restoringHosts = new Set<number>();
 	const manager = resolvePortForwardManager(service, deps, disposables);
 
 	disposables.push(
@@ -141,6 +157,12 @@ export function registerPortForwarding(
 	);
 
 	disposables.push({
+		dispose: service.connectionManager.onStateChange((change) => {
+			void restoreSavedPortForwardsOnConnect(ctx, deps, service, manager, change, restoringHosts);
+		}),
+	});
+
+	disposables.push({
 		dispose: () => {
 			for (const entry of panels.values()) {
 				entry.disposeForwardListener();
@@ -167,7 +189,7 @@ function wirePanelMessages(
 				entry.prefill = {};
 				entry.status = { tone: 'success', message: 'Forward saved.' };
 				if (message.action === 'save-start') {
-					await startMapping(service, manager, saved);
+					await startMapping(service, ctx, manager, saved);
 					entry.status = { tone: 'success', message: 'Forward started.' };
 				}
 				await renderPanel(ctx, manager, host, entry);
@@ -188,7 +210,7 @@ function wirePanelMessages(
 				}
 				entry.status = { tone: 'info', message: 'Starting forward...' };
 				await renderPanel(ctx, manager, host, entry);
-				await startMapping(service, manager, saved);
+				await startMapping(service, ctx, manager, saved);
 				entry.status = { tone: 'success', message: 'Forward started.' };
 				await renderPanel(ctx, manager, host, entry);
 				return;
@@ -200,7 +222,23 @@ function wirePanelMessages(
 				entry.status = { tone: 'info', message: 'Stopping forward...' };
 				await renderPanel(ctx, manager, host, entry);
 				await manager.stop(message.activeId);
+				await storeSavedMappings(ctx, host.id, markSavedPortForwardStopped(loadSavedMappings(ctx, host.id), message.activeId));
 				entry.status = { tone: 'success', message: 'Forward stopped.' };
+				await renderPanel(ctx, manager, host, entry);
+				return;
+			}
+			if (message.action === 'toggle-restore') {
+				if (!message.savedId) {
+					throw new Error('Saved forward not found.');
+				}
+				await storeSavedMappings(
+					ctx,
+					host.id,
+					setSavedPortForwardRestore(loadSavedMappings(ctx, host.id), message.savedId, message.restoreOnReconnect === true),
+				);
+				entry.status = message.restoreOnReconnect === true
+					? { tone: 'success', message: 'Forward will be restored on reconnect.' }
+					: { tone: 'muted', message: 'Forward restore disabled.' };
 				await renderPanel(ctx, manager, host, entry);
 				return;
 			}
@@ -287,14 +325,10 @@ async function saveMapping(
 	const next: SavedPortForwardPanelMapping = {
 		...validation.value,
 		id,
+		lastLocalPort: saved.find((mapping) => mapping.id === id)?.lastLocalPort,
+		restoreOnReconnect: saved.find((mapping) => mapping.id === id)?.restoreOnReconnect,
 	};
-	const existingIndex = saved.findIndex((mapping) => mapping.id === id);
-	if (existingIndex >= 0) {
-		saved[existingIndex] = next;
-	} else {
-		saved.push(next);
-	}
-	await storeSavedMappings(ctx, hostId, saved);
+	await storeSavedMappings(ctx, hostId, upsertSavedPortForward(saved, next));
 	return next;
 }
 
@@ -315,16 +349,13 @@ async function deleteMapping(
 	if (confirm !== deleteLabel) {
 		return false;
 	}
-	await storeSavedMappings(
-		ctx,
-		hostId,
-		loadSavedMappings(ctx, hostId).filter((mapping) => mapping.id !== savedId),
-	);
+	await storeSavedMappings(ctx, hostId, deleteSavedPortForward(loadSavedMappings(ctx, hostId), savedId));
 	return true;
 }
 
 async function startMapping(
 	service: ConnectionService,
+	ctx: vscode.ExtensionContext,
 	manager: PortForwardManager,
 	mapping: SavedPortForwardPanelMapping,
 ): Promise<{ id: string }> {
@@ -332,7 +363,9 @@ async function startMapping(
 	if (!connection) {
 		throw new Error('SSH connection is not active.');
 	}
-	return manager.start(mapping, connection);
+	const handle = await startMappingWithPortFallback(manager, mapping, connection, false);
+	await storeStartedMapping(ctx, mapping.hostId, manager, handle.id);
+	return handle;
 }
 
 async function startPrefilledMapping(
@@ -359,6 +392,9 @@ async function startPrefilledMapping(
 			...validation.value,
 			id: validation.value.id || undefined,
 		}, connection);
+		if (validation.value.id) {
+			await storeStartedMapping(ctx, host.id, manager, handle.id);
+		}
 		entry.prefill = {};
 		entry.status = { tone: 'success', message: 'Forward started.' };
 		if (openInBrowser) {
@@ -373,6 +409,110 @@ async function startPrefilledMapping(
 		entry.status = { tone: 'error', message: errorMessage(err) };
 	}
 	await renderPanel(ctx, manager, host, entry);
+}
+
+async function restoreSavedPortForwardsOnConnect(
+	ctx: vscode.ExtensionContext,
+	deps: FeatureDeps,
+	service: ConnectionService,
+	manager: PortForwardManager,
+	change: StateChange,
+	restoringHosts: Set<number>,
+): Promise<void> {
+	if (
+		change.newState !== ConnectionState.Connected ||
+		(change.event !== ConnectionEvent.Connect && change.event !== ConnectionEvent.Reconnect) ||
+		!isPortForwardRestoreEnabled(deps) ||
+		restoringHosts.has(change.hostId)
+	) {
+		return;
+	}
+
+	const connection = service.getConnection(change.hostId);
+	if (!connection) {
+		return;
+	}
+
+	const plan = buildPortForwardRestorePlan(
+		change.hostId,
+		loadSavedMappings(ctx, change.hostId),
+	);
+	if (plan.mappings.length === 0) {
+		return;
+	}
+
+	restoringHosts.add(change.hostId);
+	const failed: string[] = [];
+	try {
+		for (const mapping of plan.mappings) {
+			try {
+				if (manager.get(mapping.id)) {
+					await manager.stop(mapping.id);
+				}
+				const handle = await startMappingWithPortFallback(manager, mapping, connection, true);
+				await storeStartedMapping(ctx, change.hostId, manager, handle.id);
+			} catch (err) {
+				failed.push(`${mapping.name || `${mapping.remoteHost}:${mapping.remotePort}`}: ${errorMessage(err)}`);
+			}
+		}
+	} finally {
+		restoringHosts.delete(change.hostId);
+	}
+
+	if (failed.length > 0) {
+		void vscode.window.showWarningMessage(
+			vscode.l10n.t('Some port forwards could not be restored: {0}', failed.join('; ')),
+		);
+	}
+}
+
+async function startMappingWithPortFallback(
+	manager: PortForwardManager,
+	mapping: SavedPortForwardPanelMapping,
+	connection: SshConnection,
+	preferRememberedPort: boolean,
+): Promise<{ id: string }> {
+	try {
+		return await manager.start(savedMappingToStartSpec(mapping, {
+			preferLastLocalPort: preferRememberedPort,
+		}), connection);
+	} catch (err) {
+		if (
+			preferRememberedPort &&
+			mapping.localPort === undefined &&
+			mapping.lastLocalPort !== undefined &&
+			err instanceof PortForwardError &&
+			err.code === 'LOCAL_PORT_IN_USE'
+		) {
+			void vscode.window.showWarningMessage(
+				vscode.l10n.t(
+					'Local port {0} is unavailable; restored {1} on another local port.',
+					mapping.lastLocalPort,
+					mapping.name || `${mapping.remoteHost}:${mapping.remotePort}`,
+				),
+			);
+			return manager.start(savedMappingToStartSpec(mapping), connection);
+		}
+		throw err;
+	}
+}
+
+async function storeStartedMapping(
+	ctx: vscode.ExtensionContext,
+	hostId: number,
+	manager: PortForwardManager,
+	activeId: string,
+): Promise<void> {
+	const forward = manager.get(activeId);
+	if (!forward) {
+		return;
+	}
+	await storeSavedMappings(ctx, hostId, markSavedPortForwardStarted(loadSavedMappings(ctx, hostId), forward));
+}
+
+function isPortForwardRestoreEnabled(deps: FeatureDeps): boolean {
+	const settings = deps.getSettings?.();
+	return settings?.portForwardRestoreActiveTunnels !== false;
 }
 
 async function renderPanel(
@@ -414,7 +554,7 @@ function loadSavedMappings(
 		return [];
 	}
 	return raw
-		.map((item) => normalizeSavedPortForward(item, hostId))
+		.map((item) => normalizeSavedPortForwardState(item, hostId))
 		.filter((item): item is SavedPortForwardPanelMapping => item !== undefined);
 }
 

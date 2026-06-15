@@ -166,6 +166,7 @@ describe('settings-schema', () => {
       expect(byKey['reconnectMaxAttempts']).toBe(5);
       expect(byKey['restoreSessionOnStartup']).toBe(true);
       expect(byKey['sessionRestoreBehavior']).toBe('ask');
+      expect(byKey['portForwardRestoreActiveTunnels']).toBe(true);
     });
 
     it('terminal defaults', () => {

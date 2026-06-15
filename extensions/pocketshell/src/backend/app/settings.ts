@@ -27,6 +27,9 @@ export interface AppSettings {
   /** How startup restore should handle missing or disconnected session hosts. */
   sessionRestoreBehavior: 'ask' | 'restore-ready' | 'skip';
 
+  /** Whether selected active port forwards are restored after startup or reconnect. */
+  portForwardRestoreActiveTunnels: boolean;
+
   /** UI color theme. */
   theme: 'dark' | 'light' | 'system';
 
@@ -51,6 +54,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lastHostId: UI_DEFAULTS.lastHostId as number | null,
   restoreSessionOnStartup: UI_DEFAULTS.restoreSessionOnStartup as boolean,
   sessionRestoreBehavior: UI_DEFAULTS.sessionRestoreBehavior as AppSettings['sessionRestoreBehavior'],
+  portForwardRestoreActiveTunnels: UI_DEFAULTS.portForwardRestoreActiveTunnels as boolean,
   theme: UI_DEFAULTS.theme as AppSettings['theme'],
   diagnosticsEnabled: UI_DEFAULTS.diagnosticsEnabled as boolean,
   diagnosticsMaxEvents: UI_DEFAULTS.diagnosticsMaxEvents as number,

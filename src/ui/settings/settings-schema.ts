@@ -114,6 +114,15 @@ const connectionSettings: SettingDefinition[] = [
     enumValues: ['ask', 'restore-ready', 'skip'],
     validation: [],
   },
+  {
+    key: 'portForwardRestoreActiveTunnels',
+    label: 'Restore active port forwards',
+    description: 'Restore selected active port forwards after startup or reconnect.',
+    type: 'boolean',
+    category: 'connection',
+    defaultValue: true,
+    validation: [],
+  },
 ];
 
 const terminalSettings: SettingDefinition[] = [

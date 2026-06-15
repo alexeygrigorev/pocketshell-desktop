@@ -13,6 +13,19 @@ export type {
   SshConnectionProvider,
 } from './port-forward-manager';
 export {
+  buildPortForwardRestorePlan,
+  deleteSavedPortForward,
+  markSavedPortForwardStarted,
+  markSavedPortForwardStopped,
+  normalizeSavedPortForwardState,
+  savedMappingToStartSpec,
+  setSavedPortForwardRestore,
+  upsertSavedPortForward,
+} from './port-forward-persistence';
+export type {
+  PortForwardRestorePlan,
+} from './port-forward-persistence';
+export {
   buildRemoteListeningPortsCommand,
   detectPortsFromPaneOutput,
   extractLocalhostUrls,

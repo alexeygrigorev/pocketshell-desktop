@@ -238,6 +238,76 @@ describe('PortForwardManager', () => {
     expect(tunnel?.error).toMatchObject({ code: 'CONNECTION_UNAVAILABLE' });
   });
 
+  it('can rebuild a selected active tunnel on a new pinned connection after reconnect', async () => {
+    const staleConnection = new FakeSshConnection();
+    const newConnection = new FakeSshConnection();
+    const manager = await makeManagerAroundFreePort(staleConnection);
+
+    const first = await manager.start({
+      id: 'web',
+      hostId: 1,
+      remoteHost: 'localhost',
+      remotePort: 80,
+    }, staleConnection);
+    staleConnection.disconnect();
+
+    await manager.stop('web');
+    const restored = await manager.start({
+      id: 'web',
+      hostId: 1,
+      localPort: first.localPort,
+      remoteHost: 'localhost',
+      remotePort: 80,
+    }, newConnection);
+
+    expect(restored.id).toBe('web');
+    expect(restored.localPort).toBe(first.localPort);
+    await expect(connectAndEcho(restored.localPort, 'after-reconnect')).resolves.toBe('after-reconnect');
+    expect(staleConnection.forwardOutCalls).toHaveLength(0);
+    expect(newConnection.forwardOutCalls).toHaveLength(1);
+  });
+
+  it('can rebuild a selected active auto-port tunnel on another port when the remembered port becomes occupied', async () => {
+    const staleConnection = new FakeSshConnection();
+    const newConnection = new FakeSshConnection();
+    const manager = await makeManagerAroundFreePort(staleConnection);
+    const blocker = net.createServer();
+    servers.push(blocker);
+
+    const first = await manager.start({
+      id: 'web',
+      hostId: 1,
+      remoteHost: 'localhost',
+      remotePort: 80,
+    }, staleConnection);
+    staleConnection.disconnect();
+
+    await manager.stop('web');
+    await listen(blocker, first.localPort);
+
+    await expect(
+      manager.start({
+        id: 'web',
+        hostId: 1,
+        localPort: first.localPort,
+        remoteHost: 'localhost',
+        remotePort: 80,
+      }, newConnection),
+    ).rejects.toMatchObject({ code: 'LOCAL_PORT_IN_USE' });
+
+    const restored = await manager.start({
+      id: 'web',
+      hostId: 1,
+      remoteHost: 'localhost',
+      remotePort: 80,
+    }, newConnection);
+
+    expect(restored.localPort).toBeGreaterThan(first.localPort);
+    await expect(connectAndEcho(restored.localPort, 'fallback')).resolves.toBe('fallback');
+    expect(staleConnection.forwardOutCalls).toHaveLength(0);
+    expect(newConnection.forwardOutCalls).toHaveLength(1);
+  });
+
   it('rejects when no active connection is available from the provider', async () => {
     const manager = new PortForwardManager({
       connections: { getConnection: () => null },
