@@ -20,6 +20,14 @@ import type { SettingDefinition } from './backend/ui/settings/settings-schema';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
 import type { SshKey } from './backend/ssh/data/key-store';
 import { assignManagedKeyToHost, createHostKeyAssignmentPlan } from './backend/ssh/data/key-assignment';
+import {
+	DiagnosticsEventStore,
+	buildDiagnosticsReport,
+	normalizeDiagnosticError,
+	type DiagnosticRecordInput,
+	type DiagnosticsConfig,
+} from './backend/diagnostics';
+import type { FeatureRegistration } from './feature/manifest';
 
 /**
  * Extension entry point.
@@ -37,16 +45,55 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	const service = ConnectionService.getInstance();
 	service.setStorageDir(storageDir);
+	const settings = new SettingsStore(path.join(storageDir, 'settings.json'));
+	const appSettings = settings.load();
+	const diagnostics = new DiagnosticsEventStore(settingsToDiagnosticsConfig(appSettings));
+	const recordDiagnostics = (input: DiagnosticRecordInput): void => {
+		diagnostics.record(input);
+	};
+	service.setDiagnosticsRecorder(recordDiagnostics);
+	recordDiagnostics({
+		category: 'app',
+		name: 'extension_activated',
+		metadata: {
+			storagePath: storageDir,
+			extensionPath: context.extensionPath,
+		},
+	});
 	service.setPassphraseProvider(async (host) => vscode.window.showInputBox({
 		prompt: vscode.l10n.t('Passphrase for SSH key used by {0}', host.name || host.hostname),
 		password: true,
 		ignoreFocusOut: true,
 	}));
+	const unhandledExceptionListener = (err: Error): void => {
+		recordDiagnostics({
+			category: 'extension',
+			name: 'uncaught_exception',
+			metadata: normalizeDiagnosticError(err),
+		});
+	};
+	const unhandledRejectionListener = (reason: unknown): void => {
+		recordDiagnostics({
+			category: 'extension',
+			name: 'unhandled_rejection',
+			metadata: normalizeDiagnosticError(reason),
+		});
+	};
+	process.on('uncaughtExceptionMonitor', unhandledExceptionListener);
+	process.on('unhandledRejection', unhandledRejectionListener);
+	context.subscriptions.push({
+		dispose: () => {
+			process.off('uncaughtExceptionMonitor', unhandledExceptionListener);
+			process.off('unhandledRejection', unhandledRejectionListener);
+		},
+	});
+	const registerCommand = createDiagnosticCommandRegistrar(recordDiagnostics);
 
 	// -- Terminal profile provider -----------------------------------------------
 
 	const profileProvider: vscode.TerminalProfileProvider = {
 		async provideTerminalProfile(_token: vscode.CancellationToken): Promise<vscode.TerminalProfile | undefined> {
+			recordDiagnostics({ category: 'navigation', name: 'terminal_profile_requested' });
 			const hosts = await service.getHosts();
 			if (hosts.length === 0) {
 				vscode.window.showWarningMessage(vscode.l10n.t('No hosts configured. Use "PocketShell: Add Host" first.'));
@@ -81,7 +128,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 			return new vscode.TerminalProfile({
 				name: `PocketShell: ${host.name || host.hostname}`,
-				pty: new SshPseudoterminal(conn, host.name || host.hostname),
+				pty: new SshPseudoterminal(conn, host.name || host.hostname, recordDiagnostics),
 				iconPath: new vscode.ThemeIcon('remote'),
 			});
 		},
@@ -114,7 +161,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Connect to a host (optionally passed hostId from tree item click)
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.connect', async (element?: Host | number) => {
+		registerCommand('pocketshell.connect', async (element?: Host | number) => {
 			const id = await resolveHostId(service, element, { connectedOnly: false });
 			if (id === undefined) {
 				return;
@@ -133,7 +180,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 
 			// Open terminal
-			const pty = new SshPseudoterminal(conn, host.name || host.hostname);
+			const pty = new SshPseudoterminal(conn, host.name || host.hostname, recordDiagnostics);
 			const terminal = vscode.window.createTerminal({
 				name: `PocketShell: ${host.name || host.hostname}`,
 				pty,
@@ -148,7 +195,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Add a new host
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.addHost', async () => {
+		registerCommand('pocketshell.addHost', async () => {
 			const name = await vscode.window.showInputBox({
 				placeHolder: vscode.l10n.t('My Server'),
 				prompt: vscode.l10n.t('Host display name'),
@@ -210,10 +257,32 @@ export function activate(context: vscode.ExtensionContext): void {
 
 			try {
 				const id = await service.addHost(newHost);
+				recordDiagnostics({
+					category: 'ssh',
+					name: 'host_added',
+					metadata: {
+						hostId: id,
+						hostname: newHost.hostname,
+						username: newHost.username,
+						port: newHost.port,
+						keyPath: newHost.keyPath,
+					},
+				});
 				vscode.window.showInformationMessage(
 					vscode.l10n.t('Host "{0}" added (id={1}).', newHost.name, String(id)),
 				);
 			} catch (err) {
+				recordDiagnostics({
+					category: 'ssh',
+					name: 'host_add_failed',
+					metadata: {
+						hostname: newHost.hostname,
+						username: newHost.username,
+						port: newHost.port,
+						keyPath: newHost.keyPath,
+						...normalizeDiagnosticError(err),
+					},
+				});
 				vscode.window.showErrorMessage(
 					vscode.l10n.t('Failed to add host: {0}', String(err)),
 				);
@@ -226,7 +295,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Import hosts from ~/.ssh/config
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.importSshConfig', async () => {
+		registerCommand('pocketshell.importSshConfig', async () => {
 			const output = vscode.window.createOutputChannel('PocketShell SSH Import');
 			context.subscriptions.push(output);
 
@@ -234,6 +303,11 @@ export function activate(context: vscode.ExtensionContext): void {
 			try {
 				parsed = parseSshConfig();
 			} catch (err) {
+				recordDiagnostics({
+					category: 'ssh',
+					name: 'ssh_config_import_failed',
+					metadata: normalizeDiagnosticError(err),
+				});
 				vscode.window.showErrorMessage(
 					vscode.l10n.t('Failed to read SSH config: {0}', String(err)),
 				);
@@ -294,9 +368,30 @@ export function activate(context: vscode.ExtensionContext): void {
 					await service.addHost(item.candidate.host);
 					imported += 1;
 				} catch (err) {
+					recordDiagnostics({
+						category: 'ssh',
+						name: 'ssh_config_host_import_failed',
+						metadata: {
+							alias: item.candidate.alias,
+							hostname: item.candidate.host.hostname,
+							username: item.candidate.host.username,
+							port: item.candidate.host.port,
+							keyPath: item.candidate.host.keyPath,
+							...normalizeDiagnosticError(err),
+						},
+					});
 					output.appendLine(`Failed to import ${item.candidate.alias}: ${String(err)}`);
 				}
 			}
+			recordDiagnostics({
+				category: 'ssh',
+				name: 'ssh_config_import_completed',
+				metadata: {
+					selectedCount: picked.length,
+					importedCount: imported,
+					skippedCount: plan.skipped.length,
+				},
+			});
 
 			treeProvider.refresh();
 			if (imported === picked.length) {
@@ -318,7 +413,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Manage SSH keys
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.keys.manage', async () => {
+		registerCommand('pocketshell.keys.manage', async () => {
 			const action = await vscode.window.showQuickPick([
 				{ label: vscode.l10n.t('List Managed Keys'), command: 'pocketshell.keys.list' },
 				{ label: vscode.l10n.t('Import Private Key'), command: 'pocketshell.keys.import' },
@@ -335,7 +430,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.keys.list', async () => {
+		registerCommand('pocketshell.keys.list', async () => {
 			const keys = await service.getKeys();
 			const output = vscode.window.createOutputChannel('PocketShell SSH Keys');
 			context.subscriptions.push(output);
@@ -357,7 +452,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.keys.import', async () => {
+		registerCommand('pocketshell.keys.import', async () => {
 			const picked = await vscode.window.showOpenDialog({
 				canSelectFiles: true,
 				canSelectFolders: false,
@@ -391,17 +486,35 @@ export function activate(context: vscode.ExtensionContext): void {
 
 			try {
 				const key = await service.importKey(name || defaultName, sourcePath, encrypted.value);
+				recordDiagnostics({
+					category: 'ssh',
+					name: 'key_imported',
+					metadata: {
+						keyName: key.name,
+						keyPath: key.privateKeyPath,
+						hasPassphrase: key.hasPassphrase,
+					},
+				});
 				vscode.window.showInformationMessage(
 					vscode.l10n.t('Imported SSH key "{0}".', key.name),
 				);
 			} catch (err) {
+				recordDiagnostics({
+					category: 'ssh',
+					name: 'key_import_failed',
+					metadata: {
+						sourcePath,
+						keyName: name || defaultName,
+						...normalizeDiagnosticError(err),
+					},
+				});
 				vscode.window.showErrorMessage(vscode.l10n.t('Failed to import key: {0}', String(err)));
 			}
 		}),
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.keys.generate', async () => {
+		registerCommand('pocketshell.keys.generate', async () => {
 			const name = await vscode.window.showInputBox({
 				prompt: vscode.l10n.t('New ed25519 key name'),
 				value: 'id_ed25519_pocketshell',
@@ -412,17 +525,33 @@ export function activate(context: vscode.ExtensionContext): void {
 
 			try {
 				const key = await service.generateKey(name || 'id_ed25519_pocketshell');
+				recordDiagnostics({
+					category: 'ssh',
+					name: 'key_generated',
+					metadata: {
+						keyName: key.name,
+						keyPath: key.privateKeyPath,
+					},
+				});
 				vscode.window.showInformationMessage(
 					vscode.l10n.t('Generated SSH key "{0}".', key.name),
 				);
 			} catch (err) {
+				recordDiagnostics({
+					category: 'ssh',
+					name: 'key_generate_failed',
+					metadata: {
+						keyName: name || 'id_ed25519_pocketshell',
+						...normalizeDiagnosticError(err),
+					},
+				});
 				vscode.window.showErrorMessage(vscode.l10n.t('Failed to generate key: {0}', String(err)));
 			}
 		}),
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.keys.assignToHost', async (element?: Host | number) => {
+		registerCommand('pocketshell.keys.assignToHost', async (element?: Host | number) => {
 			const hosts = await service.getHosts();
 			const host = await pickHostForKeyAssignment(service, hosts, element);
 			if (!host) {
@@ -456,7 +585,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Disconnect from a host
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.disconnect', async (element?: Host | number) => {
+		registerCommand('pocketshell.disconnect', async (element?: Host | number) => {
 			const id = await resolveHostId(service, element, { connectedOnly: true });
 			if (id === undefined) {
 				return;
@@ -470,7 +599,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Edit an existing host
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.editHost', async (element?: Host | number) => {
+		registerCommand('pocketshell.editHost', async (element?: Host | number) => {
 			const hosts = await service.getHosts();
 			let host: Host | undefined;
 			if (element && typeof element !== 'number') {
@@ -562,7 +691,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Delete a host
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.deleteHost', async (element?: Host | number) => {
+		registerCommand('pocketshell.deleteHost', async (element?: Host | number) => {
 			const hosts = await service.getHosts();
 			let host: Host | undefined;
 			if (element && typeof element !== 'number') {
@@ -614,7 +743,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Open a remote file
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.openRemoteFile', async () => {
+		registerCommand('pocketshell.openRemoteFile', async () => {
 			const hosts = await service.getHosts();
 			const connected = hosts.filter(h => service.getConnection(h.id) !== null);
 			if (connected.length === 0) {
@@ -658,8 +787,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Show PocketShell settings from the shared settings schema.
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pocketshell.settings.open', async () => {
-			const settings = new SettingsStore(path.join(storageDir, 'settings.json'));
+		registerCommand('pocketshell.settings.open', async () => {
 			settings.load();
 			const panel = new SettingsPanel(createSettingsPanelStore(settings));
 			const output = vscode.window.createOutputChannel('PocketShell Settings');
@@ -683,6 +811,7 @@ export function activate(context: vscode.ExtensionContext): void {
 					return;
 				}
 				panel.resetToDefaults();
+				diagnostics.configure(settingsToDiagnosticsConfig(settings.get()));
 				renderSettingsSummary(panel, output);
 				vscode.window.showInformationMessage(vscode.l10n.t('PocketShell settings reset to defaults.'));
 				return;
@@ -707,18 +836,39 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 
 			renderSettingsSummary(panel, output);
+			diagnostics.configure(settingsToDiagnosticsConfig(settings.get()));
 			vscode.window.showInformationMessage(
 				vscode.l10n.t('Updated {0}.', picked.setting.label),
 			);
 		}),
 	);
 
+	context.subscriptions.push(
+		registerCommand('pocketshell.diagnostics.showReport', async () => {
+			recordDiagnostics({ category: 'diagnostics', name: 'report_show_requested' });
+			const report = createDiagnosticsReport(diagnostics, context, storageDir);
+			const output = vscode.window.createOutputChannel('PocketShell Diagnostics');
+			context.subscriptions.push(output);
+			output.clear();
+			output.append(report);
+			output.show(true);
+		}),
+	);
+
+	context.subscriptions.push(
+		registerCommand('pocketshell.diagnostics.copyReport', async () => {
+			recordDiagnostics({ category: 'diagnostics', name: 'report_copy_requested' });
+			const report = createDiagnosticsReport(diagnostics, context, storageDir);
+			await vscode.env.clipboard.writeText(report);
+			vscode.window.showInformationMessage(vscode.l10n.t('PocketShell diagnostics report copied to clipboard.'));
+		}),
+	);
+
 	// -- Feature modules (auto-registered) -------------------------------------
 	const deps: FeatureDeps = { refreshTrees: () => treeProvider.refresh() };
 	for (const feature of FEATURES) {
-		for (const disposable of feature.register(service, context, deps)) {
-			context.subscriptions.push(disposable);
-		}
+		const disposables = registerFeatureWithDiagnostics(feature.register, service, context, deps, recordDiagnostics);
+		context.subscriptions.push(...disposables);
 	}
 
 	// -- Cleanup on deactivate ---------------------------------------------------
@@ -747,6 +897,162 @@ function reportSshImportSkipped(
 function formatImportCandidateDetail(candidate: SshConfigImportCandidate): string {
 	const key = `IdentityFile ${candidate.host.keyPath}`;
 	return candidate.proxyMetadata ? `${key}; ${candidate.proxyMetadata}` : key;
+}
+
+function settingsToDiagnosticsConfig(settings: AppSettings): DiagnosticsConfig {
+	return {
+		enabled: settings.diagnosticsEnabled,
+		maxEvents: settings.diagnosticsMaxEvents,
+		redactionMode: settings.diagnosticsRedactionMode,
+	};
+}
+
+function createDiagnosticCommandRegistrar(record: (input: DiagnosticRecordInput) => void) {
+	return function registerDiagnosticCommand<T extends (...args: any[]) => unknown>(
+		commandId: string,
+		handler: T,
+		thisArg?: unknown,
+	): vscode.Disposable {
+		return vscode.commands.registerCommand(commandId, wrapDiagnosticCommand(commandId, handler, record), thisArg);
+	};
+}
+
+function wrapDiagnosticCommand<T extends (...args: any[]) => unknown>(
+	commandId: string,
+	handler: T,
+	record: (input: DiagnosticRecordInput) => void,
+): T {
+	const wrapped = async (...args: Parameters<T>) => {
+		const startedAt = Date.now();
+		const category = diagnosticCategoryForCommand(commandId);
+		record({
+			category,
+			name: 'command_started',
+			metadata: {
+				commandId,
+				argumentCount: args.length,
+			},
+		});
+		try {
+			const result = await Promise.resolve(handler(...args));
+			record({
+				category,
+				name: 'command_succeeded',
+				metadata: {
+					commandId,
+					durationMs: Date.now() - startedAt,
+				},
+			});
+			return result;
+		} catch (err) {
+			record({
+				category,
+				name: 'command_failed',
+				metadata: {
+					commandId,
+					durationMs: Date.now() - startedAt,
+					...normalizeDiagnosticError(err),
+				},
+			});
+			throw err;
+		}
+	};
+	return wrapped as T;
+}
+
+function diagnosticCategoryForCommand(commandId: string): DiagnosticRecordInput['category'] {
+	if (commandId.includes('.tmux')) {
+		return 'tmux';
+	}
+	if (
+		commandId.includes('.connect')
+		|| commandId.includes('.disconnect')
+		|| commandId.includes('.keys')
+		|| commandId.includes('Ssh')
+		|| commandId.includes('ssh')
+	) {
+		return 'ssh';
+	}
+	if (
+		commandId.includes('.bootstrap')
+		|| commandId.includes('.logs')
+		|| commandId.includes('.jobs')
+		|| commandId.includes('.env')
+		|| commandId.includes('.usage')
+		|| commandId.includes('.pocketshell')
+	) {
+		return 'helper';
+	}
+	if (commandId.includes('.settings') || commandId.includes('.openRemoteFile') || commandId.includes('.files')) {
+		return 'navigation';
+	}
+	if (commandId.includes('.diagnostics')) {
+		return 'diagnostics';
+	}
+	return 'action';
+}
+
+function registerFeatureWithDiagnostics(
+	register: FeatureRegistration['register'],
+	service: ConnectionService,
+	context: vscode.ExtensionContext,
+	deps: FeatureDeps,
+	record: (input: DiagnosticRecordInput) => void,
+): vscode.Disposable[] {
+	const original = vscode.commands.registerCommand;
+	const commands = vscode.commands as unknown as {
+		registerCommand: typeof vscode.commands.registerCommand;
+	};
+	try {
+		commands.registerCommand = ((commandId: string, handler: (...args: any[]) => unknown, thisArg?: unknown) => {
+			return original.call(vscode.commands, commandId, wrapDiagnosticCommand(commandId, handler, record), thisArg);
+		}) as typeof vscode.commands.registerCommand;
+	} catch (err) {
+		record({
+			category: 'extension',
+			name: 'feature_command_instrumentation_failed',
+			metadata: normalizeDiagnosticError(err),
+		});
+		return register(service, context, deps);
+	}
+	try {
+		return register(service, context, deps);
+	} finally {
+		try {
+			commands.registerCommand = original;
+		} catch {
+			// Leave command registration intact if VS Code exposes it as read-only.
+		}
+	}
+}
+
+function createDiagnosticsReport(
+	diagnostics: DiagnosticsEventStore,
+	context: vscode.ExtensionContext,
+	storageDir: string,
+): string {
+	const extensionPackage = context.extension?.packageJSON as { version?: string; displayName?: string; name?: string } | undefined;
+	const logUri = (context as vscode.ExtensionContext & { logUri?: vscode.Uri }).logUri;
+	return buildDiagnosticsReport(diagnostics.list(), {
+		appName: extensionPackage?.displayName ?? 'PocketShell',
+		extensionVersion: extensionPackage?.version,
+		platform: process.platform,
+		arch: process.arch,
+		nodeVersion: process.version,
+		vscodeVersion: vscode.version,
+		settings: diagnostics.getConfig(),
+		locations: [
+			{ label: 'extension global storage', path: storageDir },
+			{ label: 'hosts database', path: path.join(storageDir, 'hosts.db') },
+			{ label: 'keys database', path: path.join(storageDir, 'keys.db') },
+			{ label: 'managed keys directory', path: path.join(storageDir, 'keys') },
+			...(logUri ? [{ label: 'VS Code extension log', path: logUri.fsPath }] : []),
+		],
+		notes: [
+			'Remote helper logs are available through PocketShell: Logs commands when the helper is installed on a connected host.',
+			'Diagnostics intentionally exclude terminal contents, prompts, keystrokes, secrets, tokens, passphrases, and private-key material.',
+		],
+	});
 }
 
 async function pickHostForKeyAssignment(

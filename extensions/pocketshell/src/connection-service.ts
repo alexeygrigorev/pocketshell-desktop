@@ -12,6 +12,7 @@ import { ConnectionManager } from './backend/ssh/connection/connection-manager';
 import { ConnectionState } from './backend/ssh/connection/connection-manager';
 import type { SshConnection, SshConnectParams } from './backend/ssh/connection/ssh-client';
 import * as fs from 'fs';
+import type { DiagnosticRecordInput } from './backend/diagnostics';
 
 /**
  * Central service that manages SSH hosts, connections, and their lifecycle.
@@ -25,6 +26,7 @@ export class ConnectionService {
 	private _hostStorePromise: Promise<HostStore | undefined> | undefined;
 	private _keyStorePromise: Promise<KeyStore | undefined> | undefined;
 	private _passphraseProvider: ((host: Host) => Promise<string | undefined>) | undefined;
+	private _diagnostics: ((input: DiagnosticRecordInput) => void) | undefined;
 	readonly connectionManager: ConnectionManager;
 
 	private constructor() {
@@ -41,6 +43,10 @@ export class ConnectionService {
 
 	setPassphraseProvider(provider: (host: Host) => Promise<string | undefined>): void {
 		this._passphraseProvider = provider;
+	}
+
+	setDiagnosticsRecorder(recorder: (input: DiagnosticRecordInput) => void): void {
+		this._diagnostics = recorder;
 	}
 
 	private _storageDir: string | undefined;
@@ -187,8 +193,23 @@ export class ConnectionService {
 
 		const keyMetadata = keyStore?.getByPrivateKeyPath(expandedKeyPath) ?? keyStore?.getByPrivateKeyPath(host.keyPath);
 		const needsPassphrase = keyMetadata?.hasPassphrase ?? detectKeyPassphrase(expandedKeyPath);
+		this.recordDiagnostics('ssh', 'connect_started', {
+			hostId,
+			hostname: host.hostname,
+			username: host.username,
+			port: host.port,
+			keyPath: expandedKeyPath,
+			needsPassphrase,
+		});
 		const passphrase = needsPassphrase ? await this._passphraseProvider?.(host) : undefined;
 		if (needsPassphrase && passphrase === undefined) {
+			this.recordDiagnostics('ssh', 'connect_failed', {
+				hostId,
+				hostname: host.hostname,
+				username: host.username,
+				port: host.port,
+				reason: 'passphrase_required',
+			});
 			throw new Error('Passphrase required');
 		}
 
@@ -206,17 +227,42 @@ export class ConnectionService {
 			conn = await this.connectionManager.connect(hostId, params);
 		} catch (err) {
 			if (needsPassphrase || !isLikelyPassphraseError(err)) {
+				this.recordDiagnostics('ssh', 'connect_failed', {
+					hostId,
+					hostname: host.hostname,
+					username: host.username,
+					port: host.port,
+					error: err instanceof Error ? err.message : String(err),
+				});
 				throw err;
 			}
 
 			const retryPassphrase = await this._passphraseProvider?.(host);
 			if (retryPassphrase === undefined) {
+				this.recordDiagnostics('ssh', 'connect_failed', {
+					hostId,
+					hostname: host.hostname,
+					username: host.username,
+					port: host.port,
+					reason: 'passphrase_retry_cancelled',
+				});
 				throw err;
 			}
-			conn = await this.connectionManager.connect(hostId, {
-				...params,
-				passphrase: retryPassphrase,
-			});
+			try {
+				conn = await this.connectionManager.connect(hostId, {
+					...params,
+					passphrase: retryPassphrase,
+				});
+			} catch (retryErr) {
+				this.recordDiagnostics('ssh', 'connect_failed', {
+					hostId,
+					hostname: host.hostname,
+					username: host.username,
+					port: host.port,
+					error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+				});
+				throw retryErr;
+			}
 		}
 
 		// Update last-connected timestamp — failure must not reject connect()
@@ -226,12 +272,19 @@ export class ConnectionService {
 			console.warn('[PocketShell] Failed to update last-connected timestamp:', err);
 		}
 
+		this.recordDiagnostics('ssh', 'connect_succeeded', {
+			hostId,
+			hostname: host.hostname,
+			username: host.username,
+			port: host.port,
+		});
 		return conn;
 	}
 
 	/** Disconnect from a host. */
 	disconnect(hostId: number): void {
 		this.connectionManager.disconnect(hostId);
+		this.recordDiagnostics('ssh', 'disconnect', { hostId });
 	}
 
 	/** Get an active connection for a host, or null. */
@@ -248,6 +301,14 @@ export class ConnectionService {
 	dispose(): void {
 		this.connectionManager.destroy();
 		ConnectionService.instance = undefined;
+	}
+
+	private recordDiagnostics(
+		category: DiagnosticRecordInput['category'],
+		name: string,
+		metadata?: DiagnosticRecordInput['metadata'],
+	): void {
+		this._diagnostics?.({ category, name, metadata });
 	}
 }
 

@@ -32,6 +32,9 @@ describe('SettingsStore', () => {
       expect(settings.autoConnect).toBe(true);
       expect(settings.lastHostId).toBeNull();
       expect(settings.theme).toBe('dark');
+      expect(settings.diagnosticsEnabled).toBe(true);
+      expect(settings.diagnosticsMaxEvents).toBe(500);
+      expect(settings.diagnosticsRedactionMode).toBe('balanced');
     });
   });
 
@@ -41,6 +44,9 @@ describe('SettingsStore', () => {
         autoConnect: false,
         lastHostId: 42,
         theme: 'light',
+        diagnosticsEnabled: true,
+        diagnosticsMaxEvents: 500,
+        diagnosticsRedactionMode: 'balanced',
       };
 
       store.save(custom);
@@ -55,8 +61,22 @@ describe('SettingsStore', () => {
     });
 
     it('overwrites existing settings', () => {
-      store.save({ autoConnect: true, lastHostId: 1, theme: 'dark' });
-      store.save({ autoConnect: false, lastHostId: 2, theme: 'system' });
+      store.save({
+        autoConnect: true,
+        lastHostId: 1,
+        theme: 'dark',
+        diagnosticsEnabled: true,
+        diagnosticsMaxEvents: 500,
+        diagnosticsRedactionMode: 'balanced',
+      });
+      store.save({
+        autoConnect: false,
+        lastHostId: 2,
+        theme: 'system',
+        diagnosticsEnabled: true,
+        diagnosticsMaxEvents: 500,
+        diagnosticsRedactionMode: 'balanced',
+      });
 
       const loaded = store.load();
       expect(loaded.autoConnect).toBe(false);
@@ -110,6 +130,9 @@ describe('SettingsStore', () => {
         autoConnect: true,
         lastHostId: null,
         theme: 'dark',
+        diagnosticsEnabled: true,
+        diagnosticsMaxEvents: 500,
+        diagnosticsRedactionMode: 'balanced',
       });
     });
 
@@ -117,7 +140,14 @@ describe('SettingsStore', () => {
       const deepPath = path.join(tmpDir, 'a', 'b', 'c', 'settings.json');
       const deepStore = new SettingsStore(deepPath);
 
-      deepStore.save({ autoConnect: true, lastHostId: null, theme: 'dark' });
+      deepStore.save({
+        autoConnect: true,
+        lastHostId: null,
+        theme: 'dark',
+        diagnosticsEnabled: true,
+        diagnosticsMaxEvents: 500,
+        diagnosticsRedactionMode: 'balanced',
+      });
 
       expect(fs.existsSync(deepPath)).toBe(true);
     });

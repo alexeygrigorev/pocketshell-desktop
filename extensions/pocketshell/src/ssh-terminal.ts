@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import { SshTerminalBackend } from './backend/terminal/ssh-terminal-backend';
 import type { SshConnection } from './backend/ssh/connection/ssh-client';
+import type { DiagnosticRecordInput } from './backend/diagnostics';
 
 /**
  * VS Code Pseudoterminal backed by an SSH session.
@@ -25,6 +26,7 @@ export class SshPseudoterminal implements vscode.Pseudoterminal {
 	constructor(
 		private readonly connection: SshConnection,
 		private readonly hostName: string,
+		private readonly diagnostics?: (input: DiagnosticRecordInput) => void,
 	) {}
 
 	/**
@@ -33,6 +35,15 @@ export class SshPseudoterminal implements vscode.Pseudoterminal {
 	 * Creates and starts the SSH terminal backend, wiring up events.
 	 */
 	async open(_initialDimensions: vscode.TerminalDimensions | undefined): Promise<void> {
+		this.diagnostics?.({
+			category: 'ssh',
+			name: 'terminal_start_started',
+			metadata: {
+				hostname: this.hostName,
+				cols: _initialDimensions?.columns ?? null,
+				rows: _initialDimensions?.rows ?? null,
+			},
+		});
 		this.backend = new SshTerminalBackend(this.connection, {
 			name: this.hostName,
 			cols: _initialDimensions?.columns,
@@ -46,12 +57,30 @@ export class SshPseudoterminal implements vscode.Pseudoterminal {
 
 		// Wire backend exit -> VS Code terminal close
 		this.backend.onExit(({ exitCode }: { exitCode: number }) => {
+			this.diagnostics?.({
+				category: 'ssh',
+				name: 'terminal_exited',
+				metadata: { hostname: this.hostName, exitCode },
+			});
 			this.closeEmitter.fire(exitCode);
 		});
 
 		try {
 			await this.backend.start();
+			this.diagnostics?.({
+				category: 'ssh',
+				name: 'terminal_start_succeeded',
+				metadata: { hostname: this.hostName },
+			});
 		} catch (err) {
+			this.diagnostics?.({
+				category: 'ssh',
+				name: 'terminal_start_failed',
+				metadata: {
+					hostname: this.hostName,
+					error: err instanceof Error ? err.message : String(err),
+				},
+			});
 			this.writeEmitter.fire(`\r\n\x1b[31mFailed to start SSH terminal: ${err}\x1b[0m\r\n`);
 			this.closeEmitter.fire(1);
 		}

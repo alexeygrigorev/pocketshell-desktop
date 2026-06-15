@@ -23,6 +23,15 @@ export interface AppSettings {
 
   /** UI color theme. */
   theme: 'dark' | 'light' | 'system';
+
+  /** Whether local diagnostic event capture is enabled. */
+  diagnosticsEnabled: boolean;
+
+  /** Maximum number of in-memory diagnostic events to retain. */
+  diagnosticsMaxEvents: number;
+
+  /** Privacy mode for copied diagnostics reports. */
+  diagnosticsRedactionMode: 'strict' | 'balanced' | 'off';
 }
 
 // ---------------------------------------------------------------------------
@@ -35,6 +44,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoConnect: UI_DEFAULTS.autoConnect as boolean,
   lastHostId: UI_DEFAULTS.lastHostId as number | null,
   theme: UI_DEFAULTS.theme as AppSettings['theme'],
+  diagnosticsEnabled: UI_DEFAULTS.diagnosticsEnabled as boolean,
+  diagnosticsMaxEvents: UI_DEFAULTS.diagnosticsMaxEvents as number,
+  diagnosticsRedactionMode: UI_DEFAULTS.diagnosticsRedactionMode as AppSettings['diagnosticsRedactionMode'],
 };
 
 // ---------------------------------------------------------------------------

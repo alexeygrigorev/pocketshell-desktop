@@ -94,6 +94,18 @@
 				"icon": "$(settings-gear)"
 			},
 			{
+				"command": "pocketshell.diagnostics.showReport",
+				"title": "Diagnostics: Show Report",
+				"category": "PocketShell",
+				"icon": "$(output)"
+			},
+			{
+				"command": "pocketshell.diagnostics.copyReport",
+				"title": "Diagnostics: Copy Report",
+				"category": "PocketShell",
+				"icon": "$(copy)"
+			},
+			{
 				"command": "pocketshell.git.status",
 				"title": "Git: Status",
 				"category": "PocketShell",
