@@ -92,6 +92,7 @@ describe('AutoConnectService', () => {
   let service: AutoConnectService;
 
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -175,6 +176,38 @@ describe('AutoConnectService', () => {
       expect(events).toHaveLength(1);
       expect(events[0].type).toBe('skipped');
       expect(mockConnMgr.connect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('background startup', () => {
+    it('defers events so callers can subscribe after scheduling', async () => {
+      vi.useFakeTimers();
+      mockSettings = createMockSettingsStore({
+        autoConnect: false,
+        lastHostId: null,
+        theme: 'dark',
+      });
+      mockHostStore = createMockHostStore([]);
+      mockConnMgr = createMockConnectionManager();
+
+      service = new AutoConnectService(
+        mockHostStore as any,
+        mockConnMgr as any,
+        mockSettings as any,
+      );
+
+      service.startInBackground();
+
+      const events: AutoConnectEvent[] = [];
+      service.onEvent((e) => events.push(e));
+      expect(events).toHaveLength(0);
+
+      await vi.runAllTimersAsync();
+      await service.waitForIdle();
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('skipped');
+      vi.useRealTimers();
     });
   });
 
@@ -415,6 +448,32 @@ describe('AutoConnectService', () => {
   });
 
   describe('host selection', () => {
+    it('uses lastHostId before falling back to most recent lastConnectedAt', async () => {
+      const hosts = [
+        makeHost({ id: 1, lastConnectedAt: 5000 }),
+        makeHost({ id: 2, lastConnectedAt: 1000 }),
+      ];
+
+      mockSettings = createMockSettingsStore({
+        autoConnect: true,
+        lastHostId: 2,
+        theme: 'dark',
+      });
+      mockHostStore = createMockHostStore(hosts);
+      mockConnMgr = createMockConnectionManager();
+      mockConnMgr.connect.mockResolvedValue({});
+
+      service = new AutoConnectService(
+        mockHostStore as any,
+        mockConnMgr as any,
+        mockSettings as any,
+      );
+
+      await service.init();
+
+      expect(mockConnMgr.connect).toHaveBeenCalledWith(2, expect.anything());
+    });
+
     it('picks the host with the highest lastConnectedAt', async () => {
       const hosts = [
         makeHost({ id: 1, lastConnectedAt: 1000 }),

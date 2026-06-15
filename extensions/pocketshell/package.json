@@ -58,6 +58,12 @@
 				"title": "PocketShell: Open Remote File"
 			},
 			{
+				"command": "pocketshell.settings.open",
+				"title": "PocketShell: Open Settings",
+				"category": "PocketShell",
+				"icon": "$(settings-gear)"
+			},
+			{
 				"command": "pocketshell.git.status",
 				"title": "Git: Status",
 				"category": "PocketShell",

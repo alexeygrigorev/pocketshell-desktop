@@ -7,6 +7,7 @@ import {
   SettingsPanel,
   type SettingsStoreLike,
 } from '../../../../src/ui/settings/settings-panel';
+import { ALL_SETTINGS } from '../../../../src/ui/settings/settings-schema';
 
 // ---------------------------------------------------------------------------
 // Fake store
@@ -34,18 +35,27 @@ describe('SettingsPanel', () => {
   // ---------------------------------------------------------------------------
 
   describe('getSections', () => {
-    it('returns four sections', () => {
+    it('returns all schema sections', () => {
       const { store } = createFakeStore();
       const panel = new SettingsPanel(store);
       const sections = panel.getSections();
-      expect(sections).toHaveLength(4);
+      expect(sections).toHaveLength(8);
     });
 
-    it('sections are in schema order: connection, terminal, agent, utility', () => {
+    it('sections are in schema order', () => {
       const { store } = createFakeStore();
       const panel = new SettingsPanel(store);
       const cats = panel.getSections().map((s) => s.category);
-      expect(cats).toEqual(['connection', 'terminal', 'agent', 'utility']);
+      expect(cats).toEqual([
+        'connection',
+        'terminal',
+        'tmux',
+        'agent',
+        'usage',
+        'helper',
+        'diagnostics',
+        'utility',
+      ]);
     });
   });
 
@@ -60,6 +70,15 @@ describe('SettingsPanel', () => {
       const values = panel.getValues();
       expect(values.fontSize).toBe(18);
       expect(values.autoConnect).toBe(false);
+    });
+
+    it('merges schema defaults with sparse store values', () => {
+      const { store } = createFakeStore({ fontSize: 18 });
+      const panel = new SettingsPanel(store);
+      const values = panel.getValues();
+      expect(values.fontSize).toBe(18);
+      expect(values.autoConnect).toBe(true);
+      expect(values.theme).toBe('dark');
     });
   });
 
@@ -82,6 +101,39 @@ describe('SettingsPanel', () => {
       const errors = panel.updateValue('fontSize', 1);
       expect(errors.length).toBeGreaterThan(0);
       expect(state.fontSize).toBeUndefined();
+    });
+
+    it('rejects invalid boolean values without explicit validation rules', () => {
+      const { store, state } = createFakeStore();
+      const panel = new SettingsPanel(store);
+      const errors = panel.updateValue('autoConnect', 'false');
+      expect(errors.length).toBeGreaterThan(0);
+      expect(state.autoConnect).toBeUndefined();
+    });
+
+    it('rejects invalid enum values without explicit validation rules', () => {
+      const { store, state } = createFakeStore();
+      const panel = new SettingsPanel(store);
+      const errors = panel.updateValue('cursorStyle', 'box');
+      expect(errors.length).toBeGreaterThan(0);
+      expect(state.cursorStyle).toBeUndefined();
+    });
+
+    it('persists all schema-supported setting value types', () => {
+      const { store, state } = createFakeStore();
+      const panel = new SettingsPanel(store);
+
+      expect(panel.updateValue('restoreSessionOnStartup', false)).toHaveLength(0);
+      expect(panel.updateValue('tmuxDefaultSessionName', 'work')).toHaveLength(0);
+      expect(panel.updateValue('tmuxAttachBehavior', 'create-new')).toHaveLength(0);
+      expect(panel.updateValue('usageHistoryLimit', 250)).toHaveLength(0);
+      expect(panel.updateValue('lastHostId', null)).toHaveLength(0);
+
+      expect(state.restoreSessionOnStartup).toBe(false);
+      expect(state.tmuxDefaultSessionName).toBe('work');
+      expect(state.tmuxAttachBehavior).toBe('create-new');
+      expect(state.usageHistoryLimit).toBe(250);
+      expect(state.lastHostId).toBeNull();
     });
 
     it('rejects an unknown key', () => {
@@ -130,6 +182,9 @@ describe('SettingsPanel', () => {
       expect(state.autoConnect).toBe(true);
       expect(state.scrollback).toBe(10000);
       expect(state.cursorStyle).toBe('block');
+      expect(state.tmuxDefaultSessionName).toBe('pocketshell');
+      expect(state.helperCommand).toBe('pocketshell');
+      expect(state.diagnosticsRedactionMode).toBe('balanced');
     });
 
     it('notifies listeners for every setting', () => {
@@ -140,8 +195,7 @@ describe('SettingsPanel', () => {
 
       panel.resetToDefaults();
 
-      // There are 13 settings total, so 13 notifications
-      expect(listener).toHaveBeenCalledTimes(13);
+      expect(listener).toHaveBeenCalledTimes(ALL_SETTINGS.length);
     });
   });
 
@@ -161,6 +215,13 @@ describe('SettingsPanel', () => {
       const panel = new SettingsPanel(store);
       const errors = panel.getValidationErrors('fontSize', 200);
       expect(errors.length).toBeGreaterThan(0);
+    });
+
+    it('returns errors for invalid direct boolean and enum values', () => {
+      const { store } = createFakeStore();
+      const panel = new SettingsPanel(store);
+      expect(panel.getValidationErrors('autoConnect', 1).length).toBeGreaterThan(0);
+      expect(panel.getValidationErrors('cursorStyle', 'box').length).toBeGreaterThan(0);
     });
 
     it('returns an error for an unknown key', () => {

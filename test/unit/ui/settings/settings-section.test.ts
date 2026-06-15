@@ -66,7 +66,7 @@ describe('SettingsSection', () => {
         expect(s.label).toBeTypeOf('string');
         expect(s.description).toBeTypeOf('string');
         expect(s.type).toBeTypeOf('string');
-        expect(s.defaultValue).toBeDefined();
+        expect(s.defaultValue === null || s.defaultValue !== undefined).toBe(true);
       }
     });
 
@@ -157,7 +157,16 @@ describe('SettingsSection', () => {
   // All categories
   // ---------------------------------------------------------------------------
 
-  const categories: SettingCategory[] = ['connection', 'terminal', 'agent', 'utility'];
+  const categories: SettingCategory[] = [
+    'connection',
+    'terminal',
+    'tmux',
+    'agent',
+    'usage',
+    'helper',
+    'diagnostics',
+    'utility',
+  ];
   for (const cat of categories) {
     describe(`category "${cat}"`, () => {
       it('can be instantiated and rendered', () => {

@@ -29,8 +29,17 @@ describe('settings-schema', () => {
         expect(s.label).toBeTypeOf('string');
         expect(s.description).toBeTypeOf('string');
         expect(['boolean', 'number', 'string', 'enum']).toContain(s.type);
-        expect(['connection', 'terminal', 'agent', 'utility']).toContain(s.category);
-        expect(s.defaultValue).toBeDefined();
+        expect([
+          'connection',
+          'terminal',
+          'tmux',
+          'agent',
+          'usage',
+          'helper',
+          'diagnostics',
+          'utility',
+        ]).toContain(s.category);
+        expect(s.defaultValue === null || s.defaultValue !== undefined).toBe(true);
         expect(Array.isArray(s.validation)).toBe(true);
       }
     });
@@ -53,7 +62,11 @@ describe('settings-schema', () => {
             expect(s.defaultValue).toBeTypeOf('boolean');
             break;
           case 'number':
-            expect(s.defaultValue).toBeTypeOf('number');
+            if (s.nullable && s.defaultValue === null) {
+              expect(s.defaultValue).toBeNull();
+            } else {
+              expect(s.defaultValue).toBeTypeOf('number');
+            }
             break;
           case 'string':
             expect(s.defaultValue).toBeTypeOf('string');
@@ -87,9 +100,18 @@ describe('settings-schema', () => {
   // ---------------------------------------------------------------------------
 
   describe('categories', () => {
-    const expectedCategories: SettingCategory[] = ['connection', 'terminal', 'agent', 'utility'];
+    const expectedCategories: SettingCategory[] = [
+      'connection',
+      'terminal',
+      'tmux',
+      'agent',
+      'usage',
+      'helper',
+      'diagnostics',
+      'utility',
+    ];
 
-    it('all four categories are represented', () => {
+    it('all categories are represented', () => {
       const present = new Set(ALL_SETTINGS.map((s) => s.category));
       for (const cat of expectedCategories) {
         expect(present.has(cat)).toBe(true);
@@ -140,7 +162,10 @@ describe('settings-schema', () => {
       const conn = getSettingsByCategory('connection');
       const byKey = Object.fromEntries(conn.map((s) => [s.key, s.defaultValue]));
       expect(byKey['autoConnect']).toBe(true);
+      expect(byKey['lastHostId']).toBeNull();
       expect(byKey['reconnectMaxAttempts']).toBe(5);
+      expect(byKey['restoreSessionOnStartup']).toBe(true);
+      expect(byKey['sessionRestoreBehavior']).toBe('ask');
     });
 
     it('terminal defaults', () => {
@@ -150,6 +175,7 @@ describe('settings-schema', () => {
       expect(byKey['scrollback']).toBe(10000);
       expect(byKey['shell']).toBe('/bin/bash');
       expect(byKey['cursorStyle']).toBe('block');
+      expect(byKey['theme']).toBe('dark');
     });
 
     it('agent defaults', () => {
@@ -160,11 +186,45 @@ describe('settings-schema', () => {
       expect(byKey['maxConversations']).toBe(10);
     });
 
+    it('tmux defaults', () => {
+      const tmux = getSettingsByCategory('tmux');
+      const byKey = Object.fromEntries(tmux.map((s) => [s.key, s.defaultValue]));
+      expect(byKey['tmuxDefaultSessionName']).toBe('pocketshell');
+      expect(byKey['tmuxAttachBehavior']).toBe('attach-or-create');
+      expect(byKey['tmuxDefaultWindowName']).toBe('shell');
+      expect(byKey['tmuxDefaultPaneSplit']).toBe('none');
+    });
+
+    it('usage defaults', () => {
+      const usage = getSettingsByCategory('usage');
+      const byKey = Object.fromEntries(usage.map((s) => [s.key, s.defaultValue]));
+      expect(byKey['usageEnabled']).toBe(true);
+      expect(byKey['usageRefreshInterval']).toBe(60000);
+      expect(byKey['usageProviderBreakdown']).toBe(true);
+      expect(byKey['usageHistoryLimit']).toBe(1000);
+    });
+
+    it('helper defaults', () => {
+      const helper = getSettingsByCategory('helper');
+      const byKey = Object.fromEntries(helper.map((s) => [s.key, s.defaultValue]));
+      expect(byKey['helperCommand']).toBe('pocketshell');
+      expect(byKey['helperVersion']).toBe('');
+      expect(byKey['helperInstallMode']).toBe('auto');
+    });
+
+    it('diagnostics defaults', () => {
+      const diagnostics = getSettingsByCategory('diagnostics');
+      const byKey = Object.fromEntries(diagnostics.map((s) => [s.key, s.defaultValue]));
+      expect(byKey['diagnosticsEnabled']).toBe(true);
+      expect(byKey['diagnosticsMaxEvents']).toBe(500);
+      expect(byKey['diagnosticsRedactionMode']).toBe('balanced');
+    });
+
     it('utility defaults', () => {
       const util = getSettingsByCategory('utility');
       const byKey = Object.fromEntries(util.map((s) => [s.key, s.defaultValue]));
-      expect(byKey['usageRefreshInterval']).toBe(60000);
       expect(byKey['logMaxLines']).toBe(5000);
+      expect(byKey['outputMaxLines']).toBe(10000);
     });
   });
 });

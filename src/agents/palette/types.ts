@@ -5,6 +5,38 @@
  * system — a quick-access menu for agent operations.
  */
 
+import type { SshConnection } from '../../ssh/connection/ssh-client';
+
+// ---------------------------------------------------------------------------
+// PaletteBuiltinServices
+// ---------------------------------------------------------------------------
+
+/**
+ * Host-side services injected into the built-in slash commands so their
+ * `execute()` bodies can reach a real SSH connection and render output
+ * without depending on the VS Code API (which is unavailable in the
+ * pure-node `src/` tree).
+ *
+ * The extension supplies a concrete implementation built on its
+ * `ConnectionService`, `resolveHostId`, `getOrConnect`, and an
+ * `OutputChannel`; the unit tests call the factories with no services, in
+ * which case every command falls back to its stub behaviour.
+ */
+export interface PaletteBuiltinServices {
+  /**
+   * Resolve a connected host (prompting the user when necessary) and return
+   * a live {@link SshConnection}. Returns null when the user cancelled or the
+   * connection failed (UI already shown by the caller).
+   */
+  resolveConnection(): Promise<SshConnection | null>;
+
+  /**
+   * Append a batch of rendered lines to the shared palette output surface
+   * (an `OutputChannel` in the extension). Each string is one line.
+   */
+  render(lines: string[]): void;
+}
+
 // ---------------------------------------------------------------------------
 // SlashCommand
 // ---------------------------------------------------------------------------

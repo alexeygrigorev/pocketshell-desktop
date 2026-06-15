@@ -134,6 +134,23 @@ describe('settings-serializer', () => {
       expect(result.errors[0].key).toBe('cursorStyle');
     });
 
+    it('rejects invalid booleans through schema validation', () => {
+      const result = validateImport({
+        _version: 1,
+        settings: { autoConnect: 'false' },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors[0].key).toBe('autoConnect');
+    });
+
+    it('accepts nullable lastHostId', () => {
+      const result = validateImport({
+        _version: 1,
+        settings: { lastHostId: null },
+      });
+      expect(result.valid).toBe(true);
+    });
+
     it('accepts valid enum values', () => {
       for (const val of ['block', 'underline', 'bar']) {
         const result = validateImport({
@@ -171,18 +188,14 @@ describe('settings-serializer', () => {
       expect(state.fontSize).toBeUndefined();
     });
 
-    it('skips individual settings that fail panel-level validation', () => {
+    it('rejects settings that fail schema validation', () => {
       const { panel, state } = createPanel();
-      // fontSize 1 is out of the [6, 72] range — panel validation should reject it
       const result = importFromJson(
         { _version: 1, settings: { fontSize: 1, autoConnect: true } },
         panel,
       );
-      // The import-level validation passes (types are correct), but panel
-      // validation for the individual value should prevent applying fontSize.
-      expect(state.autoConnect).toBe(true);
-      // fontSize=1 passes type validation but should fail range validation
-      // when updateValue is called, so it should not be persisted.
+      expect(result.valid).toBe(false);
+      expect(state.autoConnect).toBeUndefined();
       expect(state.fontSize).toBeUndefined();
     });
   });

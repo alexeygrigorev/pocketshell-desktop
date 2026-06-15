@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as path from 'path';
 import { ConnectionService } from './connection-service';
 import { SshPseudoterminal } from './ssh-terminal';
 import { SftpFsProvider } from './sftp-fs-provider';
@@ -13,6 +14,9 @@ import { pickHost, resolveHostId, getOrConnect } from './host-picking';
 import { FEATURES, type FeatureDeps } from './feature';
 import { createSshConfigImportPlan, type SshConfigImportCandidate, type SshConfigImportSkipped } from './backend/ssh/data/ssh-config-import';
 import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
+import { SettingsStore, type AppSettings } from './backend/app/settings';
+import { SettingsPanel, type SettingsStoreLike } from './backend/ui/settings/settings-panel';
+import type { SettingDefinition } from './backend/ui/settings/settings-schema';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
 
 /**
@@ -507,6 +511,63 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 	);
 
+	// Show PocketShell settings from the shared settings schema.
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pocketshell.settings.open', async () => {
+			const settings = new SettingsStore(path.join(storageDir, 'settings.json'));
+			settings.load();
+			const panel = new SettingsPanel(createSettingsPanelStore(settings));
+			const output = vscode.window.createOutputChannel('PocketShell Settings');
+			context.subscriptions.push(output);
+
+			renderSettingsSummary(panel, output);
+			output.show(true);
+
+			const picked = await pickSettingsAction(panel);
+			if (!picked) {
+				return;
+			}
+
+			if (picked.action === 'reset') {
+				const confirmed = await vscode.window.showWarningMessage(
+					vscode.l10n.t('Reset all PocketShell settings to defaults?'),
+					{ modal: true },
+					vscode.l10n.t('Reset'),
+				);
+				if (confirmed !== vscode.l10n.t('Reset')) {
+					return;
+				}
+				panel.resetToDefaults();
+				renderSettingsSummary(panel, output);
+				vscode.window.showInformationMessage(vscode.l10n.t('PocketShell settings reset to defaults.'));
+				return;
+			}
+
+			const currentValue = panel.getValues()[picked.setting.key];
+			const nextValue = await promptForSettingValue(picked.setting, currentValue);
+			if (nextValue.cancelled) {
+				return;
+			}
+
+			const errors = panel.updateValue(picked.setting.key, nextValue.value);
+			if (errors.length > 0) {
+				vscode.window.showErrorMessage(
+					vscode.l10n.t(
+						'Invalid value for {0}: {1}',
+						picked.setting.label,
+						errors.map((error) => error.rule.message).join('; '),
+					),
+				);
+				return;
+			}
+
+			renderSettingsSummary(panel, output);
+			vscode.window.showInformationMessage(
+				vscode.l10n.t('Updated {0}.', picked.setting.label),
+			);
+		}),
+	);
+
 	// -- Feature modules (auto-registered) -------------------------------------
 	const deps: FeatureDeps = { refreshTrees: () => treeProvider.refresh() };
 	for (const feature of FEATURES) {
@@ -541,3 +602,127 @@ function reportSshImportSkipped(
 function formatImportCandidateDetail(candidate: SshConfigImportCandidate): string {
 	const key = `IdentityFile ${candidate.host.keyPath}`;
 	return candidate.proxyMetadata ? `${key}; ${candidate.proxyMetadata}` : key;
+}
+
+function createSettingsPanelStore(settings: SettingsStore): SettingsStoreLike {
+	return {
+		get: () => ({ ...settings.get() } as Record<string, unknown>),
+		update: (partial: Record<string, unknown>) => {
+			settings.update(partial as Partial<AppSettings>);
+		},
+	};
+}
+
+function renderSettingsSummary(panel: SettingsPanel, output: vscode.OutputChannel): void {
+	output.clear();
+	output.appendLine('PocketShell Settings');
+	output.appendLine('');
+
+	const values = panel.getValues();
+	for (const section of panel.getSections()) {
+		const rendered = section.render();
+		output.appendLine(`[${rendered.title}]`);
+		for (const setting of rendered.settings) {
+			const value = formatSettingValue(values[setting.key]);
+			output.appendLine(`${setting.label} (${setting.key}) = ${value}`);
+			output.appendLine(`  ${setting.description}`);
+			if (setting.enumValues) {
+				output.appendLine(`  Allowed: ${setting.enumValues.join(', ')}`);
+			}
+		}
+		output.appendLine('');
+	}
+}
+
+type SettingsActionPick =
+	| { action: 'edit'; setting: SettingDefinition }
+	| { action: 'reset' };
+
+async function pickSettingsAction(panel: SettingsPanel): Promise<SettingsActionPick | undefined> {
+	const values = panel.getValues();
+	const items: Array<vscode.QuickPickItem & SettingsActionPick> = [
+		{
+			label: 'Reset all settings to defaults',
+			description: 'Restore schema defaults',
+			action: 'reset',
+		},
+	];
+
+	for (const section of panel.getSections()) {
+		const rendered = section.render();
+		for (const setting of section.settings) {
+			items.push({
+				label: `${rendered.title}: ${setting.label}`,
+				description: `${setting.key} = ${formatSettingValue(values[setting.key])}`,
+				detail: setting.description,
+				action: 'edit',
+				setting,
+			});
+		}
+	}
+
+	return vscode.window.showQuickPick(items, {
+		placeHolder: vscode.l10n.t('Select a PocketShell setting to edit'),
+		matchOnDescription: true,
+		matchOnDetail: true,
+	});
+}
+
+async function promptForSettingValue(
+	setting: SettingDefinition,
+	currentValue: unknown,
+): Promise<{ cancelled: true } | { cancelled: false; value: unknown }> {
+	if (setting.type === 'boolean') {
+		const picked = await vscode.window.showQuickPick(
+			[
+				{ label: 'true', value: true, picked: currentValue === true },
+				{ label: 'false', value: false, picked: currentValue === false },
+			],
+			{ placeHolder: vscode.l10n.t('Select value for {0}', setting.label) },
+		);
+		return picked ? { cancelled: false, value: picked.value } : { cancelled: true };
+	}
+
+	if (setting.type === 'enum') {
+		const picked = await vscode.window.showQuickPick(
+			(setting.enumValues ?? []).map((value) => ({
+				label: value,
+				value,
+				picked: currentValue === value,
+			})),
+			{ placeHolder: vscode.l10n.t('Select value for {0}', setting.label) },
+		);
+		return picked ? { cancelled: false, value: picked.value } : { cancelled: true };
+	}
+
+	const input = await vscode.window.showInputBox({
+		prompt: setting.nullable
+			? vscode.l10n.t('Enter value for {0}. Leave empty for null.', setting.label)
+			: vscode.l10n.t('Enter value for {0}', setting.label),
+		value: currentValue === null || currentValue === undefined ? '' : String(currentValue),
+	});
+	if (input === undefined) {
+		return { cancelled: true };
+	}
+
+	if (setting.type === 'number') {
+		const trimmed = input.trim();
+		if (setting.nullable && trimmed === '') {
+			return { cancelled: false, value: null };
+		}
+		const value = Number(trimmed);
+		return { cancelled: false, value: Number.isNaN(value) ? input : value };
+	}
+
+	return { cancelled: false, value: input };
+}
+
+function formatSettingValue(value: unknown): string {
+	if (value === null) {
+		return 'null';
+	}
+	if (value === undefined) {
+		return '';
+	}
+	return String(value);
+}
