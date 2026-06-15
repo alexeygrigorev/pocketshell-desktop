@@ -150,6 +150,10 @@ export class TmuxSessionPseudoterminal implements vscode.Pseudoterminal {
     return state ? activePaneMetadata(state) : undefined;
   }
 
+  getConnection(): SshConnection {
+    return this.connection;
+  }
+
   async renameSession(sessionId: string, name: string): Promise<void> {
     const response = await this.requireClient().renameSession(sessionId, name);
     this.throwIfError(response, 'rename session');

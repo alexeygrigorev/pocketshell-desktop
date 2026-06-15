@@ -14,6 +14,13 @@ import { getTerminalManager } from '../terminal';
 import type { FeatureDeps } from '../manifest';
 import type { SplitDirection } from '../../backend/tmux-ui/types';
 import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
+import {
+	ConversationAttributionService,
+	enrichActivePaneConversationContext,
+	enrichConversationSessions,
+	type AttributableConversationSession,
+} from '../../backend/agents';
+import { SessionReader } from '../../backend/agents/conversation';
 import { quoteShellArg } from '../../backend/sessions/create-session';
 import {
 	decideTmuxStartupRestore,
@@ -75,6 +82,7 @@ export function registerTmuxUi(
 	});
 	disposables.push(registry, treeView);
 	const restoreStore = new TmuxRestoreStore(ctx);
+	const attributionService = new ConversationAttributionService();
 
 	// -------------------------------------------------------------------------
 	// pocketshell.tmux-ui.showTree — read: render a hierarchical snapshot
@@ -375,6 +383,26 @@ export function registerTmuxUi(
 		vscode.commands.registerCommand('pocketshell.tmux-ui.getActivePaneMetadata', async (element?: unknown) => {
 			const entry = await resolveEntry(registry, element);
 			return entry?.pty.getActivePaneMetadata();
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.getActivePaneConversationHint', async (element?: unknown, sessions?: AttributableConversationSession[]) => {
+			const entry = await resolveEntry(registry, element);
+			if (!entry) {
+				return undefined;
+			}
+			const connection = entry.pty.getConnection();
+			const metadata = await enrichActivePaneConversationContext(connection, entry.pty.getActivePaneMetadata());
+			const listedSessions = sessions ?? await new SessionReader(connection).listSessions();
+			const enrichedSessions = await enrichConversationSessions(connection, listedSessions);
+			return attributionService.attribute(metadata, enrichedSessions);
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.dismissActivePaneConversationHint', async (element?: unknown) => {
+			const entry = await resolveEntry(registry, element);
+			const metadata = entry?.pty.getActivePaneMetadata();
+			if (!metadata) {
+				return false;
+			}
+			attributionService.dismiss(metadata);
+			return true;
 		}),
 		vscode.commands.registerCommand('pocketshell.tmux-ui.renameTreeItem', async (element?: unknown) => {
 			const target = await resolveRenameTarget(registry, element);
