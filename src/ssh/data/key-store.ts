@@ -29,6 +29,10 @@ export interface SshKey {
 /** Fields required when adding a new key. */
 export type NewSshKey = Omit<SshKey, 'id' | 'createdAt'>;
 
+export interface ImportKeyOptions {
+  hasPassphrase?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // SQL
 // ---------------------------------------------------------------------------
@@ -103,10 +107,37 @@ export function hasPrivateKeyPassphrase(content: string): boolean {
   if (/Proc-Type:.*ENCRYPTED/i.test(content)) return true;
   if (/DEK-Info:/i.test(content)) return true;
   if (/BEGIN ENCRYPTED PRIVATE KEY/.test(content)) return true;
-  // OpenSSH encrypted format: the cipher name after "aes256-" style markers
-  // in the binary section is harder to parse without a full decoder.
-  // For now, rely on the PEM-level markers above.
+  if (/-----BEGIN OPENSSH PRIVATE KEY-----/.test(content)) {
+    return hasEncryptedOpenSshPrivateKeyPayload(content);
+  }
   return false;
+}
+
+function hasEncryptedOpenSshPrivateKeyPayload(content: string): boolean {
+  const body = content
+    .replace(/-----BEGIN OPENSSH PRIVATE KEY-----/g, '')
+    .replace(/-----END OPENSSH PRIVATE KEY-----/g, '')
+    .replace(/\s+/g, '');
+
+  try {
+    const payload = Buffer.from(body, 'base64');
+    const magic = Buffer.from('openssh-key-v1\0', 'utf-8');
+    if (payload.length < magic.length + 4 || !payload.subarray(0, magic.length).equals(magic)) {
+      return false;
+    }
+
+    const cipherNameLength = payload.readUInt32BE(magic.length);
+    const cipherNameStart = magic.length + 4;
+    const cipherNameEnd = cipherNameStart + cipherNameLength;
+    if (cipherNameEnd > payload.length) {
+      return false;
+    }
+
+    const cipherName = payload.subarray(cipherNameStart, cipherNameEnd).toString('utf-8');
+    return cipherName !== '' && cipherName !== 'none';
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +191,7 @@ export class KeyStore {
   importKey(
     name: string,
     sourcePath: string,
-    passphrase?: string,
+    options?: ImportKeyOptions | string,
   ): SshKey {
     const content = fs.readFileSync(sourcePath, 'utf-8');
 
@@ -176,13 +207,13 @@ export class KeyStore {
       return existing;
     }
 
-    const hasPassphrase = passphrase !== undefined || hasPrivateKeyPassphrase(content);
+    const hasPassphrase = resolveImportHasPassphrase(content, options);
 
     // Ensure keys directory exists
     fs.mkdirSync(this.keysDir, { recursive: true });
 
     // Write key to managed location
-    const destPath = path.join(this.keysDir, sanitizeFilename(name));
+    const destPath = uniqueKeyPath(this.keysDir, sanitizeFilename(name));
     fs.writeFileSync(destPath, content, { mode: 0o600 });
 
     const id = this.insertRecord(name, destPath, fingerprint, hasPassphrase);
@@ -198,7 +229,8 @@ export class KeyStore {
    * @param name - Display name and filename for the key.
    * @param type - Key type (e.g. "rsa", "ed25519"). Defaults to "ed25519".
    * @param bits - Key size in bits (for RSA). Defaults to 3072.
-   * @param passphrase - Optional passphrase for the key.
+   * @param passphrase - Unsupported. Passphrase-protected generated keys are
+   *   intentionally rejected to avoid exposing secrets through ssh-keygen argv.
    */
   generateKey(
     name: string,
@@ -206,17 +238,16 @@ export class KeyStore {
     bits: number = 3072,
     passphrase?: string,
   ): SshKey {
+    if (passphrase !== undefined && passphrase.length > 0) {
+      throw new Error('Passphrase-protected key generation is not supported; import an encrypted key instead');
+    }
+
     fs.mkdirSync(this.keysDir, { recursive: true });
 
     const filename = sanitizeFilename(name);
-    const keyPath = path.join(this.keysDir, filename);
+    const keyPath = uniqueKeyPath(this.keysDir, filename);
 
-    // Remove existing file if any (ssh-keygen won't overwrite)
-    if (fs.existsSync(keyPath)) {
-      fs.unlinkSync(keyPath);
-    }
-
-    const args: string[] = ['-t', type, '-f', keyPath, '-N', passphrase ?? ''];
+    const args: string[] = ['-t', type, '-f', keyPath, '-N', ''];
 
     if (type === 'rsa') {
       args.push('-b', String(bits));
@@ -308,5 +339,29 @@ export function initKeyStore(db: Database.Database, keysDir?: string): KeyStore 
 // ---------------------------------------------------------------------------
 
 function sanitizeFilename(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+  return (name.trim() || 'id_ed25519').replace(/[^a-zA-Z0-9_.-]/g, '_');
+}
+
+function uniqueKeyPath(dir: string, filename: string): string {
+  let candidate = path.join(dir, filename);
+  if (!fs.existsSync(candidate)) return candidate;
+
+  const ext = path.extname(filename);
+  const base = ext ? filename.slice(0, -ext.length) : filename;
+  let suffix = 2;
+  do {
+    candidate = path.join(dir, `${base}-${suffix}${ext}`);
+    suffix += 1;
+  } while (fs.existsSync(candidate));
+  return candidate;
+}
+
+function resolveImportHasPassphrase(content: string, options?: ImportKeyOptions | string): boolean {
+  if (typeof options === 'string') {
+    return true;
+  }
+  if (options?.hasPassphrase !== undefined) {
+    return options.hasPassphrase;
+  }
+  return hasPrivateKeyPassphrase(content);
 }

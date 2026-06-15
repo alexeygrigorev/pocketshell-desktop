@@ -18,6 +18,8 @@ import { SettingsStore, type AppSettings } from './backend/app/settings';
 import { SettingsPanel, type SettingsStoreLike } from './backend/ui/settings/settings-panel';
 import type { SettingDefinition } from './backend/ui/settings/settings-schema';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
+import type { SshKey } from './backend/ssh/data/key-store';
+import { assignManagedKeyToHost, createHostKeyAssignmentPlan } from './backend/ssh/data/key-assignment';
 
 /**
  * Extension entry point.
@@ -35,6 +37,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	const service = ConnectionService.getInstance();
 	service.setStorageDir(storageDir);
+	service.setPassphraseProvider(async (host) => vscode.window.showInputBox({
+		prompt: vscode.l10n.t('Passphrase for SSH key used by {0}', host.name || host.hostname),
+		password: true,
+		ignoreFocusOut: true,
+	}));
 
 	// -- Terminal profile provider -----------------------------------------------
 
@@ -305,6 +312,144 @@ export function activate(context: vscode.ExtensionContext): void {
 						String(picked.length),
 					),
 				);
+			}
+		}),
+	);
+
+	// Manage SSH keys
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pocketshell.keys.manage', async () => {
+			const action = await vscode.window.showQuickPick([
+				{ label: vscode.l10n.t('List Managed Keys'), command: 'pocketshell.keys.list' },
+				{ label: vscode.l10n.t('Import Private Key'), command: 'pocketshell.keys.import' },
+				{ label: vscode.l10n.t('Generate ed25519 Key'), command: 'pocketshell.keys.generate' },
+				{ label: vscode.l10n.t('Assign Key to Host'), command: 'pocketshell.keys.assignToHost' },
+			], {
+				placeHolder: vscode.l10n.t('Manage SSH keys'),
+			});
+			if (!action) {
+				return;
+			}
+			await vscode.commands.executeCommand(action.command);
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pocketshell.keys.list', async () => {
+			const keys = await service.getKeys();
+			const output = vscode.window.createOutputChannel('PocketShell SSH Keys');
+			context.subscriptions.push(output);
+			output.clear();
+			output.appendLine('Managed SSH keys');
+			output.appendLine('');
+			if (keys.length === 0) {
+				output.appendLine('No managed keys.');
+			} else {
+				for (const key of keys) {
+					output.appendLine(`${key.name}`);
+					output.appendLine(`  Path: ${key.privateKeyPath}`);
+					output.appendLine(`  Fingerprint: ${key.fingerprint}`);
+					output.appendLine(`  Passphrase: ${key.hasPassphrase ? 'yes' : 'no'}`);
+				}
+			}
+			output.show(true);
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pocketshell.keys.import', async () => {
+			const picked = await vscode.window.showOpenDialog({
+				canSelectFiles: true,
+				canSelectFolders: false,
+				canSelectMany: false,
+				openLabel: vscode.l10n.t('Import Key'),
+			});
+			if (!picked || picked.length === 0) {
+				return;
+			}
+
+			const sourcePath = picked[0].fsPath;
+			const defaultName = path.basename(sourcePath);
+			const name = await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('Managed key name'),
+				value: defaultName,
+			});
+			if (name === undefined) {
+				return;
+			}
+
+			const encrypted = await vscode.window.showQuickPick([
+				{ label: vscode.l10n.t('Detect automatically'), value: undefined },
+				{ label: vscode.l10n.t('Requires passphrase'), value: true },
+				{ label: vscode.l10n.t('No passphrase'), value: false },
+			], {
+				placeHolder: vscode.l10n.t('Does this key require a passphrase?'),
+			});
+			if (!encrypted) {
+				return;
+			}
+
+			try {
+				const key = await service.importKey(name || defaultName, sourcePath, encrypted.value);
+				vscode.window.showInformationMessage(
+					vscode.l10n.t('Imported SSH key "{0}".', key.name),
+				);
+			} catch (err) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to import key: {0}', String(err)));
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pocketshell.keys.generate', async () => {
+			const name = await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('New ed25519 key name'),
+				value: 'id_ed25519_pocketshell',
+			});
+			if (name === undefined) {
+				return;
+			}
+
+			try {
+				const key = await service.generateKey(name || 'id_ed25519_pocketshell');
+				vscode.window.showInformationMessage(
+					vscode.l10n.t('Generated SSH key "{0}".', key.name),
+				);
+			} catch (err) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to generate key: {0}', String(err)));
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pocketshell.keys.assignToHost', async (element?: Host | number) => {
+			const hosts = await service.getHosts();
+			const host = await pickHostForKeyAssignment(service, hosts, element);
+			if (!host) {
+				return;
+			}
+
+			const key = await pickManagedKey(service);
+			if (!key) {
+				return;
+			}
+
+			const plan = createHostKeyAssignmentPlan(host, key);
+			if (!plan.changed) {
+				vscode.window.showInformationMessage(
+					vscode.l10n.t('Host "{0}" already uses "{1}".', plan.hostName, key.name),
+				);
+				return;
+			}
+
+			try {
+				await service.updateHost(assignManagedKeyToHost(host, key));
+				treeProvider.refresh();
+				vscode.window.showInformationMessage(
+					vscode.l10n.t('Assigned SSH key "{0}" to host "{1}".', key.name, plan.hostName),
+				);
+			} catch (err) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to assign key: {0}', String(err)));
 			}
 		}),
 	);
@@ -602,6 +747,43 @@ function reportSshImportSkipped(
 function formatImportCandidateDetail(candidate: SshConfigImportCandidate): string {
 	const key = `IdentityFile ${candidate.host.keyPath}`;
 	return candidate.proxyMetadata ? `${key}; ${candidate.proxyMetadata}` : key;
+}
+
+async function pickHostForKeyAssignment(
+	service: ConnectionService,
+	hosts: Host[],
+	element?: Host | number,
+): Promise<Host | undefined> {
+	if (element && typeof element !== 'number') {
+		return element;
+	}
+	if (typeof element === 'number') {
+		return hosts.find(h => h.id === element);
+	}
+
+	const id = await pickHost(service);
+	if (id === undefined) {
+		return undefined;
+	}
+	return hosts.find(h => h.id === id);
+}
+
+async function pickManagedKey(service: ConnectionService): Promise<SshKey | undefined> {
+	const keys = await service.getKeys();
+	if (keys.length === 0) {
+		vscode.window.showWarningMessage(vscode.l10n.t('No managed SSH keys. Import or generate a key first.'));
+		return undefined;
+	}
+
+	const picked = await vscode.window.showQuickPick(keys.map(key => ({
+		label: key.name,
+		description: key.hasPassphrase ? vscode.l10n.t('passphrase') : undefined,
+		detail: `${key.fingerprint}  ${key.privateKeyPath}`,
+		key,
+	})), {
+		placeHolder: vscode.l10n.t('Select a managed SSH key'),
+	});
+	return picked?.key;
 }
 
 function createSettingsPanelStore(settings: SettingsStore): SettingsStoreLike {

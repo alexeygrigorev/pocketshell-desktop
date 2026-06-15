@@ -7,9 +7,11 @@ import * as path from 'path';
 import * as os from 'os';
 import { HostStore, initStore } from './backend/ssh/data/host-store';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
+import { KeyStore, defaultKeysDir, hasPrivateKeyPassphrase, initKeyStore } from './backend/ssh/data/key-store';
 import { ConnectionManager } from './backend/ssh/connection/connection-manager';
 import { ConnectionState } from './backend/ssh/connection/connection-manager';
 import type { SshConnection, SshConnectParams } from './backend/ssh/connection/ssh-client';
+import * as fs from 'fs';
 
 /**
  * Central service that manages SSH hosts, connections, and their lifecycle.
@@ -21,6 +23,8 @@ export class ConnectionService {
 	private static instance: ConnectionService | undefined;
 
 	private _hostStorePromise: Promise<HostStore | undefined> | undefined;
+	private _keyStorePromise: Promise<KeyStore | undefined> | undefined;
+	private _passphraseProvider: ((host: Host) => Promise<string | undefined>) | undefined;
 	readonly connectionManager: ConnectionManager;
 
 	private constructor() {
@@ -33,6 +37,10 @@ export class ConnectionService {
 	 */
 	setStorageDir(storageDir: string): void {
 		this._storageDir = storageDir;
+	}
+
+	setPassphraseProvider(provider: (host: Host) => Promise<string | undefined>): void {
+		this._passphraseProvider = provider;
 	}
 
 	private _storageDir: string | undefined;
@@ -56,6 +64,21 @@ export class ConnectionService {
 		return this._hostStorePromise;
 	}
 
+	private ensureKeyStore(): Promise<KeyStore | undefined> {
+		if (this._keyStorePromise) {
+			return this._keyStorePromise;
+		}
+		const dbPath = this._storageDir
+			? path.join(this._storageDir, 'keys.db')
+			: path.join(os.homedir(), '.pocketshell', 'keys.db');
+		const keysDir = defaultKeysDir(this._storageDir);
+		this._keyStorePromise = initKeyStore(dbPath, keysDir).catch(err => {
+			console.error('[PocketShell] Failed to initialize key database:', err);
+			return undefined;
+		});
+		return this._keyStorePromise;
+	}
+
 	/** Whether the host store is available (resolves after init attempt). */
 	async isStoreAvailable(): Promise<boolean> {
 		return (await this.ensureStore()) !== undefined;
@@ -75,6 +98,27 @@ export class ConnectionService {
 	async getHosts(): Promise<Host[]> {
 		const store = await this.ensureStore();
 		return store?.list() ?? [];
+	}
+
+	async getKeys() {
+		const store = await this.ensureKeyStore();
+		return store?.list() ?? [];
+	}
+
+	async importKey(name: string, sourcePath: string, hasPassphrase?: boolean) {
+		const store = await this.ensureKeyStore();
+		if (!store) {
+			throw new Error('Key database not available');
+		}
+		return store.importKey(name, sourcePath, { hasPassphrase });
+	}
+
+	async generateKey(name: string) {
+		const store = await this.ensureKeyStore();
+		if (!store) {
+			throw new Error('Key database not available');
+		}
+		return store.generateKey(name);
 	}
 
 	/** Get a single host by id. */
@@ -130,6 +174,7 @@ export class ConnectionService {
 	 */
 	async connect(hostId: number): Promise<SshConnection> {
 		const store = await this.ensureStore();
+		const keyStore = await this.ensureKeyStore();
 		const host = store?.get(hostId);
 		if (!host) {
 			throw new Error(`Host not found: ${hostId}`);
@@ -140,15 +185,39 @@ export class ConnectionService {
 			? path.join(os.homedir(), host.keyPath.slice(1))
 			: host.keyPath;
 
+		const keyMetadata = keyStore?.getByPrivateKeyPath(expandedKeyPath) ?? keyStore?.getByPrivateKeyPath(host.keyPath);
+		const needsPassphrase = keyMetadata?.hasPassphrase ?? detectKeyPassphrase(expandedKeyPath);
+		const passphrase = needsPassphrase ? await this._passphraseProvider?.(host) : undefined;
+		if (needsPassphrase && passphrase === undefined) {
+			throw new Error('Passphrase required');
+		}
+
 		const params: SshConnectParams = {
 			host: host.hostname,
 			port: host.port,
 			user: host.username,
 			key: { type: 'path', file: expandedKeyPath },
+			passphrase,
 			knownHosts: { type: 'acceptAll' },
 		};
 
-		const conn = await this.connectionManager.connect(hostId, params);
+		let conn: SshConnection;
+		try {
+			conn = await this.connectionManager.connect(hostId, params);
+		} catch (err) {
+			if (needsPassphrase || !isLikelyPassphraseError(err)) {
+				throw err;
+			}
+
+			const retryPassphrase = await this._passphraseProvider?.(host);
+			if (retryPassphrase === undefined) {
+				throw err;
+			}
+			conn = await this.connectionManager.connect(hostId, {
+				...params,
+				passphrase: retryPassphrase,
+			});
+		}
 
 		// Update last-connected timestamp — failure must not reject connect()
 		try {
@@ -180,4 +249,17 @@ export class ConnectionService {
 		this.connectionManager.destroy();
 		ConnectionService.instance = undefined;
 	}
+}
+
+function detectKeyPassphrase(keyPath: string): boolean {
+	try {
+		return hasPrivateKeyPassphrase(fs.readFileSync(keyPath, 'utf-8'));
+	} catch {
+		return false;
+	}
+}
+
+function isLikelyPassphraseError(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return /passphrase|encrypted|private key/i.test(message);
 }

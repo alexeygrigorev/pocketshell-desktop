@@ -42,6 +42,36 @@
 				"title": "PocketShell: Import SSH Config"
 			},
 			{
+				"command": "pocketshell.keys.manage",
+				"title": "PocketShell: Manage SSH Keys",
+				"category": "PocketShell",
+				"icon": "$(key)"
+			},
+			{
+				"command": "pocketshell.keys.list",
+				"title": "SSH Keys: List Managed Keys",
+				"category": "PocketShell",
+				"icon": "$(list-tree)"
+			},
+			{
+				"command": "pocketshell.keys.import",
+				"title": "SSH Keys: Import Private Key",
+				"category": "PocketShell",
+				"icon": "$(cloud-upload)"
+			},
+			{
+				"command": "pocketshell.keys.generate",
+				"title": "SSH Keys: Generate ed25519 Key",
+				"category": "PocketShell",
+				"icon": "$(add)"
+			},
+			{
+				"command": "pocketshell.keys.assignToHost",
+				"title": "SSH Keys: Assign Key to Host",
+				"category": "PocketShell",
+				"icon": "$(link)"
+			},
+			{
 				"command": "pocketshell.disconnect",
 				"title": "PocketShell: Disconnect"
 			},

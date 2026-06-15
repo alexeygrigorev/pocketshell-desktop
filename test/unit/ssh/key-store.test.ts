@@ -51,6 +51,15 @@ MIIEpAIBAAKCAQEAyKf7KmFm1CywFZtJ8q8r6g3HTW1ZlPDJYwMlb6UUqS0L5qXG
 qP0m9YGEmhN7CkYqQ8qBXB3LhUJQJGPzU0qYD3WCxKrFvglLhFJQy5LzCQqJLVFg
 -----END RSA PRIVATE KEY-----`;
 
+function makeOpenSshPrivateKeyWithCipher(cipherName: string): string {
+  const magic = Buffer.from('openssh-key-v1\0', 'utf-8');
+  const cipher = Buffer.from(cipherName, 'utf-8');
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(cipher.length, 0);
+  const body = Buffer.concat([magic, length, cipher, Buffer.from('stub')]).toString('base64');
+  return `-----BEGIN OPENSSH PRIVATE KEY-----\n${body}\n-----END OPENSSH PRIVATE KEY-----`;
+}
+
 describe('KeyStore', () => {
   let db: Database.Database;
   let keyStore: KeyStore;
@@ -134,6 +143,22 @@ describe('KeyStore', () => {
       expect(key.hasPassphrase).toBe(true);
     });
 
+    it('honors an explicit no-passphrase import override', () => {
+      const sourcePath = path.join(tmpDir, 'encrypted-key');
+      fs.writeFileSync(sourcePath, TEST_ENCRYPTED_KEY, { mode: 0o600 });
+
+      const key = keyStore.importKey('encrypted', sourcePath, { hasPassphrase: false });
+      expect(key.hasPassphrase).toBe(false);
+    });
+
+    it('honors an explicit requires-passphrase import override', () => {
+      const sourcePath = path.join(tmpDir, 'plain-key');
+      fs.writeFileSync(sourcePath, TEST_RSA_KEY, { mode: 0o600 });
+
+      const key = keyStore.importKey('plain', sourcePath, { hasPassphrase: true });
+      expect(key.hasPassphrase).toBe(true);
+    });
+
     it('imports OpenSSH format keys', () => {
       const sourcePath = path.join(tmpDir, 'openssh-key');
       fs.writeFileSync(sourcePath, TEST_OPENSSH_KEY, { mode: 0o600 });
@@ -141,6 +166,32 @@ describe('KeyStore', () => {
       const key = keyStore.importKey('openssh', sourcePath);
       expect(key.id).toBeGreaterThan(0);
       expect(key.fingerprint).toMatch(/^sha256:/);
+    });
+
+    it('does not overwrite an existing managed key file with the same sanitized name', () => {
+      const sourcePath1 = path.join(tmpDir, 'source-rsa');
+      const sourcePath2 = path.join(tmpDir, 'source-openssh');
+      fs.writeFileSync(sourcePath1, TEST_RSA_KEY, { mode: 0o600 });
+      fs.writeFileSync(sourcePath2, TEST_OPENSSH_KEY, { mode: 0o600 });
+
+      const key1 = keyStore.importKey('same name', sourcePath1);
+      const key2 = keyStore.importKey('same name', sourcePath2);
+
+      expect(key1.privateKeyPath).not.toBe(key2.privateKeyPath);
+      expect(path.basename(key1.privateKeyPath)).toBe('same_name');
+      expect(path.basename(key2.privateKeyPath)).toBe('same_name-2');
+      expect(fs.readFileSync(key1.privateKeyPath, 'utf-8')).toBe(TEST_RSA_KEY);
+      expect(fs.readFileSync(key2.privateKeyPath, 'utf-8')).toBe(TEST_OPENSSH_KEY);
+    });
+  });
+
+  describe('generateKey', () => {
+    it('rejects passphrase-protected generation to avoid exposing secrets in argv', () => {
+      expect(() => keyStore.generateKey('secret-key', 'ed25519', 3072, 'super-secret')).toThrow(
+        'Passphrase-protected key generation is not supported',
+      );
+      expect(keyStore.list()).toEqual([]);
+      expect(fs.existsSync(keysDir)).toBe(false);
     });
   });
 
@@ -258,6 +309,14 @@ describe('hasPrivateKeyPassphrase', () => {
   it('detects ENCRYPTED PRIVATE KEY', () => {
     const key = '-----BEGIN ENCRYPTED PRIVATE KEY-----\nstuff\n-----END ENCRYPTED PRIVATE KEY-----';
     expect(hasPrivateKeyPassphrase(key)).toBe(true);
+  });
+
+  it('detects encrypted OpenSSH private keys from the cipher name', () => {
+    expect(hasPrivateKeyPassphrase(makeOpenSshPrivateKeyWithCipher('aes256-ctr'))).toBe(true);
+  });
+
+  it('treats OpenSSH private keys with cipher none as unencrypted', () => {
+    expect(hasPrivateKeyPassphrase(makeOpenSshPrivateKeyWithCipher('none'))).toBe(false);
   });
 
   it('returns false for unencrypted keys', () => {
