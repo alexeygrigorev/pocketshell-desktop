@@ -27,7 +27,12 @@ interface SessionCommandTarget {
 }
 
 interface SessionKindPick extends vscode.QuickPickItem {
-	kind: SessionKind;
+	sessionKind: SessionKind;
+}
+
+interface StartDirectoryPick extends vscode.QuickPickItem {
+	manual: boolean;
+	path: string;
 }
 
 export function registerSessions(
@@ -122,37 +127,39 @@ async function pickSessionKind(conn: SshConnection): Promise<SessionKind | undef
 			label: AGENT_METADATA[agent.type as Exclude<AgentType, AgentType.Unknown>].name,
 			description: agent.version,
 			detail: agent.binaryPath,
-			kind: agent.type as Exclude<SessionKind, 'shell'>,
+			sessionKind: agent.type as Exclude<SessionKind, 'shell'>,
 		}));
 
 	const picked = await vscode.window.showQuickPick<SessionKindPick>([
-		{ label: vscode.l10n.t('Shell'), description: vscode.l10n.t('Start an interactive shell'), kind: 'shell' },
+		{ label: vscode.l10n.t('Shell'), description: vscode.l10n.t('Start an interactive shell'), sessionKind: 'shell' },
 		...agentItems,
 	], {
 		placeHolder: vscode.l10n.t('Choose session type'),
 	});
-	return picked?.kind;
+	return picked?.sessionKind;
 }
 
 async function pickStartDirectory(
 	suggestions: DirectorySuggestion[],
 	initialPath?: string,
 ): Promise<string | undefined> {
-	const manual: vscode.QuickPickItem & { path?: string; manual?: boolean } = {
+	const manual: StartDirectoryPick = {
 		label: vscode.l10n.t('Enter Manually'),
 		description: vscode.l10n.t('Type a remote start directory'),
+		path: initialPath ?? '',
 		manual: true,
 	};
 	const effectiveSuggestions = initialPath && !suggestions.some((suggestion) => suggestion.path === initialPath)
 		? [{ label: initialPath, path: initialPath, source: 'remote' as const }, ...suggestions]
 		: suggestions;
-	const items = effectiveSuggestions.map((suggestion) => ({
+	const items: StartDirectoryPick[] = effectiveSuggestions.map((suggestion) => ({
 		label: suggestion.label,
 		description: suggestion.path,
 		detail: suggestion.source === 'watched' ? vscode.l10n.t('Watched folder') : vscode.l10n.t('Remote directory'),
 		path: suggestion.path,
+		manual: false,
 	}));
-	const picked = await vscode.window.showQuickPick([...items, manual], {
+	const picked = await vscode.window.showQuickPick<StartDirectoryPick>([...items, manual], {
 		placeHolder: vscode.l10n.t('Choose a start directory'),
 	});
 	if (!picked) {

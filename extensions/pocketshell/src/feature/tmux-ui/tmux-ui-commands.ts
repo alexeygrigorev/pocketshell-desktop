@@ -707,7 +707,12 @@ async function openTmuxUiSession(
 	if (!host) {
 		await restoreStore.clear();
 		void vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'), vscode.l10n.t('Forget Restore State'))
-			.then((choice) => choice && restoreStore.clear());
+			.then((choice) => {
+				if (choice) {
+					return restoreStore.clear();
+				}
+				return undefined;
+			});
 		return undefined;
 	}
 	const sessionName = target?.sessionName ?? await vscode.window.showInputBox({

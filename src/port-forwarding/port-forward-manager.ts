@@ -21,7 +21,7 @@ export type PortForwardErrorCode =
 export class PortForwardError extends Error {
   readonly code: PortForwardErrorCode;
   readonly tunnelId?: string;
-  readonly cause?: unknown;
+  override readonly cause?: unknown;
 
   constructor(
     code: PortForwardErrorCode,

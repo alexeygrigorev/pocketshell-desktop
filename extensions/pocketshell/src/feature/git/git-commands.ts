@@ -16,6 +16,11 @@ import type {
 } from '../../backend/git';
 import type { FeatureDeps } from '../manifest';
 
+type CloneRootPick = vscode.QuickPickItem & {
+	manual: boolean;
+	root: string;
+};
+
 /**
  * Git feature: registers read / pick / mutate commands that drive the
  * remote `GitClient` over an SSH connection.
@@ -337,16 +342,18 @@ async function pickCloneRoot(
 			.filter((folder) => folder.enabled)
 			.map((folder) => parentPath(folder.path)),
 	]);
-	const manual: vscode.QuickPickItem & { manual?: boolean; root?: string } = {
+	const manual: CloneRootPick = {
 		label: vscode.l10n.t('Enter Manually'),
 		description: vscode.l10n.t('Type a remote clone root'),
+		root: '',
 		manual: true,
 	};
-	const picked = await vscode.window.showQuickPick([
+	const picked = await vscode.window.showQuickPick<CloneRootPick>([
 		...roots.map((root) => ({
 			label: root,
 			description: root === '~/git' ? vscode.l10n.t('Default clone root') : vscode.l10n.t('Watched folder parent'),
 			root,
+			manual: false,
 		})),
 		manual,
 	], {
