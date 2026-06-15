@@ -5,6 +5,18 @@ export interface ConversationPanelModel {
   agentType: AgentType;
   title: string;
   messages: ConversationMessage[];
+  search: ConversationSearchState;
+}
+
+export interface ConversationSearchMatch {
+  messageId: string;
+  matchCount: number;
+}
+
+export interface ConversationSearchState {
+  query: string;
+  matches: ConversationSearchMatch[];
+  activeIndex: number;
 }
 
 export interface QuoteReplyPayload {
@@ -25,6 +37,7 @@ export function createConversationPanelModel(session: ConversationSession): Conv
     agentType: session.agentType,
     title: `${session.agentType}: ${session.id}`,
     messages: [...session.messages],
+    search: createEmptySearchState(),
   };
 }
 
@@ -36,9 +49,61 @@ export function appendConversationMessage(
   const nextMessage = existingIds.has(message.id)
     ? { ...message, id: `${message.id}-${model.messages.length + 1}` }
     : message;
-  return {
+  const nextModel = {
     ...model,
     messages: [...model.messages, nextMessage],
+  };
+  return model.search.query ? updateConversationSearch(nextModel, model.search.query, model.search.activeIndex) : nextModel;
+}
+
+export function updateConversationSearch(
+  model: ConversationPanelModel,
+  query: string,
+  preferredActiveIndex = 0,
+): ConversationPanelModel {
+  const normalizedQuery = normalizeSearchText(query).trim();
+  if (!normalizedQuery) {
+    return {
+      ...model,
+      search: createEmptySearchState(),
+    };
+  }
+  const matches = model.messages.flatMap((message) => {
+    const matchCount = countSearchMatches(messagePlainText(message), normalizedQuery);
+    return matchCount > 0 ? [{ messageId: message.id, matchCount }] : [];
+  });
+  return {
+    ...model,
+    search: {
+      query,
+      matches,
+      activeIndex: clampSearchIndex(preferredActiveIndex, matches.length),
+    },
+  };
+}
+
+export function navigateConversationSearch(
+  model: ConversationPanelModel,
+  direction: 'next' | 'previous',
+): ConversationPanelModel {
+  const { matches, activeIndex } = model.search;
+  if (matches.length === 0) {
+    return model;
+  }
+  const delta = direction === 'next' ? 1 : -1;
+  return {
+    ...model,
+    search: {
+      ...model.search,
+      activeIndex: wrapSearchIndex(activeIndex + delta, matches.length),
+    },
+  };
+}
+
+export function clearConversationSearch(model: ConversationPanelModel): ConversationPanelModel {
+  return {
+    ...model,
+    search: createEmptySearchState(),
   };
 }
 
@@ -87,7 +152,15 @@ export function renderConversationHtml(
   model: ConversationPanelModel,
   options: ConversationHtmlRenderOptions = {},
 ): string {
-  const body = model.messages.map(renderMessage).join('\n');
+  const activeMatch = model.search.matches[model.search.activeIndex];
+  const matchedMessageIds = new Set(model.search.matches.map((match) => match.messageId));
+  const body = model.messages
+    .map((message) => renderMessage(message, matchedMessageIds, activeMatch?.messageId))
+    .join('\n');
+  const searchCounter = renderSearchCounter(model.search);
+  const searchEmptyState = model.search.query && model.search.matches.length === 0
+    ? `<div class="search-empty" role="status">No matches for "${escapeHtml(model.search.query)}"</div>`
+    : '';
   const nonceAttribute = options.nonce ? ` nonce="${escapeHtml(options.nonce)}"` : '';
   const csp = renderContentSecurityPolicy(options);
   const cspMeta = csp
@@ -101,12 +174,18 @@ ${cspMeta}<meta name="viewport" content="width=device-width, initial-scale=1">
 <style${nonceAttribute}>
 :root { color-scheme: light dark; }
 body { margin: 0; padding: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
-.toolbar { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-editor-background); }
+.toolbar { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-editor-background); }
 .title { font-weight: 600; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+input[type="search"] { min-width: 180px; max-width: 260px; flex: 0 1 240px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); padding: 4px 6px; border-radius: 4px; }
 button { border: 1px solid var(--vscode-button-border, transparent); color: var(--vscode-button-foreground); background: var(--vscode-button-background); padding: 4px 8px; border-radius: 4px; cursor: pointer; }
 button:hover { background: var(--vscode-button-hoverBackground); }
+button:disabled { opacity: 0.55; cursor: default; }
+.search-counter { min-width: 44px; color: var(--vscode-descriptionForeground); text-align: center; }
+.search-empty { max-width: 980px; margin: 12px auto 0; padding: 8px 12px; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border); border-radius: 6px; }
 .messages { padding: 12px; max-width: 980px; margin: 0 auto; }
 .message { border-bottom: 1px solid var(--vscode-panel-border); padding: 12px 0; }
+.message.search-match { margin: 0 -8px; padding: 12px 8px; background: var(--vscode-editor-findMatchHighlightBackground); outline: 1px solid var(--vscode-editor-findMatchBorder, transparent); }
+.message.search-active { background: var(--vscode-editor-findMatchBackground); outline: 2px solid var(--vscode-focusBorder); }
 .message-header { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; color: var(--vscode-descriptionForeground); }
 .role { font-weight: 700; color: var(--vscode-foreground); text-transform: capitalize; }
 .spacer { flex: 1; }
@@ -124,14 +203,68 @@ summary { cursor: pointer; font-weight: 600; }
 <body>
 <div class="toolbar">
   <div class="title">${escapeHtml(model.title)}</div>
+  <input type="search" value="${escapeHtml(model.search.query)}" placeholder="Search conversation" aria-label="Search conversation" data-search-input>
+  <button type="button" data-action="search-previous"${model.search.matches.length === 0 ? ' disabled' : ''}>Previous</button>
+  <button type="button" data-action="search-next"${model.search.matches.length === 0 ? ' disabled' : ''}>Next</button>
+  <span class="search-counter" role="status">${searchCounter}</span>
+  <button type="button" data-action="search-clear"${model.search.query ? '' : ' disabled'}>Clear</button>
   <button type="button" data-action="copy-session">Copy Session</button>
   <button type="button" data-action="scroll-bottom">Scroll Bottom</button>
 </div>
+${searchEmptyState}
 <main class="messages">
 ${body}
 </main>
 <script${nonceAttribute}>
 const vscode = acquireVsCodeApi();
+const SEARCH_UPDATE_DELAY_MS = 150;
+const renderedSearchQuery = ${jsonStringForScript(model.search.query)};
+const searchInput = document.querySelector('[data-search-input]');
+const restoredState = vscode.getState?.() || {};
+let searchPostTimer;
+function persistSearchState(pendingSearchInputRender) {
+  if (!searchInput) return;
+  vscode.setState?.({
+    query: searchInput.value,
+    selectionStart: searchInput.selectionStart,
+    selectionEnd: searchInput.selectionEnd,
+    scrollY: window.scrollY,
+    pendingSearchInputRender,
+  });
+}
+function scheduleSearchUpdate() {
+  if (!searchInput) return;
+  persistSearchState(true);
+  window.clearTimeout(searchPostTimer);
+  searchPostTimer = window.setTimeout(() => {
+    persistSearchState(true);
+    vscode.postMessage({ action: 'search-update', query: searchInput.value });
+  }, SEARCH_UPDATE_DELAY_MS);
+}
+function restorePendingSearchInput() {
+  if (!searchInput || restoredState.pendingSearchInputRender !== true) {
+    return false;
+  }
+  if (typeof restoredState.query === 'string') {
+    searchInput.value = restoredState.query;
+  }
+  searchInput.focus();
+  if (
+    typeof restoredState.selectionStart === 'number' &&
+    typeof restoredState.selectionEnd === 'number'
+  ) {
+    searchInput.setSelectionRange(restoredState.selectionStart, restoredState.selectionEnd);
+  }
+  if (typeof restoredState.scrollY === 'number') {
+    window.scrollTo(0, restoredState.scrollY);
+  }
+  if (searchInput.value !== renderedSearchQuery) {
+    scheduleSearchUpdate();
+  } else {
+    persistSearchState(false);
+  }
+  return true;
+}
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-action]');
   if (!button) return;
@@ -140,9 +273,34 @@ document.addEventListener('click', (event) => {
     window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
     return;
   }
+  if (action === 'search-clear') {
+    window.clearTimeout(searchPostTimer);
+    if (searchInput) {
+      searchInput.value = '';
+    }
+    persistSearchState(false);
+  }
   vscode.postMessage({ action, messageId: button.dataset.messageId });
 });
-window.addEventListener('load', () => window.scrollTo(0, document.body.scrollHeight));
+searchInput?.addEventListener('input', () => {
+  scheduleSearchUpdate();
+});
+window.addEventListener('load', () => {
+  if (restorePendingSearchInput()) {
+    return;
+  }
+  const activeMatch = document.querySelector('.message.search-active');
+  if (activeMatch) {
+    activeMatch.scrollIntoView({ block: 'center' });
+    searchInput?.focus();
+    return;
+  }
+  if (${model.search.query ? 'true' : 'false'}) {
+    searchInput?.focus();
+    return;
+  }
+  window.scrollTo(0, document.body.scrollHeight);
+});
 </script>
 </body>
 </html>`;
@@ -162,12 +320,33 @@ function renderContentSecurityPolicy(options: ConversationHtmlRenderOptions): st
   ].join('; ');
 }
 
-function renderMessage(message: ConversationMessage): string {
+function renderSearchCounter(search: ConversationSearchState): string {
+  if (!search.query) {
+    return '';
+  }
+  if (search.matches.length === 0) {
+    return '0/0';
+  }
+  return `${search.activeIndex + 1}/${search.matches.length}`;
+}
+
+function renderMessage(
+  message: ConversationMessage,
+  matchedMessageIds: Set<string>,
+  activeMessageId: string | undefined,
+): string {
+  const classes = ['message'];
+  if (matchedMessageIds.has(message.id)) {
+    classes.push('search-match');
+  }
+  if (message.id === activeMessageId) {
+    classes.push('search-active');
+  }
   const actions = `<div class="message-actions">
     <button type="button" data-action="copy-message" data-message-id="${escapeHtml(message.id)}">Copy</button>
     <button type="button" data-action="quote-reply" data-message-id="${escapeHtml(message.id)}">Quote</button>
   </div>`;
-  return `<article class="message" data-message-id="${escapeHtml(message.id)}">
+  return `<article class="${classes.join(' ')}" data-message-id="${escapeHtml(message.id)}">
   <header class="message-header">
     <span class="role">${escapeHtml(message.role)}</span>
     ${message.toolName ? `<span>${escapeHtml(message.toolName)}</span>` : ''}
@@ -277,6 +456,49 @@ function renderLinks(escaped: string): string {
 function toBlockquote(text: string): string {
   const body = text.trim() || '(empty message)';
   return body.split('\n').map((line) => `> ${line}`).join('\n');
+}
+
+function createEmptySearchState(): ConversationSearchState {
+  return {
+    query: '',
+    matches: [],
+    activeIndex: 0,
+  };
+}
+
+function countSearchMatches(text: string, normalizedQuery: string): number {
+  const normalizedText = normalizeSearchText(text);
+  let count = 0;
+  let index = normalizedText.indexOf(normalizedQuery);
+  while (index !== -1) {
+    count += 1;
+    index = normalizedText.indexOf(normalizedQuery, index + normalizedQuery.length);
+  }
+  return count;
+}
+
+function normalizeSearchText(text: string): string {
+  return text.replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+function clampSearchIndex(index: number, matchCount: number): number {
+  if (matchCount === 0) {
+    return 0;
+  }
+  return Math.min(Math.max(index, 0), matchCount - 1);
+}
+
+function wrapSearchIndex(index: number, matchCount: number): number {
+  return ((index % matchCount) + matchCount) % matchCount;
+}
+
+function jsonStringForScript(input: string): string {
+  return JSON.stringify(input)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 function formatToolValue(value: unknown): string {

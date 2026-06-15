@@ -12,12 +12,15 @@ import type { ConversationAttributionResult } from '../../backend/agents';
 import type { AgentType, ConversationMessage } from '../../backend/agents/conversation';
 import {
 	appendConversationMessage,
+	clearConversationSearch,
 	createConversationPanelModel,
 	createQuoteReplyPayload,
 	messagePlainText,
+	navigateConversationSearch,
 	renderConversationHtml,
 	sessionPlainText,
 	SessionReader,
+	updateConversationSearch,
 	type ConversationPanelModel,
 	type QuoteReplyPayload,
 } from '../../backend/agents/conversation';
@@ -27,6 +30,7 @@ interface ConversationPanelEntry {
 	model: ConversationPanelModel;
 	reader: SessionReader;
 	nonce: string;
+	searchRenderTimer?: ReturnType<typeof setTimeout>;
 	stopTail?: () => void;
 }
 
@@ -85,6 +89,7 @@ export function registerConversation(
 
 				entry.stopTail = await startTail(reader, sessionRef.id, sessionRef.agentType, entry);
 				panel.onDidDispose(() => {
+					clearScheduledSearchRender(entry);
 					entry.stopTail?.();
 					reader.dispose();
 					panels.delete(key);
@@ -110,6 +115,7 @@ export function registerConversation(
 	disposables.push({
 		dispose: () => {
 			for (const entry of panels.values()) {
+				clearScheduledSearchRender(entry);
 				entry.stopTail?.();
 				entry.reader.dispose();
 			}
@@ -152,12 +158,36 @@ async function startTail(
 ): Promise<() => void> {
 	return reader.tailSession(sessionId, agentType, (message: ConversationMessage) => {
 		entry.model = appendConversationMessage(entry.model, message);
+		clearScheduledSearchRender(entry);
 		renderPanel(entry);
 	});
 }
 
 function wirePanelMessages(panel: vscode.WebviewPanel, entry: ConversationPanelEntry): void {
-	panel.webview.onDidReceiveMessage(async (message: { action?: string; messageId?: string }) => {
+	panel.webview.onDidReceiveMessage(async (message: { action?: string; messageId?: string; query?: string }) => {
+		if (message.action === 'search-update') {
+			entry.model = updateConversationSearch(entry.model, message.query ?? '');
+			scheduleSearchRender(entry);
+			return;
+		}
+		if (message.action === 'search-next') {
+			entry.model = navigateConversationSearch(entry.model, 'next');
+			clearScheduledSearchRender(entry);
+			renderPanel(entry);
+			return;
+		}
+		if (message.action === 'search-previous') {
+			entry.model = navigateConversationSearch(entry.model, 'previous');
+			clearScheduledSearchRender(entry);
+			renderPanel(entry);
+			return;
+		}
+		if (message.action === 'search-clear') {
+			entry.model = clearConversationSearch(entry.model);
+			clearScheduledSearchRender(entry);
+			renderPanel(entry);
+			return;
+		}
 		if (message.action === 'copy-session') {
 			await vscode.env.clipboard.writeText(sessionPlainText(entry.model));
 			void vscode.window.showInformationMessage(vscode.l10n.t('Conversation copied to clipboard.'));
@@ -182,6 +212,21 @@ function wirePanelMessages(panel: vscode.WebviewPanel, entry: ConversationPanelE
 			}
 		}
 	});
+}
+
+function scheduleSearchRender(entry: ConversationPanelEntry): void {
+	clearScheduledSearchRender(entry);
+	entry.searchRenderTimer = setTimeout(() => {
+		entry.searchRenderTimer = undefined;
+		renderPanel(entry);
+	}, 150);
+}
+
+function clearScheduledSearchRender(entry: ConversationPanelEntry): void {
+	if (entry.searchRenderTimer) {
+		clearTimeout(entry.searchRenderTimer);
+		entry.searchRenderTimer = undefined;
+	}
 }
 
 function renderPanel(entry: ConversationPanelEntry): void {
