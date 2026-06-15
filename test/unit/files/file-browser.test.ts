@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { FileBrowser } from '../../../src/files/file-browser';
+import { FileBrowser, remoteFileUriParts, resolveFileBrowserStartDirectory } from '../../../src/files/file-browser';
 import type { SftpClient } from '../../../src/files/sftp-client';
 import type { RemoteFileEntry } from '../../../src/files/types';
 
@@ -265,5 +265,34 @@ describe('FileBrowser', () => {
       const entries = await browser.navigate('/home');
       expect(entries).toHaveLength(2); // Fresh result
     });
+  });
+});
+
+describe('file browser helpers', () => {
+  it('prefers explicit paths over active pane cwd for start directories', () => {
+    expect(resolveFileBrowserStartDirectory({
+      path: '/home/alice/project',
+      cwd: '/tmp/active',
+    })).toBe('/home/alice/project');
+  });
+
+  it('uses active pane cwd when no explicit path is provided', () => {
+    expect(resolveFileBrowserStartDirectory({ cwd: '/tmp/active' })).toBe('/tmp/active');
+  });
+
+  it('falls back to home when no path or cwd is available', () => {
+    expect(resolveFileBrowserStartDirectory()).toBe('~');
+  });
+
+  it('builds SFTP URI parts for VS Code remote file opening', () => {
+    expect(remoteFileUriParts(7, '/home/alice/file with spaces.txt')).toEqual({
+      scheme: 'pocketshell',
+      authority: '7',
+      path: '/home/alice/file with spaces.txt',
+    });
+  });
+
+  it('requires absolute remote file paths for SFTP URIs', () => {
+    expect(() => remoteFileUriParts(7, 'relative.txt')).toThrow(/absolute/);
   });
 });

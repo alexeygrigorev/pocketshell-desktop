@@ -21,6 +21,39 @@ export type NavigateCallback = (path: string, entries: RemoteFileEntry[]) => voi
 // ---------------------------------------------------------------------------
 
 const DEFAULT_CACHE_TTL_MS = 5000;
+const SFTP_URI_SCHEME = 'pocketshell';
+
+export interface RemoteFileBrowseTarget {
+  path?: string;
+  cwd?: string;
+}
+
+export interface RemoteFileUriParts {
+  scheme: typeof SFTP_URI_SCHEME;
+  authority: string;
+  path: string;
+}
+
+export function resolveFileBrowserStartDirectory(
+  target?: RemoteFileBrowseTarget,
+  fallback = '~',
+): string {
+  return nonEmptyPath(target?.path) ?? nonEmptyPath(target?.cwd) ?? fallback;
+}
+
+export function remoteFileUriParts(hostId: number, remotePath: string): RemoteFileUriParts {
+  if (!Number.isInteger(hostId)) {
+    throw new Error(`Invalid host id: ${hostId}`);
+  }
+  if (!remotePath.startsWith('/')) {
+    throw new Error(`Remote file path must be absolute: ${remotePath}`);
+  }
+  return {
+    scheme: SFTP_URI_SCHEME,
+    authority: String(hostId),
+    path: remotePath,
+  };
+}
 
 export class FileBrowser {
   private sftpClient: SftpClient;
@@ -151,4 +184,9 @@ export class FileBrowser {
       }
     }
   }
+}
+
+function nonEmptyPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }

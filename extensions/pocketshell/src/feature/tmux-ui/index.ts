@@ -19,6 +19,7 @@ export const TMUX_UI_FEATURE: FeatureRegistration = {
 			{ command: 'pocketshell.tmux-ui.splitTreePane', title: 'Tmux UI: Split Pane in Tree', category: 'PocketShell', icon: '$(split-horizontal)' },
 			{ command: 'pocketshell.tmux-ui.renameTreeItem', title: 'Tmux UI: Rename', category: 'PocketShell', icon: '$(edit)' },
 			{ command: 'pocketshell.tmux-ui.killTreeItem', title: 'Tmux UI: Kill', category: 'PocketShell', icon: '$(trash)' },
+			{ command: 'pocketshell.tmux-ui.browseFiles', title: 'Tmux UI: Browse Files', category: 'PocketShell', icon: '$(folder)' },
 			{ command: 'pocketshell.tmux-ui.detachTreeSession', title: 'Tmux UI: Detach', category: 'PocketShell', icon: '$(debug-disconnect)' },
 			{ command: 'pocketshell.tmux-ui.capturePane', title: 'Tmux UI: Capture Pane', category: 'PocketShell', icon: '$(eye)' },
 			{ command: 'pocketshell.tmux-ui.detectPortsActivePane', title: 'Tmux UI: Detect Ports in Active Pane', category: 'PocketShell', icon: '$(radio-tower)' },
@@ -28,6 +29,7 @@ export const TMUX_UI_FEATURE: FeatureRegistration = {
 		menus: {
 			'view/item/context': [
 				{ command: 'pocketshell.tmux-ui.detectPortsTreePane', when: 'view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)', group: '1_pane' },
+				{ command: 'pocketshell.tmux-ui.browseFiles', when: 'view == pocketshell.tmuxSessions && (viewItem == tmuxUiSession || viewItem == tmuxUiWindow || viewItem == tmuxUiPane)', group: '2_session' },
 			],
 			'terminal/context': [
 				{ command: 'pocketshell.tmux-ui.detectPortsActivePane', group: 'pocketshell_ports' },

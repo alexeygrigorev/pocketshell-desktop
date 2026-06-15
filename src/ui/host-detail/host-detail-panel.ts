@@ -304,6 +304,7 @@ function sessionRow(
     meta,
     actions: [
       { label: 'Attach', command: 'pocketshell.tmux-ui.openSession', args: [attachTarget] },
+      { label: 'Files', command: 'pocketshell.files.browse', args: [target] },
       { label: 'New Window', command: 'pocketshell.tmux.newWindow', args: [target] },
       { label: 'Rename', command: 'pocketshell.tmux.rename', args: [target] },
       { label: 'Kill', command: 'pocketshell.tmux.kill', args: [target] },

@@ -249,6 +249,14 @@ export function registerTmuxUi(
 				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to select pane: {0}', String(err)));
 			}
 		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.browseFiles', async (element?: unknown) => {
+			const target = resolveFileBrowseTarget(registry, element);
+			if (!target) {
+				void vscode.window.showWarningMessage(vscode.l10n.t('No tmux session is available for file browsing.'));
+				return;
+			}
+			await vscode.commands.executeCommand('pocketshell.files.browse', target);
+		}),
 		vscode.commands.registerCommand('pocketshell.tmux-ui.newWindow', async (element?: unknown) => {
 			const target = await resolveSessionTarget(registry, element);
 			if (!target) {
@@ -1184,6 +1192,69 @@ function collectPaneTargets(registry: TmuxSessionRegistry): PaneTarget[] {
 			),
 		);
 	});
+}
+
+function resolveFileBrowseTarget(
+	registry: TmuxSessionRegistry,
+	element: unknown,
+): { hostId: number; path?: string; entryId?: string; paneId?: string; sessionName?: string } | undefined {
+	const entryId = getEntryId(element);
+	if (!entryId) {
+		return undefined;
+	}
+	const entry = registry.get(entryId);
+	const node = element as Partial<TmuxTreeNode> | undefined;
+	if (!entry) {
+		return undefined;
+	}
+
+	const paneTarget = findPaneTarget(registry, element);
+	if (paneTarget) {
+		return {
+			hostId: entry.hostId,
+			path: paneTarget.pane.cwd,
+			entryId,
+			paneId: paneTarget.pane.id,
+			sessionName: paneTarget.session.name,
+		};
+	}
+
+	if (node?.kind === 'session' && (node as Partial<TmuxTreeSessionNode>).session) {
+		const session = (node as TmuxTreeSessionNode).session;
+		const pane = activePaneInSession(session);
+		return {
+			hostId: entry.hostId,
+			path: pane?.cwd ?? entry.path,
+			entryId,
+			paneId: pane?.id,
+			sessionName: session.name,
+		};
+	}
+
+	const active = entry.pty.getActivePaneMetadata();
+	return {
+		hostId: entry.hostId,
+		path: active?.cwd ?? entry.path,
+		entryId,
+		paneId: active?.id,
+		sessionName: entry.sessionName,
+	};
+}
+
+function activePaneInSession(session: TmuxSessionInfo): TmuxPaneInfo | undefined {
+	for (const window of session.windows) {
+		const pane = window.panes.find((candidate) => candidate.isActive);
+		if (pane) {
+			return pane;
+		}
+	}
+	for (const window of session.windows) {
+		const pane = window.panes[0];
+		if (pane) {
+			return pane;
+		}
+	}
+	return undefined;
 }
 
 function getEntryId(element: unknown): string | undefined {

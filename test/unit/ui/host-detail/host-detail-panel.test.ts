@@ -109,6 +109,7 @@ describe('host detail panel', () => {
     expect(html).toContain('api (/home/alice/git/api)');
     expect(html).toContain('<strong>api-dev</strong>');
     expect(html).toContain('command:pocketshell.tmux-ui.openSession?');
+    expect(html).toContain('command:pocketshell.files.browse?');
     expect(html).toContain('command:pocketshell.tmux.newWindow?');
     expect(html).toContain('command:pocketshell.tmux.rename?');
     expect(html).toContain('command:pocketshell.tmux.kill?');
@@ -116,6 +117,14 @@ describe('host detail panel', () => {
       hostId: 7,
       path: '/home/alice/git/api',
       sessionName: 'api-dev',
+    }])));
+    expect(html).toContain(encodeURIComponent(JSON.stringify([{
+      hostId: 7,
+      folderId: 12,
+      path: '/home/alice/git/api',
+      sessionId: '$1',
+      sessionName: 'api-dev',
+      windowId: '@1',
     }])));
     expect(html).toContain(encodeURIComponent(JSON.stringify([{
       hostId: 7,

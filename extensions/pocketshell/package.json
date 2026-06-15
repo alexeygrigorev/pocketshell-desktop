@@ -448,6 +448,12 @@
 				"icon": "$(eye-closed)"
 			},
 			{
+				"command": "pocketshell.tmux-ui.browseFiles",
+				"title": "Tmux UI: Browse Files",
+				"category": "PocketShell",
+				"icon": "$(folder)"
+			},
+			{
 				"command": "pocketshell.portForwarding.open",
 				"title": "Port Forwarding: Open Panel",
 				"category": "PocketShell",
@@ -786,6 +792,11 @@
 				{
 					"command": "pocketshell.conversation.openActivePane",
 					"when": "view == pocketshell.tmuxSessions",
+					"group": "2_session"
+				},
+				{
+					"command": "pocketshell.tmux-ui.browseFiles",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiSession || viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
 					"group": "2_session"
 				}
 			],

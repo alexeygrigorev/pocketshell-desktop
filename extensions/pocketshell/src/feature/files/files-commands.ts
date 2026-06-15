@@ -8,7 +8,7 @@ import type { ConnectionService } from '../../connection-service';
 import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
 import { resolveHostId, getOrConnect, resolveTargetPath } from '../../host-picking';
 import { SftpClient } from '../../backend/files/sftp-client';
-import { FileBrowser } from '../../backend/files/file-browser';
+import { FileBrowser, remoteFileUriParts, resolveFileBrowserStartDirectory } from '../../backend/files/file-browser';
 import { RemoteFileWatcher } from '../../backend/files/file-watcher';
 import type { RemoteFileEntry } from '../../backend/files/types';
 import type { FeatureDeps } from '../manifest';
@@ -51,13 +51,8 @@ export function registerFiles(
 			}
 
 			const targetPath = resolveTargetPath(element);
-			const startPath = targetPath ?? await vscode.window.showInputBox({
-				prompt: vscode.l10n.t('Directory to browse'),
-				value: '~',
-			});
-			if (startPath === undefined) {
-				return;
-			}
+			const activePaneCwd = targetPath ? undefined : await resolveActivePaneCwd(element);
+			const startPath = resolveFileBrowserStartDirectory({ path: targetPath, cwd: activePaneCwd });
 
 			try {
 				await browseLoop(state, conn, hostId, startPath);
@@ -309,7 +304,7 @@ async function browseLoop(
 				// core `pocketshell.openRemoteFile` command but with the host + path
 				// already known (the core command re-prompts for both).
 				try {
-					const uri = vscode.Uri.parse(`pocketshell://${hostId}${picked.entry.path}`);
+					const uri = vscode.Uri.from(remoteFileUriParts(hostId, picked.entry.path));
 					const doc = await vscode.workspace.openTextDocument(uri);
 					await vscode.window.showTextDocument(doc);
 				} catch (err) {
@@ -328,4 +323,25 @@ function formatSize(bytes: number): string {
 	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
 	if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 	return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+async function resolveActivePaneCwd(element: unknown): Promise<string | undefined> {
+	if (!hasEntryId(element)) {
+		return undefined;
+	}
+	try {
+		const metadata = await vscode.commands.executeCommand<{ cwd?: unknown }>(
+			'pocketshell.tmux-ui.getActivePaneMetadata',
+			element,
+		);
+		return typeof metadata?.cwd === 'string' && metadata.cwd.trim() ? metadata.cwd : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function hasEntryId(element: unknown): boolean {
+	return !!element
+		&& typeof element === 'object'
+		&& typeof (element as { entryId?: unknown }).entryId === 'string';
 }
