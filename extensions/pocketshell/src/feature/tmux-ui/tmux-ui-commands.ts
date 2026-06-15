@@ -13,6 +13,13 @@ import { buildSnapshot } from '../../backend/tmux-ui/snapshot-builder';
 import { getTerminalManager } from '../terminal';
 import type { FeatureDeps } from '../manifest';
 import type { SplitDirection } from '../../backend/tmux-ui/types';
+import { TmuxSessionPseudoterminal } from './tmux-session-terminal';
+
+interface TmuxUiCommandTarget {
+	hostId?: number;
+	path?: string;
+	sessionName?: string;
+}
 
 /**
  * tmux-ui feature: a higher-level management layer over {@link TmuxSessionManager}
@@ -163,6 +170,39 @@ export function registerTmuxUi(
 		}),
 	);
 
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.tmux-ui.openSession', async (element?: unknown) => {
+			const target = resolveTmuxUiTarget(element);
+			const hostId = await resolveHostId(service, target?.hostId ?? element, { connectedOnly: false });
+			if (hostId === undefined) {
+				return;
+			}
+			const host = await service.getHost(hostId);
+			if (!host) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'));
+				return;
+			}
+			const sessionName = target?.sessionName ?? await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('tmux session name to open or create'),
+				value: target?.path ? sessionNameFromPath(target.path) : 'pocketshell',
+			});
+			if (!sessionName) {
+				return;
+			}
+			const conn = await getOrConnect(service, hostId);
+			if (!conn) {
+				return;
+			}
+
+			const terminal = vscode.window.createTerminal({
+				name: `tmux -CC: ${sessionName}`,
+				pty: new TmuxSessionPseudoterminal(conn, sessionName, target?.path),
+				iconPath: new vscode.ThemeIcon('terminal-tmux'),
+			});
+			terminal.show();
+		}),
+	);
+
 	return disposables;
 }
 
@@ -228,4 +268,25 @@ async function withSessionManager<T>(
 			}
 		}
 	}
+}
+
+function resolveTmuxUiTarget(element: unknown): TmuxUiCommandTarget | undefined {
+	if (!element || typeof element !== 'object') {
+		return undefined;
+	}
+	const value = element as Record<string, unknown>;
+	return {
+		hostId: typeof value.hostId === 'number' ? value.hostId : undefined,
+		path: typeof value.path === 'string' ? value.path : undefined,
+		sessionName: typeof value.sessionName === 'string' ? value.sessionName : undefined,
+	};
+}
+
+function sessionNameFromPath(remotePath: string): string {
+	const parts = remotePath.replace(/\/+$/, '').split('/').filter(Boolean);
+	return sanitizeTmuxName(parts[parts.length - 1] || 'pocketshell');
+}
+
+function sanitizeTmuxName(value: string): string {
+	return value.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'pocketshell';
 }

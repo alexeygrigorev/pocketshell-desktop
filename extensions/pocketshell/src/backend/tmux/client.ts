@@ -10,7 +10,7 @@
 import { EventEmitter } from 'events';
 import { TmuxEventStream, type StreamReader } from './stream';
 import type { ControlEvent, CommandResponse, CaptureWithCursor } from './events';
-import type { TmuxState, TmuxPane } from './state';
+import type { TmuxState, TmuxPane, TmuxSession } from './state';
 import { emptyState, applyEvent, upsertPane } from './state';
 
 // ---------------------------------------------------------------------------
@@ -55,6 +55,48 @@ function escapeSingleQuoted(input: string): string {
 
 function quoteTmuxArg(input: string): string {
   return `"${input.replace(/[\\"$]/g, (ch) => `\\${ch}`)}"`;
+}
+
+function buildSendInputCommand(paneId: string, data: string): string {
+  const target = quoteTmuxArg(paneId);
+  const commands: string[] = [];
+  let literal = '';
+
+  const flushLiteral = () => {
+    if (literal.length === 0) {
+      return;
+    }
+    commands.push(`send-keys -t ${target} -l ${quoteTmuxArg(literal)}`);
+    literal = '';
+  };
+
+  for (const ch of data) {
+    switch (ch) {
+      case '\r':
+      case '\n':
+        flushLiteral();
+        commands.push(`send-keys -t ${target} Enter`);
+        break;
+      case '\t':
+        flushLiteral();
+        commands.push(`send-keys -t ${target} Tab`);
+        break;
+      case '\x7f':
+        flushLiteral();
+        commands.push(`send-keys -t ${target} BSpace`);
+        break;
+      case '\x1b':
+        flushLiteral();
+        commands.push(`send-keys -t ${target} Escape`);
+        break;
+      default:
+        literal += ch;
+        break;
+    }
+  }
+  flushLiteral();
+
+  return commands.length > 0 ? commands.join(' ; ') : `send-keys -t ${target} -l ""`;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +235,13 @@ export class TmuxClient extends EventEmitter {
   }
 
   /**
+   * Send terminal input bytes as literal data to a pane.
+   */
+  async sendInput(paneId: string, data: string): Promise<CommandResponse> {
+    return this.enqueueCommand(buildSendInputCommand(paneId, data));
+  }
+
+  /**
    * Resize a pane.
    * Reference: section 12
    */
@@ -220,7 +269,7 @@ export class TmuxClient extends EventEmitter {
    * Reference: section 12
    */
   async listPanes(): Promise<CommandResponse> {
-    const format = '#{pane_id}\\t#{window_id}\\t#{session_id}\\t#{pane_width}\\t#{pane_height}\\t#{pane_title}\\t#{pane_in_mode}\\t#{pane_current_path}\\t#{session_name}\\t#{window_name}\\t#{session_activity}\\t#{window_activity}';
+    const format = '#{pane_id}\\t#{window_id}\\t#{session_id}\\t#{pane_width}\\t#{pane_height}\\t#{pane_title}\\t#{pane_in_mode}\\t#{pane_current_path}\\t#{session_name}\\t#{window_name}\\t#{session_activity}\\t#{window_activity}\\t#{window_active}\\t#{pane_active}';
     return this.enqueueCommand(`list-panes -a -F '${format}'`);
   }
 
@@ -351,8 +400,14 @@ export class TmuxClient extends EventEmitter {
    */
   async refreshState(): Promise<TmuxState> {
     const response = await this.listPanes();
+    const prevState = this.state;
     if (!response.isError && response.output.length > 0) {
       this.state = parsePaneList(this.state, response.output);
+    }
+    if (this.state !== prevState) {
+      for (const cb of this.stateChangeCallbacks) {
+        try { cb(this.state); } catch { /* ignore */ }
+      }
     }
     return this.state;
   }
@@ -474,7 +529,22 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
     const parts = line.split('\t');
     if (parts.length < 7) continue;
 
-    const [paneId, windowId, sessionId, widthStr, heightStr, title, inMode, cwd] = parts;
+    const [
+      paneId,
+      windowId,
+      sessionId,
+      widthStr,
+      heightStr,
+      title,
+      inMode,
+      cwd,
+      sessionName,
+      windowName,
+      ,
+      ,
+      windowActive,
+      paneActive,
+    ] = parts;
     if (!paneId.startsWith('%')) continue;
     if (!windowId.startsWith('@')) continue;
     if (!sessionId.startsWith('$')) continue;
@@ -482,6 +552,14 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
     const width = parseInt(widthStr, 10) || 80;
     const height = parseInt(heightStr, 10) || 24;
     const mode = inMode === '1' ? 'copy-mode' : 'normal';
+
+    current = ensureSessionWindow(current, {
+      sessionId,
+      sessionName: sessionName || sessionId,
+      windowId,
+      windowName: windowName || windowId,
+      windowActive: windowActive === '1',
+    });
 
     const pane: TmuxPane = {
       id: paneId,
@@ -495,6 +573,69 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
     };
 
     current = upsertPane(current, pane);
+    if (paneActive === '1') {
+      current = {
+        ...current,
+        activeSessionId: sessionId,
+        activeWindowId: windowId,
+        activePaneId: paneId,
+      };
+    }
   }
   return current;
+}
+
+function ensureSessionWindow(
+  state: TmuxState,
+  options: {
+    sessionId: string;
+    sessionName: string;
+    windowId: string;
+    windowName: string;
+    windowActive: boolean;
+  },
+): TmuxState {
+  const sessions = new Map(state.sessions);
+  const existingSession = sessions.get(options.sessionId);
+  const session: TmuxSession = existingSession ?? {
+    id: options.sessionId,
+    name: options.sessionName,
+    windows: new Map(),
+    windowOrder: [],
+  };
+
+  const windows = new Map(session.windows);
+  const existingWindow = windows.get(options.windowId);
+  if (existingWindow) {
+    windows.set(options.windowId, {
+      ...existingWindow,
+      name: options.windowName,
+      active: options.windowActive,
+    });
+  } else {
+    windows.set(options.windowId, {
+      id: options.windowId,
+      sessionId: options.sessionId,
+      name: options.windowName,
+      active: options.windowActive,
+      layout: '',
+      panes: new Map(),
+      paneOrder: [],
+    });
+  }
+
+  const windowOrder = session.windowOrder.includes(options.windowId)
+    ? session.windowOrder
+    : [...session.windowOrder, options.windowId];
+
+  sessions.set(options.sessionId, {
+    ...session,
+    name: options.sessionName,
+    windows,
+    windowOrder,
+  });
+
+  return options.windowActive
+    ? { ...state, sessions, activeSessionId: options.sessionId, activeWindowId: options.windowId }
+    : { ...state, sessions };
 }

@@ -317,15 +317,58 @@ describe('TmuxClient', () => {
     expect(written).toContain('#{pane_current_path}');
     expect(written).toContain('#{session_name}');
     expect(written).toContain('#{window_activity}');
+    expect(written).toContain('#{pane_active}');
 
     channel.stdoutReader.pushLine('%begin 1700000000 1 0');
-    channel.stdoutReader.pushLine('%1\t@0\t$0\t120\t40\tserver\t0\t/home/alice/git/api\ttest-session\tmain\t1710000000\t1710000300');
+    channel.stdoutReader.pushLine('%1\t@0\t$0\t120\t40\tserver\t0\t/home/alice/git/api\ttest-session\tmain\t1710000000\t1710000300\t1\t1');
     channel.stdoutReader.pushLine('%end 1700000000 1 0');
 
     const state = await refresh;
     const pane = state.sessions.get('$0')?.windows.get('@0')?.panes.get('%1');
     expect(pane?.cwd).toBe('/home/alice/git/api');
+    expect(state.activeWindowId).toBe('@0');
+    expect(state.activePaneId).toBe('%1');
 
+    await client.close();
+  });
+
+  it('notifies state subscribers when refreshState changes the active pane', async () => {
+    await client.connect(channel);
+
+    channel.stdoutReader.pushLine('%session-changed $0 test-session');
+    channel.stdoutReader.pushLine('%window-add @0');
+    await waitFor(() => client.getState().sessions.get('$0')?.windows.has('@0') === true);
+
+    const seedRefresh = client.refreshState();
+    await channel.waitForWrites(2);
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%1\t@0\t$0\t120\t40\tserver\t0\t/home/alice/git/api\ttest-session\tmain\t1710000000\t1710000300\t1\t1');
+    channel.stdoutReader.pushLine('%2\t@0\t$0\t120\t40\teditor\t0\t/home/alice/git/api\ttest-session\tmain\t1710000000\t1710000300\t1\t0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+
+    await seedRefresh;
+    expect(client.getState().activePaneId).toBe('%1');
+
+    const states: unknown[] = [];
+    const sub = client.onStateChange((state) => {
+      states.push(state);
+    });
+
+    const refresh = client.refreshState();
+    await channel.waitForWrites(3);
+
+    channel.stdoutReader.pushLine('%begin 1700000001 2 0');
+    channel.stdoutReader.pushLine('%1\t@0\t$0\t120\t40\tserver\t0\t/home/alice/git/api\ttest-session\tmain\t1710000000\t1710000300\t1\t0');
+    channel.stdoutReader.pushLine('%2\t@0\t$0\t120\t40\teditor\t0\t/home/alice/git/api\ttest-session\tmain\t1710000000\t1710000300\t1\t1');
+    channel.stdoutReader.pushLine('%end 1700000001 2 0');
+
+    const state = await refresh;
+    expect(state.activePaneId).toBe('%2');
+    expect(states).toHaveLength(1);
+    expect((states[0] as { activePaneId: string }).activePaneId).toBe('%2');
+
+    sub.unsubscribe();
     await client.close();
   });
 
@@ -402,6 +445,22 @@ describe('TmuxClient', () => {
 
     const written = channel.written[1].toString('utf-8');
     expect(written).toBe('send-keys -t "prod session:claude" -l "pocketshell agent claude --dir \'/srv/prod app\'" ; send-keys -t "prod session:claude" Enter\n');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('sends terminal input as tmux literal data and key names', async () => {
+    await client.connect(channel);
+
+    const command = client.sendInput('%1', 'ls -la\r\t\x7f');
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    expect(written).toBe('send-keys -t "%1" -l "ls -la" ; send-keys -t "%1" Enter ; send-keys -t "%1" Tab ; send-keys -t "%1" BSpace\n');
 
     channel.stdoutReader.pushLine('%begin 1700000000 1 0');
     channel.stdoutReader.pushLine('%end 1700000000 1 0');

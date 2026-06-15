@@ -476,6 +476,12 @@
 				"icon": "$(add)"
 			},
 			{
+				"command": "pocketshell.tmux-ui.openSession",
+				"title": "Tmux UI: Open Session Terminal",
+				"category": "PocketShell",
+				"icon": "$(terminal-tmux)"
+			},
+			{
 				"command": "pocketshell.tmux-ui.splitPane",
 				"title": "Tmux UI: Split Pane",
 				"category": "PocketShell"

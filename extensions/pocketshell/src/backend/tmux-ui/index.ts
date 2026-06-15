@@ -15,3 +15,4 @@ export type {
 export { buildSnapshot } from './snapshot-builder';
 
 export { TmuxSessionManager } from './tmux-session-manager';
+export { ActivePaneTerminalController, selectActivePane, type ActivePaneTerminalClient } from './active-pane-terminal';

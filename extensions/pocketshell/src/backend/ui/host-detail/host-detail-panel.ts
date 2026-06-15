@@ -286,6 +286,11 @@ function sessionRow(
     sessionName: session.name,
     windowId: primaryWindow?.id,
   };
+  const attachTarget = {
+    hostId,
+    path: session.cwd ?? group.path,
+    sessionName: session.name,
+  };
   const windowNames = session.windows.map((window) => window.name).join(', ');
   const meta = [
     session.activity === null ? undefined : `active ${formatTimestamp(session.activity * 1000)}`,
@@ -298,7 +303,7 @@ function sessionRow(
     detail: session.cwd ?? undefined,
     meta,
     actions: [
-      { label: 'Attach', command: 'pocketshell.tmux.attach', args: [target] },
+      { label: 'Attach', command: 'pocketshell.tmux-ui.openSession', args: [attachTarget] },
       { label: 'New Window', command: 'pocketshell.tmux.newWindow', args: [target] },
       { label: 'Rename', command: 'pocketshell.tmux.rename', args: [target] },
       { label: 'Kill', command: 'pocketshell.tmux.kill', args: [target] },
