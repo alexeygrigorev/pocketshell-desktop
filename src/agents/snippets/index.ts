@@ -1,0 +1,27 @@
+export {
+  SNIPPET_LIBRARY_STATE_KEY,
+  SnippetValidationError,
+  checkSnippetRunScope,
+  createSnippetId,
+  deleteSnippet,
+  expandSnippetBody,
+  filterSnippetsByScope,
+  getSnippet,
+  normalizeSnippet,
+  parseSnippetLibrary,
+  scopeLabel,
+  snippetPaletteCommandId,
+  snippetToPaletteCommand,
+  upsertSnippet,
+  validateSnippet,
+} from './model';
+export type {
+  SnippetEntry,
+  SnippetExpansionContext,
+  SnippetInput,
+  SnippetKind,
+  SnippetPaletteCommandDescriptor,
+  SnippetRunScopeCheck,
+  SnippetScope,
+  SnippetScopeFilter,
+} from './types';

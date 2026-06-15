@@ -54,6 +54,16 @@ describe('SlashCommandPalette', () => {
       const palette = new SlashCommandPalette();
       expect(() => palette.unregister('nonexistent')).not.toThrow();
     });
+
+    it('looks up duplicate-prefix commands by exact id', () => {
+      const first = makeCommand({ id: 'snippet.first', prefix: '/deploy', label: 'Deploy API' });
+      const second = makeCommand({ id: 'snippet.second', prefix: '/deploy', label: 'Deploy Worker' });
+      const palette = new SlashCommandPalette([first, second]);
+
+      expect(palette.get('snippet.second')).toBe(second);
+      expect(palette.get('snippet.first')).toBe(first);
+      expect(palette.get('missing')).toBeUndefined();
+    });
   });
 
   describe('search', () => {

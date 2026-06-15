@@ -10,6 +10,11 @@ import { CommandRegistry } from '../../backend/commands';
 import { SlashCommandPalette } from '../../backend/agents/palette';
 import type { Command } from '../../backend/commands';
 import type { SlashCommand } from '../../backend/agents/palette';
+import {
+	SNIPPET_LIBRARY_STATE_KEY,
+	parseSnippetLibrary,
+	snippetToPaletteCommand,
+} from '../../backend/agents/snippets';
 
 /**
  * Palette feature: registers commands that wire the slash-command
@@ -53,9 +58,31 @@ function syncPaletteFromRegistry(): void {
 	}
 }
 
+function syncPaletteFromSnippets(ctx: vscode.ExtensionContext): void {
+	for (const snippet of parseSnippetLibrary(ctx.workspaceState.get(SNIPPET_LIBRARY_STATE_KEY, []))) {
+		const descriptor = snippetToPaletteCommand(snippet);
+		palette.register({
+			id: descriptor.id,
+			prefix: descriptor.prefix,
+			label: descriptor.label,
+			description: descriptor.description,
+			category: descriptor.category,
+			icon: descriptor.icon,
+			execute: async () => {
+				await vscode.commands.executeCommand('pocketshell.snippets.run', { snippetId: descriptor.snippetId });
+			},
+		});
+	}
+}
+
+function syncPalette(ctx: vscode.ExtensionContext): void {
+	syncPaletteFromRegistry();
+	syncPaletteFromSnippets(ctx);
+}
+
 export function registerPalette(
 	_service: ConnectionService,
-	_ctx: vscode.ExtensionContext,
+	ctx: vscode.ExtensionContext,
 	_deps: FeatureDeps,
 ): vscode.Disposable[] {
 	const disposables: vscode.Disposable[] = [];
@@ -65,11 +92,13 @@ export function registerPalette(
 	// -------------------------------------------------------------------------
 	disposables.push(
 		vscode.commands.registerCommand('pocketshell.palette.open', async () => {
+			syncPalette(ctx);
 			const items = palette.search('').map(({ command }) => ({
 				label: command.prefix,
 				description: command.label,
 				detail: command.description,
 				alwaysShow: true,
+				commandId: command.id,
 			}));
 
 			// VS Code's QuickPick performs live filtering on the displayed
@@ -84,10 +113,7 @@ export function registerPalette(
 				return;
 			}
 
-			// Resolve the selected command by prefix and execute it.
-			const match = palette
-				.listAll()
-				.find((cmd) => cmd.prefix === picked.label);
+			const match = palette.get(picked.commandId);
 			if (match === undefined) {
 				return;
 			}
@@ -106,7 +132,8 @@ export function registerPalette(
 	// -------------------------------------------------------------------------
 	disposables.push(
 		vscode.commands.registerCommand('pocketshell.palette.listCommands', async () => {
-			const commands = registry.list();
+			syncPalette(ctx);
+			const commands = palette.listAll();
 			if (commands.length === 0) {
 				vscode.window.showInformationMessage(
 					vscode.l10n.t('No commands registered.'),
@@ -117,14 +144,14 @@ export function registerPalette(
 			const items = commands
 				.slice()
 				.sort((a, b) => {
-					const catCmp = (a.category ?? '').localeCompare(b.category ?? '');
+					const catCmp = a.category.localeCompare(b.category);
 					if (catCmp !== 0) return catCmp;
-					return a.title.localeCompare(b.title);
+					return a.label.localeCompare(b.label);
 				})
 				.map((cmd) => ({
-					label: cmd.title,
-					description: cmd.category ?? '',
-					detail: cmd.id,
+					label: cmd.prefix,
+					description: cmd.label,
+					detail: cmd.description,
 					commandId: cmd.id,
 				}));
 
@@ -139,7 +166,8 @@ export function registerPalette(
 			}
 
 			try {
-				await registry.execute(picked.commandId);
+				const command = palette.get(picked.commandId);
+				await command?.execute();
 			} catch (err) {
 				vscode.window.showErrorMessage(
 					vscode.l10n.t('Command failed: {0}', String(err)),
@@ -202,11 +230,17 @@ export function registerPalette(
 				);
 				return;
 			}
-			syncPaletteFromRegistry();
+			syncPalette(ctx);
 
 			vscode.window.showInformationMessage(
 				vscode.l10n.t('Registered {0}', id),
 			);
+		}),
+	);
+
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.palette.refreshSnippets', async () => {
+			syncPalette(ctx);
 		}),
 	);
 

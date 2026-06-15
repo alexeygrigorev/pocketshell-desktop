@@ -34,6 +34,13 @@ export class SlashCommandPalette {
   }
 
   /**
+   * Look up a registered slash command by exact ID.
+   */
+  get(commandId: string): SlashCommand | undefined {
+    return this.commands.get(commandId);
+  }
+
+  /**
    * List all registered slash commands.
    */
   listAll(): SlashCommand[] {

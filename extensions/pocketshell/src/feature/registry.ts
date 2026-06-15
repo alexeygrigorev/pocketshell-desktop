@@ -17,6 +17,7 @@ import { HOOKS_FEATURE } from './hooks';
 import { REPLY_FEATURE } from './reply';
 import { CONVERSATION_FEATURE } from './conversation';
 import { PROMPT_COMPOSER_FEATURE } from './prompt-composer';
+import { SNIPPETS_FEATURE } from './snippets';
 import { FILES_FEATURE } from './files';
 import { POCKETSHELL_DETECT_FEATURE } from './pocketshell-detect';
 import { PALETTE_FEATURE } from './palette';
@@ -44,6 +45,7 @@ export const FEATURES: FeatureRegistration[] = [
 	HOOKS_FEATURE,
 	REPLY_FEATURE,
 	PROMPT_COMPOSER_FEATURE,
+	SNIPPETS_FEATURE,
 	CONVERSATION_FEATURE,
 	FILES_FEATURE,
 	PALETTE_FEATURE,
