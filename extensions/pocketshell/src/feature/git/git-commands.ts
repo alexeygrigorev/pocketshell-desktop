@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import type { ConnectionService } from '../../connection-service';
 import { resolveHostId, getOrConnect, resolveTargetPath } from '../../host-picking';
-import { GitClient, PocketShellRepos } from '../../backend/git';
+import { GitClient, PocketShellRepos, isGitNotRepositoryError } from '../../backend/git';
 import type {
 	GitStatus,
 	GitPullResult,
@@ -92,10 +92,20 @@ export function registerGit(
 				}
 			}
 
-			await vscode.commands.executeCommand('pocketshell.sessions.create', {
-				hostId,
-				path: repoPath,
-			});
+			const action = await pickRepoAction(repoPath);
+			if (action === 'history') {
+				await vscode.commands.executeCommand('pocketshell.git.history', {
+					hostId,
+					path: repoPath,
+				});
+				return;
+			}
+			if (action === 'session') {
+				await vscode.commands.executeCommand('pocketshell.sessions.create', {
+					hostId,
+					path: repoPath,
+				});
+			}
 		}),
 	);
 
@@ -219,11 +229,18 @@ export function registerGit(
 				return;
 			}
 
+			output.clear();
 			try {
 				const commits = await new GitClient(conn).log(repoPath, { maxCount: 25 });
 				renderHistory(output, repoPath, commits);
 				output.show(true);
 			} catch (err) {
+				if (isGitNotRepositoryError(err)) {
+					vscode.window.showInformationMessage(
+						vscode.l10n.t('No Git history: {0} is not a Git repository.', repoPath),
+					);
+					return;
+				}
 				vscode.window.showErrorMessage(
 					vscode.l10n.t('Git history failed: {0}', String(err)),
 				);
@@ -267,6 +284,24 @@ export function registerGit(
 	);
 
 	return disposables;
+}
+
+async function pickRepoAction(repoPath: string): Promise<'session' | 'history' | undefined> {
+	const picked = await vscode.window.showQuickPick([
+		{
+			label: vscode.l10n.t('Open Session'),
+			description: repoPath,
+			action: 'session' as const,
+		},
+		{
+			label: vscode.l10n.t('Show History'),
+			description: repoPath,
+			action: 'history' as const,
+		},
+	], {
+		placeHolder: vscode.l10n.t('Choose repository action'),
+	});
+	return picked?.action;
 }
 
 async function loadRepoBrowserRows(repos: PocketShellRepos): Promise<PocketShellRepoBrowserEntry[]> {
@@ -466,6 +501,17 @@ function renderHistory(
 	for (const commit of commits) {
 		const date = commit.date ? commit.date.slice(0, 10) : 'unknown-date';
 		output.appendLine(`${commit.shortHash}  ${date}  ${commit.author}  ${commit.subject}`);
+		if (commit.files.length === 0) {
+			output.appendLine('  (no file summary)');
+			continue;
+		}
+		for (const file of commit.files) {
+			const path = file.oldPath ? `${file.oldPath} => ${file.path}` : file.path;
+			const summary = file.binary
+				? 'binary'
+				: `+${file.insertions ?? 0} -${file.deletions ?? 0}`;
+			output.appendLine(`  ${summary}  ${path}`);
+		}
 	}
 	output.appendLine('');
 }

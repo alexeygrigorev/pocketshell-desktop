@@ -31,6 +31,7 @@ describe('parseLog', () => {
       date: '2026-01-15T10:30:00+00:00',
       subject: 'Initial commit',
       body: undefined,
+      files: [],
     });
   });
 
@@ -77,5 +78,24 @@ describe('parseLog', () => {
 
     expect(commits).toHaveLength(1);
     expect(commits[0].subject).toBe('Fix bug: handle "quotes" & <brackets>');
+  });
+
+  it('parses changed-file summaries from numstat output', () => {
+    const output = [
+      'ENDCOMMIT\x00hash1\x00sh1\x00Author\x00a@test.com\x002026-01-01T00:00:00Z\x00Subject\x00\x00',
+      '\n12\t1\tsrc/app.ts',
+      '\n-\t-\tassets/logo.png',
+      '\n3\t0\tsrc/{old.ts => new.ts}',
+      '\n',
+    ].join('');
+
+    const commits = parseLog(output);
+
+    expect(commits).toHaveLength(1);
+    expect(commits[0].files).toEqual([
+      { path: 'src/app.ts', insertions: 12, deletions: 1, binary: false },
+      { path: 'assets/logo.png', insertions: undefined, deletions: undefined, binary: true },
+      { path: 'src/new.ts', oldPath: 'src/old.ts', insertions: 3, deletions: 0, binary: false },
+    ]);
   });
 });

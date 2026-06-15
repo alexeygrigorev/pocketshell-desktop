@@ -9,6 +9,7 @@ import type {
   GitStatus,
   GitFileStatus,
   GitCommit,
+  GitCommitFileChange,
   GitBranch,
   GitBlameLine,
 } from './types';
@@ -173,6 +174,8 @@ function fileStatusFromCode(
  *
  * Expected format string:
  *   --format=ENDCOMMIT%x00%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00
+ * followed by optional `--numstat` lines:
+ *   <insertions>\t<deletions>\t<path>
  *
  * Each commit is delimited by "ENDCOMMIT\0", fields separated by \0.
  */
@@ -195,6 +198,7 @@ export function parseLog(output: string): GitCommit[] {
     const date = fields[4];
     const subject = fields[5];
     const body = fields[6];
+    const numstat = fields.slice(7).join('\x00');
 
     if (!hash) continue;
 
@@ -206,10 +210,53 @@ export function parseLog(output: string): GitCommit[] {
       date,
       subject,
       body: body || undefined,
+      files: parseNumstat(numstat),
     });
   }
 
   return commits;
+}
+
+function parseNumstat(output: string): GitCommitFileChange[] {
+  const files: GitCommitFileChange[] = [];
+  for (const line of output.split('\n')) {
+    const trimmed = line.trimEnd();
+    if (!trimmed) {
+      continue;
+    }
+    const match = trimmed.match(/^([0-9-]+)\t([0-9-]+)\t(.+)$/);
+    if (!match) {
+      continue;
+    }
+    const binary = match[1] === '-' || match[2] === '-';
+    const rename = parseRenamePath(match[3]);
+    files.push({
+      path: rename.path,
+      oldPath: rename.oldPath,
+      insertions: binary ? undefined : parseInt(match[1], 10),
+      deletions: binary ? undefined : parseInt(match[2], 10),
+      binary,
+    });
+  }
+  return files;
+}
+
+function parseRenamePath(path: string): { path: string; oldPath?: string } {
+  const braceRename = path.match(/^(.*)\{(.+) => (.+)\}(.*)$/);
+  if (braceRename) {
+    return {
+      oldPath: `${braceRename[1]}${braceRename[2]}${braceRename[4]}`,
+      path: `${braceRename[1]}${braceRename[3]}${braceRename[4]}`,
+    };
+  }
+  const simpleRename = path.match(/^(.+) => (.+)$/);
+  if (simpleRename) {
+    return {
+      oldPath: simpleRename[1],
+      path: simpleRename[2],
+    };
+  }
+  return { path };
 }
 
 // ---------------------------------------------------------------------------

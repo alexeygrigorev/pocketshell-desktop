@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { GitClient } from '../../../src/git/git-client';
+import { GitClient, GitNotRepositoryError } from '../../../src/git/git-client';
 import type { SshConnection, ExecResult } from '../../../src/ssh/connection/ssh-client';
 
 // ---------------------------------------------------------------------------
@@ -135,6 +135,9 @@ describe('GitClient', () => {
       expect(commits[0].shortHash).toBe('short1');
       expect(commits[0].author).toBe('Alice');
       expect(commits[0].subject).toBe('First commit');
+      expect(conn.exec).toHaveBeenCalledWith(
+        expect.stringContaining('--numstat'),
+      );
     });
 
     it('returns empty array for empty log', async () => {
@@ -151,6 +154,21 @@ describe('GitClient', () => {
       const commits = await client.log('/home/user/repo');
 
       expect(commits).toEqual([]);
+    });
+
+    it('classifies non-repository log errors', async () => {
+      const responses = new Map<string, ExecResult>([
+        ['git log', {
+          stdout: '',
+          stderr: 'fatal: not a git repository (or any of the parent directories): .git',
+          exitCode: 128,
+        }],
+      ]);
+
+      const conn = createMockConnection(responses);
+      const client = new GitClient(conn);
+
+      await expect(client.log('/tmp')).rejects.toBeInstanceOf(GitNotRepositoryError);
     });
   });
 

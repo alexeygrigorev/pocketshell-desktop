@@ -89,13 +89,14 @@ export class GitClient {
     const branch = options?.branch;
 
     let cmd = `git log --format=${LOG_FORMAT} -n ${maxCount}`;
+    cmd += ' --numstat';
     if (branch) {
       cmd += ` ${quote(branch)}`;
     }
 
     const result = await this.exec(cmd, cwd);
     if (result.exitCode !== 0) {
-      throw new Error(`git log failed: ${result.stderr}`);
+      throwGitCommandError('git log', result.stderr);
     }
     return parseLog(result.stdout);
   }
@@ -198,6 +199,17 @@ export class GitClient {
   }
 }
 
+export class GitNotRepositoryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GitNotRepositoryError';
+  }
+}
+
+export function isGitNotRepositoryError(err: unknown): err is GitNotRepositoryError {
+  return err instanceof GitNotRepositoryError;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -205,6 +217,17 @@ export class GitClient {
 /** Quote a shell argument with single quotes. */
 function quote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+function throwGitCommandError(command: string, stderr: string): never {
+  if (isNotRepositoryMessage(stderr)) {
+    throw new GitNotRepositoryError(`${command} failed: ${stderr}`);
+  }
+  throw new Error(`${command} failed: ${stderr}`);
+}
+
+function isNotRepositoryMessage(stderr: string): boolean {
+  return /not a git repository/i.test(stderr);
 }
 
 /**

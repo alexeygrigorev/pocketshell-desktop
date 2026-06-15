@@ -5,7 +5,7 @@
  * pocketshell repos subcommand.
  */
 
-export { GitClient } from './git-client';
+export { GitClient, GitNotRepositoryError, isGitNotRepositoryError } from './git-client';
 export { PocketShellRepos } from './pocketshell-repos';
 export { parseStatus, parseLog, parseBranches, parseBlame } from './status-parser';
 export type {
@@ -13,6 +13,7 @@ export type {
   GitStatus,
   GitFileStatus,
   GitCommit,
+  GitCommitFileChange,
   GitBranch,
   GitPullResult,
   GitBlameLine,

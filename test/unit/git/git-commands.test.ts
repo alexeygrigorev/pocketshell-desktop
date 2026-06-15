@@ -8,6 +8,7 @@ const vscodeMock = vi.hoisted(() => {
     commandHandlers,
     createOutputChannel: vi.fn(() => ({
       appendLine: vi.fn(),
+      clear: vi.fn(),
       show: vi.fn(),
       dispose: vi.fn(),
     })),
@@ -73,6 +74,9 @@ describe('git commands', () => {
       expect(items).toHaveLength(1);
       expect(items[0].row.fullName).toBe('alice/api');
       return items[0];
+    }).mockImplementationOnce(async (items: Array<{ action: string }>) => {
+      expect(items.map((item) => item.action)).toEqual(['session', 'history']);
+      return items[0];
     });
 
     await vscodeMock.commandHandlers.get('pocketshell.git.browse')?.({ hostId: 7 });
@@ -112,6 +116,10 @@ describe('git commands', () => {
       .mockImplementationOnce(async (items: Array<{ root?: string }>) => {
         expect(items.map((item) => item.root).filter(Boolean)).toEqual(['~/git', '/home/alice/git']);
         return items[1];
+      })
+      .mockImplementationOnce(async (items: Array<{ action: string }>) => {
+        expect(items.map((item) => item.action)).toEqual(['session', 'history']);
+        return items[0];
       });
     vscodeMock.showInputBox.mockResolvedValueOnce('/srv/src');
 
@@ -128,6 +136,85 @@ describe('git commands', () => {
       path: '/srv/src/web',
     });
   });
+
+  it('opens history from a cloned repo browser row', async () => {
+    const commands: string[] = [];
+    const conn = mockConnection(commands, new Map([
+      ['pocketshell repos list --remote --json', json([
+        remoteRepo('alice/api', '2026-01-03T00:00:00Z'),
+      ])],
+      ['pocketshell repos list --local --json', json([
+        localRepo('alice/api', '/home/alice/git/api'),
+      ])],
+    ]));
+    const service = mockService(conn);
+    registerGit(service, {} as never, { refreshTrees: vi.fn() });
+
+    vscodeMock.showQuickPick
+      .mockImplementationOnce(async (items: Array<{ row: { fullName: string } }>) => items[0])
+      .mockImplementationOnce(async (items: Array<{ action: string }>) => items[1]);
+
+    await vscodeMock.commandHandlers.get('pocketshell.git.browse')?.({ hostId: 7 });
+
+    expect(vscodeMock.executeCommand).toHaveBeenCalledWith('pocketshell.git.history', {
+      hostId: 7,
+      path: '/home/alice/git/api',
+    });
+  });
+
+  it('renders commit history with changed-file summaries', async () => {
+    const commands: string[] = [];
+    const conn = mockConnection(commands, new Map([
+      ['git log', {
+        stdout: [
+          'ENDCOMMIT\x00hash1\x00sh1\x00Alice\x00alice@test.com\x002026-01-01T00:00:00Z\x00Ship history\x00\x00',
+          '\n5\t2\tsrc/git.ts',
+          '\n-\t-\tassets/logo.png',
+          '\n',
+        ].join(''),
+        stderr: '',
+        exitCode: 0,
+      }],
+    ]));
+    const service = mockService(conn);
+    registerGit(service, {} as never, { refreshTrees: vi.fn() });
+
+    await vscodeMock.commandHandlers.get('pocketshell.git.history')?.({
+      hostId: 7,
+      path: '/home/alice/git/api',
+    });
+
+    const output = vscodeMock.createOutputChannel.mock.results[0].value;
+    const lines = output.appendLine.mock.calls.map((call: string[]) => call[0]);
+    expect(commands[0]).toContain("cd '/home/alice/git/api' && git log");
+    expect(lines).toContain('sh1  2026-01-01  Alice  Ship history');
+    expect(lines).toContain('  +5 -2  src/git.ts');
+    expect(lines).toContain('  binary  assets/logo.png');
+    expect(output.show).toHaveBeenCalledWith(true);
+  });
+
+  it('shows a clear message for non-repo history requests', async () => {
+    const commands: string[] = [];
+    const conn = mockConnection(commands, new Map([
+      ['git log', {
+        stdout: '',
+        stderr: 'fatal: not a git repository (or any of the parent directories): .git',
+        exitCode: 128,
+      }],
+    ]));
+    const service = mockService(conn);
+    registerGit(service, {} as never, { refreshTrees: vi.fn() });
+
+    await vscodeMock.commandHandlers.get('pocketshell.git.history')?.({
+      hostId: 7,
+      path: '/tmp/not-repo',
+    });
+
+    expect(vscodeMock.showInformationMessage).toHaveBeenCalledWith(
+      'No Git history: /tmp/not-repo is not a Git repository.',
+    );
+    expect(vscodeMock.showErrorMessage).not.toHaveBeenCalled();
+  });
 });
 
 function mockConnection(
@@ -138,7 +225,9 @@ function mockConnection(
     connected: true,
     exec: vi.fn(async (command: string): Promise<ExecResult> => {
       commands.push(command);
-      return responses.get(command) ?? { stdout: '', stderr: '', exitCode: 0 };
+      return responses.get(command)
+        ?? Array.from(responses.entries()).find(([key]) => command.includes(key))?.[1]
+        ?? { stdout: '', stderr: '', exitCode: 0 };
     }),
     shell: vi.fn(),
     sftp: vi.fn(),

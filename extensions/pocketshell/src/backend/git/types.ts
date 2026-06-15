@@ -52,6 +52,16 @@ export interface GitCommit {
   date: string;
   subject: string;
   body?: string;
+  files: GitCommitFileChange[];
+}
+
+/** Changed-file summary for a commit from `git log --numstat`. */
+export interface GitCommitFileChange {
+  path: string;
+  oldPath?: string;
+  insertions?: number;
+  deletions?: number;
+  binary: boolean;
 }
 
 // ---------------------------------------------------------------------------
