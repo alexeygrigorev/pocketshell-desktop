@@ -27,6 +27,7 @@ export interface PromptComposerOpenArgs {
 }
 
 export type PromptComposerStatusKind = 'idle' | 'sending' | 'sent' | 'inserting' | 'inserted' | 'failed';
+export type PromptComposerAttachmentStatus = 'staged' | 'uploading' | 'uploaded' | 'error';
 
 export interface PromptComposerStatus {
   kind: PromptComposerStatusKind;
@@ -35,12 +36,43 @@ export interface PromptComposerStatus {
   failedDraft?: string;
 }
 
+export interface PromptComposerAttachment {
+  id: string;
+  localPath: string;
+  name: string;
+  displayName: string;
+  status: PromptComposerAttachmentStatus;
+  size?: number;
+  remotePath?: string;
+  error?: string;
+}
+
+export interface PromptComposerAttachmentInput {
+  id: string;
+  localPath: string;
+  displayName?: string;
+  size?: number;
+}
+
+export interface PromptComposerAttachmentRemotePlan {
+  targetFragment: string;
+  stagingDirectory: string;
+  remotePath: string;
+  filename: string;
+}
+
+export interface PromptComposerInsertResolution {
+  target?: PromptComposerPaneTarget;
+  error?: string;
+}
+
 export interface PromptComposerPanelModel {
   target: PromptComposerTarget;
   title: string;
   initialDraft: string;
   clearDraftToken: number;
   status: PromptComposerStatus;
+  attachments: PromptComposerAttachment[];
 }
 
 export interface PromptComposerHtmlRenderOptions {
@@ -110,6 +142,7 @@ export function createPromptComposerPanelModel(
     initialDraft,
     clearDraftToken: 0,
     status: { kind: 'idle' },
+    attachments: [],
   };
 }
 
@@ -182,6 +215,7 @@ export function markPromptComposerSent(model: PromptComposerPanelModel): PromptC
     initialDraft: '',
     clearDraftToken: model.clearDraftToken + 1,
     status: { kind: 'sent', message: 'Prompt sent.' },
+    attachments: [],
   };
 }
 
@@ -201,6 +235,208 @@ export function markPromptComposerFailed(
     ...model,
     status: { kind: 'failed', message: 'Prompt failed.', error, failedDraft },
   };
+}
+
+export function addPromptComposerAttachments(
+  model: PromptComposerPanelModel,
+  files: PromptComposerAttachmentInput[],
+): PromptComposerPanelModel {
+  const existingNames = new Set(model.attachments.map((attachment) => attachment.name));
+  const attachments = files.map((file) => {
+    const displayName = file.displayName?.trim() || basenameFromPath(file.localPath) || 'attachment';
+    const name = uniqueAttachmentFileName(sanitizePromptComposerFileName(displayName), existingNames);
+    existingNames.add(name);
+    return {
+      id: file.id,
+      localPath: file.localPath,
+      displayName,
+      name,
+      status: 'staged' as const,
+      size: file.size,
+    };
+  });
+  return {
+    ...model,
+    attachments: [...model.attachments, ...attachments],
+  };
+}
+
+export function removePromptComposerAttachment(
+  model: PromptComposerPanelModel,
+  attachmentId: string,
+): PromptComposerPanelModel {
+  return {
+    ...model,
+    attachments: model.attachments.filter((attachment) => attachment.id !== attachmentId),
+  };
+}
+
+export function markPromptComposerAttachmentUploading(
+  model: PromptComposerPanelModel,
+  attachmentId: string,
+  remotePath?: string,
+): PromptComposerPanelModel {
+  return updatePromptComposerAttachment(model, attachmentId, (attachment) => ({
+    ...attachment,
+    status: 'uploading',
+    remotePath: remotePath ?? attachment.remotePath,
+    error: undefined,
+  }));
+}
+
+export function markPromptComposerAttachmentUploaded(
+  model: PromptComposerPanelModel,
+  attachmentId: string,
+  remotePath: string,
+): PromptComposerPanelModel {
+  return updatePromptComposerAttachment(model, attachmentId, (attachment) => ({
+    ...attachment,
+    status: 'uploaded',
+    remotePath,
+    error: undefined,
+  }));
+}
+
+export function markPromptComposerAttachmentError(
+  model: PromptComposerPanelModel,
+  attachmentId: string,
+  error: string,
+): PromptComposerPanelModel {
+  return updatePromptComposerAttachment(model, attachmentId, (attachment) => ({
+    ...attachment,
+    status: 'error',
+    error,
+  }));
+}
+
+export function planPromptComposerAttachmentRemotePath(
+  target: PromptComposerTarget,
+  attachment: Pick<PromptComposerAttachment, 'name'>,
+  options: { remoteHome?: string; baseDirectory?: string } = {},
+): PromptComposerAttachmentRemotePlan {
+  const targetFragment = sanitizePromptComposerTargetFragment(buildPromptComposerAttachmentTargetKey(target));
+  const baseDirectory = normalizeRemoteBaseDirectory(options.remoteHome, options.baseDirectory);
+  const stagingDirectory = `${baseDirectory}/${targetFragment}`;
+  const filename = sanitizePromptComposerFileName(attachment.name);
+  return {
+    targetFragment,
+    stagingDirectory,
+    remotePath: `${stagingDirectory}/${filename}`,
+    filename,
+  };
+}
+
+export function buildPromptComposerAttachmentContext(attachments: readonly PromptComposerAttachment[]): string {
+  const uploaded = attachments.filter((attachment) => attachment.status === 'uploaded' && attachment.remotePath);
+  if (uploaded.length === 0) {
+    return '';
+  }
+  const lines = [
+    'Attached files are available on the remote host:',
+    ...uploaded.map((attachment) => `- ${attachment.displayName}: ${attachment.remotePath}`),
+  ];
+  return lines.join('\n');
+}
+
+export function findPromptComposerAttachmentSendBlocker(
+  attachments: readonly PromptComposerAttachment[],
+): string | undefined {
+  const failed = attachments.find((attachment) => attachment.status === 'error');
+  if (failed) {
+    return `Attachment upload failed for ${failed.displayName}: ${failed.error ?? 'Unknown upload error'}`;
+  }
+  const pending = attachments.find((attachment) => attachment.status !== 'uploaded');
+  if (pending) {
+    return `Attachment ${pending.displayName} is not uploaded yet`;
+  }
+  return undefined;
+}
+
+export function buildPromptComposerPromptText(text: string, attachments: readonly PromptComposerAttachment[]): string {
+  const blocker = findPromptComposerAttachmentSendBlocker(attachments);
+  if (blocker) {
+    throw new Error(blocker);
+  }
+  const trimmedText = text.trimEnd();
+  const context = buildPromptComposerAttachmentContext(attachments);
+  if (!context) {
+    return trimmedText;
+  }
+  return trimmedText ? `${trimmedText}\n\n${context}` : context;
+}
+
+export function sanitizePromptComposerFileName(value: string): string {
+  const stripped = value
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .pop()
+    ?.trim() ?? '';
+  const sanitized = stripped
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^\.+$/, '')
+    .replace(/^\.+/, '')
+    .slice(0, 120);
+  return sanitized || 'attachment';
+}
+
+export function sanitizePromptComposerTargetFragment(value: string): string {
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[^A-Za-z0-9._-]/g, '-')
+    .replace(/\.\.+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[.-]+/, '')
+    .replace(/[.-]+$/, '')
+    .slice(0, 120);
+  return sanitized || 'target';
+}
+
+export function canResolvePromptComposerPaneHostFromTarget(target: PromptComposerPaneTarget): boolean {
+  return target.hostId !== undefined || Boolean(target.entryId);
+}
+
+export function promptComposerPaneTargetsMatchRequest(
+  requested: PromptComposerPaneTarget,
+  resolved: PromptComposerPaneTarget,
+): boolean {
+  if (requested.hostId !== undefined && resolved.hostId !== requested.hostId) {
+    return false;
+  }
+  if (requested.entryId && resolved.entryId !== requested.entryId) {
+    return false;
+  }
+  if (requested.paneId && resolved.paneId !== requested.paneId) {
+    return false;
+  }
+  return true;
+}
+
+export function resolvePromptComposerInsertTarget(
+  target: PromptComposerTarget,
+  insertTarget?: PromptComposerPaneTarget,
+): PromptComposerInsertResolution {
+  if (target.kind === 'pane') {
+    if (target.hostId === undefined) {
+      return { error: 'No connected host is available for this tmux pane' };
+    }
+    return { target };
+  }
+  if (!insertTarget) {
+    return { error: 'Insert requires a tmux pane opened from the same host as this agent session' };
+  }
+  if (target.hostId === undefined) {
+    return { error: 'No connected host is available for this agent session' };
+  }
+  if (insertTarget.hostId === undefined) {
+    return { error: 'No connected host is available for the insert tmux pane' };
+  }
+  if (insertTarget.hostId !== target.hostId) {
+    return { error: 'Insert target must be on the same host as this agent session' };
+  }
+  return { target: insertTarget };
 }
 
 export function persistPromptComposerDraftState(
@@ -236,6 +472,7 @@ export function renderPromptComposerHtml(
     : '';
   const targetKey = buildPromptComposerDraftKey(model.target);
   const status = renderStatus(model.status);
+  const attachments = renderAttachments(model.attachments);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -248,8 +485,15 @@ body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-edit
 .header { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 10px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
 .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .target-kind { color: var(--vscode-descriptionForeground); text-transform: uppercase; font-size: 0.85em; }
-.body { padding: 12px; }
+.body { padding: 12px; min-height: 0; }
 textarea { box-sizing: border-box; width: 100%; height: 100%; min-height: 260px; resize: none; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); padding: 10px; border-radius: 4px; font: inherit; line-height: 1.45; }
+.attachments { display: grid; gap: 6px; padding: 0 12px 10px; }
+.attachments[data-visible="false"] { display: none; }
+.attachment { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
+.attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-status { color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+.attachment-status[data-status="uploaded"] { color: var(--vscode-testing-iconPassed); }
+.attachment-status[data-status="error"] { color: var(--vscode-errorForeground); }
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border-top: 1px solid var(--vscode-panel-border); }
 button { border: 1px solid var(--vscode-button-border, transparent); color: var(--vscode-button-foreground); background: var(--vscode-button-background); padding: 5px 10px; border-radius: 4px; cursor: pointer; }
 button:hover { background: var(--vscode-button-hoverBackground); }
@@ -271,9 +515,11 @@ button:disabled { opacity: 0.55; cursor: default; }
   <main class="body">
     <textarea data-composer-input aria-label="Prompt text" placeholder="Prompt"></textarea>
   </main>
+  ${attachments}
   <footer class="actions">
     <button type="button" data-action="send">Send</button>
     <button type="button" class="secondary" data-action="insert">Insert</button>
+    <button type="button" class="secondary" data-action="attach">Attach</button>
     <button type="button" class="secondary" data-action="restore-failed-draft"${model.status.failedDraft ? '' : ' disabled'}>Restore Failed Draft</button>
     <span class="status" role="status" data-visible="${status.visible ? 'true' : 'false'}">${status.html}</span>
   </footer>
@@ -329,6 +575,16 @@ document.addEventListener('click', (event) => {
     submit(action);
     return;
   }
+  if (action === 'attach') {
+    persistDraft();
+    vscode.postMessage({ action: 'attach-files' });
+    return;
+  }
+  if (action === 'remove-attachment') {
+    persistDraft();
+    vscode.postMessage({ action, attachmentId: button.dataset.attachmentId });
+    return;
+  }
   if (action === 'restore-failed-draft') {
     insertText(renderedFailedDraft);
   }
@@ -360,6 +616,23 @@ function defaultTargetLabel(target: PromptComposerTarget): string {
     return `${target.agentType}: ${target.sessionId}`;
   }
   return target.paneId ? `tmux pane ${target.paneId}` : 'tmux active pane';
+}
+
+function renderAttachments(attachments: readonly PromptComposerAttachment[]): string {
+  if (attachments.length === 0) {
+    return '<section class="attachments" aria-label="Attachments" data-visible="false"></section>';
+  }
+  const rows = attachments.map((attachment) => {
+    const status = attachment.status === 'error' && attachment.error
+      ? `${attachment.status}: ${attachment.error}`
+      : attachment.status;
+    return `<div class="attachment" data-attachment-id="${escapeHtml(attachment.id)}">
+      <span class="attachment-name" title="${escapeHtml(attachment.displayName)}">${escapeHtml(attachment.displayName)}</span>
+      <span class="attachment-status" data-status="${escapeHtml(attachment.status)}" title="${escapeHtml(status)}">${escapeHtml(status)}</span>
+      <button type="button" class="secondary" data-action="remove-attachment" data-attachment-id="${escapeHtml(attachment.id)}">Remove</button>
+    </div>`;
+  }).join('');
+  return `<section class="attachments" aria-label="Attachments" data-visible="true">${rows}</section>`;
 }
 
 function renderStatus(status: PromptComposerStatus): { visible: boolean; html: string } {
@@ -407,6 +680,65 @@ function numberField(value: Record<string, unknown>, key: string): number | unde
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object';
+}
+
+function updatePromptComposerAttachment(
+  model: PromptComposerPanelModel,
+  attachmentId: string,
+  update: (attachment: PromptComposerAttachment) => PromptComposerAttachment,
+): PromptComposerPanelModel {
+  return {
+    ...model,
+    attachments: model.attachments.map((attachment) => (
+      attachment.id === attachmentId ? update(attachment) : attachment
+    )),
+  };
+}
+
+function uniqueAttachmentFileName(name: string, existingNames: ReadonlySet<string>): string {
+  if (!existingNames.has(name)) {
+    return name;
+  }
+  const dot = name.lastIndexOf('.');
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const extension = dot > 0 ? name.slice(dot) : '';
+  let index = 2;
+  let candidate = `${base}-${index}${extension}`;
+  while (existingNames.has(candidate)) {
+    index += 1;
+    candidate = `${base}-${index}${extension}`;
+  }
+  return candidate;
+}
+
+function buildPromptComposerAttachmentTargetKey(target: PromptComposerTarget): string {
+  if (target.kind === 'agent') {
+    return [
+      'agent',
+      target.hostId ?? 'unknown-host',
+      target.agentType,
+      target.sessionId,
+    ].join('-');
+  }
+  return [
+    'pane',
+    target.hostId ?? 'unknown-host',
+    target.entryId ?? 'unknown-entry',
+    target.paneId ?? 'active',
+  ].join('-');
+}
+
+function normalizeRemoteBaseDirectory(remoteHome?: string, baseDirectory?: string): string {
+  const base = (baseDirectory?.trim() || '.pocketshell/attachments').replace(/\/+$/, '');
+  if (base.startsWith('/') || base.startsWith('~')) {
+    return base;
+  }
+  const home = remoteHome?.trim().replace(/\/+$/, '');
+  return home ? `${home}/${base}` : `~/${base}`;
+}
+
+function basenameFromPath(value: string): string | undefined {
+  return value.split(/[\\/]/).filter(Boolean).pop();
 }
 
 function escapeHtml(value: string): string {

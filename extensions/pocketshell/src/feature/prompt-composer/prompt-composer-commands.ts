@@ -11,18 +11,31 @@ import type { FeatureDeps } from '../manifest';
 import { AgentMessenger } from '../../backend/agents/reply';
 import type { ConversationAttributionResult } from '../../backend/agents';
 import type { QuoteReplyPayload } from '../../backend/agents/conversation';
+import { SftpClient } from '../../backend/files/sftp-client';
 import {
+	addPromptComposerAttachments,
 	buildInitialPromptDraft,
 	buildPromptComposerDraftKey,
+	buildPromptComposerPromptText,
+	canResolvePromptComposerPaneHostFromTarget,
 	createPromptComposerPanelModel,
+	markPromptComposerAttachmentError,
+	markPromptComposerAttachmentUploaded,
+	markPromptComposerAttachmentUploading,
 	markPromptComposerFailed,
 	markPromptComposerInserted,
 	markPromptComposerInserting,
 	markPromptComposerSending,
 	markPromptComposerSent,
 	normalizePromptComposerOpenArgs,
+	planPromptComposerAttachmentRemotePath,
+	promptComposerPaneTargetsMatchRequest,
 	quoteTargetsPromptComposer,
+	removePromptComposerAttachment,
 	renderPromptComposerHtml,
+	resolvePromptComposerInsertTarget,
+	type PromptComposerAttachment,
+	type PromptComposerAttachmentInput,
 	type PromptComposerPaneTarget,
 	type PromptComposerPanelModel,
 	type PromptComposerTarget,
@@ -61,7 +74,7 @@ export function registerPromptComposer(
 				return undefined;
 			}
 
-			const target = await fillAgentHostId(service, resolved.target, element);
+			const target = await fillTargetHostId(service, resolved.target, element);
 			if (!target) {
 				return undefined;
 			}
@@ -121,9 +134,18 @@ function wirePanelMessages(
 	ctx: vscode.ExtensionContext,
 	entry: PromptComposerPanelEntry,
 ): void {
-	entry.panel.webview.onDidReceiveMessage(async (message: { action?: string; text?: string }) => {
+	entry.panel.webview.onDidReceiveMessage(async (message: { action?: string; text?: string; attachmentId?: string }) => {
 		if (message.action === 'draft-change') {
 			await ctx.workspaceState.update(entry.draftKey, message.text ?? '');
+			return;
+		}
+		if (message.action === 'attach-files') {
+			await attachFiles(service, entry);
+			return;
+		}
+		if (message.action === 'remove-attachment' && message.attachmentId) {
+			entry.model = removePromptComposerAttachment(entry.model, message.attachmentId);
+			renderPanel(entry);
 			return;
 		}
 		if (message.action === 'send') {
@@ -131,7 +153,7 @@ function wirePanelMessages(
 			return;
 		}
 		if (message.action === 'insert') {
-			await insertPrompt(entry, message.text ?? '');
+			await insertPrompt(service, entry, message.text ?? '');
 		}
 	});
 }
@@ -142,8 +164,9 @@ async function sendPrompt(
 	entry: PromptComposerPanelEntry,
 	text: string,
 ): Promise<void> {
-	if (!text.trim()) {
-		entry.model = markPromptComposerFailed(entry.model, 'Prompt must not be empty', text);
+	await uploadPendingAttachments(service, entry);
+	const promptText = buildPromptTextOrFail(entry, text);
+	if (promptText === undefined) {
 		renderPanel(entry);
 		return;
 	}
@@ -163,14 +186,14 @@ async function sendPrompt(
 			const result = await new AgentMessenger(connection).send(
 				entry.model.target.sessionId,
 				entry.model.target.agentType,
-				text,
+				promptText,
 			);
 			if (!result.success) {
 				throw new Error(result.error ?? 'Unknown send failure');
 			}
 		} else {
 			const sent = await vscode.commands.executeCommand<boolean>('pocketshell.tmux-ui.sendTextToPane', entry.model.target, {
-				text,
+				text: promptText,
 				submit: true,
 			});
 			if (sent !== true) {
@@ -185,9 +208,17 @@ async function sendPrompt(
 	renderPanel(entry);
 }
 
-async function insertPrompt(entry: PromptComposerPanelEntry, text: string): Promise<void> {
-	if (!text.trim()) {
-		entry.model = markPromptComposerFailed(entry.model, 'Prompt must not be empty', text);
+async function insertPrompt(service: ConnectionService, entry: PromptComposerPanelEntry, text: string): Promise<void> {
+	const insertResolution = resolvePromptComposerInsertTarget(entry.model.target, entry.insertTarget);
+	if (!insertResolution.target) {
+		entry.model = markPromptComposerFailed(entry.model, insertResolution.error ?? 'Insert target is not available', text);
+		renderPanel(entry);
+		return;
+	}
+
+	await uploadPendingAttachments(service, entry);
+	const promptText = buildPromptTextOrFail(entry, text);
+	if (promptText === undefined) {
 		renderPanel(entry);
 		return;
 	}
@@ -195,9 +226,8 @@ async function insertPrompt(entry: PromptComposerPanelEntry, text: string): Prom
 	entry.model = markPromptComposerInserting(entry.model);
 	renderPanel(entry);
 	try {
-		const target = entry.model.target.kind === 'pane' ? entry.model.target : entry.insertTarget;
-		const inserted = await vscode.commands.executeCommand<boolean>('pocketshell.tmux-ui.sendTextToPane', target, {
-			text,
+		const inserted = await vscode.commands.executeCommand<boolean>('pocketshell.tmux-ui.sendTextToPane', insertResolution.target, {
+			text: promptText,
 			submit: false,
 		});
 		if (inserted !== true) {
@@ -208,6 +238,134 @@ async function insertPrompt(entry: PromptComposerPanelEntry, text: string): Prom
 		entry.model = markPromptComposerFailed(entry.model, errorMessage(err), text);
 	}
 	renderPanel(entry);
+}
+
+async function attachFiles(service: ConnectionService, entry: PromptComposerPanelEntry): Promise<void> {
+	const uris = await vscode.window.showOpenDialog({
+		canSelectFiles: true,
+		canSelectFolders: false,
+		canSelectMany: true,
+		openLabel: vscode.l10n.t('Attach'),
+		title: vscode.l10n.t('Attach files to prompt'),
+	});
+	if (!uris?.length) {
+		return;
+	}
+
+	const files = await Promise.all(uris.map(async (uri): Promise<PromptComposerAttachmentInput> => {
+		let size: number | undefined;
+		try {
+			size = (await vscode.workspace.fs.stat(uri)).size;
+		} catch {
+			size = undefined;
+		}
+		return {
+			id: createAttachmentId(),
+			localPath: uri.fsPath,
+			displayName: uri.path.split('/').filter(Boolean).pop() ?? uri.fsPath,
+			size,
+		};
+	}));
+	entry.model = addPromptComposerAttachments(entry.model, files);
+	renderPanel(entry);
+	await uploadPendingAttachments(service, entry);
+}
+
+async function uploadPendingAttachments(service: ConnectionService, entry: PromptComposerPanelEntry): Promise<void> {
+	const pending = entry.model.attachments.filter((attachment) => (
+		attachment.status === 'staged' || attachment.status === 'error'
+	));
+	if (pending.length === 0) {
+		return;
+	}
+
+	const hostId = entry.model.target.hostId;
+	if (hostId === undefined) {
+		const message = entry.model.target.kind === 'pane'
+			? 'No connected host is available for this tmux pane'
+			: 'No connected host is available for this agent session';
+		for (const attachment of pending) {
+			entry.model = markPromptComposerAttachmentError(entry.model, attachment.id, message);
+		}
+		renderPanel(entry);
+		return;
+	}
+
+	try {
+		const connection = await getOrConnect(service, hostId);
+		if (!connection) {
+			for (const attachment of pending) {
+				entry.model = markPromptComposerAttachmentError(entry.model, attachment.id, 'SSH connection is not active');
+			}
+			renderPanel(entry);
+			return;
+		}
+
+		const sftp = new SftpClient(connection);
+		try {
+			await sftp.connect();
+			const remoteHome = await sftp.realpath('.');
+			for (const attachment of pending) {
+				await uploadAttachment(entry, sftp, remoteHome, attachment);
+			}
+		} finally {
+			sftp.disconnect();
+		}
+	} catch (err) {
+		for (const attachment of pending) {
+			entry.model = markPromptComposerAttachmentError(entry.model, attachment.id, errorMessage(err));
+		}
+		renderPanel(entry);
+	}
+}
+
+async function uploadAttachment(
+	entry: PromptComposerPanelEntry,
+	sftp: SftpClient,
+	remoteHome: string,
+	attachment: PromptComposerAttachment,
+): Promise<void> {
+	const plan = planPromptComposerAttachmentRemotePath(entry.model.target, attachment, { remoteHome });
+	entry.model = markPromptComposerAttachmentUploading(entry.model, attachment.id, plan.remotePath);
+	renderPanel(entry);
+	try {
+		await ensureRemoteDirectory(sftp, plan.stagingDirectory);
+		const data = await vscode.workspace.fs.readFile(vscode.Uri.file(attachment.localPath));
+		await sftp.writeFile(plan.remotePath, Buffer.from(data));
+		entry.model = markPromptComposerAttachmentUploaded(entry.model, attachment.id, plan.remotePath);
+	} catch (err) {
+		entry.model = markPromptComposerAttachmentError(entry.model, attachment.id, errorMessage(err));
+	}
+	renderPanel(entry);
+}
+
+async function ensureRemoteDirectory(sftp: SftpClient, remoteDirectory: string): Promise<void> {
+	const isAbsolute = remoteDirectory.startsWith('/');
+	const parts = remoteDirectory.split('/').filter(Boolean);
+	let current = isAbsolute ? '' : '.';
+	for (const part of parts) {
+		current = current === ''
+			? `/${part}`
+			: `${current.replace(/\/$/, '')}/${part}`;
+		if (await sftp.exists(current)) {
+			continue;
+		}
+		await sftp.mkdir(current);
+	}
+}
+
+function buildPromptTextOrFail(entry: PromptComposerPanelEntry, text: string): string | undefined {
+	try {
+		const promptText = buildPromptComposerPromptText(text, entry.model.attachments);
+		if (!promptText.trim()) {
+			entry.model = markPromptComposerFailed(entry.model, 'Prompt must not be empty', text);
+			return undefined;
+		}
+		return promptText;
+	} catch (err) {
+		entry.model = markPromptComposerFailed(entry.model, errorMessage(err), text);
+		return undefined;
+	}
 }
 
 async function resolveDefaultComposerTarget(element: unknown): Promise<ResolvedPromptComposerTarget | undefined> {
@@ -237,13 +395,21 @@ async function resolveDefaultComposerTarget(element: unknown): Promise<ResolvedP
 	return paneTarget ? { target: paneTarget, insertTarget: paneTarget } : undefined;
 }
 
-async function fillAgentHostId(
+async function fillTargetHostId(
 	service: ConnectionService,
 	target: PromptComposerTarget,
 	element: unknown,
 ): Promise<PromptComposerTarget | undefined> {
-	if (target.kind !== 'agent' || target.hostId !== undefined) {
+	if (target.hostId !== undefined) {
 		return target;
+	}
+	if (target.kind === 'pane') {
+		const resolved = await resolvePaneTargetHostId(target);
+		if (!resolved) {
+			void vscode.window.showWarningMessage(vscode.l10n.t('Open the prompt composer from a known tmux pane before attaching files.'));
+			return undefined;
+		}
+		return resolved;
 	}
 	const hostId = await resolveHostId(service, element, { connectedOnly: true });
 	if (hostId === undefined) {
@@ -254,6 +420,26 @@ async function fillAgentHostId(
 		...target,
 		hostId,
 		panelKey: target.panelKey ?? `${hostId}:${target.agentType}:${target.sessionId}`,
+	};
+}
+
+async function resolvePaneTargetHostId(target: PromptComposerPaneTarget): Promise<PromptComposerPaneTarget | undefined> {
+	if (!canResolvePromptComposerPaneHostFromTarget(target)) {
+		return undefined;
+	}
+	const resolved = await vscode.commands.executeCommand<PromptComposerPaneTarget | undefined>(
+		'pocketshell.tmux-ui.getPromptComposerPaneTarget',
+		target,
+	);
+	if (!resolved || resolved.hostId === undefined || !promptComposerPaneTargetsMatchRequest(target, resolved)) {
+		return undefined;
+	}
+	return {
+		...target,
+		hostId: resolved.hostId,
+		entryId: target.entryId ?? resolved.entryId,
+		paneId: target.paneId ?? resolved.paneId,
+		label: target.label ?? resolved.label,
 	};
 }
 
@@ -287,4 +473,8 @@ function errorMessage(err: unknown): string {
 
 function createNonce(): string {
 	return randomBytes(16).toString('base64');
+}
+
+function createAttachmentId(): string {
+	return `att-${Date.now().toString(36)}-${randomBytes(6).toString('hex')}`;
 }

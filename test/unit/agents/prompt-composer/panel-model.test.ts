@@ -1,15 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addPromptComposerAttachments,
   appendPromptComposerText,
+  buildPromptComposerAttachmentContext,
   buildInitialPromptDraft,
   buildPromptComposerDraftKey,
+  buildPromptComposerPromptText,
+  canResolvePromptComposerPaneHostFromTarget,
   createPromptComposerPanelModel,
+  findPromptComposerAttachmentSendBlocker,
+  markPromptComposerAttachmentError,
+  markPromptComposerAttachmentUploaded,
+  markPromptComposerAttachmentUploading,
   markPromptComposerFailed,
   markPromptComposerSent,
   normalizePromptComposerOpenArgs,
   persistPromptComposerDraftState,
+  planPromptComposerAttachmentRemotePath,
+  promptComposerPaneTargetsMatchRequest,
   quoteTargetsPromptComposer,
+  removePromptComposerAttachment,
   renderPromptComposerHtml,
+  resolvePromptComposerInsertTarget,
+  sanitizePromptComposerFileName,
+  sanitizePromptComposerTargetFragment,
   shouldClearPromptComposerDraft,
 } from '../../../../src/agents/prompt-composer';
 
@@ -146,5 +160,175 @@ describe('prompt composer panel model', () => {
     expect(failed.clearDraftToken).toBe(0);
     expect(failed.status.failedDraft).toBe('draft');
     expect(renderPromptComposerHtml(failed)).toContain('network down');
+  });
+
+  it('sanitizes attachment filenames and target fragments for remote staging paths', () => {
+    expect(sanitizePromptComposerFileName('../a file?.txt')).toBe('a_file_.txt');
+    expect(sanitizePromptComposerFileName('..')).toBe('attachment');
+    expect(sanitizePromptComposerTargetFragment('pane:1:%4/../../x')).toBe('pane-1-4-x');
+
+    const plan = planPromptComposerAttachmentRemotePath({
+      kind: 'agent',
+      hostId: 7,
+      agentType: 'codex',
+      sessionId: 'session/with spaces',
+    }, { name: '../context.md' }, { remoteHome: '/home/dev' });
+
+    expect(plan).toEqual({
+      targetFragment: 'agent-7-codex-session-with-spaces',
+      stagingDirectory: '/home/dev/.pocketshell/attachments/agent-7-codex-session-with-spaces',
+      remotePath: '/home/dev/.pocketshell/attachments/agent-7-codex-session-with-spaces/context.md',
+      filename: 'context.md',
+    });
+  });
+
+  it('stages, updates, removes, and preserves prompt attachments with failed drafts', () => {
+    const model = createPromptComposerPanelModel({
+      kind: 'pane',
+      hostId: 2,
+      entryId: 'tmux-ui-1',
+      paneId: '%1',
+    }, 'draft');
+    const staged = addPromptComposerAttachments(model, [
+      { id: 'a1', localPath: '/tmp/report.txt', displayName: 'report.txt', size: 12 },
+      { id: 'a2', localPath: '/tmp/other/report.txt', displayName: 'report.txt' },
+    ]);
+    const uploading = markPromptComposerAttachmentUploading(staged, 'a1', '/remote/report.txt');
+    const uploaded = markPromptComposerAttachmentUploaded(uploading, 'a1', '/remote/report.txt');
+    const failed = markPromptComposerAttachmentError(uploaded, 'a2', 'disk full');
+    const failedPrompt = markPromptComposerFailed(failed, 'Attachment upload failed', 'draft text');
+    const removed = removePromptComposerAttachment(failedPrompt, 'a2');
+
+    expect(staged.attachments.map((attachment) => attachment.name)).toEqual(['report.txt', 'report-2.txt']);
+    expect(uploading.attachments[0]).toMatchObject({ status: 'uploading', remotePath: '/remote/report.txt' });
+    expect(uploaded.attachments[0]).toMatchObject({ status: 'uploaded', error: undefined });
+    expect(failed.attachments[1]).toMatchObject({ status: 'error', error: 'disk full' });
+    expect(failedPrompt.status.failedDraft).toBe('draft text');
+    expect(failedPrompt.attachments).toHaveLength(2);
+    expect(removed.attachments).toHaveLength(1);
+    expect(removed.initialDraft).toBe('draft');
+  });
+
+  it('builds prompt attachment context and blocks pending or failed attachments', () => {
+    const model = addPromptComposerAttachments(createPromptComposerPanelModel({
+      kind: 'agent',
+      hostId: 1,
+      agentType: 'claude',
+      sessionId: 's1',
+    }), [
+      { id: 'a1', localPath: '/tmp/a.txt', displayName: 'a.txt' },
+      { id: 'a2', localPath: '/tmp/b.txt', displayName: 'b.txt' },
+    ]);
+    const oneUploaded = markPromptComposerAttachmentUploaded(model, 'a1', '/home/dev/.pocketshell/attachments/t/a.txt');
+    const failed = markPromptComposerAttachmentError(oneUploaded, 'a2', 'permission denied');
+    const uploadedOnly = oneUploaded.attachments.filter((attachment) => attachment.id === 'a1');
+
+    expect(buildPromptComposerAttachmentContext(oneUploaded.attachments)).toBe(
+      'Attached files are available on the remote host:\n- a.txt: /home/dev/.pocketshell/attachments/t/a.txt',
+    );
+    expect(findPromptComposerAttachmentSendBlocker(oneUploaded.attachments)).toBe('Attachment b.txt is not uploaded yet');
+    expect(findPromptComposerAttachmentSendBlocker(failed.attachments)).toBe(
+      'Attachment upload failed for b.txt: permission denied',
+    );
+    expect(() => buildPromptComposerPromptText('Use these', oneUploaded.attachments)).toThrow('not uploaded yet');
+    expect(() => buildPromptComposerPromptText('Use these', failed.attachments)).toThrow('permission denied');
+    expect(buildPromptComposerPromptText('Use these', uploadedOnly)).toBe(
+      'Use these\n\nAttached files are available on the remote host:\n- a.txt: /home/dev/.pocketshell/attachments/t/a.txt',
+    );
+  });
+
+  it('renders attachment controls and upload states in the webview contract', () => {
+    const model = markPromptComposerAttachmentError(
+      addPromptComposerAttachments(createPromptComposerPanelModel({
+        kind: 'agent',
+        hostId: 1,
+        agentType: 'codex',
+        sessionId: 's1',
+      }), [
+        { id: 'a1', localPath: '/tmp/<bad>.txt', displayName: '<bad>.txt' },
+      ]),
+      'a1',
+      'upload failed',
+    );
+    const html = renderPromptComposerHtml(model);
+
+    expect(html).toContain('data-action="attach"');
+    expect(html).toContain('data-action="remove-attachment"');
+    expect(html).toContain('&lt;bad&gt;.txt');
+    expect(html).toContain('error: upload failed');
+    expect(html).toContain("vscode.postMessage({ action: 'attach-files' })");
+  });
+
+  it('requires pane host resolution from a tmux entry before attachment upload', () => {
+    expect(canResolvePromptComposerPaneHostFromTarget({
+      kind: 'pane',
+      paneId: '%1',
+    })).toBe(false);
+    expect(canResolvePromptComposerPaneHostFromTarget({
+      kind: 'pane',
+      entryId: 'tmux-ui-1',
+      paneId: '%1',
+    })).toBe(true);
+    expect(promptComposerPaneTargetsMatchRequest({
+      kind: 'pane',
+      entryId: 'tmux-ui-1',
+      paneId: '%1',
+    }, {
+      kind: 'pane',
+      hostId: 1,
+      entryId: 'tmux-ui-1',
+      paneId: '%1',
+    })).toBe(true);
+    expect(promptComposerPaneTargetsMatchRequest({
+      kind: 'pane',
+      entryId: 'tmux-ui-1',
+      paneId: '%1',
+    }, {
+      kind: 'pane',
+      hostId: 2,
+      entryId: 'tmux-ui-2',
+      paneId: '%1',
+    })).toBe(false);
+  });
+
+  it('requires agent insert targets to be known same-host panes', () => {
+    const agentTarget = {
+      kind: 'agent' as const,
+      hostId: 1,
+      agentType: 'codex' as const,
+      sessionId: 's1',
+    };
+
+    expect(resolvePromptComposerInsertTarget(agentTarget)).toEqual({
+      error: 'Insert requires a tmux pane opened from the same host as this agent session',
+    });
+    expect(resolvePromptComposerInsertTarget(agentTarget, {
+      kind: 'pane',
+      hostId: 2,
+      entryId: 'tmux-ui-2',
+      paneId: '%2',
+    })).toEqual({
+      error: 'Insert target must be on the same host as this agent session',
+    });
+    expect(resolvePromptComposerInsertTarget(agentTarget, {
+      kind: 'pane',
+      hostId: 1,
+      entryId: 'tmux-ui-1',
+      paneId: '%1',
+    })).toEqual({
+      target: {
+        kind: 'pane',
+        hostId: 1,
+        entryId: 'tmux-ui-1',
+        paneId: '%1',
+      },
+    });
+    expect(resolvePromptComposerInsertTarget({
+      kind: 'pane',
+      entryId: 'tmux-ui-1',
+      paneId: '%1',
+    })).toEqual({
+      error: 'No connected host is available for this tmux pane',
+    });
   });
 });
