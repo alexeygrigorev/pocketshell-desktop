@@ -38,6 +38,10 @@
 				"title": "PocketShell: Add Host"
 			},
 			{
+				"command": "pocketshell.importSshConfig",
+				"title": "PocketShell: Import SSH Config"
+			},
+			{
 				"command": "pocketshell.disconnect",
 				"title": "PocketShell: Disconnect"
 			},

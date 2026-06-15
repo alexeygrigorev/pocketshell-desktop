@@ -11,6 +11,8 @@ import { SftpFsProvider } from './sftp-fs-provider';
 import { HostTreeProvider } from './host-tree-provider';
 import { pickHost, resolveHostId, getOrConnect } from './host-picking';
 import { FEATURES, type FeatureDeps } from './feature';
+import { createSshConfigImportPlan, type SshConfigImportCandidate, type SshConfigImportSkipped } from './backend/ssh/data/ssh-config-import';
+import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
 
 /**
@@ -208,6 +210,98 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 
 			treeProvider.refresh();
+		}),
+	);
+
+	// Import hosts from ~/.ssh/config
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pocketshell.importSshConfig', async () => {
+			const output = vscode.window.createOutputChannel('PocketShell SSH Import');
+			context.subscriptions.push(output);
+
+			let parsed: ReturnType<typeof parseSshConfig>;
+			try {
+				parsed = parseSshConfig();
+			} catch (err) {
+				vscode.window.showErrorMessage(
+					vscode.l10n.t('Failed to read SSH config: {0}', String(err)),
+				);
+				return;
+			}
+
+			if (parsed.length === 0) {
+				vscode.window.showInformationMessage(vscode.l10n.t('No hosts found in ~/.ssh/config.'));
+				return;
+			}
+
+			const existingHosts = await service.getHosts();
+			const plan = createSshConfigImportPlan(parsed, existingHosts);
+			reportSshImportSkipped(output, plan.skipped);
+
+			if (plan.importable.length === 0) {
+				const detail = plan.skipped.length > 0
+					? vscode.l10n.t('See "PocketShell SSH Import" output for skipped entries.')
+					: '';
+				vscode.window.showWarningMessage(
+					vscode.l10n.t('No importable SSH config hosts found. {0}', detail),
+				);
+				if (plan.skipped.length > 0) {
+					output.show(true);
+				}
+				return;
+			}
+
+			if (plan.skipped.length > 0) {
+				vscode.window.showWarningMessage(
+					vscode.l10n.t(
+						'Skipped {0} SSH config entr{1}. See "PocketShell SSH Import" output for details.',
+						String(plan.skipped.length),
+						plan.skipped.length === 1 ? 'y' : 'ies',
+					),
+				);
+			}
+
+			const items = plan.importable.map(candidate => ({
+				label: candidate.alias,
+				description: `${candidate.host.username}@${candidate.host.hostname}:${candidate.host.port}`,
+				detail: formatImportCandidateDetail(candidate),
+				candidate,
+				picked: true,
+			}));
+
+			const picked = await vscode.window.showQuickPick(items, {
+				canPickMany: true,
+				placeHolder: vscode.l10n.t('Select SSH config hosts to import'),
+			});
+			if (!picked || picked.length === 0) {
+				return;
+			}
+
+			let imported = 0;
+			for (const item of picked) {
+				try {
+					await service.addHost(item.candidate.host);
+					imported += 1;
+				} catch (err) {
+					output.appendLine(`Failed to import ${item.candidate.alias}: ${String(err)}`);
+				}
+			}
+
+			treeProvider.refresh();
+			if (imported === picked.length) {
+				vscode.window.showInformationMessage(
+					vscode.l10n.t('Imported {0} SSH config host{1}.', String(imported), imported === 1 ? '' : 's'),
+				);
+			} else {
+				output.show(true);
+				vscode.window.showWarningMessage(
+					vscode.l10n.t(
+						'Imported {0} of {1} selected SSH config hosts. See output for details.',
+						String(imported),
+						String(picked.length),
+					),
+				);
+			}
 		}),
 	);
 
@@ -427,3 +521,23 @@ export function activate(context: vscode.ExtensionContext): void {
 		dispose: () => service.dispose(),
 	});
 }
+
+function reportSshImportSkipped(
+	output: vscode.OutputChannel,
+	skipped: SshConfigImportSkipped[],
+): void {
+	output.clear();
+	if (skipped.length === 0) {
+		return;
+	}
+
+	output.appendLine('Skipped SSH config entries:');
+	for (const entry of skipped) {
+		const proxy = entry.proxyMetadata ? ` (${entry.proxyMetadata})` : '';
+		output.appendLine(`- ${entry.alias}: ${entry.reason}${proxy}`);
+	}
+}
+
+function formatImportCandidateDetail(candidate: SshConfigImportCandidate): string {
+	const key = `IdentityFile ${candidate.host.keyPath}`;
+	return candidate.proxyMetadata ? `${key}; ${candidate.proxyMetadata}` : key;

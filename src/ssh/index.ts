@@ -24,6 +24,13 @@ export {
   filterConcreteHosts,
 } from './data/ssh-config-parser';
 export type { SshConfigHost } from './data/ssh-config-parser';
+export { createSshConfigImportPlan } from './data/ssh-config-import';
+export type {
+  SshConfigImportCandidate,
+  SshConfigImportHost,
+  SshConfigImportPlan,
+  SshConfigImportSkipped,
+} from './data/ssh-config-import';
 
 // Connection layer
 export { SshClient, ConnectionPool } from './connection/ssh-client';

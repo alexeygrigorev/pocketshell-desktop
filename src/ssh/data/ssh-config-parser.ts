@@ -33,17 +33,26 @@ export interface SshConfigHost {
   /** The Host pattern (may include wildcards like `*`). */
   host: string;
 
+  /** Individual patterns from the Host line. */
+  patterns?: string[];
+
   /** Resolved hostname or IP. May be absent if only a Host alias is used. */
   hostname?: string;
 
   /** SSH port. Default is 22 if not specified. */
   port?: number;
 
+  /** Raw invalid port value, if a Port directive could not be parsed. */
+  invalidPort?: string;
+
   /** Remote username. */
   user?: string;
 
   /** Path to the identity (private key) file. */
   identityFile?: string;
+
+  /** All configured identity files, in config order. */
+  identityFiles?: string[];
 
   /** ProxyCommand, if set. */
   proxyCommand?: string;
@@ -123,7 +132,7 @@ export function parseSshConfigString(content: string): SshConfigHost[] {
       if (current) {
         hosts.push(current);
       }
-      current = { host: value, extra: {} };
+      current = { host: value, patterns: splitHostPatterns(value), extra: {} };
       continue;
     }
 
@@ -135,15 +144,20 @@ export function parseSshConfigString(content: string): SshConfigHost[] {
         current.hostname = value;
         break;
       case 'port':
-        current.port = parseInt(value, 10);
-        if (isNaN(current.port)) current.port = undefined;
+        current.port = parsePort(value);
+        if (current.port === undefined) {
+          current.port = undefined;
+          current.invalidPort = value;
+        }
         break;
       case 'user':
         current.user = value;
         break;
       case 'identityfile':
         // Resolve ~ to home directory
-        current.identityFile = expandPath(value);
+        current.identityFiles = current.identityFiles ?? [];
+        current.identityFiles.push(expandPath(value));
+        current.identityFile = current.identityFile ?? current.identityFiles[0];
         break;
       case 'proxycommand':
         current.proxyCommand = value;
@@ -217,6 +231,21 @@ function expandPath(p: string): string {
     return path.join(os.homedir(), p.slice(1));
   }
   return p;
+}
+
+function splitHostPatterns(value: string): string[] {
+  return value.split(/\s+/).map(pattern => pattern.trim()).filter(Boolean);
+}
+
+function parsePort(value: string): number | undefined {
+  if (!/^\d+$/.test(value)) {
+    return undefined;
+  }
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return undefined;
+  }
+  return port;
 }
 
 /**
