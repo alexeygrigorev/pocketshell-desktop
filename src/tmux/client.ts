@@ -26,6 +26,7 @@ export interface SshChannel {
 export interface TmuxClientOptions {
   sessionName: string;
   startDir?: string;
+  initialCommand?: string;
   createIfMissing?: boolean;
   commandTimeoutMs?: number;
 }
@@ -109,6 +110,9 @@ export class TmuxClient extends EventEmitter {
     if (this.options.startDir) {
       cmd += ` -c '${escapeSingleQuoted(this.options.startDir)}'`;
     }
+    if (this.options.initialCommand) {
+      cmd += ` '${escapeSingleQuoted(this.options.initialCommand)}'`;
+    }
     cmd += '\n';
 
     // Start reader loop (before writing, to avoid missing notifications)
@@ -182,6 +186,13 @@ export class TmuxClient extends EventEmitter {
   }
 
   /**
+   * Send literal text to a pane/session/window target, followed by Enter.
+   */
+  async sendKeysLiteral(target: string, text: string): Promise<CommandResponse> {
+    return this.enqueueCommand(`send-keys -t ${quoteTmuxArg(target)} -l ${quoteTmuxArg(text)} ; send-keys -t ${quoteTmuxArg(target)} Enter`);
+  }
+
+  /**
    * Resize a pane.
    * Reference: section 12
    */
@@ -243,6 +254,17 @@ export class TmuxClient extends EventEmitter {
    */
   async newWindow(sessionId?: string, name?: string, startDir?: string): Promise<CommandResponse> {
     let cmd = 'new-window';
+    if (sessionId) cmd += ` -t ${quoteTmuxArg(sessionId)}`;
+    if (name) cmd += ` -n ${quoteTmuxArg(name)}`;
+    if (startDir) cmd += ` -c ${quoteTmuxArg(startDir)}`;
+    return this.enqueueCommand(cmd);
+  }
+
+  /**
+   * Create a new window and print the new pane id.
+   */
+  async newWindowWithPaneId(sessionId?: string, name?: string, startDir?: string): Promise<CommandResponse> {
+    let cmd = 'new-window -P -F "#{pane_id}"';
     if (sessionId) cmd += ` -t ${quoteTmuxArg(sessionId)}`;
     if (name) cmd += ` -n ${quoteTmuxArg(name)}`;
     if (startDir) cmd += ` -c ${quoteTmuxArg(startDir)}`;

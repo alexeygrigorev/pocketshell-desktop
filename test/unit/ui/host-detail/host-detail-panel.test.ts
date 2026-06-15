@@ -54,7 +54,7 @@ describe('host detail panel', () => {
     expect(html).toContain('<strong>api</strong>');
     expect(html).toContain('/home/alice/git/api');
     expect(html).toContain('discovered');
-    expect(html).toContain('command:pocketshell.watchedFolders.openSession?');
+    expect(html).toContain('command:pocketshell.sessions.create?');
     expect(html).toContain('command:pocketshell.tmux.new?');
     expect(html).toContain('command:pocketshell.files.browse?');
     expect(html).toContain('command:pocketshell.git.status?');

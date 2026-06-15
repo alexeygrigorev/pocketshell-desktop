@@ -87,6 +87,18 @@
 				"icon": "$(terminal)"
 			},
 			{
+				"command": "pocketshell.sessions.create",
+				"title": "Sessions: Create Shell or Agent Session",
+				"category": "PocketShell",
+				"icon": "$(terminal-tmux)"
+			},
+			{
+				"command": "pocketshell.session.create",
+				"title": "Session: Create Shell or Agent Session",
+				"category": "PocketShell",
+				"icon": "$(terminal-tmux)"
+			},
+			{
 				"command": "pocketshell.addHost",
 				"title": "PocketShell: Add Host"
 			},

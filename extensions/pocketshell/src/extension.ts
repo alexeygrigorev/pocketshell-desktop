@@ -208,28 +208,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	context.subscriptions.push(
 		registerCommand('pocketshell.watchedFolders.openSession', async (element?: unknown) => {
-			const target = resolveWatchedFolderTarget(element);
-			const id = await resolveHostId(service, target?.hostId ?? element, { connectedOnly: false });
-			if (id === undefined) {
-				return;
-			}
-			const host = await service.getHost(id);
-			if (!host) {
-				vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'));
-				return;
-			}
-			const conn = await getOrConnect(service, id);
-			if (!conn) {
-				return;
-			}
-			const terminal = vscode.window.createTerminal({
-				name: `PocketShell: ${host.name || host.hostname}${target?.path ? ` ${target.path}` : ''}`,
-				pty: new SshPseudoterminal(conn, host.name || host.hostname, recordDiagnostics, {
-					cwd: target?.path,
-				}),
-				iconPath: new vscode.ThemeIcon('terminal'),
-			});
-			terminal.show();
+			await vscode.commands.executeCommand('pocketshell.sessions.create', element);
 		}),
 	);
 

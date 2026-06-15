@@ -313,7 +313,7 @@ function folderRow(hostId: number, folder: HostDetailFolder): HostDetailRow {
     detail: folder.path,
     meta: `${folder.source}${folder.enabled ? '' : ', disabled'}`,
     actions: [
-      { label: 'Session', command: 'pocketshell.watchedFolders.openSession', args: [target] },
+      { label: 'Session', command: 'pocketshell.sessions.create', args: [target] },
       { label: 'Create tmux', command: 'pocketshell.tmux.new', args: [target] },
       { label: 'Files', command: 'pocketshell.files.browse', args: [target] },
       { label: 'Env', command: 'pocketshell.env.list', args: [target] },

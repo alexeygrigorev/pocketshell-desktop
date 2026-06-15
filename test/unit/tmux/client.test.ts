@@ -252,6 +252,22 @@ describe('TmuxClient', () => {
     await quotedClient.close();
   });
 
+  it('can start a fresh session with an initial command in the first pane', async () => {
+    const initialCommandClient = new TmuxClient({
+      sessionName: 'agent session',
+      startDir: "/srv/prod app",
+      initialCommand: "pocketshell agent claude --dir '/srv/prod app'",
+      commandTimeoutMs: 2000,
+    });
+
+    await initialCommandClient.connect(channel);
+
+    const written = channel.written[0].toString('utf-8');
+    expect(written).toBe("tmux -CC new-session -A -s 'agent session' -c '/srv/prod app' 'pocketshell agent claude --dir '\\''/srv/prod app'\\'''\n");
+
+    await initialCommandClient.close();
+  });
+
   it('serializes commands (one at a time)', async () => {
     await client.connect(channel);
 
@@ -353,6 +369,39 @@ describe('TmuxClient', () => {
 
     const written = channel.written[1].toString('utf-8');
     expect(written).toBe('new-window -t "\\$1" -n "dev shell" -c "/srv/prod app"\n');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('can create a new window while printing the new pane id', async () => {
+    await client.connect(channel);
+
+    const command = client.newWindowWithPaneId('$1', 'claude', "/srv/prod app");
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    expect(written).toBe('new-window -P -F "#{pane_id}" -t "\\$1" -n "claude" -c "/srv/prod app"\n');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%7');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false, output: ['%7'] });
+
+    await client.close();
+  });
+
+  it('sends literal text to quoted targets before pressing Enter', async () => {
+    await client.connect(channel);
+
+    const command = client.sendKeysLiteral('prod session:claude', "pocketshell agent claude --dir '/srv/prod app'");
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    expect(written).toBe('send-keys -t "prod session:claude" -l "pocketshell agent claude --dir \'/srv/prod app\'" ; send-keys -t "prod session:claude" Enter\n');
 
     channel.stdoutReader.pushLine('%begin 1700000000 1 0');
     channel.stdoutReader.pushLine('%end 1700000000 1 0');
