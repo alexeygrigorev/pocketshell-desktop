@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import type { ConnectionService } from '../../connection-service';
 import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
-import { resolveHostId, getOrConnect } from '../../host-picking';
+import { resolveHostId, getOrConnect, resolveTargetPath } from '../../host-picking';
 import { SftpClient } from '../../backend/files/sftp-client';
 import { FileBrowser } from '../../backend/files/file-browser';
 import { RemoteFileWatcher } from '../../backend/files/file-watcher';
@@ -50,7 +50,8 @@ export function registerFiles(
 				return;
 			}
 
-			const startPath = await vscode.window.showInputBox({
+			const targetPath = resolveTargetPath(element);
+			const startPath = targetPath ?? await vscode.window.showInputBox({
 				prompt: vscode.l10n.t('Directory to browse'),
 				value: '~',
 			});
@@ -82,7 +83,8 @@ export function registerFiles(
 				return;
 			}
 
-			const watchPath = await vscode.window.showInputBox({
+			const targetPath = resolveTargetPath(element);
+			const watchPath = targetPath ?? await vscode.window.showInputBox({
 				prompt: vscode.l10n.t('Directory to watch'),
 				value: '~',
 			});

@@ -11,6 +11,7 @@ export const GIT_FEATURE: FeatureRegistration = {
 		commands: [
 			{ command: 'pocketshell.git.status', title: 'Git: Status', category: 'PocketShell', icon: '$(git-branch)' },
 			{ command: 'pocketshell.git.branches', title: 'Git: Branches', category: 'PocketShell' },
+			{ command: 'pocketshell.git.history', title: 'Git: History', category: 'PocketShell', icon: '$(history)' },
 			{ command: 'pocketshell.git.pull', title: 'Git: Pull', category: 'PocketShell', icon: '$(repo-pull)' },
 		],
 	},

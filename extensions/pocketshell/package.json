@@ -39,6 +39,54 @@
 				"icon": "$(server-environment)"
 			},
 			{
+				"command": "pocketshell.watchedFolders.manage",
+				"title": "Watched Folders: Manage",
+				"category": "PocketShell",
+				"icon": "$(folder-active)"
+			},
+			{
+				"command": "pocketshell.watchedFolders.add",
+				"title": "Watched Folders: Add",
+				"category": "PocketShell",
+				"icon": "$(add)"
+			},
+			{
+				"command": "pocketshell.watchedFolders.edit",
+				"title": "Watched Folders: Edit",
+				"category": "PocketShell",
+				"icon": "$(edit)"
+			},
+			{
+				"command": "pocketshell.watchedFolders.delete",
+				"title": "Watched Folders: Delete",
+				"category": "PocketShell",
+				"icon": "$(trash)"
+			},
+			{
+				"command": "pocketshell.watchedFolders.moveUp",
+				"title": "Watched Folders: Move Up",
+				"category": "PocketShell",
+				"icon": "$(arrow-up)"
+			},
+			{
+				"command": "pocketshell.watchedFolders.moveDown",
+				"title": "Watched Folders: Move Down",
+				"category": "PocketShell",
+				"icon": "$(arrow-down)"
+			},
+			{
+				"command": "pocketshell.watchedFolders.discover",
+				"title": "Watched Folders: Discover Project Roots",
+				"category": "PocketShell",
+				"icon": "$(search)"
+			},
+			{
+				"command": "pocketshell.watchedFolders.openSession",
+				"title": "Watched Folders: Open Session",
+				"category": "PocketShell",
+				"icon": "$(terminal)"
+			},
+			{
 				"command": "pocketshell.addHost",
 				"title": "PocketShell: Add Host"
 			},
@@ -120,6 +168,12 @@
 				"command": "pocketshell.git.branches",
 				"title": "Git: Branches",
 				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.git.history",
+				"title": "Git: History",
+				"category": "PocketShell",
+				"icon": "$(history)"
 			},
 			{
 				"command": "pocketshell.git.pull",

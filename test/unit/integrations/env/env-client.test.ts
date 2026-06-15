@@ -78,6 +78,24 @@ describe('EnvClient', () => {
       );
     });
 
+    it('uses folder path as scope when provided', async () => {
+      const responses = new Map<string, ExecResult>([
+        ['pocketshell env list', {
+          stdout: 'FOO=bar\n',
+          stderr: '',
+          exitCode: 0,
+        }],
+      ]);
+
+      const conn = createMockConnection(responses);
+      const client = new EnvClient(conn);
+      await client.list('/home/alice/git/api');
+
+      expect(conn.exec).toHaveBeenCalledWith(
+        "pocketshell env list --scope '/home/alice/git/api'",
+      );
+    });
+
     it('throws on non-zero exit code', async () => {
       const responses = new Map<string, ExecResult>([
         ['pocketshell env list', {

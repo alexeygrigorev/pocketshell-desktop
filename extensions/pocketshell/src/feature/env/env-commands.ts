@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 import type { ConnectionService } from '../../connection-service';
-import { resolveHostId, getOrConnect } from '../../host-picking';
+import { resolveHostId, getOrConnect, resolveTargetPath } from '../../host-picking';
 import { EnvClient } from '../../backend/integrations/env';
 import type { EnvVar } from '../../backend/integrations/env';
 import type { FeatureDeps } from '../manifest';
@@ -42,9 +42,11 @@ export function registerEnv(
 				return;
 			}
 
+			const scope = resolveTargetPath(element);
+
 			try {
-				const vars = await new EnvClient(conn).list();
-				renderVars(output, vars);
+				const vars = await new EnvClient(conn).list(scope);
+				renderVars(output, vars, scope);
 				output.show(true);
 			} catch (err) {
 				vscode.window.showErrorMessage(
@@ -164,8 +166,9 @@ export function registerEnv(
 function renderVars(
 	output: vscode.OutputChannel,
 	vars: EnvVar[],
+	scope?: string,
 ): void {
-	output.appendLine('# pocketshell env list');
+	output.appendLine(scope ? `# pocketshell env list — ${scope}` : '# pocketshell env list');
 	if (vars.length === 0) {
 		output.appendLine('(no variables)');
 		output.appendLine('');

@@ -5,9 +5,9 @@
 
 import * as vscode from 'vscode';
 import type { ConnectionService } from '../../connection-service';
-import { resolveHostId, getOrConnect } from '../../host-picking';
+import { resolveHostId, getOrConnect, resolveTargetPath } from '../../host-picking';
 import { GitClient } from '../../backend/git';
-import type { GitStatus, GitPullResult } from '../../backend/git';
+import type { GitStatus, GitPullResult, GitCommit } from '../../backend/git';
 import type { FeatureDeps } from '../manifest';
 
 /**
@@ -42,7 +42,7 @@ export function registerGit(
 				return;
 			}
 
-			const repoPath = await vscode.window.showInputBox({
+			const repoPath = resolveTargetPath(element) ?? await vscode.window.showInputBox({
 				prompt: 'Repository path',
 				value: '/home/',
 			});
@@ -76,7 +76,7 @@ export function registerGit(
 				return;
 			}
 
-			const repoPath = await vscode.window.showInputBox({
+			const repoPath = resolveTargetPath(element) ?? await vscode.window.showInputBox({
 				prompt: 'Repository path',
 				value: '/home/',
 			});
@@ -127,11 +127,11 @@ export function registerGit(
 	);
 
 	// -------------------------------------------------------------------------
-	// pocketshell.git.pull — mutate: pull upstream, then refresh trees
+	// pocketshell.git.history — read: render recent commit history
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.git.pull', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.git.history', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined) {
 				return;
 			}
@@ -140,7 +140,41 @@ export function registerGit(
 				return;
 			}
 
-			const repoPath = await vscode.window.showInputBox({
+			const repoPath = resolveTargetPath(element) ?? await vscode.window.showInputBox({
+				prompt: 'Repository path',
+				value: '/home/',
+			});
+			if (repoPath === undefined) {
+				return;
+			}
+
+			try {
+				const commits = await new GitClient(conn).log(repoPath, { maxCount: 25 });
+				renderHistory(output, repoPath, commits);
+				output.show(true);
+			} catch (err) {
+				vscode.window.showErrorMessage(
+					vscode.l10n.t('Git history failed: {0}', String(err)),
+				);
+			}
+		}),
+	);
+
+	// -------------------------------------------------------------------------
+	// pocketshell.git.pull — mutate: pull upstream, then refresh trees
+	// -------------------------------------------------------------------------
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.git.pull', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
+			if (hostId === undefined) {
+				return;
+			}
+			const conn = await getOrConnect(service, hostId);
+			if (conn === null) {
+				return;
+			}
+
+			const repoPath = resolveTargetPath(element) ?? await vscode.window.showInputBox({
 				prompt: 'Repository path',
 				value: '/home/',
 			});
@@ -203,6 +237,25 @@ function renderStatus(
 		for (const p of status.untracked) {
 			output.appendLine(`  ${p}`);
 		}
+	}
+	output.appendLine('');
+}
+
+/** Render recent commit history to the shared OutputChannel. */
+function renderHistory(
+	output: vscode.OutputChannel,
+	repoPath: string,
+	commits: GitCommit[],
+): void {
+	output.appendLine(`# git history — ${repoPath}`);
+	if (commits.length === 0) {
+		output.appendLine('(no commits)');
+		output.appendLine('');
+		return;
+	}
+	for (const commit of commits) {
+		const date = commit.date ? commit.date.slice(0, 10) : 'unknown-date';
+		output.appendLine(`${commit.shortHash}  ${date}  ${commit.author}  ${commit.subject}`);
 	}
 	output.appendLine('');
 }

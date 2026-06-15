@@ -7,6 +7,8 @@ import * as path from 'path';
 import * as os from 'os';
 import { HostStore, initStore } from './backend/ssh/data/host-store';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
+import { initWatchedFolderStore, type NewWatchedFolder, type WatchedFolder, type WatchedFolderStore, type WatchedFolderUpdate } from './backend/ssh/data/watched-folder-store';
+import { discoveredRootToWatchedFolder, discoverRemoteProjectRoots } from './backend/ssh/data/watched-folder-discovery';
 import { KeyStore, defaultKeysDir, hasPrivateKeyPassphrase, initKeyStore } from './backend/ssh/data/key-store';
 import { ConnectionManager } from './backend/ssh/connection/connection-manager';
 import { ConnectionState } from './backend/ssh/connection/connection-manager';
@@ -24,6 +26,7 @@ export class ConnectionService {
 	private static instance: ConnectionService | undefined;
 
 	private _hostStorePromise: Promise<HostStore | undefined> | undefined;
+	private _watchedFolderStorePromise: Promise<WatchedFolderStore | undefined> | undefined;
 	private _keyStorePromise: Promise<KeyStore | undefined> | undefined;
 	private _passphraseProvider: ((host: Host) => Promise<string | undefined>) | undefined;
 	private _diagnostics: ((input: DiagnosticRecordInput) => void) | undefined;
@@ -83,6 +86,20 @@ export class ConnectionService {
 			return undefined;
 		});
 		return this._keyStorePromise;
+	}
+
+	private ensureWatchedFolderStore(): Promise<WatchedFolderStore | undefined> {
+		if (this._watchedFolderStorePromise) {
+			return this._watchedFolderStorePromise;
+		}
+		const dbPath = this._storageDir
+			? path.join(this._storageDir, 'watched-folders.db')
+			: path.join(os.homedir(), '.pocketshell', 'watched-folders.db');
+		this._watchedFolderStorePromise = initWatchedFolderStore(dbPath).catch(err => {
+			console.error('[PocketShell] Failed to initialize watched folder database:', err);
+			return undefined;
+		});
+		return this._watchedFolderStorePromise;
 	}
 
 	/** Whether the host store is available (resolves after init attempt). */
@@ -167,6 +184,64 @@ export class ConnectionService {
 			throw new Error('Database not available');
 		}
 		return store.delete(id);
+	}
+
+	async getWatchedFolders(hostId: number): Promise<WatchedFolder[]> {
+		const store = await this.ensureWatchedFolderStore();
+		return store?.list(hostId) ?? [];
+	}
+
+	async getWatchedFolder(id: number): Promise<WatchedFolder | undefined> {
+		const store = await this.ensureWatchedFolderStore();
+		return store?.get(id);
+	}
+
+	async addWatchedFolder(folder: NewWatchedFolder): Promise<number> {
+		const store = await this.ensureWatchedFolderStore();
+		if (!store) {
+			throw new Error('Watched folder database not available');
+		}
+		return store.add(folder);
+	}
+
+	async updateWatchedFolder(id: number, patch: WatchedFolderUpdate): Promise<boolean> {
+		const store = await this.ensureWatchedFolderStore();
+		if (!store) {
+			throw new Error('Watched folder database not available');
+		}
+		return store.update(id, patch);
+	}
+
+	async deleteWatchedFolder(id: number): Promise<boolean> {
+		const store = await this.ensureWatchedFolderStore();
+		if (!store) {
+			throw new Error('Watched folder database not available');
+		}
+		return store.delete(id);
+	}
+
+	async moveWatchedFolder(id: number, direction: 'up' | 'down'): Promise<boolean> {
+		const store = await this.ensureWatchedFolderStore();
+		if (!store) {
+			throw new Error('Watched folder database not available');
+		}
+		return store.move(id, direction);
+	}
+
+	async discoverWatchedFolders(hostId: number): Promise<WatchedFolder[]> {
+		const store = await this.ensureWatchedFolderStore();
+		if (!store) {
+			throw new Error('Watched folder database not available');
+		}
+		const conn = this.getConnection(hostId);
+		if (!conn) {
+			throw new Error('Host is not connected. Connect first, then discover project roots.');
+		}
+		const discovered = await discoverRemoteProjectRoots(conn);
+		for (const root of discovered) {
+			store.add(discoveredRootToWatchedFolder(hostId, root));
+		}
+		return store.list(hostId);
 	}
 
 	// -- Connection operations --------------------------------------------------

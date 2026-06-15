@@ -7,6 +7,25 @@
 // Data layer
 export { HostStore, initStore, createHostStore } from './data/host-store';
 export type { Host, NewHost } from './data/host-store';
+export {
+  WatchedFolderStore,
+  initWatchedFolderStore,
+  createWatchedFolderStore,
+} from './data/watched-folder-store';
+export type {
+  NewWatchedFolder,
+  WatchedFolder,
+  WatchedFolderSource,
+  WatchedFolderUpdate,
+} from './data/watched-folder-store';
+export {
+  COMMON_REMOTE_ROOTS,
+  buildDiscoveryCommand,
+  discoveredRootToWatchedFolder,
+  discoverRemoteProjectRoots,
+  parseDiscoveryOutput,
+} from './data/watched-folder-discovery';
+export type { DiscoveredRemoteRoot } from './data/watched-folder-discovery';
 
 export {
   KeyStore,

@@ -24,9 +24,24 @@ export interface HostDetailAction {
   primary?: boolean;
 }
 
+export interface HostDetailFolder {
+  id: number;
+  label: string;
+  path: string;
+  source: 'manual' | 'discovered';
+  enabled: boolean;
+}
+
+export interface HostDetailRow {
+  label: string;
+  detail?: string;
+  meta?: string;
+  actions?: HostDetailAction[];
+}
+
 export interface HostDetailSection {
   title: string;
-  rows: string[];
+  rows: Array<string | HostDetailRow>;
   empty?: string;
   actions?: HostDetailAction[];
 }
@@ -42,6 +57,7 @@ export interface HostDetailModel {
 
 export interface HostDetailOptions {
   connectionState: string;
+  watchedFolders?: HostDetailFolder[];
   now?: number;
 }
 
@@ -102,11 +118,12 @@ export function buildHostDetailModel(
       },
       {
         title: 'Watched Folders',
-        rows: [],
-        empty: 'No watched folders are configured in this desktop workspace yet.',
+        rows: (options.watchedFolders ?? []).map((folder) => folderRow(host.id, folder)),
+        empty: 'No watched folders are configured in this desktop workspace yet. Add a folder or discover common remote roots.',
         actions: [
-          { label: 'Watch Directory', command: 'pocketshell.files.watch', args: [host.id] },
-          { label: 'Browse Files', command: 'pocketshell.files.browse', args: [host.id] },
+          { label: 'Add Folder', command: 'pocketshell.watchedFolders.add', args: [host.id] },
+          { label: 'Manage Folders', command: 'pocketshell.watchedFolders.manage', args: [host.id] },
+          { label: 'Discover Roots', command: 'pocketshell.watchedFolders.discover', args: [host.id] },
         ],
       },
       {
@@ -121,6 +138,23 @@ export function buildHostDetailModel(
           { label: 'Refresh', command: 'pocketshell.hostDetail.open', args: [host.id] },
         ],
       },
+    ],
+  };
+}
+
+function folderRow(hostId: number, folder: HostDetailFolder): HostDetailRow {
+  const target = { hostId, folderId: folder.id, path: folder.path };
+  return {
+    label: folder.label,
+    detail: folder.path,
+    meta: `${folder.source}${folder.enabled ? '' : ', disabled'}`,
+    actions: [
+      { label: 'Session', command: 'pocketshell.watchedFolders.openSession', args: [target] },
+      { label: 'Files', command: 'pocketshell.files.browse', args: [target] },
+      { label: 'Env', command: 'pocketshell.env.list', args: [target] },
+      { label: 'Git', command: 'pocketshell.git.status', args: [target] },
+      { label: 'History', command: 'pocketshell.git.history', args: [target] },
+      { label: 'Repo', command: 'pocketshell.git.branches', args: [target] },
     ],
   };
 }
@@ -199,6 +233,28 @@ export function renderHostDetailHtml(model: HostDetailModel): string {
     li {
       margin: 4px 0;
     }
+    .row-detail {
+      color: var(--vscode-descriptionForeground);
+      margin-left: 6px;
+    }
+    .row-meta {
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+      margin-left: 6px;
+    }
+    .row-actions {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-left: 8px;
+    }
+    a.row-action {
+      color: var(--vscode-textLink-foreground);
+      text-decoration: none;
+    }
+    a.row-action:hover {
+      text-decoration: underline;
+    }
     .empty {
       color: var(--vscode-descriptionForeground);
       margin-top: 8px;
@@ -232,8 +288,25 @@ function renderSection(section: HostDetailSection): string {
   </section>`;
 }
 
-function renderRows(rows: string[]): string {
-  return `<ul>${rows.map((row) => `<li>${escapeHtml(row)}</li>`).join('')}</ul>`;
+function renderRows(rows: Array<string | HostDetailRow>): string {
+  return `<ul>${rows.map(renderRow).join('')}</ul>`;
+}
+
+function renderRow(row: string | HostDetailRow): string {
+  if (typeof row === 'string') {
+    return `<li>${escapeHtml(row)}</li>`;
+  }
+  const detail = row.detail ? `<span class="row-detail">${escapeHtml(row.detail)}</span>` : '';
+  const meta = row.meta ? `<span class="row-meta">${escapeHtml(row.meta)}</span>` : '';
+  const actions = row.actions && row.actions.length > 0
+    ? `<span class="row-actions">${row.actions.map(renderRowAction).join('')}</span>`
+    : '';
+  return `<li><strong>${escapeHtml(row.label)}</strong>${detail}${meta}${actions}</li>`;
+}
+
+function renderRowAction(action: HostDetailAction): string {
+  const href = `command:${action.command}?${encodeURIComponent(JSON.stringify(action.args))}`;
+  return `<a class="row-action" href="${href}">${escapeHtml(action.label)}</a>`;
 }
 
 function renderActions(actions: HostDetailAction[]): string {

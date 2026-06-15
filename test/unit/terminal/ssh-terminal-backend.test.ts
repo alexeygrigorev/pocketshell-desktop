@@ -168,7 +168,7 @@ describe('SshTerminalBackend', () => {
       await new Promise((r) => setTimeout(r, 50));
 
       const written = Buffer.concat(chunks).toString('utf-8');
-      expect(written).toContain('cd /home/user/project');
+      expect(written).toContain("cd '/home/user/project'");
     });
 
     it('sends export commands when env is specified', async () => {

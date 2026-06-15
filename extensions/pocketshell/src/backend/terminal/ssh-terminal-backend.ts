@@ -153,7 +153,7 @@ export class SshTerminalBackend {
 
     // If a cwd was specified, send a cd command
     if (this.options.cwd) {
-      this.adapter.write(`cd ${this.options.cwd}\n`);
+      this.adapter.write(`cd ${quoteShellArg(this.options.cwd)}\n`);
     }
 
     // If env vars were specified, export them
@@ -263,4 +263,8 @@ export class SshTerminalBackend {
     this.onDataEmitter.dispose();
     this.onExitEmitter.dispose();
   }
+}
+
+function quoteShellArg(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }

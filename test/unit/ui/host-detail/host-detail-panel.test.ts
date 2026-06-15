@@ -36,6 +36,31 @@ describe('host detail panel', () => {
     expect(html).toContain('PocketShell CLI: installed (1.2.3)');
   });
 
+  it('renders watched folders with row actions', () => {
+    const model = buildHostDetailModel(host(), {
+      connectionState: 'Connected',
+      watchedFolders: [
+        {
+          id: 12,
+          label: 'api',
+          path: '/home/alice/git/api',
+          source: 'discovered',
+          enabled: true,
+        },
+      ],
+    });
+    const html = renderHostDetailHtml(model);
+
+    expect(html).toContain('<strong>api</strong>');
+    expect(html).toContain('/home/alice/git/api');
+    expect(html).toContain('discovered');
+    expect(html).toContain('command:pocketshell.watchedFolders.openSession?');
+    expect(html).toContain('command:pocketshell.files.browse?');
+    expect(html).toContain('command:pocketshell.git.status?');
+    expect(html).toContain('command:pocketshell.git.history?');
+    expect(html).toContain(encodeURIComponent(JSON.stringify([{ hostId: 7, folderId: 12, path: '/home/alice/git/api' }])));
+  });
+
   it('escapes host text in rendered html', () => {
     const html = renderHostDetailHtml(
       buildHostDetailModel({

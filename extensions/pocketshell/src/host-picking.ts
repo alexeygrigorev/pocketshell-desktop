@@ -71,7 +71,18 @@ export async function resolveHostId(
 	if (element && typeof element === 'object' && 'id' in element) {
 		return (element as { id: number }).id;
 	}
+	if (element && typeof element === 'object' && 'hostId' in element) {
+		return (element as { hostId: number }).hostId;
+	}
 	return opts.connectedOnly ? pickConnectedHost(service) : pickHost(service);
+}
+
+export function resolveTargetPath(element: unknown): string | undefined {
+	if (element && typeof element === 'object' && 'path' in element) {
+		const value = (element as { path: unknown }).path;
+		return typeof value === 'string' ? value : undefined;
+	}
+	return undefined;
 }
 
 /**

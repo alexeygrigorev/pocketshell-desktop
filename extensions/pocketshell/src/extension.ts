@@ -19,6 +19,7 @@ import { SettingsPanel, type SettingsStoreLike } from './backend/ui/settings/set
 import type { SettingDefinition } from './backend/ui/settings/settings-schema';
 import { buildHostDetailModel, renderHostDetailHtml } from './backend/ui/host-detail';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
+import type { WatchedFolder } from './backend/ssh/data/watched-folder-store';
 import type { SshKey } from './backend/ssh/data/key-store';
 import { assignManagedKeyToHost, createHostKeyAssignmentPlan } from './backend/ssh/data/key-assignment';
 import {
@@ -176,6 +177,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 			const model = buildHostDetailModel(host, {
 				connectionState: service.getState(id),
+				watchedFolders: await service.getWatchedFolders(id),
 			});
 			const title = vscode.l10n.t('PocketShell: {0}', model.title);
 
@@ -197,6 +199,160 @@ export function activate(context: vscode.ExtensionContext): void {
 			hostDetailPanel.title = title;
 			hostDetailPanel.webview.html = renderHostDetailHtml(model);
 			hostDetailPanel.reveal(vscode.ViewColumn.Active);
+		}),
+	);
+
+	context.subscriptions.push(
+		registerCommand('pocketshell.watchedFolders.openSession', async (element?: unknown) => {
+			const target = resolveWatchedFolderTarget(element);
+			const id = await resolveHostId(service, target?.hostId ?? element, { connectedOnly: false });
+			if (id === undefined) {
+				return;
+			}
+			const host = await service.getHost(id);
+			if (!host) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'));
+				return;
+			}
+			const conn = await getOrConnect(service, id);
+			if (!conn) {
+				return;
+			}
+			const terminal = vscode.window.createTerminal({
+				name: `PocketShell: ${host.name || host.hostname}${target?.path ? ` ${target.path}` : ''}`,
+				pty: new SshPseudoterminal(conn, host.name || host.hostname, recordDiagnostics, {
+					cwd: target?.path,
+				}),
+				iconPath: new vscode.ThemeIcon('terminal'),
+			});
+			terminal.show();
+		}),
+	);
+
+	context.subscriptions.push(
+		registerCommand('pocketshell.watchedFolders.add', async (element?: Host | number) => {
+			const id = await resolveHostId(service, element, { connectedOnly: false });
+			if (id === undefined) {
+				return;
+			}
+			const folder = await promptWatchedFolder();
+			if (!folder) {
+				return;
+			}
+			try {
+				await service.addWatchedFolder({ hostId: id, ...folder, source: 'manual', enabled: true });
+				await vscode.commands.executeCommand('pocketshell.hostDetail.open', id);
+			} catch (err) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to add watched folder: {0}', String(err)));
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		registerCommand('pocketshell.watchedFolders.edit', async (element?: unknown) => {
+			const folder = await pickWatchedFolder(service, element);
+			if (!folder) {
+				return;
+			}
+			const edited = await promptWatchedFolder(folder);
+			if (!edited) {
+				return;
+			}
+			try {
+				const updated = await service.updateWatchedFolder(folder.id, edited);
+				if (!updated) {
+					vscode.window.showWarningMessage(
+						vscode.l10n.t('That folder path is already watched on this host.'),
+					);
+					return;
+				}
+				await vscode.commands.executeCommand('pocketshell.hostDetail.open', folder.hostId);
+			} catch (err) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to edit watched folder: {0}', String(err)));
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		registerCommand('pocketshell.watchedFolders.delete', async (element?: unknown) => {
+			const folder = await pickWatchedFolder(service, element);
+			if (!folder) {
+				return;
+			}
+			const deleteLabel = vscode.l10n.t('Delete');
+			const confirm = await vscode.window.showWarningMessage(
+				vscode.l10n.t('Delete watched folder "{0}"?', folder.label),
+				{ modal: true },
+				deleteLabel,
+			);
+			if (confirm !== deleteLabel) {
+				return;
+			}
+			try {
+				await service.deleteWatchedFolder(folder.id);
+				await vscode.commands.executeCommand('pocketshell.hostDetail.open', folder.hostId);
+			} catch (err) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to delete watched folder: {0}', String(err)));
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		registerCommand('pocketshell.watchedFolders.moveUp', async (element?: unknown) => {
+			await moveWatchedFolder(service, element, 'up');
+		}),
+		registerCommand('pocketshell.watchedFolders.moveDown', async (element?: unknown) => {
+			await moveWatchedFolder(service, element, 'down');
+		}),
+	);
+
+	context.subscriptions.push(
+		registerCommand('pocketshell.watchedFolders.discover', async (element?: Host | number) => {
+			const id = await resolveHostId(service, element, { connectedOnly: false });
+			if (id === undefined) {
+				return;
+			}
+			try {
+				const folders = await vscode.window.withProgress(
+					{
+						location: vscode.ProgressLocation.Notification,
+						title: vscode.l10n.t('Discovering project roots...'),
+						cancellable: false,
+					},
+					() => service.discoverWatchedFolders(id),
+				);
+				vscode.window.showInformationMessage(
+					vscode.l10n.t('Watched folders updated ({0} total).', String(folders.length)),
+				);
+				await vscode.commands.executeCommand('pocketshell.hostDetail.open', id);
+			} catch (err) {
+				vscode.window.showErrorMessage(
+					vscode.l10n.t('Project root discovery failed: {0}', String(err)),
+				);
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		registerCommand('pocketshell.watchedFolders.manage', async (element?: Host | number) => {
+			const id = await resolveHostId(service, element, { connectedOnly: false });
+			if (id === undefined) {
+				return;
+			}
+			const action = await vscode.window.showQuickPick([
+				{ label: vscode.l10n.t('Add Folder'), command: 'pocketshell.watchedFolders.add' },
+				{ label: vscode.l10n.t('Edit Folder'), command: 'pocketshell.watchedFolders.edit' },
+				{ label: vscode.l10n.t('Delete Folder'), command: 'pocketshell.watchedFolders.delete' },
+				{ label: vscode.l10n.t('Move Folder Up'), command: 'pocketshell.watchedFolders.moveUp' },
+				{ label: vscode.l10n.t('Move Folder Down'), command: 'pocketshell.watchedFolders.moveDown' },
+				{ label: vscode.l10n.t('Discover Roots'), command: 'pocketshell.watchedFolders.discover' },
+			], {
+				placeHolder: vscode.l10n.t('Manage watched folders'),
+			});
+			if (!action) {
+				return;
+			}
+			await vscode.commands.executeCommand(action.command, id);
 		}),
 	);
 
@@ -917,6 +1073,110 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push({
 		dispose: () => service.dispose(),
 	});
+}
+
+interface WatchedFolderPromptResult {
+	label: string;
+	path: string;
+}
+
+interface WatchedFolderTarget {
+	hostId: number;
+	folderId?: number;
+	path?: string;
+}
+
+async function promptWatchedFolder(
+	existing?: WatchedFolder,
+): Promise<WatchedFolderPromptResult | undefined> {
+	const folderPath = await vscode.window.showInputBox({
+		prompt: vscode.l10n.t('Remote folder path'),
+		value: existing?.path ?? '~/git',
+	});
+	if (folderPath === undefined) {
+		return undefined;
+	}
+	const label = await vscode.window.showInputBox({
+		prompt: vscode.l10n.t('Watched folder label'),
+		value: existing?.label ?? labelFromRemotePath(folderPath),
+	});
+	if (label === undefined) {
+		return undefined;
+	}
+	return {
+		path: folderPath,
+		label: label || labelFromRemotePath(folderPath),
+	};
+}
+
+async function pickWatchedFolder(
+	service: ConnectionService,
+	element: unknown,
+): Promise<WatchedFolder | undefined> {
+	const target = resolveWatchedFolderTarget(element);
+	if (target?.folderId !== undefined) {
+		const folder = await service.getWatchedFolder(target.folderId);
+		if (folder) {
+			return folder;
+		}
+	}
+
+	const hostId = await resolveHostId(service, target?.hostId ?? element, { connectedOnly: false });
+	if (hostId === undefined) {
+		return undefined;
+	}
+	const folders = await service.getWatchedFolders(hostId);
+	if (folders.length === 0) {
+		vscode.window.showInformationMessage(vscode.l10n.t('No watched folders configured.'));
+		return undefined;
+	}
+	const picked = await vscode.window.showQuickPick(
+		folders.map((folder) => ({
+			label: folder.label,
+			description: folder.path,
+			detail: folder.source,
+			folder,
+		})),
+		{ placeHolder: vscode.l10n.t('Select a watched folder') },
+	);
+	return picked?.folder;
+}
+
+async function moveWatchedFolder(
+	service: ConnectionService,
+	element: unknown,
+	direction: 'up' | 'down',
+): Promise<void> {
+	const folder = await pickWatchedFolder(service, element);
+	if (!folder) {
+		return;
+	}
+	try {
+		await service.moveWatchedFolder(folder.id, direction);
+		await vscode.commands.executeCommand('pocketshell.hostDetail.open', folder.hostId);
+	} catch (err) {
+		vscode.window.showErrorMessage(vscode.l10n.t('Failed to move watched folder: {0}', String(err)));
+	}
+}
+
+function resolveWatchedFolderTarget(element: unknown): WatchedFolderTarget | undefined {
+	if (!element || typeof element !== 'object' || !('hostId' in element)) {
+		return undefined;
+	}
+	const value = element as { hostId: unknown; folderId?: unknown; path?: unknown };
+	if (typeof value.hostId !== 'number') {
+		return undefined;
+	}
+	return {
+		hostId: value.hostId,
+		folderId: typeof value.folderId === 'number' ? value.folderId : undefined,
+		path: typeof value.path === 'string' ? value.path : undefined,
+	};
+}
+
+function labelFromRemotePath(folderPath: string): string {
+	const parts = folderPath.replace(/\/+$/, '').split('/').filter(Boolean);
+	return parts[parts.length - 1] || folderPath;
 }
 
 function reportSshImportSkipped(

@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { SshTerminalBackend } from './backend/terminal/ssh-terminal-backend';
 import type { SshConnection } from './backend/ssh/connection/ssh-client';
 import type { DiagnosticRecordInput } from './backend/diagnostics';
+import type { TerminalOptions } from './backend/terminal/types';
 
 /**
  * VS Code Pseudoterminal backed by an SSH session.
@@ -27,6 +28,7 @@ export class SshPseudoterminal implements vscode.Pseudoterminal {
 		private readonly connection: SshConnection,
 		private readonly hostName: string,
 		private readonly diagnostics?: (input: DiagnosticRecordInput) => void,
+		private readonly options: Pick<TerminalOptions, 'cwd'> = {},
 	) {}
 
 	/**
@@ -46,6 +48,7 @@ export class SshPseudoterminal implements vscode.Pseudoterminal {
 		});
 		this.backend = new SshTerminalBackend(this.connection, {
 			name: this.hostName,
+			cwd: this.options.cwd,
 			cols: _initialDimensions?.columns,
 			rows: _initialDimensions?.rows,
 		});
