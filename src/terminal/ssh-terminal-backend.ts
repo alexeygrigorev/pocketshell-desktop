@@ -164,6 +164,10 @@ export class SshTerminalBackend {
       }
     }
 
+    if (this.options.initialCommand) {
+      this.adapter.write(`${this.options.initialCommand}\n`);
+    }
+
     this.started = true;
   }
 

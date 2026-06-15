@@ -9,7 +9,17 @@ import { resolveHostId, getOrConnect } from '../../host-picking';
 import { TmuxClient } from '../../backend/tmux/client';
 import type { CommandResponse } from '../../backend/tmux';
 import { SshShellBridge } from '../../backend/tmux/ssh-shell-bridge';
+import { SshPseudoterminal } from '../../ssh-terminal';
 import type { FeatureDeps } from '../manifest';
+
+interface TmuxCommandTarget {
+	hostId?: number;
+	folderId?: number;
+	path?: string;
+	sessionId?: string;
+	sessionName?: string;
+	windowId?: string;
+}
 
 /**
  * tmux feature: registers read / mutate commands that drive a remote
@@ -52,16 +62,17 @@ export function registerTmux(
 	// -------------------------------------------------------------------------
 	disposables.push(
 		vscode.commands.registerCommand('pocketshell.tmux.new', async (element?: unknown) => {
+			const target = resolveTmuxTarget(element);
 			const name = await vscode.window.showInputBox({
 				prompt: vscode.l10n.t('New tmux session name'),
-				value: 'pocketshell',
+				value: target?.path ? sessionNameFromPath(target.path) : 'pocketshell',
 			});
 			if (name === undefined) {
 				return;
 			}
 
 			const result = await withTmux(service, element, `new-session ${name}`, async (client) => {
-				return client.newSession(name);
+				return client.newSession(name, target?.path);
 			});
 			if (result === undefined) {
 				return;
@@ -74,7 +85,125 @@ export function registerTmux(
 				vscode.window.showInformationMessage(
 					vscode.l10n.t('Created tmux session {0}', name),
 				);
+				await refreshHostDetail(target);
 			}
+		}),
+	);
+
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.tmux.attach', async (element?: unknown) => {
+			const target = resolveTmuxTarget(element);
+			const hostId = await resolveHostId(service, target?.hostId ?? element, { connectedOnly: false });
+			if (hostId === undefined) {
+				return;
+			}
+			const host = await service.getHost(hostId);
+			if (!host) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'));
+				return;
+			}
+			const sessionTarget = target?.sessionId ?? target?.sessionName ?? await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('tmux session id or name to attach'),
+			});
+			if (!sessionTarget) {
+				return;
+			}
+			const conn = await getOrConnect(service, hostId);
+			if (!conn) {
+				return;
+			}
+			const terminal = vscode.window.createTerminal({
+				name: `tmux: ${target?.sessionName ?? sessionTarget}`,
+				pty: new SshPseudoterminal(conn, host.name || host.hostname, undefined, {
+					cwd: target?.path,
+					initialCommand: `tmux attach-session -t ${quoteShellArg(sessionTarget)}`,
+				}),
+				iconPath: new vscode.ThemeIcon('terminal-tmux'),
+			});
+			terminal.show();
+		}),
+	);
+
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.tmux.rename', async (element?: unknown) => {
+			const target = resolveTmuxTarget(element);
+			const sessionTarget = target?.sessionId ?? target?.sessionName ?? await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('tmux session id or name to rename'),
+			});
+			if (!sessionTarget) {
+				return;
+			}
+			const newName = await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('New tmux session name'),
+				value: target?.sessionName,
+			});
+			if (newName === undefined) {
+				return;
+			}
+			const result = await withTmux(service, element, `rename-session ${sessionTarget}`, async (client) => {
+				return client.renameSession(sessionTarget, newName);
+			});
+			if (result === undefined) {
+				return;
+			}
+			reportMutationResult('rename-session', result, vscode.l10n.t('Renamed tmux session to {0}', newName));
+			await refreshHostDetail(target, result);
+		}),
+	);
+
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.tmux.kill', async (element?: unknown) => {
+			const target = resolveTmuxTarget(element);
+			const sessionTarget = target?.sessionId ?? target?.sessionName ?? await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('tmux session id or name to kill'),
+			});
+			if (!sessionTarget) {
+				return;
+			}
+			const killLabel = vscode.l10n.t('Kill');
+			const confirm = await vscode.window.showWarningMessage(
+				vscode.l10n.t('Kill tmux session "{0}"?', target?.sessionName ?? sessionTarget),
+				{ modal: true },
+				killLabel,
+			);
+			if (confirm !== killLabel) {
+				return;
+			}
+			const result = await withTmux(service, element, `kill-session ${sessionTarget}`, async (client) => {
+				return client.killSession(sessionTarget);
+			});
+			if (result === undefined) {
+				return;
+			}
+			reportMutationResult('kill-session', result, vscode.l10n.t('Killed tmux session {0}', target?.sessionName ?? sessionTarget));
+			await refreshHostDetail(target, result);
+		}),
+	);
+
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.tmux.newWindow', async (element?: unknown) => {
+			const target = resolveTmuxTarget(element);
+			const sessionTarget = target?.sessionId ?? target?.sessionName ?? await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('Target tmux session id or name'),
+			});
+			if (!sessionTarget) {
+				return;
+			}
+			const name = await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('New tmux window name'),
+				value: target?.path ? sessionNameFromPath(target.path) : undefined,
+			});
+			if (name === undefined) {
+				return;
+			}
+			const result = await withTmux(service, element, `new-window ${sessionTarget}`, async (client) => {
+				return client.newWindow(sessionTarget, name || undefined, target?.path);
+			});
+			if (result === undefined) {
+				return;
+			}
+			reportMutationResult('new-window', result, vscode.l10n.t('Created tmux window in {0}', target?.sessionName ?? sessionTarget));
+			await refreshHostDetail(target, result);
 		}),
 	);
 
@@ -200,4 +329,49 @@ function renderResponse(
 		output.appendLine(line);
 	}
 	output.appendLine('');
+}
+
+function reportMutationResult(label: string, result: CommandResponse, successMessage: string): void {
+	if (result.isError) {
+		void vscode.window.showErrorMessage(
+			vscode.l10n.t('tmux {0} failed: {1}', label, result.output.join('\n')),
+		);
+		return;
+	}
+	void vscode.window.showInformationMessage(successMessage);
+}
+
+async function refreshHostDetail(target: TmuxCommandTarget | undefined, result?: CommandResponse): Promise<void> {
+	if (result?.isError || target?.hostId === undefined) {
+		return;
+	}
+	await vscode.commands.executeCommand('pocketshell.hostDetail.open', target.hostId);
+}
+
+function resolveTmuxTarget(element: unknown): TmuxCommandTarget | undefined {
+	if (!element || typeof element !== 'object') {
+		return undefined;
+	}
+	const value = element as Record<string, unknown>;
+	return {
+		hostId: typeof value.hostId === 'number' ? value.hostId : undefined,
+		folderId: typeof value.folderId === 'number' ? value.folderId : undefined,
+		path: typeof value.path === 'string' ? value.path : undefined,
+		sessionId: typeof value.sessionId === 'string' ? value.sessionId : undefined,
+		sessionName: typeof value.sessionName === 'string' ? value.sessionName : undefined,
+		windowId: typeof value.windowId === 'string' ? value.windowId : undefined,
+	};
+}
+
+function sessionNameFromPath(remotePath: string): string {
+	const parts = remotePath.replace(/\/+$/, '').split('/').filter(Boolean);
+	return sanitizeTmuxName(parts[parts.length - 1] || 'pocketshell');
+}
+
+function sanitizeTmuxName(value: string): string {
+	return value.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'pocketshell';
+}
+
+function quoteShellArg(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
 }

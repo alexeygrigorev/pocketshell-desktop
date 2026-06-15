@@ -286,4 +286,78 @@ describe('TmuxClient', () => {
 
     await client.close();
   });
+
+  it('refreshes pane cwd from extended list-panes output', async () => {
+    await client.connect(channel);
+
+    channel.stdoutReader.pushLine('%session-changed $0 test-session');
+    channel.stdoutReader.pushLine('%window-add @0');
+    await waitFor(() => client.getState().sessions.get('$0')?.windows.has('@0') === true);
+
+    const refresh = client.refreshState();
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    expect(written).toContain('#{pane_current_path}');
+    expect(written).toContain('#{session_name}');
+    expect(written).toContain('#{window_activity}');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%1\t@0\t$0\t120\t40\tserver\t0\t/home/alice/git/api\ttest-session\tmain\t1710000000\t1710000300');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+
+    const state = await refresh;
+    const pane = state.sessions.get('$0')?.windows.get('@0')?.panes.get('%1');
+    expect(pane?.cwd).toBe('/home/alice/git/api');
+
+    await client.close();
+  });
+
+  it('quotes rename-session targets with tmux-parser-safe double quotes', async () => {
+    await client.connect(channel);
+
+    const command = client.renameSession('prod session:1', 'new "prod"\\session');
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    expect(written).toBe('rename-session -t "prod session:1" "new \\"prod\\"\\\\session"\n');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('leaves apostrophes literal in tmux command arguments', async () => {
+    await client.connect(channel);
+
+    const command = client.renameSession('$0', "new prod's session");
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    expect(written).toBe('rename-session -t "\\$0" "new prod\'s session"\n');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('quotes new-window targets while preserving tmux id targets', async () => {
+    await client.connect(channel);
+
+    const command = client.newWindow('$1', 'dev shell', "/srv/prod app");
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    expect(written).toBe('new-window -t "\\$1" -n "dev shell" -c "/srv/prod app"\n');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
 });

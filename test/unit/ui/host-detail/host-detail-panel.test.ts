@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHostDetailModel, renderHostDetailHtml } from '../../../../src/ui/host-detail';
+import { buildHostDetailModel, buildHostDetailSessionGroups, renderHostDetailHtml } from '../../../../src/ui/host-detail';
 import type { HostDetailHost } from '../../../../src/ui/host-detail';
 
 describe('host detail panel', () => {
@@ -29,10 +29,10 @@ describe('host detail panel', () => {
     const model = buildHostDetailModel(host(), { connectionState: 'Idle' });
     const html = renderHostDetailHtml(model);
 
-    expect(html).toContain('Recent session data is not available yet');
+    expect(html).toContain('Connect to this host to load recent tmux sessions');
     expect(html).toContain('No watched folders are configured');
     expect(html).toContain('command:pocketshell.connect?%5B7%5D');
-    expect(html).toContain('command:pocketshell.tmux.new?%5B7%5D');
+    expect(html).toContain('command:pocketshell.tmux.new?%5B%7B%22hostId%22%3A7%7D%5D');
     expect(html).toContain('PocketShell CLI: installed (1.2.3)');
   });
 
@@ -55,6 +55,7 @@ describe('host detail panel', () => {
     expect(html).toContain('/home/alice/git/api');
     expect(html).toContain('discovered');
     expect(html).toContain('command:pocketshell.watchedFolders.openSession?');
+    expect(html).toContain('command:pocketshell.tmux.new?');
     expect(html).toContain('command:pocketshell.files.browse?');
     expect(html).toContain('command:pocketshell.git.status?');
     expect(html).toContain('command:pocketshell.git.history?');
@@ -74,7 +75,73 @@ describe('host detail panel', () => {
     expect(html).toContain('prod&amp;ops.example.com');
     expect(html).not.toContain('<prod>');
   });
+
+  it('groups tmux sessions by watched folder and recent activity', () => {
+    const groups = buildHostDetailSessionGroups([
+      pane('%1', '$1', 'api-dev', '@1', 'server', '/home/alice/git/api', 100),
+      pane('%2', '$2', 'docs', '@2', 'edit', '/home/alice/docs', 300),
+      pane('%3', '$3', 'api-test', '@3', 'test', '/home/alice/git/api/tests', 200),
+      pane('%4', '$4', 'mystery', '@4', 'shell', null, null),
+    ], [
+      { id: 10, label: 'git', path: '/home/alice/git', source: 'manual', enabled: true },
+      { id: 12, label: 'api', path: '/home/alice/git/api', source: 'discovered', enabled: true },
+    ]);
+
+    expect(groups.map((group) => [group.label, group.folderId, group.sessions.map((session) => session.name)])).toEqual([
+      ['Other Paths', undefined, ['docs']],
+      ['api', 12, ['api-test', 'api-dev']],
+      ['Unknown Folder', undefined, ['mystery']],
+    ]);
+  });
+
+  it('renders grouped tmux session actions with host detail target shape', () => {
+    const model = buildHostDetailModel(host(), {
+      connectionState: 'Connected',
+      watchedFolders: [
+        { id: 12, label: 'api', path: '/home/alice/git/api', source: 'discovered', enabled: true },
+      ],
+      tmuxPanes: [
+        pane('%1', '$1', 'api-dev', '@1', 'server', '/home/alice/git/api', 100),
+      ],
+    });
+    const html = renderHostDetailHtml(model);
+
+    expect(html).toContain('api (/home/alice/git/api)');
+    expect(html).toContain('<strong>api-dev</strong>');
+    expect(html).toContain('command:pocketshell.tmux.attach?');
+    expect(html).toContain('command:pocketshell.tmux.newWindow?');
+    expect(html).toContain('command:pocketshell.tmux.rename?');
+    expect(html).toContain('command:pocketshell.tmux.kill?');
+    expect(html).toContain(encodeURIComponent(JSON.stringify([{
+      hostId: 7,
+      folderId: 12,
+      path: '/home/alice/git/api',
+      sessionId: '$1',
+      sessionName: 'api-dev',
+      windowId: '@1',
+    }])));
+  });
 });
+
+function pane(
+  id: string,
+  sessionId: string,
+  sessionName: string,
+  windowId: string,
+  windowName: string,
+  cwd: string | null,
+  activity: number | null,
+) {
+  return {
+    id,
+    sessionId,
+    sessionName,
+    windowId,
+    windowName,
+    cwd,
+    activity,
+  };
+}
 
 function host(): HostDetailHost {
   return {

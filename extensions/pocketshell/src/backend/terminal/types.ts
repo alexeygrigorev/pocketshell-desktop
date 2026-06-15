@@ -21,6 +21,9 @@ export interface TerminalOptions {
   /** Environment variables to set on the remote shell. */
   env?: Record<string, string>;
 
+  /** Command to run after cwd/env setup. */
+  initialCommand?: string;
+
   /** Initial PTY columns (default 80). */
   cols?: number;
 

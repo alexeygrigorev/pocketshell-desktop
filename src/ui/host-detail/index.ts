@@ -7,4 +7,8 @@ export {
   type HostDetailModel,
   type HostDetailRow,
   type HostDetailSection,
+  type HostDetailSession,
+  type HostDetailSessionGroup,
+  type HostDetailTmuxPane,
+  buildHostDetailSessionGroups,
 } from './host-detail-panel';

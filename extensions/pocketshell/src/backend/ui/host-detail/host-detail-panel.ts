@@ -32,6 +32,35 @@ export interface HostDetailFolder {
   enabled: boolean;
 }
 
+export interface HostDetailTmuxPane {
+  id: string;
+  sessionId: string;
+  sessionName: string;
+  windowId: string;
+  windowName: string;
+  cwd: string | null;
+  activity: number | null;
+}
+
+export interface HostDetailSession {
+  id: string;
+  name: string;
+  cwd: string | null;
+  activity: number | null;
+  windows: Array<{
+    id: string;
+    name: string;
+  }>;
+}
+
+export interface HostDetailSessionGroup {
+  id: string;
+  label: string;
+  path?: string;
+  folderId?: number;
+  sessions: HostDetailSession[];
+}
+
 export interface HostDetailRow {
   label: string;
   detail?: string;
@@ -58,6 +87,8 @@ export interface HostDetailModel {
 export interface HostDetailOptions {
   connectionState: string;
   watchedFolders?: HostDetailFolder[];
+  tmuxPanes?: HostDetailTmuxPane[];
+  tmuxError?: string;
   now?: number;
 }
 
@@ -68,6 +99,11 @@ export function buildHostDetailModel(
   const title = host.name || host.hostname;
   const subtitle = `${host.username}@${host.hostname}:${host.port}`;
   const isConnected = options.connectionState === 'Connected';
+  const watchedFolders = options.watchedFolders ?? [];
+  const sessionGroups = buildHostDetailSessionGroups(options.tmuxPanes ?? [], watchedFolders);
+  const recentSessionRows = options.tmuxError
+    ? [`tmux sessions unavailable: ${options.tmuxError}`]
+    : sessionRows(host.id, sessionGroups);
 
   return {
     title,
@@ -109,16 +145,18 @@ export function buildHostDetailModel(
       },
       {
         title: 'Recent Sessions',
-        rows: [],
-        empty: 'Recent session data is not available yet. Use tmux sessions to list what is running on this host.',
+        rows: recentSessionRows,
+        empty: isConnected
+          ? 'No tmux sessions are running on this host.'
+          : 'Connect to this host to load recent tmux sessions.',
         actions: [
           { label: 'List tmux Sessions', command: 'pocketshell.tmux.list', args: [host.id] },
-          { label: 'Create tmux Session', command: 'pocketshell.tmux.new', args: [host.id] },
+          { label: 'Create tmux Session', command: 'pocketshell.tmux.new', args: [{ hostId: host.id }] },
         ],
       },
       {
         title: 'Watched Folders',
-        rows: (options.watchedFolders ?? []).map((folder) => folderRow(host.id, folder)),
+        rows: watchedFolders.map((folder) => folderRow(host.id, folder)),
         empty: 'No watched folders are configured in this desktop workspace yet. Add a folder or discover common remote roots.',
         actions: [
           { label: 'Add Folder', command: 'pocketshell.watchedFolders.add', args: [host.id] },
@@ -142,6 +180,132 @@ export function buildHostDetailModel(
   };
 }
 
+export function buildHostDetailSessionGroups(
+  panes: HostDetailTmuxPane[],
+  watchedFolders: HostDetailFolder[],
+): HostDetailSessionGroup[] {
+  const sessions = new Map<string, HostDetailSession & { paneCwds: string[] }>();
+
+  for (const pane of panes) {
+    const existing = sessions.get(pane.sessionId);
+    if (!existing) {
+      sessions.set(pane.sessionId, {
+        id: pane.sessionId,
+        name: pane.sessionName || pane.sessionId,
+        cwd: pane.cwd,
+        activity: pane.activity,
+        windows: [{ id: pane.windowId, name: pane.windowName || pane.windowId }],
+        paneCwds: pane.cwd ? [pane.cwd] : [],
+      });
+      continue;
+    }
+
+    if (pane.activity !== null && (existing.activity === null || pane.activity > existing.activity)) {
+      existing.activity = pane.activity;
+    }
+    if (pane.cwd) {
+      existing.paneCwds.push(pane.cwd);
+      if (!existing.cwd || pathDepth(pane.cwd) > pathDepth(existing.cwd)) {
+        existing.cwd = pane.cwd;
+      }
+    }
+    if (!existing.windows.some((window) => window.id === pane.windowId)) {
+      existing.windows.push({ id: pane.windowId, name: pane.windowName || pane.windowId });
+    }
+  }
+
+  const enabledFolders = watchedFolders
+    .filter((folder) => folder.enabled)
+    .map((folder) => ({ ...folder, normalizedPath: normalizeRemotePath(folder.path) }))
+    .sort((a, b) => b.normalizedPath.length - a.normalizedPath.length);
+
+  const groups = new Map<string, HostDetailSessionGroup>();
+  for (const session of sessions.values()) {
+    const matched = bestFolderMatch(session.paneCwds, enabledFolders);
+    const key = matched ? `folder:${matched.id}` : session.cwd ? 'fallback:other' : 'fallback:unknown';
+    if (!groups.has(key)) {
+      groups.set(key, matched
+        ? {
+            id: key,
+            label: matched.label,
+            path: matched.path,
+            folderId: matched.id,
+            sessions: [],
+          }
+        : {
+            id: key,
+            label: session.cwd ? 'Other Paths' : 'Unknown Folder',
+            sessions: [],
+          });
+    }
+    groups.get(key)!.sessions.push({
+      id: session.id,
+      name: session.name,
+      cwd: session.cwd,
+      activity: session.activity,
+      windows: session.windows.sort((a, b) => a.name.localeCompare(b.name)),
+    });
+  }
+
+  const ordered = Array.from(groups.values());
+  for (const group of ordered) {
+    group.sessions.sort(compareSessionsByRecency);
+  }
+  return ordered.sort((a, b) => {
+    const recentA = a.sessions[0]?.activity ?? 0;
+    const recentB = b.sessions[0]?.activity ?? 0;
+    if (recentA !== recentB) {
+      return recentB - recentA;
+    }
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function sessionRows(hostId: number, groups: HostDetailSessionGroup[]): Array<string | HostDetailRow> {
+  const rows: Array<string | HostDetailRow> = [];
+  for (const group of groups) {
+    rows.push(group.path ? `${group.label} (${group.path})` : group.label);
+    for (const session of group.sessions) {
+      rows.push(sessionRow(hostId, group, session));
+    }
+  }
+  return rows;
+}
+
+function sessionRow(
+  hostId: number,
+  group: HostDetailSessionGroup,
+  session: HostDetailSession,
+): HostDetailRow {
+  const primaryWindow = session.windows[0];
+  const target = {
+    hostId,
+    folderId: group.folderId,
+    path: session.cwd ?? group.path,
+    sessionId: session.id,
+    sessionName: session.name,
+    windowId: primaryWindow?.id,
+  };
+  const windowNames = session.windows.map((window) => window.name).join(', ');
+  const meta = [
+    session.activity === null ? undefined : `active ${formatTimestamp(session.activity * 1000)}`,
+    session.windows.length === 1 ? '1 window' : `${session.windows.length} windows`,
+    windowNames ? `windows: ${windowNames}` : undefined,
+  ].filter(Boolean).join(' | ');
+
+  return {
+    label: session.name,
+    detail: session.cwd ?? undefined,
+    meta,
+    actions: [
+      { label: 'Attach', command: 'pocketshell.tmux.attach', args: [target] },
+      { label: 'New Window', command: 'pocketshell.tmux.newWindow', args: [target] },
+      { label: 'Rename', command: 'pocketshell.tmux.rename', args: [target] },
+      { label: 'Kill', command: 'pocketshell.tmux.kill', args: [target] },
+    ],
+  };
+}
+
 function folderRow(hostId: number, folder: HostDetailFolder): HostDetailRow {
   const target = { hostId, folderId: folder.id, path: folder.path };
   return {
@@ -150,6 +314,7 @@ function folderRow(hostId: number, folder: HostDetailFolder): HostDetailRow {
     meta: `${folder.source}${folder.enabled ? '' : ', disabled'}`,
     actions: [
       { label: 'Session', command: 'pocketshell.watchedFolders.openSession', args: [target] },
+      { label: 'Create tmux', command: 'pocketshell.tmux.new', args: [target] },
       { label: 'Files', command: 'pocketshell.files.browse', args: [target] },
       { label: 'Env', command: 'pocketshell.env.list', args: [target] },
       { label: 'Git', command: 'pocketshell.git.status', args: [target] },
@@ -157,6 +322,38 @@ function folderRow(hostId: number, folder: HostDetailFolder): HostDetailRow {
       { label: 'Repo', command: 'pocketshell.git.branches', args: [target] },
     ],
   };
+}
+
+function bestFolderMatch<T extends { normalizedPath: string }>(paths: string[], folders: T[]): T | undefined {
+  for (const folder of folders) {
+    if (paths.some((candidate) => isPathPrefix(folder.normalizedPath, candidate))) {
+      return folder;
+    }
+  }
+  return undefined;
+}
+
+function isPathPrefix(folderPath: string, candidatePath: string): boolean {
+  const normalizedCandidate = normalizeRemotePath(candidatePath);
+  return normalizedCandidate === folderPath || normalizedCandidate.startsWith(`${folderPath}/`);
+}
+
+function normalizeRemotePath(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, '');
+  return trimmed || '/';
+}
+
+function pathDepth(value: string): number {
+  return normalizeRemotePath(value).split('/').filter(Boolean).length;
+}
+
+function compareSessionsByRecency(a: HostDetailSession, b: HostDetailSession): number {
+  const activityA = a.activity ?? 0;
+  const activityB = b.activity ?? 0;
+  if (activityA !== activityB) {
+    return activityB - activityA;
+  }
+  return a.name.localeCompare(b.name);
 }
 
 export function renderHostDetailHtml(model: HostDetailModel): string {

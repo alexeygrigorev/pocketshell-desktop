@@ -52,6 +52,10 @@ function escapeSingleQuoted(input: string): string {
   return input.replace(/'/g, "'\\''");
 }
 
+function quoteTmuxArg(input: string): string {
+  return `"${input.replace(/[\\"$]/g, (ch) => `\\${ch}`)}"`;
+}
+
 // ---------------------------------------------------------------------------
 // TmuxClient
 // ---------------------------------------------------------------------------
@@ -205,7 +209,7 @@ export class TmuxClient extends EventEmitter {
    * Reference: section 12
    */
   async listPanes(): Promise<CommandResponse> {
-    const format = '#{pane_id}\\t#{window_id}\\t#{session_id}\\t#{pane_width}\\t#{pane_height}\\t#{pane_title}\\t#{pane_in_mode}';
+    const format = '#{pane_id}\\t#{window_id}\\t#{session_id}\\t#{pane_width}\\t#{pane_height}\\t#{pane_title}\\t#{pane_in_mode}\\t#{pane_current_path}\\t#{session_name}\\t#{window_name}\\t#{session_activity}\\t#{window_activity}';
     return this.enqueueCommand(`list-panes -a -F '${format}'`);
   }
 
@@ -224,23 +228,24 @@ export class TmuxClient extends EventEmitter {
    * Kill a session.
    */
   async killSession(name: string): Promise<CommandResponse> {
-    return this.enqueueCommand(`kill-session -t '${escapeSingleQuoted(name)}'`);
+    return this.enqueueCommand(`kill-session -t ${quoteTmuxArg(name)}`);
   }
 
   /**
    * Rename a session.
    */
   async renameSession(sessionId: string, newName: string): Promise<CommandResponse> {
-    return this.enqueueCommand(`rename-session -t ${sessionId} '${escapeSingleQuoted(newName)}'`);
+    return this.enqueueCommand(`rename-session -t ${quoteTmuxArg(sessionId)} ${quoteTmuxArg(newName)}`);
   }
 
   /**
    * Create a new window.
    */
-  async newWindow(sessionId?: string, name?: string): Promise<CommandResponse> {
+  async newWindow(sessionId?: string, name?: string, startDir?: string): Promise<CommandResponse> {
     let cmd = 'new-window';
-    if (sessionId) cmd += ` -t ${sessionId}`;
-    if (name) cmd += ` -n '${escapeSingleQuoted(name)}'`;
+    if (sessionId) cmd += ` -t ${quoteTmuxArg(sessionId)}`;
+    if (name) cmd += ` -n ${quoteTmuxArg(name)}`;
+    if (startDir) cmd += ` -c ${quoteTmuxArg(startDir)}`;
     return this.enqueueCommand(cmd);
   }
 
@@ -447,7 +452,7 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
     const parts = line.split('\t');
     if (parts.length < 7) continue;
 
-    const [paneId, windowId, sessionId, widthStr, heightStr, title, inMode] = parts;
+    const [paneId, windowId, sessionId, widthStr, heightStr, title, inMode, cwd] = parts;
     if (!paneId.startsWith('%')) continue;
     if (!windowId.startsWith('@')) continue;
     if (!sessionId.startsWith('$')) continue;
@@ -464,6 +469,7 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
       height,
       title,
       mode,
+      cwd: cwd || undefined,
     };
 
     current = upsertPane(current, pane);

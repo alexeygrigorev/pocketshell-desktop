@@ -187,6 +187,24 @@ describe('SshTerminalBackend', () => {
       expect(written).toContain("export FOO='bar'");
       expect(written).toContain("export BAZ='qux'");
     });
+
+    it('runs an initial command after cwd and env setup', async () => {
+      const backend = new SshTerminalBackend(connection, {
+        cwd: '/home/user/project',
+        env: { FOO: 'bar' },
+        initialCommand: "tmux attach-session -t '$1'",
+      });
+      await backend.start();
+
+      const shell = connection.lastShell!;
+      const chunks: Buffer[] = [];
+      shell.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const written = Buffer.concat(chunks).toString('utf-8');
+      expect(written).toContain("cd '/home/user/project'\nexport FOO='bar'\ntmux attach-session -t '$1'\n");
+    });
   });
 
   describe('write()', () => {

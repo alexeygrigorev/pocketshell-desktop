@@ -17,7 +17,7 @@ import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
 import { SettingsStore, type AppSettings } from './backend/app/settings';
 import { SettingsPanel, type SettingsStoreLike } from './backend/ui/settings/settings-panel';
 import type { SettingDefinition } from './backend/ui/settings/settings-schema';
-import { buildHostDetailModel, renderHostDetailHtml } from './backend/ui/host-detail';
+import { buildHostDetailModel, renderHostDetailHtml, type HostDetailTmuxPane } from './backend/ui/host-detail';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
 import type { WatchedFolder } from './backend/ssh/data/watched-folder-store';
 import type { SshKey } from './backend/ssh/data/key-store';
@@ -175,9 +175,13 @@ export function activate(context: vscode.ExtensionContext): void {
 				return;
 			}
 
+			const watchedFolders = await service.getWatchedFolders(id);
+			const tmuxSnapshot = await loadHostDetailTmuxPanes(service, id);
 			const model = buildHostDetailModel(host, {
 				connectionState: service.getState(id),
-				watchedFolders: await service.getWatchedFolders(id),
+				watchedFolders,
+				tmuxPanes: tmuxSnapshot.panes,
+				tmuxError: tmuxSnapshot.error,
 			});
 			const title = vscode.l10n.t('PocketShell: {0}', model.title);
 
@@ -1177,6 +1181,71 @@ function resolveWatchedFolderTarget(element: unknown): WatchedFolderTarget | und
 function labelFromRemotePath(folderPath: string): string {
 	const parts = folderPath.replace(/\/+$/, '').split('/').filter(Boolean);
 	return parts[parts.length - 1] || folderPath;
+}
+
+async function loadHostDetailTmuxPanes(
+	service: ConnectionService,
+	hostId: number,
+): Promise<{ panes: HostDetailTmuxPane[]; error?: string }> {
+	const conn = service.getConnection(hostId);
+	if (!conn) {
+		return { panes: [] };
+	}
+
+	const format = '#{session_id}\\t#{session_name}\\t#{session_activity}\\t#{window_id}\\t#{window_name}\\t#{window_activity}\\t#{pane_id}\\t#{pane_current_path}\\t#{pane_title}';
+	try {
+		const result = await conn.exec(`tmux list-panes -a -F '${format}'`, 5_000);
+		if (result.exitCode !== 0) {
+			const message = (result.stderr || result.stdout || 'tmux list-panes failed').trim();
+			return { panes: [], error: message };
+		}
+		return { panes: parseHostDetailTmuxPanes(result.stdout) };
+	} catch (err) {
+		return { panes: [], error: String(err) };
+	}
+}
+
+function parseHostDetailTmuxPanes(output: string): HostDetailTmuxPane[] {
+	return output
+		.split(/\r?\n/)
+		.map((line) => line.trimEnd())
+		.filter(Boolean)
+		.map((line): HostDetailTmuxPane | undefined => {
+			const parts = line.split('\t');
+			if (parts.length < 9) {
+				return undefined;
+			}
+			const [
+				sessionId,
+				sessionName,
+				sessionActivity,
+				windowId,
+				windowName,
+				windowActivity,
+				paneId,
+				cwd,
+			] = parts;
+			if (!sessionId || !windowId || !paneId) {
+				return undefined;
+			}
+			const parsedSessionActivity = Number.parseInt(sessionActivity, 10);
+			const parsedWindowActivity = Number.parseInt(windowActivity, 10);
+			const activity = Number.isFinite(parsedWindowActivity)
+				? parsedWindowActivity
+				: Number.isFinite(parsedSessionActivity)
+					? parsedSessionActivity
+					: null;
+			return {
+				id: paneId,
+				sessionId,
+				sessionName: sessionName || sessionId,
+				windowId,
+				windowName: windowName || windowId,
+				cwd: cwd || null,
+				activity,
+			};
+		})
+		.filter((pane): pane is HostDetailTmuxPane => pane !== undefined);
 }
 
 function reportSshImportSkipped(

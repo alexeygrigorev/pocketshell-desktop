@@ -25,6 +25,8 @@ export interface TmuxPane {
   title: string;
   /** Pane mode: "normal" | "copy-mode" | etc. */
   mode: string;
+  /** Current working directory reported by tmux, when available. */
+  cwd?: string;
 }
 
 /** A tmux window (tab) */

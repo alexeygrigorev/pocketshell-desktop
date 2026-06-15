@@ -11,6 +11,10 @@ export const TMUX_FEATURE: FeatureRegistration = {
 		commands: [
 			{ command: 'pocketshell.tmux.list', title: 'Tmux: List Sessions', category: 'PocketShell', icon: '$(list-tree)' },
 			{ command: 'pocketshell.tmux.new', title: 'Tmux: New Session', category: 'PocketShell', icon: '$(add)' },
+			{ command: 'pocketshell.tmux.attach', title: 'Tmux: Attach Session', category: 'PocketShell', icon: '$(terminal-tmux)' },
+			{ command: 'pocketshell.tmux.rename', title: 'Tmux: Rename Session', category: 'PocketShell', icon: '$(edit)' },
+			{ command: 'pocketshell.tmux.kill', title: 'Tmux: Kill Session', category: 'PocketShell', icon: '$(trash)' },
+			{ command: 'pocketshell.tmux.newWindow', title: 'Tmux: New Window', category: 'PocketShell', icon: '$(window)' },
 			{ command: 'pocketshell.tmux.send', title: 'Tmux: Send Keys', category: 'PocketShell' },
 			{ command: 'pocketshell.tmux.detach', title: 'Tmux: Detach', category: 'PocketShell', icon: '$(debug-disconnect)' },
 		],

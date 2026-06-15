@@ -28,7 +28,7 @@ export class SshPseudoterminal implements vscode.Pseudoterminal {
 		private readonly connection: SshConnection,
 		private readonly hostName: string,
 		private readonly diagnostics?: (input: DiagnosticRecordInput) => void,
-		private readonly options: Pick<TerminalOptions, 'cwd'> = {},
+		private readonly options: Pick<TerminalOptions, 'cwd' | 'initialCommand'> = {},
 	) {}
 
 	/**
@@ -49,6 +49,7 @@ export class SshPseudoterminal implements vscode.Pseudoterminal {
 		this.backend = new SshTerminalBackend(this.connection, {
 			name: this.hostName,
 			cwd: this.options.cwd,
+			initialCommand: this.options.initialCommand,
 			cols: _initialDimensions?.columns,
 			rows: _initialDimensions?.rows,
 		});
