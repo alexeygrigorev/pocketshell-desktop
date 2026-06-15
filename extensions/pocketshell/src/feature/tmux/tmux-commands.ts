@@ -35,8 +35,8 @@ export function registerTmux(
 	// pocketshell.tmux.list — read: list tmux sessions on a host
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.tmux.list', async () => {
-			const result = await withTmux(service, 'list-sessions', async (client) => {
+		vscode.commands.registerCommand('pocketshell.tmux.list', async (element?: unknown) => {
+			const result = await withTmux(service, element, 'list-sessions', async (client) => {
 				return client.listSessions();
 			});
 			if (result === undefined) {
@@ -51,7 +51,7 @@ export function registerTmux(
 	// pocketshell.tmux.new — mutate: create a detached session
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.tmux.new', async () => {
+		vscode.commands.registerCommand('pocketshell.tmux.new', async (element?: unknown) => {
 			const name = await vscode.window.showInputBox({
 				prompt: vscode.l10n.t('New tmux session name'),
 				value: 'pocketshell',
@@ -60,7 +60,7 @@ export function registerTmux(
 				return;
 			}
 
-			const result = await withTmux(service, `new-session ${name}`, async (client) => {
+			const result = await withTmux(service, element, `new-session ${name}`, async (client) => {
 				return client.newSession(name);
 			});
 			if (result === undefined) {
@@ -82,7 +82,7 @@ export function registerTmux(
 	// pocketshell.tmux.send — mutate: send keystrokes to a pane
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.tmux.send', async () => {
+		vscode.commands.registerCommand('pocketshell.tmux.send', async (element?: unknown) => {
 			const paneId = await vscode.window.showInputBox({
 				prompt: vscode.l10n.t('Target pane id (e.g. %0)'),
 				validateInput: (v) =>
@@ -98,7 +98,7 @@ export function registerTmux(
 				return;
 			}
 
-			const result = await withTmux(service, `send-keys ${paneId}`, async (client) => {
+			const result = await withTmux(service, element, `send-keys ${paneId}`, async (client) => {
 				return client.sendKeys(paneId, keys);
 			});
 			if (result === undefined) {
@@ -120,8 +120,8 @@ export function registerTmux(
 	// pocketshell.tmux.detach — mutate: detach the control-mode client
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.tmux.detach', async () => {
-			const detached = await withTmux(service, 'detach', async (client) => {
+		vscode.commands.registerCommand('pocketshell.tmux.detach', async (element?: unknown) => {
+			const detached = await withTmux(service, element, 'detach', async (client) => {
 				await client.detach();
 				return true;
 			});
@@ -149,10 +149,11 @@ export function registerTmux(
  */
 async function withTmux<T>(
 	service: ConnectionService,
+	element: unknown,
 	label: string,
 	fn: (client: TmuxClient) => Promise<T>,
 ): Promise<T | undefined> {
-	const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+	const hostId = await resolveHostId(service, element, { connectedOnly: true });
 	if (hostId === undefined) {
 		return undefined;
 	}

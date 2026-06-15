@@ -31,7 +31,12 @@
 		"commands": [
 			{
 				"command": "pocketshell.connect",
-				"title": "PocketShell: Connect to Host"
+				"title": "PocketShell: Open Terminal"
+			},
+			{
+				"command": "pocketshell.hostDetail.open",
+				"title": "PocketShell: Open Host Detail",
+				"icon": "$(server-environment)"
 			},
 			{
 				"command": "pocketshell.addHost",
@@ -395,14 +400,19 @@
 		"menus": {
 			"view/item/context": [
 				{
-					"command": "pocketshell.connect",
-					"when": "view == pocketshell.hosts && viewItem == disconnectedHost",
+					"command": "pocketshell.hostDetail.open",
+					"when": "view == pocketshell.hosts",
 					"group": "inline"
 				},
 				{
 					"command": "pocketshell.disconnect",
 					"when": "view == pocketshell.hosts && viewItem == connectedHost",
 					"group": "inline"
+				},
+				{
+					"command": "pocketshell.connect",
+					"when": "view == pocketshell.hosts",
+					"group": "0_terminal"
 				},
 				{
 					"command": "pocketshell.editHost",

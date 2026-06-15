@@ -40,8 +40,8 @@ export function registerFiles(
 	// pocketshell.files.browse — QuickPick directory navigation
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.files.browse', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.files.browse', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined) {
 				return;
 			}
@@ -72,8 +72,8 @@ export function registerFiles(
 	// pocketshell.files.watch — poll a directory, log changes to OutputChannel
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.files.watch', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.files.watch', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined) {
 				return;
 			}

@@ -12,7 +12,7 @@ import { ConnectionState } from './backend/ssh/connection/connection-manager';
  * Tree data provider for the SSH Hosts sidebar.
  *
  * Shows all configured hosts with their connection status.
- * Clicking a host connects to it (if not already) and opens a terminal.
+ * Clicking a host opens the per-host workspace/detail surface.
  */
 export class HostTreeProvider implements vscode.TreeDataProvider<Host> {
 	private readonly changeEmitter = new vscode.EventEmitter<Host | Host[] | undefined | null>();
@@ -43,10 +43,10 @@ export class HostTreeProvider implements vscode.TreeDataProvider<Host> {
 			item.iconPath = new vscode.ThemeIcon('server');
 		}
 
-		// Click → connect + open terminal
+		// Click -> host detail/workspace surface. Direct terminal remains an explicit action.
 		item.command = {
-			command: 'pocketshell.connect',
-			title: 'Connect',
+			command: 'pocketshell.hostDetail.open',
+			title: 'Open Host',
 			arguments: [host.id],
 		};
 

@@ -32,8 +32,8 @@ export function registerEnv(
 	// pocketshell.env.list — read: render environment variables
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.env.list', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.env.list', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined) {
 				return;
 			}
@@ -58,8 +58,8 @@ export function registerEnv(
 	// pocketshell.env.set — mutate: prompt key + value, then set
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.env.set', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.env.set', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined) {
 				return;
 			}
@@ -100,8 +100,8 @@ export function registerEnv(
 	// pocketshell.env.unset — mutate: list keys, pick, then unset
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.env.unset', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.env.unset', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined) {
 				return;
 			}

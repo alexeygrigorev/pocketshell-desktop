@@ -17,6 +17,7 @@ import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
 import { SettingsStore, type AppSettings } from './backend/app/settings';
 import { SettingsPanel, type SettingsStoreLike } from './backend/ui/settings/settings-panel';
 import type { SettingDefinition } from './backend/ui/settings/settings-schema';
+import { buildHostDetailModel, renderHostDetailHtml } from './backend/ui/host-detail';
 import type { Host, NewHost } from './backend/ssh/data/host-store';
 import type { SshKey } from './backend/ssh/data/key-store';
 import { assignManagedKeyToHost, createHostKeyAssignmentPlan } from './backend/ssh/data/key-assignment';
@@ -156,8 +157,48 @@ export function activate(context: vscode.ExtensionContext): void {
 		showCollapseAll: false,
 	});
 	context.subscriptions.push(treeView);
+	let hostDetailPanel: vscode.WebviewPanel | undefined;
 
 	// -- Commands ----------------------------------------------------------------
+
+	context.subscriptions.push(
+		registerCommand('pocketshell.hostDetail.open', async (element?: Host | number) => {
+			const id = await resolveHostId(service, element, { connectedOnly: false });
+			if (id === undefined) {
+				return;
+			}
+
+			const host = await service.getHost(id);
+			if (!host) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'));
+				return;
+			}
+
+			const model = buildHostDetailModel(host, {
+				connectionState: service.getState(id),
+			});
+			const title = vscode.l10n.t('PocketShell: {0}', model.title);
+
+			if (!hostDetailPanel) {
+				hostDetailPanel = vscode.window.createWebviewPanel(
+					'pocketshell.hostDetail',
+					title,
+					vscode.ViewColumn.Active,
+					{
+						enableCommandUris: true,
+						retainContextWhenHidden: true,
+					},
+				);
+				hostDetailPanel.onDidDispose(() => {
+					hostDetailPanel = undefined;
+				}, null, context.subscriptions);
+			}
+
+			hostDetailPanel.title = title;
+			hostDetailPanel.webview.html = renderHostDetailHtml(model);
+			hostDetailPanel.reveal(vscode.ViewColumn.Active);
+		}),
+	);
 
 	// Connect to a host (optionally passed hostId from tree item click)
 	context.subscriptions.push(

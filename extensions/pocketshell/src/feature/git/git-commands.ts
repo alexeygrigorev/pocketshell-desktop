@@ -32,8 +32,8 @@ export function registerGit(
 	// pocketshell.git.status — read: render working-tree status
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.git.status', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.git.status', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined) {
 				return;
 			}
@@ -66,8 +66,8 @@ export function registerGit(
 	// pocketshell.git.branches — read+pick+mutate: list branches, checkout
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.git.branches', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.git.branches', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined) {
 				return;
 			}

@@ -33,8 +33,8 @@ export function registerBootstrap(
 	// pocketshell.bootstrap.status — read: detect install + update availability
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.bootstrap.status', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.bootstrap.status', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined || hostId === null) {
 				return;
 			}
@@ -59,8 +59,8 @@ export function registerBootstrap(
 	// pocketshell.bootstrap.install — mutate: install pocketshell, refresh trees
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.bootstrap.install', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.bootstrap.install', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined || hostId === null) {
 				return;
 			}
@@ -102,8 +102,8 @@ export function registerBootstrap(
 	// pocketshell.bootstrap.upgrade — mutate: upgrade pocketshell, refresh trees
 	// -------------------------------------------------------------------------
 	disposables.push(
-		vscode.commands.registerCommand('pocketshell.bootstrap.upgrade', async () => {
-			const hostId = await resolveHostId(service, undefined, { connectedOnly: true });
+		vscode.commands.registerCommand('pocketshell.bootstrap.upgrade', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined || hostId === null) {
 				return;
 			}
