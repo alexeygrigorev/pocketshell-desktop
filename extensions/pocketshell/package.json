@@ -382,6 +382,54 @@
 				"icon": "$(comment-add)"
 			},
 			{
+				"command": "pocketshell.snippets.create",
+				"title": "Snippets: Create Snippet or Template",
+				"category": "PocketShell",
+				"icon": "$(add)"
+			},
+			{
+				"command": "pocketshell.snippets.edit",
+				"title": "Snippets: Edit",
+				"category": "PocketShell",
+				"icon": "$(edit)"
+			},
+			{
+				"command": "pocketshell.snippets.delete",
+				"title": "Snippets: Delete",
+				"category": "PocketShell",
+				"icon": "$(trash)"
+			},
+			{
+				"command": "pocketshell.snippets.list",
+				"title": "Snippets: List",
+				"category": "PocketShell",
+				"icon": "$(list-unordered)"
+			},
+			{
+				"command": "pocketshell.snippets.manage",
+				"title": "Snippets: Manage Library",
+				"category": "PocketShell",
+				"icon": "$(symbol-snippet)"
+			},
+			{
+				"command": "pocketshell.snippets.insertTerminal",
+				"title": "Snippets: Insert into Terminal",
+				"category": "PocketShell",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "pocketshell.snippets.openComposer",
+				"title": "Snippets: Open in Composer",
+				"category": "PocketShell",
+				"icon": "$(comment-add)"
+			},
+			{
+				"command": "pocketshell.snippets.run",
+				"title": "Snippets: Run Snippet or Template",
+				"category": "PocketShell",
+				"icon": "$(play)"
+			},
+			{
 				"command": "pocketshell.files.browse",
 				"title": "Files: Browse",
 				"category": "PocketShell",
@@ -404,6 +452,12 @@
 				"title": "Port Forwarding: Open Panel",
 				"category": "PocketShell",
 				"icon": "$(plug)"
+			},
+			{
+				"command": "pocketshell.portForwarding.listRemotePorts",
+				"title": "Port Forwarding: List Remote Listening Ports",
+				"category": "PocketShell",
+				"icon": "$(radio-tower)"
 			},
 			{
 				"command": "pocketshell.pocketshell.detect",
@@ -571,6 +625,18 @@
 				"icon": "$(eye)"
 			},
 			{
+				"command": "pocketshell.tmux-ui.detectPortsActivePane",
+				"title": "Tmux UI: Detect Ports in Active Pane",
+				"category": "PocketShell",
+				"icon": "$(radio-tower)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.detectPortsTreePane",
+				"title": "Tmux UI: Detect Ports in Selected Pane",
+				"category": "PocketShell",
+				"icon": "$(radio-tower)"
+			},
+			{
 				"command": "pocketshell.tmux-ui.sendTextToPane",
 				"title": "Tmux UI: Send Text to Pane",
 				"category": "PocketShell",
@@ -623,6 +689,11 @@
 					"group": "0_terminal"
 				},
 				{
+					"command": "pocketshell.portForwarding.listRemotePorts",
+					"when": "view == pocketshell.hosts",
+					"group": "0_terminal"
+				},
+				{
 					"command": "pocketshell.editHost",
 					"when": "view == pocketshell.hosts",
 					"group": "1_manage"
@@ -663,12 +734,27 @@
 					"group": "1_pane"
 				},
 				{
+					"command": "pocketshell.tmux-ui.detectPortsTreePane",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "1_pane"
+				},
+				{
 					"command": "pocketshell.tmux-ui.sendTextToPane",
 					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
 					"group": "1_pane"
 				},
 				{
 					"command": "pocketshell.promptComposer.open",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "1_pane"
+				},
+				{
+					"command": "pocketshell.snippets.insertTerminal",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "1_pane"
+				},
+				{
+					"command": "pocketshell.snippets.openComposer",
 					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
 					"group": "1_pane"
 				},
@@ -718,6 +804,18 @@
 				{
 					"command": "pocketshell.promptComposer.open",
 					"group": "pocketshell_promptComposer"
+				},
+				{
+					"command": "pocketshell.tmux-ui.detectPortsActivePane",
+					"group": "pocketshell_ports"
+				},
+				{
+					"command": "pocketshell.snippets.insertTerminal",
+					"group": "pocketshell_snippets"
+				},
+				{
+					"command": "pocketshell.snippets.openComposer",
+					"group": "pocketshell_snippets"
 				},
 				{
 					"command": "pocketshell.usage.panel",

@@ -21,6 +21,9 @@ export interface SavedPortForwardPanelMapping {
 export interface PortForwardOpenArgs {
   hostId?: number;
   prefill: PortForwardFormState;
+  start?: boolean;
+  openInBrowser?: boolean;
+  openProtocol?: 'http' | 'https';
 }
 
 export interface PortForwardFormState {
@@ -174,6 +177,9 @@ export function normalizePortForwardOpenArgs(input: unknown): PortForwardOpenArg
   const prefillSource = isRecord(record.prefill) ? record.prefill : record;
   return {
     hostId: numberField(record, 'hostId'),
+    start: record.start === true,
+    openInBrowser: record.openInBrowser === true || record.openBrowser === true,
+    openProtocol: protocolField(record, 'openProtocol') ?? protocolField(prefillSource, 'protocol'),
     prefill: defaultPortForwardForm({
       id: stringField(prefillSource, 'id'),
       name: stringField(prefillSource, 'name'),
@@ -210,13 +216,16 @@ export function normalizeSavedPortForward(
   };
 }
 
-export function formatLocalUrl(forward: Pick<ActivePortForward, 'localHost' | 'localPort' | 'state'>): string | undefined {
+export function formatLocalUrl(
+  forward: Pick<ActivePortForward, 'localHost' | 'localPort' | 'state'>,
+  protocol: 'http' | 'https' = 'http',
+): string | undefined {
   if (forward.state !== 'listening' || forward.localPort <= 0) {
     return undefined;
   }
   const host = forward.localHost === '0.0.0.0' ? 'localhost' : forward.localHost;
   const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  return `http://${urlHost}:${forward.localPort}`;
+  return `${protocol}://${urlHost}:${forward.localPort}`;
 }
 
 export function resolveActivePortForwardLocalUrl(
@@ -505,6 +514,11 @@ function numberField(value: Record<string, unknown>, key: string): number | unde
 
 function stringField(value: Record<string, unknown>, key: string): string | undefined {
   return typeof value[key] === 'string' ? value[key] : undefined;
+}
+
+function protocolField(value: Record<string, unknown>, key: string): 'http' | 'https' | undefined {
+  const raw = value[key];
+  return raw === 'http' || raw === 'https' ? raw : undefined;
 }
 
 function trimOptional(value: string | undefined): string | undefined {

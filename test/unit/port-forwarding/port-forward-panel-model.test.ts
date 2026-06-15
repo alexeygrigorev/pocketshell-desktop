@@ -117,6 +117,7 @@ describe('port forwarding panel model', () => {
 
   it('formats local URLs only once the tunnel is listening', () => {
     expect(formatLocalUrl(activeForward({ localHost: '0.0.0.0', localPort: 3000 }))).toBe('http://localhost:3000');
+    expect(formatLocalUrl(activeForward({ localPort: 8443 }), 'https')).toBe('https://127.0.0.1:8443');
     expect(formatLocalUrl(activeForward({ localHost: '::1', localPort: 3000 }))).toBe('http://[::1]:3000');
     expect(formatLocalUrl(activeForward({ state: 'starting', localPort: 3000 }))).toBeUndefined();
     expect(formatLocalUrl(activeForward({ localPort: 0 }))).toBeUndefined();
@@ -177,8 +178,14 @@ describe('port forwarding panel model', () => {
       remotePort: '5173',
       localPort: '3000',
       name: 'Vite',
+      start: true,
+      openInBrowser: true,
+      openProtocol: 'https',
     })).toEqual({
       hostId: 7,
+      start: true,
+      openInBrowser: true,
+      openProtocol: 'https',
       prefill: {
         id: undefined,
         name: 'Vite',
@@ -193,11 +200,14 @@ describe('port forwarding panel model', () => {
       prefill: {
         port: 8080,
         remoteHost: 'localhost',
+        protocol: 'ftp',
       },
+      openBrowser: true,
     }).prefill).toMatchObject({
       remoteHost: 'localhost',
       remotePort: 8080,
     });
+    expect(normalizePortForwardOpenArgs({ openProtocol: 'ftp' }).openProtocol).toBeUndefined();
   });
 
   it('exposes status and error rendering data', () => {

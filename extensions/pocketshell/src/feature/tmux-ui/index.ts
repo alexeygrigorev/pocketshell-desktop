@@ -21,8 +21,18 @@ export const TMUX_UI_FEATURE: FeatureRegistration = {
 			{ command: 'pocketshell.tmux-ui.killTreeItem', title: 'Tmux UI: Kill', category: 'PocketShell', icon: '$(trash)' },
 			{ command: 'pocketshell.tmux-ui.detachTreeSession', title: 'Tmux UI: Detach', category: 'PocketShell', icon: '$(debug-disconnect)' },
 			{ command: 'pocketshell.tmux-ui.capturePane', title: 'Tmux UI: Capture Pane', category: 'PocketShell', icon: '$(eye)' },
+			{ command: 'pocketshell.tmux-ui.detectPortsActivePane', title: 'Tmux UI: Detect Ports in Active Pane', category: 'PocketShell', icon: '$(radio-tower)' },
+			{ command: 'pocketshell.tmux-ui.detectPortsTreePane', title: 'Tmux UI: Detect Ports in Selected Pane', category: 'PocketShell', icon: '$(radio-tower)' },
 			{ command: 'pocketshell.tmux-ui.forgetRestoreState', title: 'Tmux UI: Forget Restore State', category: 'PocketShell', icon: '$(discard)' },
 		],
+		menus: {
+			'view/item/context': [
+				{ command: 'pocketshell.tmux-ui.detectPortsTreePane', when: 'view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)', group: '1_pane' },
+			],
+			'terminal/context': [
+				{ command: 'pocketshell.tmux-ui.detectPortsActivePane', group: 'pocketshell_ports' },
+			],
+		},
 	},
 	register: registerTmuxUi,
 };

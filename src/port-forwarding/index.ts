@@ -13,6 +13,21 @@ export type {
   SshConnectionProvider,
 } from './port-forward-manager';
 export {
+  buildRemoteListeningPortsCommand,
+  detectPortsFromPaneOutput,
+  extractLocalhostUrls,
+  mergeDetectedPortCandidates,
+  parseRemoteListeningPorts,
+  remoteListeningPortsToCandidates,
+} from './port-detection-scanner';
+export type {
+  DetectedPortCandidate,
+  DetectedPortProtocol,
+  DetectedPortSource,
+  LocalhostUrlDetection,
+  RemoteListeningPort,
+} from './port-detection-scanner';
+export {
   buildPortForwardPanelModel,
   formatLocalUrl,
   normalizePortForwardOpenArgs,

@@ -20,6 +20,14 @@ import {
 	enrichConversationSessions,
 	type AttributableConversationSession,
 } from '../../backend/agents';
+import {
+	buildRemoteListeningPortsCommand,
+	detectPortsFromPaneOutput,
+	mergeDetectedPortCandidates,
+	parseRemoteListeningPorts,
+	remoteListeningPortsToCandidates,
+	type DetectedPortCandidate,
+} from '../../backend/port-forwarding';
 import { SessionReader } from '../../backend/agents/conversation';
 import { quoteShellArg } from '../../backend/sessions/create-session';
 import {
@@ -314,6 +322,33 @@ export function registerTmuxUi(
 				return undefined;
 			}
 		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.detectPortsActivePane', async (element?: unknown) => {
+			const entry = await resolveEntry(registry, element);
+			if (!entry) {
+				return undefined;
+			}
+			try {
+				const metadata = entry.pty.getActivePaneMetadata();
+				const captured = await entry.pty.captureActivePane();
+				return detectAndForwardPorts(entry, captured, metadata?.id ?? 'active pane');
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to detect ports: {0}', String(err)));
+				return undefined;
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.detectPortsTreePane', async (element?: unknown) => {
+			const target = await resolvePaneTarget(registry, element);
+			if (!target) {
+				return undefined;
+			}
+			try {
+				const captured = await target.entry.pty.capturePane(target.pane.id);
+				return detectAndForwardPorts(target.entry, captured, target.pane.id);
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to detect ports: {0}', String(err)));
+				return undefined;
+			}
+		}),
 		vscode.commands.registerCommand('pocketshell.tmux-ui.sendTextToPane', async (element?: unknown, options?: TmuxUiSendTextOptions) => {
 			const target = await resolvePaneTarget(registry, element);
 			if (!target) {
@@ -500,6 +535,73 @@ export function registerTmuxUi(
 	void restoreTmuxUiSessionOnStartup(service, registry, restoreStore, deps);
 
 	return disposables;
+}
+
+async function detectAndForwardPorts(
+	entry: RegisteredTmuxSession,
+	paneOutput: string,
+	paneLabel: string,
+): Promise<unknown> {
+	const paneCandidates = detectPortsFromPaneOutput(paneOutput);
+	const listenerCandidates = await listRemoteListeningPortCandidates(entry);
+	const candidates = mergeDetectedPortCandidates([...paneCandidates, ...listenerCandidates]);
+	if (candidates.length === 0) {
+		void vscode.window.showInformationMessage(vscode.l10n.t('No localhost URLs or interesting listening ports found for {0}.', paneLabel));
+		return undefined;
+	}
+	const picked = await vscode.window.showQuickPick(
+		candidates.map((candidate) => ({
+			label: candidate.label,
+			description: candidate.source === 'pane-url'
+				? vscode.l10n.t('from {0}', paneLabel)
+				: candidate.description,
+			detail: candidate.detail,
+			candidate,
+		})),
+		{ placeHolder: vscode.l10n.t('Select a port to forward') },
+	);
+	if (!picked) {
+		return undefined;
+	}
+
+	const actions = [
+		{ label: vscode.l10n.t('Open Port Panel'), start: false, openInBrowser: false },
+		{ label: vscode.l10n.t('Start Tunnel'), start: true, openInBrowser: false },
+		{ label: vscode.l10n.t('Start Tunnel and Open Browser'), start: true, openInBrowser: true },
+	];
+	const action = await vscode.window.showQuickPick(actions, {
+		placeHolder: vscode.l10n.t('Forward {0}', picked.candidate.label),
+	});
+	if (!action) {
+		return undefined;
+	}
+
+	return vscode.commands.executeCommand('pocketshell.portForwarding.open', {
+		hostId: entry.hostId,
+		prefill: prefillFromDetectedPort(picked.candidate),
+		start: action.start,
+		openInBrowser: action.openInBrowser,
+		openProtocol: picked.candidate.protocol ?? 'http',
+	});
+}
+
+async function listRemoteListeningPortCandidates(entry: RegisteredTmuxSession): Promise<DetectedPortCandidate[]> {
+	try {
+		const result = await entry.pty.getConnection().exec(buildRemoteListeningPortsCommand(), 5_000);
+		return remoteListeningPortsToCandidates(parseRemoteListeningPorts(`${result.stdout}\n${result.stderr}`));
+	} catch {
+		return [];
+	}
+}
+
+function prefillFromDetectedPort(candidate: DetectedPortCandidate): { name: string; remoteHost: string; remotePort: number } {
+	return {
+		name: candidate.source === 'pane-url'
+			? candidate.label
+			: candidate.process ? `${candidate.process} ${candidate.remotePort}` : `Port ${candidate.remotePort}`,
+		remoteHost: candidate.remoteHost,
+		remotePort: candidate.remotePort,
+	};
 }
 
 // -----------------------------------------------------------------------------

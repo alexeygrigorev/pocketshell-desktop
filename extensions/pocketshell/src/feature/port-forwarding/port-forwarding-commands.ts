@@ -10,12 +10,19 @@ import { getOrConnect, resolveHostId } from '../../host-picking';
 import type { FeatureDeps } from '../manifest';
 import {
 	PortForwardManager,
+	buildRemoteListeningPortsCommand,
 	buildPortForwardPanelModel,
+	formatLocalUrl,
+	mergeDetectedPortCandidates,
 	normalizePortForwardOpenArgs,
 	normalizeSavedPortForward,
+	parseRemoteListeningPorts,
 	renderPortForwardHtml,
+	remoteListeningPortsToCandidates,
 	resolveActivePortForwardLocalUrl,
 	validatePortForwardInput,
+	type DetectedPortCandidate,
+	type DetectedPortProtocol,
 	type PortForwardFormState,
 	type PortForwardPanelStatus,
 	type SavedPortForwardPanelMapping,
@@ -66,6 +73,10 @@ export function registerPortForwarding(
 			if (existing) {
 				existing.prefill = args.prefill;
 				existing.panel.reveal(vscode.ViewColumn.Active);
+				if (args.start) {
+					await startPrefilledMapping(service, ctx, manager, host, existing, args.openInBrowser, args.openProtocol);
+					return existing;
+				}
 				await renderPanel(ctx, manager, host, existing);
 				return existing;
 			}
@@ -93,12 +104,39 @@ export function registerPortForwarding(
 
 			panels.set(hostId, entry);
 			wirePanelMessages(service, ctx, manager, host, entry);
-			await renderPanel(ctx, manager, host, entry);
+			if (args.start) {
+				await startPrefilledMapping(service, ctx, manager, host, entry, args.openInBrowser, args.openProtocol);
+			} else {
+				await renderPanel(ctx, manager, host, entry);
+			}
 			panel.onDidDispose(() => {
 				entry.disposeForwardListener();
 				panels.delete(hostId);
 			}, null, disposables);
 			return entry;
+		}),
+	);
+
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.portForwarding.listRemotePorts', async (element?: unknown) => {
+			const hostId = await resolveHostId(service, element, { connectedOnly: false });
+			if (hostId === undefined) {
+				return undefined;
+			}
+			const connection = await getOrConnect(service, hostId);
+			if (!connection) {
+				return undefined;
+			}
+
+			const result = await connection.exec(buildRemoteListeningPortsCommand(), 5_000);
+			const candidates = mergeDetectedPortCandidates(
+				remoteListeningPortsToCandidates(parseRemoteListeningPorts(`${result.stdout}\n${result.stderr}`)),
+			);
+			if (candidates.length === 0) {
+				void vscode.window.showInformationMessage(vscode.l10n.t('No interesting listening TCP ports found.'));
+				return undefined;
+			}
+			return pickDetectedPortAction(hostId, candidates);
 		}),
 	);
 
@@ -185,6 +223,43 @@ function wirePanelMessages(
 	});
 }
 
+async function pickDetectedPortAction(
+	hostId: number,
+	candidates: readonly DetectedPortCandidate[],
+): Promise<unknown> {
+	const picked = await vscode.window.showQuickPick(
+		candidates.map((candidate) => ({
+			label: candidate.label,
+			description: candidate.description,
+			detail: candidate.detail,
+			candidate,
+		})),
+		{ placeHolder: vscode.l10n.t('Select a remote port to forward') },
+	);
+	if (!picked) {
+		return undefined;
+	}
+
+	const actions = [
+		{ label: vscode.l10n.t('Open Port Panel'), start: false, openInBrowser: false },
+		{ label: vscode.l10n.t('Start Tunnel'), start: true, openInBrowser: false },
+		{ label: vscode.l10n.t('Start Tunnel and Open Browser'), start: true, openInBrowser: true },
+	];
+	const action = await vscode.window.showQuickPick(actions, {
+		placeHolder: vscode.l10n.t('Forward {0}', picked.candidate.label),
+	});
+	if (!action) {
+		return undefined;
+	}
+	return vscode.commands.executeCommand('pocketshell.portForwarding.open', {
+		hostId,
+		prefill: prefillFromDetectedPort(picked.candidate),
+		start: action.start,
+		openInBrowser: action.openInBrowser,
+		openProtocol: picked.candidate.protocol ?? 'http',
+	});
+}
+
 function resolvePanelLocalUrl(
 	manager: PortForwardManager,
 	hostId: number,
@@ -252,12 +327,52 @@ async function startMapping(
 	service: ConnectionService,
 	manager: PortForwardManager,
 	mapping: SavedPortForwardPanelMapping,
-): Promise<void> {
+): Promise<{ id: string }> {
 	const connection = await getOrConnect(service, mapping.hostId);
 	if (!connection) {
 		throw new Error('SSH connection is not active.');
 	}
-	await manager.start(mapping, connection);
+	return manager.start(mapping, connection);
+}
+
+async function startPrefilledMapping(
+	service: ConnectionService,
+	ctx: vscode.ExtensionContext,
+	manager: PortForwardManager,
+	host: { id: number; name: string; hostname: string; username: string; port: number },
+	entry: PortForwardPanelEntry,
+	openInBrowser?: boolean,
+	openProtocol: DetectedPortProtocol = 'http',
+): Promise<void> {
+	try {
+		const validation = validatePortForwardInput(entry.prefill, host.id);
+		if (!validation.ok || !validation.value) {
+			throw new Error(validation.errors.join(' '));
+		}
+		entry.status = { tone: 'info', message: 'Starting forward...' };
+		await renderPanel(ctx, manager, host, entry);
+		const connection = await getOrConnect(service, host.id);
+		if (!connection) {
+			throw new Error('SSH connection is not active.');
+		}
+		const handle = await manager.start({
+			...validation.value,
+			id: validation.value.id || undefined,
+		}, connection);
+		entry.prefill = {};
+		entry.status = { tone: 'success', message: 'Forward started.' };
+		if (openInBrowser) {
+			const forward = manager.get(handle.id);
+			const url = forward ? formatLocalUrl(forward, openProtocol) : undefined;
+			if (!url) {
+				throw new Error('Started forward is not listening yet.');
+			}
+			await vscode.env.openExternal(vscode.Uri.parse(url));
+		}
+	} catch (err) {
+		entry.status = { tone: 'error', message: errorMessage(err) };
+	}
+	await renderPanel(ctx, manager, host, entry);
 }
 
 async function renderPanel(
@@ -278,6 +393,16 @@ async function renderPanel(
 		cspSource: entry.panel.webview.cspSource,
 		nonce: entry.nonce,
 	});
+}
+
+function prefillFromDetectedPort(candidate: DetectedPortCandidate): PortForwardFormState {
+	return {
+		name: candidate.source === 'pane-url'
+			? candidate.label
+			: candidate.process ? `${candidate.process} ${candidate.remotePort}` : `Port ${candidate.remotePort}`,
+		remoteHost: candidate.remoteHost,
+		remotePort: candidate.remotePort,
+	};
 }
 
 function loadSavedMappings(
