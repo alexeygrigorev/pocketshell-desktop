@@ -6,7 +6,7 @@
  */
 
 import type { SshConnection, ExecResult } from '../../ssh/connection/ssh-client';
-import type { EnvVar } from './types';
+import type { EnvCopyDestination, EnvCopyResult, EnvVar } from './types';
 
 // ---------------------------------------------------------------------------
 // Secret detection
@@ -29,6 +29,21 @@ export function detectSecret(key: string, _value: string): boolean {
   return SECRET_PATTERNS.some((pattern) => pattern.test(key));
 }
 
+export function safeEnvValue(entry: EnvVar): string {
+  return entry.isSecret ? '***' : entry.value;
+}
+
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function envCopyDestinations<T extends EnvCopyDestination>(
+  folders: T[],
+  sourceScope: string,
+): T[] {
+  return folders.filter((folder) => folder.enabled && folder.path !== sourceScope);
+}
+
 // ---------------------------------------------------------------------------
 // EnvClient
 // ---------------------------------------------------------------------------
@@ -49,7 +64,7 @@ export class EnvClient {
   async list(scope?: string): Promise<EnvVar[]> {
     let command = 'pocketshell env list';
     if (scope) {
-      command += ` --scope '${scope}'`;
+      command += ` --scope ${shellQuote(scope)}`;
     }
 
     const result: ExecResult = await this.connection.exec(command);
@@ -67,10 +82,13 @@ export class EnvClient {
    * @param key The variable name to look up.
    * @returns The variable value, or undefined if not found.
    */
-  async get(key: string): Promise<string | undefined> {
-    const result: ExecResult = await this.connection.exec(
-      `pocketshell env get '${key}'`,
-    );
+  async get(key: string, scope?: string): Promise<string | undefined> {
+    let command = `pocketshell env get ${shellQuote(key)}`;
+    if (scope) {
+      command += ` --scope ${shellQuote(scope)}`;
+    }
+
+    const result: ExecResult = await this.connection.exec(command);
 
     if (result.exitCode !== 0) {
       // Variable not found
@@ -88,9 +106,9 @@ export class EnvClient {
    * @param scope Optional scope (global, project, session).
    */
   async set(key: string, value: string, scope?: string): Promise<void> {
-    let command = `pocketshell env set '${key}' '${value}'`;
+    let command = `pocketshell env set ${shellQuote(key)} ${shellQuote(value)}`;
     if (scope) {
-      command += ` --scope '${scope}'`;
+      command += ` --scope ${shellQuote(scope)}`;
     }
 
     const result: ExecResult = await this.connection.exec(command);
@@ -107,9 +125,9 @@ export class EnvClient {
    * @param scope Optional scope (global, project, session).
    */
   async unset(key: string, scope?: string): Promise<void> {
-    let command = `pocketshell env unset '${key}'`;
+    let command = `pocketshell env unset ${shellQuote(key)}`;
     if (scope) {
-      command += ` --scope '${scope}'`;
+      command += ` --scope ${shellQuote(scope)}`;
     }
 
     const result: ExecResult = await this.connection.exec(command);
@@ -117,6 +135,33 @@ export class EnvClient {
     if (result.exitCode !== 0) {
       throw new Error(`pocketshell env unset failed: ${result.stderr}`);
     }
+  }
+
+  async copy(sourceScope: string, destinationScope: string, keys?: string[]): Promise<EnvCopyResult> {
+    if (sourceScope === destinationScope) {
+      throw new Error('Source and destination folders must be different');
+    }
+
+    const sourceVars = await this.list(sourceScope);
+    const selectedKeys = keys ? new Set(keys) : undefined;
+    const result: EnvCopyResult = { copied: [], skipped: [] };
+
+    for (const entry of sourceVars) {
+      if (selectedKeys && !selectedKeys.has(entry.key)) {
+        continue;
+      }
+
+      const value = await this.get(entry.key, sourceScope);
+      if (value === undefined) {
+        result.skipped.push({ key: entry.key, reason: 'source value unavailable' });
+        continue;
+      }
+
+      await this.set(entry.key, value, destinationScope);
+      result.copied.push(entry.key);
+    }
+
+    return result;
   }
 
   // ---------------------------------------------------------------------------

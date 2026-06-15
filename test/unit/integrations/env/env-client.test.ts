@@ -6,7 +6,13 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { EnvClient, detectSecret } from '../../../../src/integrations/env/env-client';
+import {
+  EnvClient,
+  detectSecret,
+  envCopyDestinations,
+  safeEnvValue,
+  shellQuote,
+} from '../../../../src/integrations/env/env-client';
 import type { SshConnection, ExecResult } from '../../../../src/ssh/connection/ssh-client';
 
 // ---------------------------------------------------------------------------
@@ -37,6 +43,19 @@ function createMockConnection(
 // ---------------------------------------------------------------------------
 
 describe('EnvClient', () => {
+  describe('safeEnvValue', () => {
+    it('masks secret values for display', () => {
+      expect(safeEnvValue({ key: 'API_KEY', value: 'actual-secret', isSecret: true })).toBe('***');
+      expect(safeEnvValue({ key: 'DATABASE_URL', value: 'sqlite:///test.db', isSecret: false })).toBe('sqlite:///test.db');
+    });
+  });
+
+  describe('shellQuote', () => {
+    it('quotes values used in command generation', () => {
+      expect(shellQuote("/home/alice/git/client's-api")).toBe("'/home/alice/git/client'\\''s-api'");
+    });
+  });
+
   describe('list', () => {
     it('returns parsed env vars', async () => {
       const responses = new Map<string, ExecResult>([
@@ -144,6 +163,25 @@ describe('EnvClient', () => {
       expect(value).toBe('sqlite:///test.db');
     });
 
+    it('sends get command with folder scope', async () => {
+      const responses = new Map<string, ExecResult>([
+        ['pocketshell env get', {
+          stdout: 'secret-value\n',
+          stderr: '',
+          exitCode: 0,
+        }],
+      ]);
+
+      const conn = createMockConnection(responses);
+      const client = new EnvClient(conn);
+      const value = await client.get('API_KEY', '/home/alice/git/api');
+
+      expect(value).toBe('secret-value');
+      expect(conn.exec).toHaveBeenCalledWith(
+        "pocketshell env get 'API_KEY' --scope '/home/alice/git/api'",
+      );
+    });
+
     it('returns undefined when variable not found', async () => {
       const responses = new Map<string, ExecResult>([
         ['pocketshell env get', {
@@ -195,6 +233,24 @@ describe('EnvClient', () => {
 
       expect(conn.exec).toHaveBeenCalledWith(
         "pocketshell env set 'MY_VAR' 'my_value' --scope 'project'",
+      );
+    });
+
+    it('escapes key, value, and folder scope in set command', async () => {
+      const responses = new Map<string, ExecResult>([
+        ['pocketshell env set', {
+          stdout: 'ok\n',
+          stderr: '',
+          exitCode: 0,
+        }],
+      ]);
+
+      const conn = createMockConnection(responses);
+      const client = new EnvClient(conn);
+      await client.set("CLIENT'S_KEY", "don't leak", "/home/alice/git/client's-api");
+
+      expect(conn.exec).toHaveBeenCalledWith(
+        "pocketshell env set 'CLIENT'\\''S_KEY' 'don'\\''t leak' --scope '/home/alice/git/client'\\''s-api'",
       );
     });
 
@@ -250,6 +306,24 @@ describe('EnvClient', () => {
       );
     });
 
+    it('sends unset command with folder scope', async () => {
+      const responses = new Map<string, ExecResult>([
+        ['pocketshell env unset', {
+          stdout: 'ok\n',
+          stderr: '',
+          exitCode: 0,
+        }],
+      ]);
+
+      const conn = createMockConnection(responses);
+      const client = new EnvClient(conn);
+      await client.unset('MY_VAR', '/home/alice/git/api');
+
+      expect(conn.exec).toHaveBeenCalledWith(
+        "pocketshell env unset 'MY_VAR' --scope '/home/alice/git/api'",
+      );
+    });
+
     it('throws on non-zero exit code', async () => {
       const responses = new Map<string, ExecResult>([
         ['pocketshell env unset', {
@@ -262,6 +336,76 @@ describe('EnvClient', () => {
       const conn = createMockConnection(responses);
       const client = new EnvClient(conn);
       await expect(client.unset('NONEXISTENT')).rejects.toThrow('pocketshell env unset failed');
+    });
+  });
+
+  describe('copy', () => {
+    it('offers copy destinations only from known enabled folders', () => {
+      const destinations = envCopyDestinations([
+        { label: 'api', path: '/home/alice/git/api', enabled: true },
+        { label: 'web', path: '/home/alice/git/web', enabled: true },
+        { label: 'disabled', path: '/home/alice/git/disabled', enabled: false },
+      ], '/home/alice/git/api');
+
+      expect(destinations).toEqual([
+        { label: 'web', path: '/home/alice/git/web', enabled: true },
+      ]);
+    });
+
+    it('copies selected keys between known folder scopes using real values', async () => {
+      const commands: string[] = [];
+      const conn = {
+        connected: true,
+        exec: vi.fn(async (command: string): Promise<ExecResult> => {
+          commands.push(command);
+          if (command === "pocketshell env list --scope '/home/alice/git/api'") {
+            return {
+              stdout: 'API_KEY=***\nDATABASE_URL=sqlite:///api.db\nSKIP_ME=unused\n',
+              stderr: '',
+              exitCode: 0,
+            };
+          }
+          if (command === "pocketshell env get 'API_KEY' --scope '/home/alice/git/api'") {
+            return { stdout: 'real-secret\n', stderr: '', exitCode: 0 };
+          }
+          if (command === "pocketshell env get 'DATABASE_URL' --scope '/home/alice/git/api'") {
+            return { stdout: 'sqlite:///api.db\n', stderr: '', exitCode: 0 };
+          }
+          if (command.startsWith('pocketshell env set ')) {
+            return { stdout: 'ok\n', stderr: '', exitCode: 0 };
+          }
+          return { stdout: '', stderr: `unexpected command: ${command}`, exitCode: 1 };
+        }),
+        shell: vi.fn(),
+        sftp: vi.fn(),
+        disconnect: vi.fn(),
+      } as unknown as SshConnection;
+
+      const client = new EnvClient(conn);
+      const result = await client.copy(
+        '/home/alice/git/api',
+        '/home/alice/git/web',
+        ['API_KEY', 'DATABASE_URL'],
+      );
+
+      expect(result).toEqual({ copied: ['API_KEY', 'DATABASE_URL'], skipped: [] });
+      expect(commands).toEqual([
+        "pocketshell env list --scope '/home/alice/git/api'",
+        "pocketshell env get 'API_KEY' --scope '/home/alice/git/api'",
+        "pocketshell env set 'API_KEY' 'real-secret' --scope '/home/alice/git/web'",
+        "pocketshell env get 'DATABASE_URL' --scope '/home/alice/git/api'",
+        "pocketshell env set 'DATABASE_URL' 'sqlite:///api.db' --scope '/home/alice/git/web'",
+      ]);
+    });
+
+    it('rejects copying within the same folder scope', async () => {
+      const conn = createMockConnection(new Map());
+      const client = new EnvClient(conn);
+
+      await expect(client.copy('/home/alice/git/api', '/home/alice/git/api')).rejects.toThrow(
+        'Source and destination folders must be different',
+      );
+      expect(conn.exec).not.toHaveBeenCalled();
     });
   });
 

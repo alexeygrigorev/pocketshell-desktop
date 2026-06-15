@@ -10,6 +10,7 @@ export const ENV_FEATURE: FeatureRegistration = {
 	manifest: {
 		commands: [
 			{ command: 'pocketshell.env.list', title: 'Env: List', category: 'PocketShell' },
+			{ command: 'pocketshell.env.manage', title: 'Env: Manage Folder', category: 'PocketShell', icon: '$(symbol-variable)' },
 			{ command: 'pocketshell.env.set', title: 'Env: Set', category: 'PocketShell' },
 			{ command: 'pocketshell.env.unset', title: 'Env: Unset', category: 'PocketShell' },
 		],

@@ -25,3 +25,16 @@ export interface EnvConfig {
   /** Identifier within the scope — project path or session ID. */
   scopeId?: string;
 }
+
+/** Summary of env entries copied between two folder scopes. */
+export interface EnvCopyResult {
+  copied: string[];
+  skipped: Array<{ key: string; reason: string }>;
+}
+
+/** Minimal folder shape used when choosing a safe env-copy destination. */
+export interface EnvCopyDestination {
+  label: string;
+  path: string;
+  enabled: boolean;
+}

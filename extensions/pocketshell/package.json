@@ -229,6 +229,12 @@
 				"category": "PocketShell"
 			},
 			{
+				"command": "pocketshell.env.manage",
+				"title": "Env: Manage Folder",
+				"category": "PocketShell",
+				"icon": "$(symbol-variable)"
+			},
+			{
 				"command": "pocketshell.env.set",
 				"title": "Env: Set",
 				"category": "PocketShell"

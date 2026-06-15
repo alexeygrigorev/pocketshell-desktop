@@ -322,7 +322,7 @@ function folderRow(hostId: number, folder: HostDetailFolder): HostDetailRow {
       { label: 'Session', command: 'pocketshell.sessions.create', args: [target] },
       { label: 'Create tmux', command: 'pocketshell.tmux.new', args: [target] },
       { label: 'Files', command: 'pocketshell.files.browse', args: [target] },
-      { label: 'Env', command: 'pocketshell.env.list', args: [target] },
+      { label: 'Env', command: 'pocketshell.env.manage', args: [target] },
       { label: 'Git', command: 'pocketshell.git.status', args: [target] },
       { label: 'History', command: 'pocketshell.git.history', args: [target] },
       { label: 'Repo', command: 'pocketshell.git.branches', args: [target] },
