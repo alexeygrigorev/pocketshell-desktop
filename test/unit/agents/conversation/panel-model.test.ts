@@ -250,6 +250,7 @@ describe('conversation panel model', () => {
 
     expect(html).toContain('Reply to codex session s1');
     expect(html).toContain('data-composer-input');
+    expect(html).toContain('data-action="open-prompt-composer"');
     expect(html).toContain('data-action="send-reply"');
     expect(html).toContain('data-action="queue-reply"');
     expect(html).toContain('renderedClearDraftToken = 0');

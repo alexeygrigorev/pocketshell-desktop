@@ -191,9 +191,18 @@ export function selectActivePane(state: TmuxState): TmuxPane | undefined {
 
 export function activePaneMetadata(state: TmuxState): TmuxActivePaneMetadata | undefined {
   const pane = selectActivePane(state);
+  return pane ? metadataForPane(pane) : undefined;
+}
+
+export function paneMetadata(state: TmuxState, paneId: string): TmuxActivePaneMetadata | undefined {
+  const pane = findPane(state, paneId);
   if (!pane) {
     return undefined;
   }
+  return metadataForPane(pane);
+}
+
+function metadataForPane(pane: TmuxPane): TmuxActivePaneMetadata {
   return {
     id: pane.id,
     sessionId: pane.sessionId,

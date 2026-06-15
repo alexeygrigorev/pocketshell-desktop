@@ -25,4 +25,4 @@ export {
 export type { RestoreDecision, TmuxRestoreSettings, TmuxRestoreTarget, TmuxSessionRestoreBehavior } from './restore-state';
 
 export { TmuxSessionManager } from './tmux-session-manager';
-export { ActivePaneTerminalController, selectActivePane, type ActivePaneTerminalClient } from './active-pane-terminal';
+export { ActivePaneTerminalController, paneMetadata, selectActivePane, type ActivePaneTerminalClient } from './active-pane-terminal';

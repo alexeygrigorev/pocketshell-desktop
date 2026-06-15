@@ -328,6 +328,7 @@ textarea { box-sizing: border-box; width: 100%; min-height: 88px; resize: vertic
   <span class="search-counter" role="status">${searchCounter}</span>
   <button type="button" data-action="search-clear"${model.search.query ? '' : ' disabled'}>Clear</button>
   <button type="button" data-action="copy-session">Copy Session</button>
+  <button type="button" data-action="open-prompt-composer">Open Composer</button>
   <button type="button" data-action="scroll-bottom">Scroll Bottom</button>
 </div>
 ${searchEmptyState}

@@ -1,0 +1,28 @@
+export {
+  appendPromptComposerText,
+  buildInitialPromptDraft,
+  buildPromptComposerDraftKey,
+  createPromptComposerPanelModel,
+  markPromptComposerFailed,
+  markPromptComposerInserted,
+  markPromptComposerInserting,
+  markPromptComposerSending,
+  markPromptComposerSent,
+  normalizePromptComposerOpenArgs,
+  normalizePromptComposerTarget,
+  persistPromptComposerDraftState,
+  quoteTargetsPromptComposer,
+  renderPromptComposerHtml,
+  shouldClearPromptComposerDraft,
+} from './panel-model';
+export type {
+  PromptComposerAgentTarget,
+  PromptComposerHtmlRenderOptions,
+  PromptComposerOpenArgs,
+  PromptComposerPaneTarget,
+  PromptComposerPanelModel,
+  PromptComposerStatus,
+  PromptComposerStatusKind,
+  PromptComposerTarget,
+  PromptComposerWebviewState,
+} from './panel-model';

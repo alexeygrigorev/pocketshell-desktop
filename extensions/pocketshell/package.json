@@ -376,6 +376,12 @@
 				"icon": "$(quote)"
 			},
 			{
+				"command": "pocketshell.promptComposer.open",
+				"title": "Prompt Composer: Open",
+				"category": "PocketShell",
+				"icon": "$(comment-add)"
+			},
+			{
 				"command": "pocketshell.files.browse",
 				"title": "Files: Browse",
 				"category": "PocketShell",
@@ -651,6 +657,11 @@
 					"group": "1_pane"
 				},
 				{
+					"command": "pocketshell.promptComposer.open",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "1_pane"
+				},
+				{
 					"command": "pocketshell.tmux-ui.sendKeysToPane",
 					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
 					"group": "1_pane"
@@ -692,6 +703,10 @@
 				{
 					"command": "pocketshell.conversation.openActivePane",
 					"group": "pocketshell_conversation"
+				},
+				{
+					"command": "pocketshell.promptComposer.open",
+					"group": "pocketshell_promptComposer"
 				},
 				{
 					"command": "pocketshell.usage.panel",

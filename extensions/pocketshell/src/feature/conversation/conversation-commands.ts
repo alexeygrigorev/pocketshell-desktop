@@ -35,6 +35,7 @@ import {
 
 interface ConversationPanelEntry {
 	key: string;
+	hostId: number;
 	panel: vscode.WebviewPanel;
 	model: ConversationPanelModel;
 	reader: SessionReader;
@@ -96,7 +97,7 @@ export function registerConversation(
 				);
 				const messenger = new AgentMessenger(connection);
 				const queue = new ReplyQueue(messenger);
-				const entry: ConversationPanelEntry = { key, panel, model, reader, messenger, queue, nonce: createNonce() };
+				const entry: ConversationPanelEntry = { key, hostId, panel, model, reader, messenger, queue, nonce: createNonce() };
 				panels.set(key, entry);
 				wireQueue(entry);
 				wirePanelMessages(panel, entry);
@@ -213,6 +214,19 @@ function wirePanelMessages(panel: vscode.WebviewPanel, entry: ConversationPanelE
 		if (message.action === 'copy-session') {
 			await vscode.env.clipboard.writeText(sessionPlainText(entry.model));
 			void vscode.window.showInformationMessage(vscode.l10n.t('Conversation copied to clipboard.'));
+			return;
+		}
+		if (message.action === 'open-prompt-composer') {
+			await vscode.commands.executeCommand('pocketshell.promptComposer.open', {
+				target: {
+					kind: 'agent',
+					hostId: entry.hostId,
+					agentType: entry.model.agentType,
+					sessionId: entry.model.sessionId,
+					label: entry.model.title,
+					panelKey: entry.key,
+				},
+			});
 			return;
 		}
 		if (message.action === 'send-reply') {

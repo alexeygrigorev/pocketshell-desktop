@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ActivePaneTerminalController, activePaneMetadata, selectActivePane, type ActivePaneTerminalClient } from '../../../src/tmux-ui/active-pane-terminal';
+import { ActivePaneTerminalController, activePaneMetadata, paneMetadata, selectActivePane, type ActivePaneTerminalClient } from '../../../src/tmux-ui/active-pane-terminal';
 import { emptyState, applyEvent, upsertPane } from '../../../src/tmux/state';
 import type { TmuxState } from '../../../src/tmux/state';
 import type { CommandResponse } from '../../../src/tmux/events';
@@ -156,6 +156,24 @@ describe('ActivePaneTerminalController', () => {
       process: {
         currentCommand: 'bash',
         pid: 1001,
+      },
+    });
+  });
+
+  it('builds metadata for a selected non-active pane without using the active pane', () => {
+    expect(paneMetadata(buildState('%1'), '%2')).toEqual({
+      id: '%2',
+      sessionId: '$0',
+      windowId: '@0',
+      tty: undefined,
+      cwd: undefined,
+      size: {
+        width: 80,
+        height: 24,
+      },
+      process: {
+        currentCommand: undefined,
+        pid: undefined,
       },
     });
   });

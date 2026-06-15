@@ -50,6 +50,11 @@ interface TmuxUiCommandTarget {
 	requireExisting?: boolean;
 }
 
+interface TmuxUiSendTextOptions {
+	text?: string;
+	submit?: boolean;
+}
+
 /**
  * tmux-ui feature: a higher-level management layer over {@link TmuxSessionManager}
  * that mirrors the read/mutate pattern of the base tmux feature but operates on
@@ -309,32 +314,38 @@ export function registerTmuxUi(
 				return undefined;
 			}
 		}),
-		vscode.commands.registerCommand('pocketshell.tmux-ui.sendTextToPane', async (element?: unknown) => {
+		vscode.commands.registerCommand('pocketshell.tmux-ui.sendTextToPane', async (element?: unknown, options?: TmuxUiSendTextOptions) => {
 			const target = await resolvePaneTarget(registry, element);
 			if (!target) {
 				return;
 			}
-			const text = await vscode.window.showInputBox({
-				prompt: vscode.l10n.t('Text to send to pane {0}', target.pane.id),
-				ignoreFocusOut: true,
-			});
+			const text = typeof options?.text === 'string'
+				? options.text
+				: await vscode.window.showInputBox({
+					prompt: vscode.l10n.t('Text to send to pane {0}', target.pane.id),
+					ignoreFocusOut: true,
+				});
 			if (text === undefined) {
 				return;
 			}
-			const submit = await vscode.window.showQuickPick(
-				[
-					{ label: 'Send text only', value: false },
-					{ label: 'Send text and Enter', value: true },
-				],
-				{ placeHolder: vscode.l10n.t('Send mode') },
-			);
+			const submit = typeof options?.submit === 'boolean'
+				? { value: options.submit }
+				: await vscode.window.showQuickPick(
+					[
+						{ label: 'Send text only', value: false },
+						{ label: 'Send text and Enter', value: true },
+					],
+					{ placeHolder: vscode.l10n.t('Send mode') },
+				);
 			if (submit === undefined) {
 				return;
 			}
 			try {
 				await target.entry.pty.sendTextToPane(target.pane.id, text, submit.value);
+				return true;
 			} catch (err) {
 				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to send text: {0}', String(err)));
+				return false;
 			}
 		}),
 		vscode.commands.registerCommand('pocketshell.tmux-ui.sendKeysToPane', async (element?: unknown) => {
@@ -384,13 +395,33 @@ export function registerTmuxUi(
 			const entry = await resolveEntry(registry, element);
 			return entry?.pty.getActivePaneMetadata();
 		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.getPromptComposerPaneTarget', async (element?: unknown) => {
+			const target = await resolvePaneTarget(registry, element);
+			if (!target) {
+				return undefined;
+			}
+			return {
+				kind: 'pane',
+				hostId: target.entry.hostId,
+				entryId: target.entry.id,
+				paneId: target.pane.id,
+				label: `${target.entry.hostLabel}: ${target.session.name}/${target.window.name} ${target.pane.id}`,
+			};
+		}),
 		vscode.commands.registerCommand('pocketshell.tmux-ui.getActivePaneConversationHint', async (element?: unknown, sessions?: AttributableConversationSession[]) => {
-			const entry = await resolveEntry(registry, element);
+			const paneTarget = findPaneTarget(registry, element);
+			if (!paneTarget && hasExplicitPaneTarget(element)) {
+				return undefined;
+			}
+			const entry = paneTarget?.entry ?? await resolveEntry(registry, element);
 			if (!entry) {
 				return undefined;
 			}
 			const connection = entry.pty.getConnection();
-			const metadata = await enrichActivePaneConversationContext(connection, entry.pty.getActivePaneMetadata());
+			const rawMetadata = paneTarget
+				? entry.pty.getPaneMetadata(paneTarget.pane.id)
+				: entry.pty.getActivePaneMetadata();
+			const metadata = await enrichActivePaneConversationContext(connection, rawMetadata);
 			const listedSessions = sessions ?? await new SessionReader(connection).listSessions();
 			const enrichedSessions = await enrichConversationSessions(connection, listedSessions);
 			return attributionService.attribute(metadata, enrichedSessions);
@@ -857,6 +888,10 @@ async function resolveEntry(
 	if (entryId) {
 		return registry.get(entryId);
 	}
+	const activeTerminalEntry = registry.entries().find((entry) => entry.terminal === vscode.window.activeTerminal);
+	if (activeTerminalEntry) {
+		return registry.get(activeTerminalEntry.id);
+	}
 	const picked = await vscode.window.showQuickPick(
 		registry.entries().map((entry) => ({
 			label: entry.label,
@@ -1008,6 +1043,9 @@ function findPaneTarget(registry: TmuxSessionRegistry, element: unknown): PaneTa
 		const pane = (node as Partial<TmuxTreePaneNode>).pane!;
 		return findPaneTargetById(entry, treeEntry.snapshot.sessions, pane.id);
 	}
+	if (typeof (node as { paneId?: unknown })?.paneId === 'string') {
+		return findPaneTargetById(entry, treeEntry.snapshot.sessions, (node as { paneId: string }).paneId);
+	}
 	if (node?.kind === 'window' && (node as Partial<TmuxTreeWindowNode>).window) {
 		const window = (node as Partial<TmuxTreeWindowNode>).window!;
 		const pane = window.panes.find((candidate) => candidate.isActive) ?? window.panes[0];
@@ -1052,6 +1090,20 @@ function getEntryId(element: unknown): string | undefined {
 	}
 	const value = element as Record<string, unknown>;
 	return typeof value.entryId === 'string' ? value.entryId : undefined;
+}
+
+function hasExplicitPaneTarget(element: unknown): boolean {
+	if (!element || typeof element !== 'object') {
+		return false;
+	}
+	const value = element as Record<string, unknown>;
+	if (typeof value.paneId === 'string') {
+		return true;
+	}
+	if (value.kind === 'pane' && value.pane && typeof value.pane === 'object') {
+		return true;
+	}
+	return false;
 }
 
 function isTmuxTreeNode(node: Partial<TmuxTreeNode> | undefined): node is TmuxTreeNode {

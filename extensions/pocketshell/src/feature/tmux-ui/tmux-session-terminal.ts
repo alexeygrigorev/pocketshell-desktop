@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { TmuxClient } from '../../backend/tmux/client';
 import { SshShellBridge } from '../../backend/tmux/ssh-shell-bridge';
-import { ActivePaneTerminalController, activePaneMetadata } from '../../backend/tmux-ui/active-pane-terminal';
+import { ActivePaneTerminalController, activePaneMetadata, paneMetadata } from '../../backend/tmux-ui/active-pane-terminal';
 import type { ControlEvent } from '../../backend/tmux';
 import type { TmuxActivePaneMetadata } from '../../backend/tmux-ui/types';
 import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
@@ -148,6 +148,11 @@ export class TmuxSessionPseudoterminal implements vscode.Pseudoterminal {
   getActivePaneMetadata(): TmuxActivePaneMetadata | undefined {
     const state = this.client?.getState();
     return state ? activePaneMetadata(state) : undefined;
+  }
+
+  getPaneMetadata(paneId: string): TmuxActivePaneMetadata | undefined {
+    const state = this.client?.getState();
+    return state ? paneMetadata(state, paneId) : undefined;
   }
 
   getConnection(): SshConnection {

@@ -17,4 +17,4 @@ export { buildTmuxTreeRoots, getTmuxTreeChildren, getKillTargetFromTmuxTreeNode 
 export type { TmuxTreeNode, TmuxTreeSessionEntry, TmuxTreeKillTarget } from './tree-model';
 
 export { TmuxSessionManager } from './tmux-session-manager';
-export { ActivePaneTerminalController, selectActivePane, type ActivePaneTerminalClient } from './active-pane-terminal';
+export { ActivePaneTerminalController, paneMetadata, selectActivePane, type ActivePaneTerminalClient } from './active-pane-terminal';
