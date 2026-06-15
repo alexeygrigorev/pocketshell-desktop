@@ -6,6 +6,7 @@ export interface ConversationPanelModel {
   title: string;
   messages: ConversationMessage[];
   search: ConversationSearchState;
+  composer: ConversationComposerState;
 }
 
 export interface ConversationSearchMatch {
@@ -24,11 +25,34 @@ export interface QuoteReplyPayload {
   agentType: AgentType;
   messageId: string;
   quote: string;
+  panelKey?: string;
+}
+
+export type ComposerLastStatusKind = 'idle' | 'sending' | 'sent' | 'queued' | 'failed';
+
+export interface ConversationComposerLastStatus {
+  kind: ComposerLastStatusKind;
+  message?: string;
+  error?: string;
+  failedDraft?: string;
+}
+
+export interface ConversationComposerState {
+  pendingCount: number;
+  isProcessing: boolean;
+  clearDraftToken: number;
+  lastStatus: ConversationComposerLastStatus;
 }
 
 export interface ConversationHtmlRenderOptions {
   cspSource?: string;
   nonce?: string;
+}
+
+export interface ConversationWebviewState {
+  draft?: string;
+  clearDraftToken?: number;
+  [key: string]: unknown;
 }
 
 export function createConversationPanelModel(session: ConversationSession): ConversationPanelModel {
@@ -38,6 +62,7 @@ export function createConversationPanelModel(session: ConversationSession): Conv
     title: `${session.agentType}: ${session.id}`,
     messages: [...session.messages],
     search: createEmptySearchState(),
+    composer: createEmptyComposerState(),
   };
 }
 
@@ -135,6 +160,7 @@ export function sessionPlainText(model: ConversationPanelModel): string {
 export function createQuoteReplyPayload(
   model: ConversationPanelModel,
   messageId: string,
+  panelKey?: string,
 ): QuoteReplyPayload | undefined {
   const message = model.messages.find((m) => m.id === messageId);
   if (!message) {
@@ -145,7 +171,90 @@ export function createQuoteReplyPayload(
     agentType: model.agentType,
     messageId: message.id,
     quote: toBlockquote(messagePlainText(message)),
+    ...(panelKey ? { panelKey } : {}),
   };
+}
+
+export function quotePayloadTargetsPanel(payload: QuoteReplyPayload, panelKey: string): boolean {
+  return payload.panelKey === panelKey;
+}
+
+export function updateConversationComposer(
+  model: ConversationPanelModel,
+  composer: Partial<ConversationComposerState>,
+): ConversationPanelModel {
+  return {
+    ...model,
+    composer: {
+      ...model.composer,
+      ...composer,
+      lastStatus: composer.lastStatus ?? model.composer.lastStatus,
+    },
+  };
+}
+
+export function markComposerSending(model: ConversationPanelModel): ConversationPanelModel {
+  return updateConversationComposer(model, {
+    lastStatus: { kind: 'sending', message: 'Sending reply...' },
+  });
+}
+
+export function markComposerSendSucceeded(model: ConversationPanelModel): ConversationPanelModel {
+  return updateConversationComposer(model, {
+    clearDraftToken: model.composer.clearDraftToken + 1,
+    lastStatus: { kind: 'sent', message: 'Reply sent.' },
+  });
+}
+
+export function markComposerQueuedReplySent(model: ConversationPanelModel): ConversationPanelModel {
+  return updateConversationComposer(model, {
+    lastStatus: { kind: 'sent', message: 'Queued reply sent.' },
+  });
+}
+
+export function markComposerSendFailed(
+  model: ConversationPanelModel,
+  error: string,
+  failedDraft: string,
+): ConversationPanelModel {
+  return updateConversationComposer(model, {
+    lastStatus: { kind: 'failed', message: 'Reply failed.', error, failedDraft },
+  });
+}
+
+export function markComposerQueued(model: ConversationPanelModel): ConversationPanelModel {
+  return updateConversationComposer(model, {
+    clearDraftToken: model.composer.clearDraftToken + 1,
+    lastStatus: { kind: 'queued', message: 'Reply queued.' },
+  });
+}
+
+export function insertQuoteIntoDraft(draft: string, quote: string): string {
+  const trimmedDraft = draft.trimEnd();
+  const trimmedQuote = quote.trimEnd();
+  if (!trimmedQuote) {
+    return draft;
+  }
+  return trimmedDraft ? `${trimmedDraft}\n\n${trimmedQuote}\n\n` : `${trimmedQuote}\n\n`;
+}
+
+export function persistComposerDraftState(
+  state: ConversationWebviewState,
+  renderedClearDraftToken: number,
+  draft: string,
+): ConversationWebviewState {
+  return {
+    ...state,
+    draft,
+    clearDraftToken: renderedClearDraftToken,
+  };
+}
+
+export function shouldClearComposerDraft(
+  state: ConversationWebviewState,
+  renderedClearDraftToken: number,
+): boolean {
+  return state.clearDraftToken !== renderedClearDraftToken;
 }
 
 export function renderConversationHtml(
@@ -166,6 +275,7 @@ export function renderConversationHtml(
   const cspMeta = csp
     ? `<meta http-equiv="Content-Security-Policy" content="${escapeHtml(csp)}">\n`
     : '';
+  const composerStatus = renderComposerStatus(model.composer);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -198,6 +308,15 @@ button:disabled { opacity: 0.55; cursor: default; }
 details { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 8px; }
 summary { cursor: pointer; font-weight: 600; }
 .tool-section { margin-top: 8px; }
+.composer { position: sticky; bottom: 0; z-index: 1; padding: 10px 12px; border-top: 1px solid var(--vscode-panel-border); background: var(--vscode-editor-background); }
+.composer-inner { max-width: 980px; margin: 0 auto; display: grid; gap: 8px; }
+.composer-meta { color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+textarea { box-sizing: border-box; width: 100%; min-height: 88px; resize: vertical; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); padding: 8px; border-radius: 4px; font: inherit; line-height: 1.45; }
+.composer-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.composer-status { color: var(--vscode-descriptionForeground); }
+.composer-status[data-visible="false"] { display: none; }
+.composer-status strong { color: var(--vscode-foreground); }
+.composer-status .error { color: var(--vscode-errorForeground); }
 </style>
 </head>
 <body>
@@ -215,22 +334,53 @@ ${searchEmptyState}
 <main class="messages">
 ${body}
 </main>
+<section class="composer" aria-label="Reply composer">
+  <div class="composer-inner">
+    <div class="composer-meta">Reply to ${escapeHtml(model.agentType)} session ${escapeHtml(model.sessionId)}</div>
+    <textarea data-composer-input aria-label="Reply text" placeholder="Type a reply to this agent session"></textarea>
+    <div class="composer-actions">
+      <button type="button" data-action="send-reply">Send</button>
+      <button type="button" data-action="queue-reply">Queue</button>
+      <button type="button" data-action="restore-failed-draft"${model.composer.lastStatus.failedDraft ? '' : ' disabled'}>Restore Failed Draft</button>
+      <span class="composer-status" role="status" data-composer-status data-visible="${composerStatus.visible ? 'true' : 'false'}">${composerStatus.html}</span>
+    </div>
+  </div>
+</section>
 <script${nonceAttribute}>
 const vscode = acquireVsCodeApi();
 const SEARCH_UPDATE_DELAY_MS = 150;
 const renderedSearchQuery = ${jsonStringForScript(model.search.query)};
+const renderedClearDraftToken = ${JSON.stringify(model.composer.clearDraftToken)};
+const renderedFailedDraft = ${jsonStringForScript(model.composer.lastStatus.failedDraft ?? '')};
 const searchInput = document.querySelector('[data-search-input]');
-const restoredState = vscode.getState?.() || {};
+const composerInput = document.querySelector('[data-composer-input]');
+let restoredState = vscode.getState?.() || {};
 let searchPostTimer;
+function setWebviewState(nextState) {
+  restoredState = nextState;
+  vscode.setState?.(nextState);
+}
+function nextPersistedState(extra) {
+  return {
+    ...restoredState,
+    query: searchInput?.value ?? restoredState.query,
+    selectionStart: searchInput?.selectionStart ?? restoredState.selectionStart,
+    selectionEnd: searchInput?.selectionEnd ?? restoredState.selectionEnd,
+    scrollY: window.scrollY,
+    draft: composerInput?.value ?? restoredState.draft ?? '',
+    clearDraftToken: renderedClearDraftToken,
+    ...extra,
+  };
+}
 function persistSearchState(pendingSearchInputRender) {
   if (!searchInput) return;
-  vscode.setState?.({
-    query: searchInput.value,
-    selectionStart: searchInput.selectionStart,
-    selectionEnd: searchInput.selectionEnd,
-    scrollY: window.scrollY,
+  setWebviewState({
+    ...nextPersistedState({}),
     pendingSearchInputRender,
   });
+}
+function persistComposerState() {
+  setWebviewState(nextPersistedState({ pendingSearchInputRender: restoredState.pendingSearchInputRender === true }));
 }
 function scheduleSearchUpdate() {
   if (!searchInput) return;
@@ -265,6 +415,29 @@ function restorePendingSearchInput() {
   }
   return true;
 }
+function restoreComposerInput() {
+  if (!composerInput) return;
+  if (restoredState.clearDraftToken !== renderedClearDraftToken) {
+    composerInput.value = '';
+    setWebviewState(nextPersistedState({ draft: '', clearDraftToken: renderedClearDraftToken }));
+    return;
+  }
+  if (typeof restoredState.draft === 'string') {
+    composerInput.value = restoredState.draft;
+  }
+}
+function submitComposer(action) {
+  if (!composerInput) return;
+  persistComposerState();
+  vscode.postMessage({ action, text: composerInput.value });
+}
+function insertIntoComposer(text) {
+  if (!composerInput || !text) return;
+  const draft = composerInput.value.trimEnd();
+  composerInput.value = draft ? draft + '\\n\\n' + text.trimEnd() + '\\n\\n' : text.trimEnd() + '\\n\\n';
+  composerInput.focus();
+  persistComposerState();
+}
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-action]');
   if (!button) return;
@@ -280,12 +453,30 @@ document.addEventListener('click', (event) => {
     }
     persistSearchState(false);
   }
+  if (action === 'send-reply' || action === 'queue-reply') {
+    submitComposer(action);
+    return;
+  }
+  if (action === 'restore-failed-draft') {
+    insertIntoComposer(renderedFailedDraft);
+    return;
+  }
   vscode.postMessage({ action, messageId: button.dataset.messageId });
 });
 searchInput?.addEventListener('input', () => {
   scheduleSearchUpdate();
 });
+composerInput?.addEventListener('input', () => {
+  persistComposerState();
+});
+window.addEventListener('message', (event) => {
+  const message = event.data || {};
+  if (message.action === 'composer-insert-quote' && typeof message.quote === 'string') {
+    insertIntoComposer(message.quote);
+  }
+});
 window.addEventListener('load', () => {
+  restoreComposerInput();
   if (restorePendingSearchInput()) {
     return;
   }
@@ -328,6 +519,25 @@ function renderSearchCounter(search: ConversationSearchState): string {
     return '0/0';
   }
   return `${search.activeIndex + 1}/${search.matches.length}`;
+}
+
+function renderComposerStatus(composer: ConversationComposerState): { visible: boolean; html: string } {
+  const parts: string[] = [];
+  if (composer.pendingCount > 0) {
+    parts.push(`${composer.pendingCount} pending`);
+  }
+  if (composer.isProcessing) {
+    parts.push('sending queued reply');
+  }
+  if (composer.lastStatus.kind !== 'idle') {
+    const label = composer.lastStatus.kind === 'failed' ? 'failed' : composer.lastStatus.kind;
+    const error = composer.lastStatus.error ? ` <span class="error">${escapeHtml(composer.lastStatus.error)}</span>` : '';
+    parts.push(`<strong>${escapeHtml(label)}</strong>${composer.lastStatus.message ? ` ${escapeHtml(composer.lastStatus.message)}` : ''}${error}`);
+  }
+  return {
+    visible: composer.pendingCount > 0 || composer.isProcessing || composer.lastStatus.kind !== 'idle',
+    html: parts.join(' &middot; '),
+  };
 }
 
 function renderMessage(
@@ -463,6 +673,15 @@ function createEmptySearchState(): ConversationSearchState {
     query: '',
     matches: [],
     activeIndex: 0,
+  };
+}
+
+function createEmptyComposerState(): ConversationComposerState {
+  return {
+    pendingCount: 0,
+    isProcessing: false,
+    clearDraftToken: 0,
+    lastStatus: { kind: 'idle' },
   };
 }
 

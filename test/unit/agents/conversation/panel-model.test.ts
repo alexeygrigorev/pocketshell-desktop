@@ -4,11 +4,19 @@ import {
   clearConversationSearch,
   createConversationPanelModel,
   createQuoteReplyPayload,
+  insertQuoteIntoDraft,
+  markComposerQueued,
+  markComposerQueuedReplySent,
+  markComposerSendFailed,
+  markComposerSendSucceeded,
   messagePlainText,
   navigateConversationSearch,
+  persistComposerDraftState,
+  quotePayloadTargetsPanel,
   renderConversationHtml,
   renderMarkdown,
   sessionPlainText,
+  shouldClearComposerDraft,
   updateConversationSearch,
 } from '../../../../src/agents/conversation/panel-model';
 import type { ConversationSession } from '../../../../src/agents/conversation/types';
@@ -105,6 +113,21 @@ describe('conversation panel model', () => {
         '> [ok](https://example.com)',
       ].join('\n'),
     });
+  });
+
+  it('builds panel-scoped quote payloads for composer insertion', () => {
+    const model = createConversationPanelModel(session());
+    const payload = createQuoteReplyPayload(model, 'm1', 'host-1:codex:s1');
+
+    expect(payload?.panelKey).toBe('host-1:codex:s1');
+    expect(quotePayloadTargetsPanel(payload!, 'host-1:codex:s1')).toBe(true);
+    expect(quotePayloadTargetsPanel(payload!, 'host-2:codex:s1')).toBe(false);
+    expect(quotePayloadTargetsPanel({ ...payload!, panelKey: undefined }, 'host-1:codex:s1')).toBe(false);
+  });
+
+  it('inserts quotes into empty and existing composer drafts', () => {
+    expect(insertQuoteIntoDraft('', '> quoted')).toBe('> quoted\n\n');
+    expect(insertQuoteIntoDraft('Please explain', '> quoted')).toBe('Please explain\n\n> quoted\n\n');
   });
 
   it('appends tail messages without mutating previous state', () => {
@@ -212,12 +235,88 @@ describe('conversation panel model', () => {
     const updateIndex = html.indexOf("vscode.postMessage({ action: 'search-update'");
 
     expect(html).toContain('const SEARCH_UPDATE_DELAY_MS = 150');
-    expect(html).toContain('vscode.setState?.({');
-    expect(html).toContain('const restoredState = vscode.getState?.() || {};');
+    expect(html).toContain('setWebviewState({');
+    expect(html).toContain('let restoredState = vscode.getState?.() || {};');
+    expect(html).toContain('function setWebviewState(nextState)');
     expect(html).toContain('restorePendingSearchInput()');
     expect(debounceIndex).toBeGreaterThan(-1);
     expect(updateIndex).toBeGreaterThan(debounceIndex);
     expect(html).not.toContain("searchInput?.addEventListener('input', () => {\n  vscode.postMessage");
+  });
+
+  it('renders a composer pre-bound to the current session and agent', () => {
+    const model = createConversationPanelModel(session());
+    const html = renderConversationHtml(model);
+
+    expect(html).toContain('Reply to codex session s1');
+    expect(html).toContain('data-composer-input');
+    expect(html).toContain('data-action="send-reply"');
+    expect(html).toContain('data-action="queue-reply"');
+    expect(html).toContain('renderedClearDraftToken = 0');
+    expect(html).toContain("vscode.postMessage({ action, text: composerInput.value })");
+    expect(html).toContain('let restoredState = vscode.getState?.() || {};');
+    expect(html).toContain('restoredState = nextState;');
+    expect(html).toContain('clearDraftToken: renderedClearDraftToken');
+    expect(html).not.toContain('clearDraftToken: restoredState.clearDraftToken');
+  });
+
+  it('preserves a draft across a normal same-token rerender', () => {
+    const renderedClearDraftToken = 0;
+    let webviewState = {};
+
+    expect(shouldClearComposerDraft(webviewState, renderedClearDraftToken)).toBe(true);
+    webviewState = persistComposerDraftState(webviewState, renderedClearDraftToken, '');
+    expect(shouldClearComposerDraft(webviewState, renderedClearDraftToken)).toBe(false);
+
+    webviewState = persistComposerDraftState(webviewState, renderedClearDraftToken, 'draft reply');
+    expect(shouldClearComposerDraft(webviewState, renderedClearDraftToken)).toBe(false);
+    expect(webviewState).toMatchObject({
+      draft: 'draft reply',
+      clearDraftToken: renderedClearDraftToken,
+    });
+  });
+
+  it('shows queue status when replies are pending or processing', () => {
+    const model = markComposerQueued(createConversationPanelModel(session()));
+    const processing = {
+      ...model,
+      composer: {
+        ...model.composer,
+        pendingCount: 2,
+        isProcessing: true,
+      },
+    };
+    const html = renderConversationHtml(processing);
+
+    expect(html).toContain('data-visible="true"');
+    expect(html).toContain('2 pending');
+    expect(html).toContain('sending queued reply');
+    expect(html).toContain('<strong>queued</strong> Reply queued.');
+  });
+
+  it('advances the clear token only for accepted queue or direct send success', () => {
+    const model = createConversationPanelModel(session());
+    const queued = markComposerQueued(model);
+    const sent = markComposerSendSucceeded(model);
+    const queuedSent = markComposerQueuedReplySent(queued);
+
+    expect(queued.composer.clearDraftToken).toBe(1);
+    expect(sent.composer.clearDraftToken).toBe(1);
+    expect(queuedSent.composer.clearDraftToken).toBe(queued.composer.clearDraftToken);
+    expect(queuedSent.composer.lastStatus).toEqual({ kind: 'sent', message: 'Queued reply sent.' });
+  });
+
+  it('preserves failed draft text for retry without advancing the clear token', () => {
+    const model = createConversationPanelModel(session());
+    const failed = markComposerSendFailed(model, 'network down', 'unsent text');
+    const html = renderConversationHtml(failed);
+
+    expect(failed.composer.clearDraftToken).toBe(0);
+    expect(failed.composer.lastStatus.failedDraft).toBe('unsent text');
+    expect(html).toContain('<strong>failed</strong> Reply failed.');
+    expect(html).toContain('network down');
+    expect(html).toContain('const renderedFailedDraft = "unsent text";');
+    expect(html).toContain('data-action="restore-failed-draft"');
   });
 
   it('reschedules an unsent restored search query after a tail render replacement', () => {

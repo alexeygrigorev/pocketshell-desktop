@@ -10,27 +10,39 @@ import { getOrConnect, resolveHostId } from '../../host-picking';
 import type { FeatureDeps } from '../manifest';
 import type { ConversationAttributionResult } from '../../backend/agents';
 import type { AgentType, ConversationMessage } from '../../backend/agents/conversation';
+import { AgentMessenger, ReplyQueue } from '../../backend/agents/reply';
 import {
 	appendConversationMessage,
 	clearConversationSearch,
 	createConversationPanelModel,
 	createQuoteReplyPayload,
+	markComposerQueued,
+	markComposerQueuedReplySent,
+	markComposerSendFailed,
+	markComposerSendSucceeded,
+	markComposerSending,
 	messagePlainText,
 	navigateConversationSearch,
+	quotePayloadTargetsPanel,
 	renderConversationHtml,
 	sessionPlainText,
 	SessionReader,
+	updateConversationComposer,
 	updateConversationSearch,
 	type ConversationPanelModel,
 	type QuoteReplyPayload,
 } from '../../backend/agents/conversation';
 
 interface ConversationPanelEntry {
+	key: string;
 	panel: vscode.WebviewPanel;
 	model: ConversationPanelModel;
 	reader: SessionReader;
+	messenger: AgentMessenger;
+	queue: ReplyQueue;
 	nonce: string;
 	searchRenderTimer?: ReturnType<typeof setTimeout>;
+	queueRenderTimer?: ReturnType<typeof setTimeout>;
 	stopTail?: () => void;
 }
 
@@ -82,14 +94,18 @@ export function registerConversation(
 						retainContextWhenHidden: true,
 					},
 				);
-				const entry: ConversationPanelEntry = { panel, model, reader, nonce: createNonce() };
+				const messenger = new AgentMessenger(connection);
+				const queue = new ReplyQueue(messenger);
+				const entry: ConversationPanelEntry = { key, panel, model, reader, messenger, queue, nonce: createNonce() };
 				panels.set(key, entry);
+				wireQueue(entry);
 				wirePanelMessages(panel, entry);
 				renderPanel(entry);
 
 				entry.stopTail = await startTail(reader, sessionRef.id, sessionRef.agentType, entry);
 				panel.onDidDispose(() => {
 					clearScheduledSearchRender(entry);
+					clearScheduledQueueRender(entry);
 					entry.stopTail?.();
 					reader.dispose();
 					panels.delete(key);
@@ -107,6 +123,11 @@ export function registerConversation(
 			}
 			await ctx.workspaceState.update('pocketshell.conversation.lastQuoteReply', payload);
 			await vscode.env.clipboard.writeText(payload.quote);
+			for (const entry of panels.values()) {
+				if (quotePayloadTargetsPanel(payload, entry.key)) {
+					void entry.panel.webview.postMessage({ action: 'composer-insert-quote', quote: payload.quote });
+				}
+			}
 			void vscode.window.showInformationMessage(vscode.l10n.t('Quoted message copied for reply.'));
 			return payload;
 		}),
@@ -116,6 +137,7 @@ export function registerConversation(
 		dispose: () => {
 			for (const entry of panels.values()) {
 				clearScheduledSearchRender(entry);
+				clearScheduledQueueRender(entry);
 				entry.stopTail?.();
 				entry.reader.dispose();
 			}
@@ -164,7 +186,7 @@ async function startTail(
 }
 
 function wirePanelMessages(panel: vscode.WebviewPanel, entry: ConversationPanelEntry): void {
-	panel.webview.onDidReceiveMessage(async (message: { action?: string; messageId?: string; query?: string }) => {
+	panel.webview.onDidReceiveMessage(async (message: { action?: string; messageId?: string; query?: string; text?: string }) => {
 		if (message.action === 'search-update') {
 			entry.model = updateConversationSearch(entry.model, message.query ?? '');
 			scheduleSearchRender(entry);
@@ -193,6 +215,14 @@ function wirePanelMessages(panel: vscode.WebviewPanel, entry: ConversationPanelE
 			void vscode.window.showInformationMessage(vscode.l10n.t('Conversation copied to clipboard.'));
 			return;
 		}
+		if (message.action === 'send-reply') {
+			await sendComposerReply(entry, message.text ?? '');
+			return;
+		}
+		if (message.action === 'queue-reply') {
+			queueComposerReply(entry, message.text ?? '');
+			return;
+		}
 		if (!message.messageId) {
 			return;
 		}
@@ -206,12 +236,66 @@ function wirePanelMessages(panel: vscode.WebviewPanel, entry: ConversationPanelE
 			return;
 		}
 		if (message.action === 'quote-reply') {
-			const payload = createQuoteReplyPayload(entry.model, message.messageId);
+			const payload = createQuoteReplyPayload(entry.model, message.messageId, entry.key);
 			if (payload) {
 				await vscode.commands.executeCommand('pocketshell.conversation.quoteReply', payload);
 			}
 		}
 	});
+}
+
+async function sendComposerReply(entry: ConversationPanelEntry, text: string): Promise<void> {
+	const draft = text;
+	entry.model = markComposerSending(entry.model);
+	renderPanel(entry);
+
+	const result = await entry.messenger.send(entry.model.sessionId, entry.model.agentType, draft);
+	if (result.success) {
+		entry.model = markComposerSendSucceeded(entry.model);
+	} else {
+		entry.model = markComposerSendFailed(entry.model, result.error ?? 'Unknown send failure', draft);
+	}
+	renderPanel(entry);
+}
+
+function queueComposerReply(entry: ConversationPanelEntry, text: string): void {
+	if (!text.trim()) {
+		entry.model = markComposerSendFailed(entry.model, 'Message must not be empty', text);
+		renderPanel(entry);
+		return;
+	}
+
+	entry.queue.enqueue(entry.model.sessionId, entry.model.agentType, text);
+	entry.model = markComposerQueued(entry.model);
+	syncQueueComposerStatus(entry);
+	renderPanel(entry);
+}
+
+function wireQueue(entry: ConversationPanelEntry): void {
+	entry.queue.onReplySent.listen(() => {
+		entry.model = markComposerQueuedReplySent(entry.model);
+		scheduleQueueStatusRender(entry);
+	});
+	entry.queue.onReplyFailed.listen(({ reply, error }) => {
+		entry.model = markComposerSendFailed(entry.model, error.message, reply.message);
+		scheduleQueueStatusRender(entry);
+	});
+}
+
+function syncQueueComposerStatus(entry: ConversationPanelEntry): void {
+	entry.model = updateConversationComposer(entry.model, {
+		pendingCount: entry.queue.pending.length,
+		isProcessing: entry.queue.isProcessing,
+	});
+}
+
+function scheduleQueueStatusRender(entry: ConversationPanelEntry): void {
+	clearScheduledQueueRender(entry);
+	entry.queueRenderTimer = setTimeout(() => {
+		entry.queueRenderTimer = undefined;
+		syncQueueComposerStatus(entry);
+		renderPanel(entry);
+	}, 0);
 }
 
 function scheduleSearchRender(entry: ConversationPanelEntry): void {
@@ -226,6 +310,13 @@ function clearScheduledSearchRender(entry: ConversationPanelEntry): void {
 	if (entry.searchRenderTimer) {
 		clearTimeout(entry.searchRenderTimer);
 		entry.searchRenderTimer = undefined;
+	}
+}
+
+function clearScheduledQueueRender(entry: ConversationPanelEntry): void {
+	if (entry.queueRenderTimer) {
+		clearTimeout(entry.queueRenderTimer);
+		entry.queueRenderTimer = undefined;
 	}
 }
 
