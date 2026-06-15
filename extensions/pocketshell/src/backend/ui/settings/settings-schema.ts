@@ -251,6 +251,61 @@ const agentSettings: SettingDefinition[] = [
       { message: 'Must be between 1 and 100', min: 1, max: 100 },
     ],
   },
+  {
+    key: 'promptComposerDictationProvider',
+    label: 'Prompt composer dictation',
+    description: 'Optional transcription provider for inserting dictated text into prompt composer drafts.',
+    type: 'enum',
+    category: 'agent',
+    defaultValue: 'none',
+    enumValues: ['none', 'local', 'system', 'openai'],
+    validation: [],
+  },
+  {
+    key: 'promptComposerDictationCommand',
+    label: 'Dictation command',
+    description: 'Shell command used by local or system prompt composer dictation providers. Stdout is inserted as transcript text.',
+    type: 'string',
+    category: 'agent',
+    defaultValue: '',
+    validation: [
+      { message: 'Dictation command must be at most 1024 characters', maxLength: 1024 },
+    ],
+  },
+  {
+    key: 'promptComposerDictationOpenAiApiKey',
+    label: 'OpenAI dictation API key',
+    description: 'Optional API key used only when prompt composer dictation provider is set to OpenAI. OPENAI_API_KEY is also supported.',
+    type: 'string',
+    category: 'agent',
+    defaultValue: '',
+    validation: [
+      { message: 'OpenAI dictation API key must be at most 4096 characters', maxLength: 4096 },
+    ],
+  },
+  {
+    key: 'promptComposerDictationOpenAiModel',
+    label: 'OpenAI dictation model',
+    description: 'OpenAI audio transcription model for prompt composer dictation.',
+    type: 'string',
+    category: 'agent',
+    defaultValue: 'whisper-1',
+    validation: [
+      { message: 'OpenAI dictation model cannot be empty', minLength: 1 },
+      { message: 'OpenAI dictation model must be at most 128 characters', maxLength: 128 },
+    ],
+  },
+  {
+    key: 'promptComposerDictationLanguage',
+    label: 'Dictation language',
+    description: 'Optional language hint for prompt composer dictation transcription.',
+    type: 'string',
+    category: 'agent',
+    defaultValue: '',
+    validation: [
+      { message: 'Dictation language must be at most 32 characters', maxLength: 32 },
+    ],
+  },
 ];
 
 const usageSettings: SettingDefinition[] = [

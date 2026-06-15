@@ -5,6 +5,8 @@
 
 import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
+import { exec } from 'child_process';
+import * as https from 'https';
 import type { ConnectionService } from '../../connection-service';
 import { getOrConnect, resolveHostId } from '../../host-picking';
 import type { FeatureDeps } from '../manifest';
@@ -14,11 +16,14 @@ import type { QuoteReplyPayload } from '../../backend/agents/conversation';
 import { SftpClient } from '../../backend/files/sftp-client';
 import {
 	addPromptComposerAttachments,
+	appendPromptComposerTranscript,
 	buildInitialPromptDraft,
 	buildPromptComposerDraftKey,
 	buildPromptComposerPromptText,
 	canResolvePromptComposerPaneHostFromTarget,
+	createPromptComposerDictationProvider,
 	createPromptComposerPanelModel,
+	getPromptComposerDictationAvailability,
 	markPromptComposerAttachmentError,
 	markPromptComposerAttachmentUploaded,
 	markPromptComposerAttachmentUploading,
@@ -31,11 +36,14 @@ import {
 	planPromptComposerAttachmentRemotePath,
 	promptComposerPaneTargetsMatchRequest,
 	quoteTargetsPromptComposer,
+	readPromptComposerDictationConfig,
 	removePromptComposerAttachment,
 	renderPromptComposerHtml,
 	resolvePromptComposerInsertTarget,
 	type PromptComposerAttachment,
 	type PromptComposerAttachmentInput,
+	type PromptComposerDictationConfig,
+	type PromptComposerDictationRequest,
 	type PromptComposerPaneTarget,
 	type PromptComposerPanelModel,
 	type PromptComposerTarget,
@@ -58,7 +66,7 @@ interface ResolvedPromptComposerTarget {
 export function registerPromptComposer(
 	service: ConnectionService,
 	ctx: vscode.ExtensionContext,
-	_deps: FeatureDeps,
+	deps: FeatureDeps,
 ): vscode.Disposable[] {
 	const disposables: vscode.Disposable[] = [];
 	const panels = new Map<string, PromptComposerPanelEntry>();
@@ -105,12 +113,16 @@ export function registerPromptComposer(
 				key: draftKey,
 				draftKey,
 				panel,
-				model: createPromptComposerPanelModel(target, initialDraft),
+				model: createPromptComposerPanelModel(target, initialDraft, {
+					dictationEnabled: getPromptComposerDictationAvailability(
+						readPromptComposerDictationConfig(deps.getSettings?.(), process.env),
+					).enabled,
+				}),
 				nonce: createNonce(),
 				insertTarget: resolved.insertTarget,
 			};
 			panels.set(draftKey, entry);
-			wirePanelMessages(service, ctx, entry);
+			wirePanelMessages(service, ctx, deps, entry);
 			renderPanel(entry);
 			panel.onDidDispose(() => panels.delete(draftKey), null, disposables);
 			return entry;
@@ -132,6 +144,7 @@ export function registerPromptComposer(
 function wirePanelMessages(
 	service: ConnectionService,
 	ctx: vscode.ExtensionContext,
+	deps: FeatureDeps,
 	entry: PromptComposerPanelEntry,
 ): void {
 	entry.panel.webview.onDidReceiveMessage(async (message: { action?: string; text?: string; attachmentId?: string }) => {
@@ -141,6 +154,10 @@ function wirePanelMessages(
 		}
 		if (message.action === 'attach-files') {
 			await attachFiles(service, entry);
+			return;
+		}
+		if (message.action === 'dictate') {
+			await dictatePrompt(ctx, deps, entry, message.text ?? '');
 			return;
 		}
 		if (message.action === 'remove-attachment' && message.attachmentId) {
@@ -240,6 +257,40 @@ async function insertPrompt(service: ConnectionService, entry: PromptComposerPan
 	renderPanel(entry);
 }
 
+async function dictatePrompt(
+	ctx: vscode.ExtensionContext,
+	deps: FeatureDeps,
+	entry: PromptComposerPanelEntry,
+	currentDraft: string,
+): Promise<void> {
+	const config = readPromptComposerDictationConfig(deps.getSettings?.(), process.env);
+	const provider = createPromptComposerDictationProvider(config, {
+		runCommand: runDictationCommand,
+		transcribeOpenAi: transcribeOpenAiAudio,
+	});
+	if (!provider) {
+		const availability = getPromptComposerDictationAvailability(config);
+		void vscode.window.showWarningMessage(vscode.l10n.t(availability.reason ?? 'Dictation is not configured.'));
+		return;
+	}
+
+	try {
+		const transcript = await vscode.window.withProgress({
+			location: vscode.ProgressLocation.Notification,
+			title: vscode.l10n.t('Transcribing dictation...'),
+			cancellable: false,
+		}, () => provider.transcribe());
+		if (!transcript.trim()) {
+			void vscode.window.showWarningMessage(vscode.l10n.t('Dictation did not return any transcript text.'));
+			return;
+		}
+		await ctx.workspaceState.update(entry.draftKey, appendPromptComposerTranscript(currentDraft, transcript));
+		void entry.panel.webview.postMessage({ action: 'insert-text', text: transcript });
+	} catch (err) {
+		void vscode.window.showErrorMessage(vscode.l10n.t('Dictation failed: {0}', errorMessage(err)));
+	}
+}
+
 async function attachFiles(service: ConnectionService, entry: PromptComposerPanelEntry): Promise<void> {
 	const uris = await vscode.window.showOpenDialog({
 		canSelectFiles: true,
@@ -269,6 +320,166 @@ async function attachFiles(service: ConnectionService, entry: PromptComposerPane
 	entry.model = addPromptComposerAttachments(entry.model, files);
 	renderPanel(entry);
 	await uploadPendingAttachments(service, entry);
+}
+
+async function runDictationCommand(command: string, request?: PromptComposerDictationRequest): Promise<string> {
+	return new Promise((resolve, reject) => {
+		exec(command, {
+			env: {
+				...process.env,
+				...(request?.audioPath ? { PROMPT_COMPOSER_DICTATION_AUDIO_PATH: request.audioPath } : {}),
+			},
+			maxBuffer: 10 * 1024 * 1024,
+		}, (error, stdout, stderr) => {
+			if (error) {
+				reject(new Error(stderr.trim() || error.message));
+				return;
+			}
+			resolve(stdout);
+		});
+	});
+}
+
+async function transcribeOpenAiAudio(
+	request: PromptComposerDictationRequest,
+	config: PromptComposerDictationConfig,
+): Promise<string> {
+	const audio = request.audioData
+		? Buffer.from(request.audioData)
+		: await readDictationAudioFile(request.audioPath);
+	const filename = request.fileName ?? basenameFromPath(request.audioPath) ?? 'dictation.wav';
+	const mimeType = request.mimeType ?? mimeTypeFromAudioFileName(filename);
+	const body = buildOpenAiTranscriptionBody({
+		audio,
+		filename,
+		mimeType,
+		model: config.openAiModel ?? 'whisper-1',
+		language: config.language,
+	});
+	const response = await postOpenAiTranscription(body, config.openAiApiKey ?? '');
+	const transcript = parseOpenAiTranscript(response);
+	if (!transcript) {
+		throw new Error('OpenAI transcription response did not include text');
+	}
+	return transcript;
+}
+
+async function readDictationAudioFile(audioPath?: string): Promise<Buffer> {
+	const path = audioPath ?? await pickDictationAudioPath();
+	const data = await vscode.workspace.fs.readFile(vscode.Uri.file(path));
+	return Buffer.from(data);
+}
+
+async function pickDictationAudioPath(): Promise<string> {
+	const uris = await vscode.window.showOpenDialog({
+		canSelectFiles: true,
+		canSelectFolders: false,
+		canSelectMany: false,
+		openLabel: vscode.l10n.t('Transcribe'),
+		title: vscode.l10n.t('Select audio file for dictation'),
+		filters: {
+			Audio: ['wav', 'mp3', 'm4a', 'mp4', 'mpeg', 'mpga', 'webm'],
+		},
+	});
+	if (!uris?.[0]) {
+		throw new Error('No audio file selected');
+	}
+	return uris[0].fsPath;
+}
+
+function buildOpenAiTranscriptionBody(options: {
+	audio: Buffer;
+	filename: string;
+	mimeType: string;
+	model: string;
+	language?: string;
+}): { body: Buffer; boundary: string } {
+	const boundary = `----pocketshell-${randomBytes(12).toString('hex')}`;
+	const parts: Buffer[] = [
+		multipartField(boundary, 'model', options.model),
+	];
+	if (options.language) {
+		parts.push(multipartField(boundary, 'language', options.language));
+	}
+	parts.push(Buffer.from(
+		`--${boundary}\r\n`
+		+ `Content-Disposition: form-data; name="file"; filename="${escapeMultipartValue(options.filename)}"\r\n`
+		+ `Content-Type: ${options.mimeType}\r\n\r\n`,
+		'utf8',
+	));
+	parts.push(options.audio);
+	parts.push(Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'));
+	return { body: Buffer.concat(parts), boundary };
+}
+
+function multipartField(boundary: string, name: string, value: string): Buffer {
+	return Buffer.from(
+		`--${boundary}\r\n`
+		+ `Content-Disposition: form-data; name="${escapeMultipartValue(name)}"\r\n\r\n`
+		+ `${value}\r\n`,
+		'utf8',
+	);
+}
+
+async function postOpenAiTranscription(
+	payload: { body: Buffer; boundary: string },
+	apiKey: string,
+): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const req = https.request('https://api.openai.com/v1/audio/transcriptions', {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				'Content-Type': `multipart/form-data; boundary=${payload.boundary}`,
+				'Content-Length': payload.body.length,
+			},
+		}, (res) => {
+			const chunks: Buffer[] = [];
+			res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+			res.on('end', () => {
+				const body = Buffer.concat(chunks).toString('utf8');
+				if ((res.statusCode ?? 500) < 200 || (res.statusCode ?? 500) >= 300) {
+					reject(new Error(`OpenAI transcription failed (${res.statusCode ?? 'unknown'}): ${body}`));
+					return;
+				}
+				resolve(body);
+			});
+		});
+		req.on('error', reject);
+		req.write(payload.body);
+		req.end();
+	});
+}
+
+function parseOpenAiTranscript(body: string): string {
+	try {
+		const parsed = JSON.parse(body) as { text?: unknown };
+		return typeof parsed.text === 'string' ? parsed.text.trim() : '';
+	} catch {
+		return '';
+	}
+}
+
+function basenameFromPath(path: string | undefined): string | undefined {
+	return path?.split(/[\\/]/).filter(Boolean).pop();
+}
+
+function mimeTypeFromAudioFileName(filename: string): string {
+	const ext = filename.split('.').pop()?.toLowerCase();
+	if (ext === 'mp3' || ext === 'mpeg' || ext === 'mpga') {
+		return 'audio/mpeg';
+	}
+	if (ext === 'm4a' || ext === 'mp4') {
+		return 'audio/mp4';
+	}
+	if (ext === 'webm') {
+		return 'audio/webm';
+	}
+	return 'audio/wav';
+}
+
+function escapeMultipartValue(value: string): string {
+	return value.replace(/["\r\n]/g, '_');
 }
 
 async function uploadPendingAttachments(service: ConnectionService, entry: PromptComposerPanelEntry): Promise<void> {

@@ -73,6 +73,7 @@ export interface PromptComposerPanelModel {
   clearDraftToken: number;
   status: PromptComposerStatus;
   attachments: PromptComposerAttachment[];
+  dictationEnabled: boolean;
 }
 
 export interface PromptComposerHtmlRenderOptions {
@@ -135,6 +136,7 @@ export function normalizePromptComposerTarget(input: unknown): PromptComposerTar
 export function createPromptComposerPanelModel(
   target: PromptComposerTarget,
   initialDraft = '',
+  options: { dictationEnabled?: boolean } = {},
 ): PromptComposerPanelModel {
   return {
     target,
@@ -143,6 +145,7 @@ export function createPromptComposerPanelModel(
     clearDraftToken: 0,
     status: { kind: 'idle' },
     attachments: [],
+    dictationEnabled: options.dictationEnabled === true,
   };
 }
 
@@ -519,6 +522,7 @@ button:disabled { opacity: 0.55; cursor: default; }
   <footer class="actions">
     <button type="button" data-action="send">Send</button>
     <button type="button" class="secondary" data-action="insert">Insert</button>
+    ${model.dictationEnabled ? '<button type="button" class="secondary" data-action="dictate">Dictate</button>' : ''}
     <button type="button" class="secondary" data-action="attach">Attach</button>
     <button type="button" class="secondary" data-action="restore-failed-draft"${model.status.failedDraft ? '' : ' disabled'}>Restore Failed Draft</button>
     <span class="status" role="status" data-visible="${status.visible ? 'true' : 'false'}">${status.html}</span>
@@ -578,6 +582,11 @@ document.addEventListener('click', (event) => {
   if (action === 'attach') {
     persistDraft();
     vscode.postMessage({ action: 'attach-files' });
+    return;
+  }
+  if (action === 'dictate') {
+    persistDraft();
+    vscode.postMessage({ action: 'dictate', text: composerInput?.value ?? '' });
     return;
   }
   if (action === 'remove-attachment') {

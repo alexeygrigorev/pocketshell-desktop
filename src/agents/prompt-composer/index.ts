@@ -29,6 +29,14 @@ export {
   sanitizePromptComposerTargetFragment,
   shouldClearPromptComposerDraft,
 } from './panel-model';
+export {
+  DEFAULT_PROMPT_COMPOSER_DICTATION_CONFIG,
+  appendPromptComposerTranscript,
+  createPromptComposerDictationProvider,
+  getPromptComposerDictationAvailability,
+  normalizeTranscript,
+  readPromptComposerDictationConfig,
+} from './dictation';
 export type {
   PromptComposerAttachment,
   PromptComposerAttachmentInput,
@@ -45,3 +53,11 @@ export type {
   PromptComposerTarget,
   PromptComposerWebviewState,
 } from './panel-model';
+export type {
+  PromptComposerDictationAvailability,
+  PromptComposerDictationConfig,
+  PromptComposerDictationDeps,
+  PromptComposerDictationProvider,
+  PromptComposerDictationProviderId,
+  PromptComposerDictationRequest,
+} from './dictation';

@@ -1,19 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import {
   addPromptComposerAttachments,
+  appendPromptComposerTranscript,
   appendPromptComposerText,
   buildPromptComposerAttachmentContext,
   buildInitialPromptDraft,
   buildPromptComposerDraftKey,
   buildPromptComposerPromptText,
   canResolvePromptComposerPaneHostFromTarget,
+  createPromptComposerDictationProvider,
   createPromptComposerPanelModel,
   findPromptComposerAttachmentSendBlocker,
+  getPromptComposerDictationAvailability,
   markPromptComposerAttachmentError,
   markPromptComposerAttachmentUploaded,
   markPromptComposerAttachmentUploading,
   markPromptComposerFailed,
   markPromptComposerSent,
+  readPromptComposerDictationConfig,
   normalizePromptComposerOpenArgs,
   persistPromptComposerDraftState,
   planPromptComposerAttachmentRemotePath,
@@ -143,6 +147,80 @@ describe('prompt composer panel model', () => {
     expect(html).toContain("default-src &#39;none&#39;");
     expect(html).toContain('<script nonce="test-nonce">');
     expect(html).not.toContain('unsafe-inline');
+  });
+
+  it('keeps dictation off by default and does not require an API key', () => {
+    const config = readPromptComposerDictationConfig(undefined, {});
+    const availability = getPromptComposerDictationAvailability(config);
+    const model = createPromptComposerPanelModel({
+      kind: 'agent',
+      hostId: 1,
+      agentType: 'codex',
+      sessionId: 's1',
+    });
+    const html = renderPromptComposerHtml(model);
+
+    expect(config.provider).toBe('none');
+    expect(config.openAiApiKey).toBeUndefined();
+    expect(availability.enabled).toBe(false);
+    expect(createPromptComposerDictationProvider(config, {})).toBeUndefined();
+    expect(html).not.toContain('data-action="dictate"');
+  });
+
+  it('requires an OpenAI key only when the OpenAI dictation provider is enabled', () => {
+    const missingKey = readPromptComposerDictationConfig({
+      promptComposerDictationProvider: 'openai',
+    }, {});
+    const withEnvKey = readPromptComposerDictationConfig({
+      promptComposerDictationProvider: 'openai',
+    }, {
+      OPENAI_API_KEY: 'env-key',
+    });
+
+    expect(getPromptComposerDictationAvailability(missingKey)).toEqual({
+      enabled: false,
+      provider: 'openai',
+      reason: 'OpenAI dictation requires an API key.',
+    });
+    expect(getPromptComposerDictationAvailability(withEnvKey)).toEqual({
+      enabled: true,
+      provider: 'openai',
+    });
+  });
+
+  it('supports local/system provider abstraction without an API key', async () => {
+    const calls: string[] = [];
+    const config = readPromptComposerDictationConfig({
+      promptComposerDictationProvider: 'system',
+      promptComposerDictationCommand: 'dictate-once',
+    }, {});
+    const provider = createPromptComposerDictationProvider(config, {
+      runCommand: async (command) => {
+        calls.push(command);
+        return '  hello from dictation  \n';
+      },
+    });
+
+    await expect(provider?.transcribe()).resolves.toBe('hello from dictation');
+    expect(calls).toEqual(['dictate-once']);
+  });
+
+  it('appends transcripts into composer drafts and renders dictation controls only when enabled', () => {
+    const target = {
+      kind: 'pane' as const,
+      hostId: 1,
+      entryId: 'tmux-ui-1',
+      paneId: '%1',
+    };
+    const disabled = createPromptComposerPanelModel(target);
+    const enabled = createPromptComposerPanelModel(target, 'existing', { dictationEnabled: true });
+    const html = renderPromptComposerHtml(enabled);
+
+    expect(appendPromptComposerTranscript('existing', 'spoken prompt')).toBe('existing\n\nspoken prompt\n\n');
+    expect(appendPromptComposerTranscript('', 'spoken prompt\n')).toBe('spoken prompt\n\n');
+    expect(renderPromptComposerHtml(disabled)).not.toContain('data-action="dictate"');
+    expect(html).toContain('data-action="dictate"');
+    expect(html).toContain("vscode.postMessage({ action: 'dictate', text: composerInput?.value ?? '' })");
   });
 
   it('clears only after successful send and preserves failed drafts', () => {
