@@ -30,6 +30,7 @@ import {
 	type DiagnosticsConfig,
 } from './backend/diagnostics';
 import type { FeatureRegistration } from './feature/manifest';
+import { PortForwardManager } from './backend/port-forwarding';
 
 /**
  * Extension entry point.
@@ -47,6 +48,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	const service = ConnectionService.getInstance();
 	service.setStorageDir(storageDir);
+	const portForwardManager = new PortForwardManager({
+		connections: service.connectionManager,
+	});
 	const settings = new SettingsStore(path.join(storageDir, 'settings.json'));
 	const appSettings = settings.load();
 	const diagnostics = new DiagnosticsEventStore(settingsToDiagnosticsConfig(appSettings));
@@ -1048,6 +1052,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	const deps: FeatureDeps = {
 		refreshTrees: () => treeProvider.refresh(),
 		getSettings: () => ({ ...settings.get() } as Record<string, unknown>),
+		portForwardManager,
 	};
 	for (const feature of FEATURES) {
 		const disposables = registerFeatureWithDiagnostics(feature.register, service, context, deps, recordDiagnostics);
@@ -1057,7 +1062,10 @@ export function activate(context: vscode.ExtensionContext): void {
 	// -- Cleanup on deactivate ---------------------------------------------------
 
 	context.subscriptions.push({
-		dispose: () => service.dispose(),
+		dispose: () => {
+			void portForwardManager.dispose();
+			service.dispose();
+		},
 	});
 }
 

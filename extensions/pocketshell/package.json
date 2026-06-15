@@ -400,6 +400,12 @@
 				"icon": "$(eye-closed)"
 			},
 			{
+				"command": "pocketshell.portForwarding.open",
+				"title": "Port Forwarding: Open Panel",
+				"category": "PocketShell",
+				"icon": "$(plug)"
+			},
+			{
 				"command": "pocketshell.pocketshell.detect",
 				"title": "PocketShell: Detect on Host",
 				"category": "PocketShell",
@@ -608,6 +614,11 @@
 				},
 				{
 					"command": "pocketshell.connect",
+					"when": "view == pocketshell.hosts",
+					"group": "0_terminal"
+				},
+				{
+					"command": "pocketshell.portForwarding.open",
 					"when": "view == pocketshell.hosts",
 					"group": "0_terminal"
 				},
