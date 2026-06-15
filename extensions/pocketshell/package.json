@@ -482,9 +482,51 @@
 				"icon": "$(terminal-tmux)"
 			},
 			{
+				"command": "pocketshell.tmux-ui.refreshTree",
+				"title": "Tmux UI: Refresh Tree",
+				"category": "PocketShell",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.selectPane",
+				"title": "Tmux UI: Select Pane",
+				"category": "PocketShell",
+				"icon": "$(play)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.newWindow",
+				"title": "Tmux UI: New Window",
+				"category": "PocketShell",
+				"icon": "$(window)"
+			},
+			{
 				"command": "pocketshell.tmux-ui.splitPane",
 				"title": "Tmux UI: Split Pane",
 				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.tmux-ui.splitTreePane",
+				"title": "Tmux UI: Split Pane in Tree",
+				"category": "PocketShell",
+				"icon": "$(split-horizontal)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.renameTreeItem",
+				"title": "Tmux UI: Rename",
+				"category": "PocketShell",
+				"icon": "$(edit)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.killTreeItem",
+				"title": "Tmux UI: Kill",
+				"category": "PocketShell",
+				"icon": "$(trash)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.detachTreeSession",
+				"title": "Tmux UI: Detach",
+				"category": "PocketShell",
+				"icon": "$(debug-disconnect)"
 			},
 			{
 				"command": "pocketshell.tmux-ui.capturePane",
@@ -529,6 +571,43 @@
 					"command": "pocketshell.usage.refresh",
 					"when": "view == pocketshell.hosts",
 					"group": "2_usage"
+				},
+				{
+					"command": "pocketshell.tmux-ui.selectPane",
+					"when": "view == pocketshell.tmuxSessions && viewItem == tmuxUiPane",
+					"group": "inline"
+				},
+				{
+					"command": "pocketshell.tmux-ui.newWindow",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiRoot || viewItem == tmuxUiSession || viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "0_create"
+				},
+				{
+					"command": "pocketshell.tmux-ui.splitTreePane",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "0_create"
+				},
+				{
+					"command": "pocketshell.tmux-ui.renameTreeItem",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiSession || viewItem == tmuxUiWindow)",
+					"group": "1_manage"
+				},
+				{
+					"command": "pocketshell.tmux-ui.killTreeItem",
+					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiSession || viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
+					"group": "1_manage"
+				},
+				{
+					"command": "pocketshell.tmux-ui.detachTreeSession",
+					"when": "view == pocketshell.tmuxSessions",
+					"group": "2_session"
+				}
+			],
+			"view/title": [
+				{
+					"command": "pocketshell.tmux-ui.refreshTree",
+					"when": "view == pocketshell.tmuxSessions",
+					"group": "navigation"
 				}
 			],
 			"terminal/context": [
@@ -557,6 +636,11 @@
 					"id": "pocketshell.hosts",
 					"name": "SSH Hosts",
 					"icon": "$(server)"
+				},
+				{
+					"id": "pocketshell.tmuxSessions",
+					"name": "tmux Sessions",
+					"icon": "$(terminal-tmux)"
 				}
 			]
 		}

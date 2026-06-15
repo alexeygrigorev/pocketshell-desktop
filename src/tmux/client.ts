@@ -375,6 +375,21 @@ export class TmuxClient extends EventEmitter {
   }
 
   /**
+   * Select a pane and make it the active pane in its window/session.
+   */
+  async selectPane(paneId: string, sessionId?: string, windowId?: string): Promise<CommandResponse> {
+    const commands: string[] = [];
+    if (sessionId) {
+      commands.push(`switch-client -t ${quoteTmuxArg(sessionId)}`);
+    }
+    if (windowId) {
+      commands.push(`select-window -t ${quoteTmuxArg(windowId)}`);
+    }
+    commands.push(`select-pane -t ${quoteTmuxArg(paneId)}`);
+    return this.enqueueCommand(commands.join(' ; '));
+  }
+
+  /**
    * Set window size policy.
    * Reference: section 8.7
    */
@@ -525,6 +540,9 @@ export class TmuxClient extends EventEmitter {
  */
 function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
   let current = state;
+  const seenSessionIds = new Set<string>();
+  const activeWindowBySession = new Map<string, string>();
+  const activePaneByWindow = new Map<string, string>();
   for (const line of lines) {
     const parts = line.split('\t');
     if (parts.length < 7) continue;
@@ -548,6 +566,7 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
     if (!paneId.startsWith('%')) continue;
     if (!windowId.startsWith('@')) continue;
     if (!sessionId.startsWith('$')) continue;
+    seenSessionIds.add(sessionId);
 
     const width = parseInt(widthStr, 10) || 80;
     const height = parseInt(heightStr, 10) || 24;
@@ -573,16 +592,30 @@ function parsePaneList(state: TmuxState, lines: string[]): TmuxState {
     };
 
     current = upsertPane(current, pane);
+    if (windowActive === '1') {
+      activeWindowBySession.set(sessionId, windowId);
+    }
     if (paneActive === '1') {
-      current = {
-        ...current,
-        activeSessionId: sessionId,
-        activeWindowId: windowId,
-        activePaneId: paneId,
-      };
+      activePaneByWindow.set(`${sessionId}\0${windowId}`, paneId);
     }
   }
-  return current;
+
+  const activeSessionId = current.activeSessionId && seenSessionIds.has(current.activeSessionId)
+    ? current.activeSessionId
+    : seenSessionIds.values().next().value ?? current.activeSessionId;
+  const activeWindowId = activeSessionId
+    ? activeWindowBySession.get(activeSessionId) ?? current.activeWindowId
+    : current.activeWindowId;
+  const activePaneId = activeSessionId && activeWindowId
+    ? activePaneByWindow.get(`${activeSessionId}\0${activeWindowId}`) ?? current.activePaneId
+    : current.activePaneId;
+
+  return {
+    ...current,
+    activeSessionId,
+    activeWindowId,
+    activePaneId,
+  };
 }
 
 function ensureSessionWindow(
@@ -635,7 +668,5 @@ function ensureSessionWindow(
     windowOrder,
   });
 
-  return options.windowActive
-    ? { ...state, sessions, activeSessionId: options.sessionId, activeWindowId: options.windowId }
-    : { ...state, sessions };
+  return { ...state, sessions };
 }

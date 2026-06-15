@@ -33,6 +33,8 @@ export interface TmuxPaneInfo {
   title: string;
   /** Pane mode */
   mode: string;
+  /** Current working directory reported by tmux, when available. */
+  cwd: string | undefined;
   /** Whether this pane has an active terminal attached */
   hasTerminal: boolean;
   /** Terminal ID if a terminal is attached, undefined otherwise */

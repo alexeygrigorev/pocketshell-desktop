@@ -14,6 +14,10 @@ import { getTerminalManager } from '../terminal';
 import type { FeatureDeps } from '../manifest';
 import type { SplitDirection } from '../../backend/tmux-ui/types';
 import { TmuxSessionPseudoterminal } from './tmux-session-terminal';
+import { TmuxSessionRegistry, type RegisteredTmuxSession } from './tmux-session-registry';
+import { TmuxTreeProvider } from './tmux-tree-provider';
+import { getKillTargetFromTmuxTreeNode, type TmuxTreeNode, type TmuxTreePaneNode, type TmuxTreeSessionNode, type TmuxTreeWindowNode } from '../../backend/tmux-ui/tree-model';
+import type { TmuxPaneInfo, TmuxSessionInfo, TmuxWindowInfo } from '../../backend/tmux-ui/types';
 
 interface TmuxUiCommandTarget {
 	hostId?: number;
@@ -45,6 +49,13 @@ export function registerTmuxUi(
 
 	const output = vscode.window.createOutputChannel('PocketShell tmux-ui');
 	disposables.push(output);
+	const registry = new TmuxSessionRegistry();
+	const treeProvider = new TmuxTreeProvider(registry);
+	const treeView = vscode.window.createTreeView('pocketshell.tmuxSessions', {
+		treeDataProvider: treeProvider,
+		showCollapseAll: true,
+	});
+	disposables.push(registry, treeView);
 
 	// -------------------------------------------------------------------------
 	// pocketshell.tmux-ui.showTree — read: render a hierarchical snapshot
@@ -193,13 +204,138 @@ export function registerTmuxUi(
 			if (!conn) {
 				return;
 			}
+			const pty = new TmuxSessionPseudoterminal(conn, sessionName, target?.path);
 
 			const terminal = vscode.window.createTerminal({
 				name: `tmux -CC: ${sessionName}`,
-				pty: new TmuxSessionPseudoterminal(conn, sessionName, target?.path),
+				pty,
 				iconPath: new vscode.ThemeIcon('terminal-tmux'),
 			});
+			registry.register({
+				hostId,
+				hostLabel: host.name || host.hostname,
+				sessionName,
+				terminal,
+				pty,
+			});
 			terminal.show();
+		}),
+	);
+
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.tmux-ui.refreshTree', async () => {
+			await Promise.all(registry.entries().map((entry) => entry.pty.refreshState()));
+			treeProvider.refresh();
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.selectPane', async (element?: unknown) => {
+			const target = await resolvePaneTarget(registry, element);
+			if (!target) {
+				return;
+			}
+			try {
+				await target.entry.pty.selectPane(target.pane.id, target.session.id, target.window.id);
+				target.entry.terminal.show();
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to select pane: {0}', String(err)));
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.newWindow', async (element?: unknown) => {
+			const target = await resolveSessionTarget(registry, element);
+			if (!target) {
+				return;
+			}
+			const name = await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('New tmux window name'),
+			});
+			if (name === undefined) {
+				return;
+			}
+			try {
+				await target.entry.pty.newWindow(target.session.id, name || undefined, target.cwd);
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to create window: {0}', String(err)));
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.splitTreePane', async (element?: unknown) => {
+			const target = await resolvePaneTarget(registry, element);
+			if (!target) {
+				return;
+			}
+			const direction = await vscode.window.showQuickPick(
+				[
+					{ label: 'Vertical', value: 'vertical' as SplitDirection },
+					{ label: 'Horizontal', value: 'horizontal' as SplitDirection },
+				],
+				{ placeHolder: vscode.l10n.t('Split direction') },
+			);
+			if (!direction) {
+				return;
+			}
+			try {
+				await target.entry.pty.splitPane(target.pane.id, direction.value);
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to split pane: {0}', String(err)));
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.renameTreeItem', async (element?: unknown) => {
+			const target = await resolveRenameTarget(registry, element);
+			if (!target) {
+				return;
+			}
+			const name = await vscode.window.showInputBox({
+				prompt: vscode.l10n.t('New name'),
+				value: target.currentName,
+			});
+			if (!name) {
+				return;
+			}
+			try {
+				if (target.kind === 'session') {
+					await target.entry.pty.renameSession(target.id, name);
+				} else {
+					await target.entry.pty.renameWindow(target.id, name);
+				}
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to rename tmux item: {0}', String(err)));
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.killTreeItem', async (element?: unknown) => {
+			const target = await resolveKillTarget(registry, element);
+			if (!target) {
+				return;
+			}
+			const killLabel = vscode.l10n.t('Kill');
+			const confirmed = await vscode.window.showWarningMessage(
+				vscode.l10n.t('Kill tmux {0} "{1}"?', target.kind, target.label),
+				{ modal: true },
+				killLabel,
+			);
+			if (confirmed !== killLabel) {
+				return;
+			}
+			try {
+				if (target.kind === 'session') {
+					await target.entry.pty.killSession(target.id);
+				} else if (target.kind === 'window') {
+					await target.entry.pty.killWindow(target.id);
+				} else {
+					await target.entry.pty.killPane(target.id);
+				}
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to kill tmux item: {0}', String(err)));
+			}
+		}),
+		vscode.commands.registerCommand('pocketshell.tmux-ui.detachTreeSession', async (element?: unknown) => {
+			const entry = await resolveEntry(registry, element);
+			if (!entry) {
+				return;
+			}
+			try {
+				await entry.pty.detach();
+				entry.terminal.dispose();
+			} catch (err) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to detach tmux session: {0}', String(err)));
+			}
 		}),
 	);
 
@@ -289,4 +425,238 @@ function sessionNameFromPath(remotePath: string): string {
 
 function sanitizeTmuxName(value: string): string {
 	return value.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'pocketshell';
+}
+
+interface PaneTarget {
+	entry: RegisteredTmuxSession;
+	session: TmuxSessionInfo;
+	window: TmuxWindowInfo;
+	pane: TmuxPaneInfo;
+}
+
+interface SessionTarget {
+	entry: RegisteredTmuxSession;
+	session: TmuxSessionInfo;
+	cwd: string | undefined;
+}
+
+async function resolveEntry(
+	registry: TmuxSessionRegistry,
+	element: unknown,
+): Promise<RegisteredTmuxSession | undefined> {
+	const entryId = getEntryId(element);
+	if (entryId) {
+		return registry.get(entryId);
+	}
+	const picked = await vscode.window.showQuickPick(
+		registry.entries().map((entry) => ({
+			label: entry.label,
+			description: entry.snapshot?.activePaneId ?? entry.sessionName,
+			entry,
+		})),
+		{ placeHolder: vscode.l10n.t('Select tmux session terminal') },
+	);
+	return picked?.entry;
+}
+
+async function resolvePaneTarget(
+	registry: TmuxSessionRegistry,
+	element: unknown,
+): Promise<PaneTarget | undefined> {
+	const direct = findPaneTarget(registry, element);
+	if (direct) {
+		return direct;
+	}
+	const picks = collectPaneTargets(registry);
+	const picked = await vscode.window.showQuickPick(
+		picks.map((target) => ({
+			label: `${target.pane.id} ${target.pane.cwd ?? ''}`.trim(),
+			description: `${target.session.name} / ${target.window.name}`,
+			target,
+		})),
+		{ placeHolder: vscode.l10n.t('Select tmux pane') },
+	);
+	return picked?.target;
+}
+
+async function resolveSessionTarget(
+	registry: TmuxSessionRegistry,
+	element: unknown,
+): Promise<SessionTarget | undefined> {
+	const paneTarget = findPaneTarget(registry, element);
+	if (paneTarget) {
+		return { entry: paneTarget.entry, session: paneTarget.session, cwd: paneTarget.pane.cwd };
+	}
+	const node = element as Partial<TmuxTreeNode> | undefined;
+	const entry = await resolveEntry(registry, element);
+	if (!entry) {
+		return undefined;
+	}
+	const snapshot = registry.entries().find((candidate) => candidate.id === entry.id)?.snapshot;
+	const sessions = snapshot?.sessions ?? [];
+	if (node?.kind === 'session') {
+		const session = sessions.find((candidate) => candidate.id === (node as TmuxTreeSessionNode).session?.id);
+		if (session) {
+			return { entry, session, cwd: undefined };
+		}
+	}
+	if (node?.kind === 'window') {
+		const windowNode = node as TmuxTreeWindowNode;
+		const session = sessions.find((candidate) => candidate.id === windowNode.session?.id);
+		if (session) {
+			return { entry, session, cwd: undefined };
+		}
+	}
+	const activeSession = sessions.find((session) => session.isActive) ?? sessions[0];
+	if (activeSession) {
+		return { entry, session: activeSession, cwd: undefined };
+	}
+	return undefined;
+}
+
+async function resolveRenameTarget(
+	registry: TmuxSessionRegistry,
+	element: unknown,
+): Promise<{ kind: 'session' | 'window'; entry: RegisteredTmuxSession; id: string; currentName: string } | undefined> {
+	const entry = await resolveEntry(registry, element);
+	const node = element as Partial<TmuxTreeNode> | undefined;
+	if (entry && node?.kind === 'session' && (node as TmuxTreeSessionNode).session) {
+		const session = (node as TmuxTreeSessionNode).session;
+		return { kind: 'session', entry, id: session.id, currentName: session.name };
+	}
+	if (entry && node?.kind === 'window' && (node as TmuxTreeWindowNode).window) {
+		const window = (node as TmuxTreeWindowNode).window;
+		return { kind: 'window', entry, id: window.id, currentName: window.name };
+	}
+	const picks = registry.entries().flatMap((treeEntry) => {
+		const live = registry.get(treeEntry.id);
+		if (!live || !treeEntry.snapshot) {
+			return [];
+		}
+		return treeEntry.snapshot.sessions.flatMap((session) => [
+			{ label: session.name, description: `session ${session.id}`, target: { kind: 'session' as const, entry: live, id: session.id, currentName: session.name } },
+			...session.windows.map((window) => ({
+				label: window.name,
+				description: `window ${window.id} in ${session.name}`,
+				target: { kind: 'window' as const, entry: live, id: window.id, currentName: window.name },
+			})),
+		]);
+	});
+	const picked = await vscode.window.showQuickPick(picks, { placeHolder: vscode.l10n.t('Select tmux item to rename') });
+	return picked?.target;
+}
+
+async function resolveKillTarget(
+	registry: TmuxSessionRegistry,
+	element: unknown,
+): Promise<{ kind: 'session' | 'window' | 'pane'; entry: RegisteredTmuxSession; id: string; label: string } | undefined> {
+	const node = element as Partial<TmuxTreeNode> | undefined;
+	const entryId = getEntryId(element);
+	const entry = entryId ? registry.get(entryId) : undefined;
+	if (entry && isTmuxTreeNode(node)) {
+		const target = getKillTargetFromTmuxTreeNode(node);
+		if (target) {
+			return { ...target, entry };
+		}
+	}
+	const pane = findPaneTarget(registry, element);
+	if (pane) {
+		return { kind: 'pane', entry: pane.entry, id: pane.pane.id, label: pane.pane.id };
+	}
+	const picks = registry.entries().flatMap((treeEntry) => {
+		const live = registry.get(treeEntry.id);
+		if (!live || !treeEntry.snapshot) {
+			return [];
+		}
+		return treeEntry.snapshot.sessions.flatMap((session) => [
+			{ label: session.name, description: `session ${session.id}`, target: { kind: 'session' as const, entry: live, id: session.id, label: session.name } },
+			...session.windows.flatMap((window) => [
+				{ label: window.name, description: `window ${window.id}`, target: { kind: 'window' as const, entry: live, id: window.id, label: window.name } },
+				...window.panes.map((paneInfo) => ({
+					label: paneInfo.id,
+					description: paneInfo.cwd,
+					target: { kind: 'pane' as const, entry: live, id: paneInfo.id, label: paneInfo.id },
+				})),
+			]),
+		]);
+	});
+	const picked = await vscode.window.showQuickPick(picks, { placeHolder: vscode.l10n.t('Select tmux item to kill') });
+	return picked?.target;
+}
+
+function findPaneTarget(registry: TmuxSessionRegistry, element: unknown): PaneTarget | undefined {
+	const node = element as Partial<TmuxTreePaneNode | TmuxTreeWindowNode> | undefined;
+	const entryId = getEntryId(element);
+	if (!entryId) {
+		return undefined;
+	}
+	const entry = registry.get(entryId);
+	const treeEntry = registry.entries().find((candidate) => candidate.id === entryId);
+	if (!entry || !treeEntry?.snapshot) {
+		return undefined;
+	}
+	if (node?.kind === 'pane' && (node as Partial<TmuxTreePaneNode>).pane) {
+		const pane = (node as Partial<TmuxTreePaneNode>).pane!;
+		return findPaneTargetById(entry, treeEntry.snapshot.sessions, pane.id);
+	}
+	if (node?.kind === 'window' && (node as Partial<TmuxTreeWindowNode>).window) {
+		const window = (node as Partial<TmuxTreeWindowNode>).window!;
+		const pane = window.panes.find((candidate) => candidate.isActive) ?? window.panes[0];
+		return pane ? findPaneTargetById(entry, treeEntry.snapshot.sessions, pane.id) : undefined;
+	}
+	return undefined;
+}
+
+function findPaneTargetById(
+	entry: RegisteredTmuxSession,
+	sessions: TmuxSessionInfo[],
+	paneId: string,
+): PaneTarget | undefined {
+	for (const session of sessions) {
+		for (const window of session.windows) {
+			const pane = window.panes.find((candidate) => candidate.id === paneId);
+			if (pane) {
+				return { entry, session, window, pane };
+			}
+		}
+	}
+	return undefined;
+}
+
+function collectPaneTargets(registry: TmuxSessionRegistry): PaneTarget[] {
+	return registry.entries().flatMap((treeEntry) => {
+		const entry = registry.get(treeEntry.id);
+		if (!entry || !treeEntry.snapshot) {
+			return [];
+		}
+		return treeEntry.snapshot.sessions.flatMap((session) =>
+			session.windows.flatMap((window) =>
+				window.panes.map((pane) => ({ entry, session, window, pane })),
+			),
+		);
+	});
+}
+
+function getEntryId(element: unknown): string | undefined {
+	if (!element || typeof element !== 'object') {
+		return undefined;
+	}
+	const value = element as Record<string, unknown>;
+	return typeof value.entryId === 'string' ? value.entryId : undefined;
+}
+
+function isTmuxTreeNode(node: Partial<TmuxTreeNode> | undefined): node is TmuxTreeNode {
+	if (node?.kind === 'root') {
+		return typeof (node as { entryId?: unknown }).entryId === 'string';
+	}
+	if (node?.kind === 'session') {
+		return (node as Partial<TmuxTreeSessionNode>).session !== undefined;
+	}
+	if (node?.kind === 'window') {
+		return (node as Partial<TmuxTreeWindowNode>).window !== undefined;
+	}
+	if (node?.kind === 'pane') {
+		return (node as Partial<TmuxTreePaneNode>).pane !== undefined;
+	}
+	return false;
 }

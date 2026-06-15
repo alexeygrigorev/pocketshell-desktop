@@ -46,6 +46,7 @@ export function buildSnapshot(
           height: pane.height,
           title: pane.title,
           mode: pane.mode,
+          cwd: pane.cwd,
           hasTerminal: terminalId !== undefined,
           terminalId,
           isActive: state.activePaneId === paneId,

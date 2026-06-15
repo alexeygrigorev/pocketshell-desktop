@@ -234,6 +234,51 @@ describe('TmuxClient', () => {
     await client.close();
   });
 
+  it('uses the active pane from the active client window when refreshing all panes', async () => {
+    await client.connect(channel);
+
+    channel.stdoutReader.pushLine('%session-changed $0 test-session');
+    channel.stdoutReader.pushLine('%window-add @0');
+    channel.stdoutReader.pushLine('%window-add @1');
+    await waitFor(() => client.getState().activeSessionId === '$0');
+
+    const refresh = client.refreshState();
+    await channel.waitForWrites(2);
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%0\t@0\t$0\t80\t24\teditor\t0\t/work/editor\ttest-session\teditor\t0\t0\t1\t1');
+    channel.stdoutReader.pushLine('%1\t@1\t$0\t80\t24\tbuild\t0\t/work/build\ttest-session\tbuild\t0\t0\t0\t1');
+    channel.stdoutReader.pushLine('%2\t@2\t$1\t80\t24\tlogs\t0\t/work/logs\tother\tlogs\t0\t0\t1\t1');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+
+    const state = await refresh;
+
+    expect(state.activeSessionId).toBe('$0');
+    expect(state.activeWindowId).toBe('@0');
+    expect(state.activePaneId).toBe('%0');
+    expect(state.sessions.get('$0')?.windows.get('@1')?.panes.has('%1')).toBe(true);
+    expect(state.sessions.get('$1')?.windows.get('@2')?.panes.has('%2')).toBe(true);
+
+    await client.close();
+  });
+
+  it('switches session and window before selecting a pane from another session', async () => {
+    await client.connect(channel);
+
+    const selected = client.selectPane('%9', '$1', '@4');
+    await channel.waitForWrites(2);
+
+    expect(channel.written[1].toString('utf-8')).toBe(
+      'switch-client -t "\\$1" ; select-window -t "@4" ; select-pane -t "%9"\n',
+    );
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(selected).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
   it('escapes session names with single quotes', async () => {
     const quotedClient = new TmuxClient({
       sessionName: "it's here",

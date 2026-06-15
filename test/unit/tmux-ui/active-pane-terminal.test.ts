@@ -39,6 +39,7 @@ class MockClient implements ActivePaneTerminalClient {
   closed = false;
   inputs: { paneId: string; data: string }[] = [];
   resizes: { paneId: string; width: number; height: number }[] = [];
+  selectedPanes: { paneId: string; sessionId?: string; windowId?: string }[] = [];
   commands: string[] = [];
   private stateCallbacks = new Set<(state: TmuxState) => void>();
   private outputCallbacks = new Map<string, Set<(data: Uint8Array) => void>>();
@@ -77,6 +78,12 @@ class MockClient implements ActivePaneTerminalClient {
 
   async resizePane(paneId: string, width: number, height: number): Promise<void> {
     this.resizes.push({ paneId, width, height });
+  }
+
+  async selectPane(paneId: string, sessionId?: string, windowId?: string): Promise<CommandResponse> {
+    this.selectedPanes.push({ paneId, sessionId, windowId });
+    this.state = buildState(paneId);
+    return ok();
   }
 
   async sendCommand(command: string): Promise<CommandResponse> {
@@ -166,6 +173,21 @@ describe('ActivePaneTerminalController', () => {
 
     expect(client.inputs).toEqual([{ paneId: '%1', data: 'ls\r' }]);
     expect(client.resizes).toEqual([{ paneId: '%1', width: 120, height: 40 }]);
+  });
+
+  it('selects a pane through tmux and switches streamed output', async () => {
+    const client = new MockClient();
+    const writes: string[] = [];
+    const controller = new ActivePaneTerminalController(client, (data) => writes.push(data));
+
+    await controller.start(10);
+    await controller.selectPane('%2', '$0', '@0');
+    client.emitOutput('%1', 'old');
+    client.emitOutput('%2', 'new');
+
+    expect(client.selectedPanes).toEqual([{ paneId: '%2', sessionId: '$0', windowId: '@0' }]);
+    expect(controller.getActivePaneId()).toBe('%2');
+    expect(writes).toEqual(['initial', '\r\n', 'new']);
   });
 
   it('detaches without closing the tmux session explicitly', async () => {

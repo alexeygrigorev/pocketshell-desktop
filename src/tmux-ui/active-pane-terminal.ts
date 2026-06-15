@@ -10,6 +10,7 @@ export interface ActivePaneTerminalClient {
   onOutput(paneId: string, callback: (data: Uint8Array) => void): OutputSubscription;
   sendInput(paneId: string, data: string): Promise<CommandResponse>;
   resizePane(paneId: string, width: number, height: number): Promise<void>;
+  selectPane(paneId: string, sessionId?: string, windowId?: string): Promise<CommandResponse>;
   sendCommand(command: string): Promise<CommandResponse>;
   detach(): Promise<void>;
   close(): Promise<void>;
@@ -70,6 +71,18 @@ export class ActivePaneTerminalController {
 
   getActivePaneId(): string | undefined {
     return this.activePaneId;
+  }
+
+  async selectPane(paneId: string, sessionId?: string, windowId?: string): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    const response = await this.client.selectPane(paneId, sessionId, windowId);
+    if (response.isError) {
+      throw new Error(response.output.join('\n') || `Failed to select pane ${paneId}`);
+    }
+    const state = await this.client.refreshState();
+    this.updateState(state);
   }
 
   updateState(state: TmuxState): void {

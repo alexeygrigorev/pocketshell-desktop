@@ -63,7 +63,7 @@ function buildTestState(): TmuxState {
   // Add panes
   state = upsertPane(state, {
     id: '%0', sessionId: '$0', windowId: '@0',
-    width: 80, height: 24, title: 'bash', mode: 'normal',
+    width: 80, height: 24, title: 'bash', mode: 'normal', cwd: '/home/alex/project',
   });
 
   state = upsertPane(state, {
@@ -306,6 +306,7 @@ describe('buildSnapshot', () => {
       expect(pane0.height).toBe(24);
       expect(pane0.title).toBe('bash');
       expect(pane0.mode).toBe('normal');
+      expect(pane0.cwd).toBe('/home/alex/project');
 
       const pane3 = snapshot.sessions[1].windows[0].panes[0];
       expect(pane3.width).toBe(120);
