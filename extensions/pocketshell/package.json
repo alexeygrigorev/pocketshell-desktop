@@ -436,6 +436,18 @@
 				"icon": "$(folder)"
 			},
 			{
+				"command": "pocketshell.files.openPreview",
+				"title": "Files: Open Preview",
+				"category": "PocketShell",
+				"icon": "$(preview)"
+			},
+			{
+				"command": "pocketshell.files.review",
+				"title": "Files: Review with Agent",
+				"category": "PocketShell",
+				"icon": "$(comment-add)"
+			},
+			{
 				"command": "pocketshell.files.watch",
 				"title": "Files: Watch Directory",
 				"category": "PocketShell",

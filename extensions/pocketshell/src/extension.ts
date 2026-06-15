@@ -957,10 +957,11 @@ export function activate(context: vscode.ExtensionContext): void {
 				return;
 			}
 
-			const uri = vscode.Uri.parse(`pocketshell://${picked.hostId}${remotePath}`);
 			try {
-				const doc = await vscode.workspace.openTextDocument(uri);
-				await vscode.window.showTextDocument(doc);
+				await vscode.commands.executeCommand('pocketshell.files.openPreview', {
+					hostId: picked.hostId,
+					path: remotePath,
+				});
 			} catch (err) {
 				vscode.window.showErrorMessage(
 					vscode.l10n.t('Failed to open remote file: {0}', String(err)),

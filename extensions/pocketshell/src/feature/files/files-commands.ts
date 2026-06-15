@@ -11,6 +11,14 @@ import { SftpClient } from '../../backend/files/sftp-client';
 import { FileBrowser, remoteFileUriParts, resolveFileBrowserStartDirectory } from '../../backend/files/file-browser';
 import { RemoteFileWatcher } from '../../backend/files/file-watcher';
 import type { RemoteFileEntry } from '../../backend/files/types';
+import {
+	buildRemoteFileReviewPrompt,
+	classifyRemoteFileEntryPreview,
+	classifyRemoteFileStatPreview,
+	formatBytes,
+	looksLikeBinarySample,
+	type RemoteFilePreviewPlan,
+} from '../../backend/files/remote-file-preview';
 import type { FeatureDeps } from '../manifest';
 
 /**
@@ -93,6 +101,44 @@ export function registerFiles(
 			} catch (err) {
 				vscode.window.showErrorMessage(
 					vscode.l10n.t('Files watch failed: {0}', String(err)),
+				);
+			}
+		}),
+	);
+
+	// -------------------------------------------------------------------------
+	// pocketshell.files.openPreview — classify and preview a remote file
+	// -------------------------------------------------------------------------
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.files.openPreview', async (element?: unknown) => {
+			try {
+				const target = await resolveRemoteFileTarget(service, state, element);
+				if (!target) {
+					return;
+				}
+				await openRemoteFilePreview(state, target.conn, target.hostId, target.path, target.entry);
+			} catch (err) {
+				vscode.window.showErrorMessage(
+					vscode.l10n.t('Failed to preview remote file: {0}', String(err)),
+				);
+			}
+		}),
+	);
+
+	// -------------------------------------------------------------------------
+	// pocketshell.files.review — insert a remote-file review prompt in composer
+	// -------------------------------------------------------------------------
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.files.review', async (element?: unknown) => {
+			try {
+				const target = await resolveRemoteFileTarget(service, state, element);
+				if (!target) {
+					return;
+				}
+				await attachRemoteFileReviewPrompt(state, target.conn, target.hostId, target.path, target.entry);
+			} catch (err) {
+				vscode.window.showErrorMessage(
+					vscode.l10n.t('Failed to create file review prompt: {0}', String(err)),
 				);
 			}
 		}),
@@ -300,17 +346,29 @@ async function browseLoop(
 					await browser.navigate(picked.entry.path);
 					continue;
 				}
-				// File: open via the pocketshell:// FileSystemProvider, mirroring the
-				// core `pocketshell.openRemoteFile` command but with the host + path
-				// already known (the core command re-prompts for both).
-				try {
-					const uri = vscode.Uri.from(remoteFileUriParts(hostId, picked.entry.path));
-					const doc = await vscode.workspace.openTextDocument(uri);
-					await vscode.window.showTextDocument(doc);
-				} catch (err) {
-					vscode.window.showErrorMessage(
-						vscode.l10n.t('Failed to open remote file: {0}', String(err)),
-					);
+				{
+					const action = await vscode.window.showQuickPick([
+						{
+							label: '$(preview) Preview',
+							description: vscode.l10n.t('Open a text, markdown, image, or unsupported preview'),
+							action: 'preview' as const,
+						},
+						{
+							label: '$(comment-add) Review with Agent',
+							description: vscode.l10n.t('Add a review prompt to the current prompt composer'),
+							action: 'review' as const,
+						},
+					], {
+						placeHolder: vscode.l10n.t('{0} — choose an action', picked.entry.path),
+					});
+					if (!action) {
+						continue;
+					}
+					if (action.action === 'review') {
+						await attachRemoteFileReviewPrompt(state, conn, hostId, picked.entry.path, picked.entry);
+					} else {
+						await openRemoteFilePreview(state, conn, hostId, picked.entry.path, picked.entry);
+					}
 				}
 				return;
 		}
@@ -344,4 +402,269 @@ function hasEntryId(element: unknown): boolean {
 	return !!element
 		&& typeof element === 'object'
 		&& typeof (element as { entryId?: unknown }).entryId === 'string';
+}
+
+interface RemoteFileCommandTarget {
+	hostId: number;
+	conn: SshConnection;
+	path: string;
+	entry?: RemoteFileEntry;
+}
+
+interface RemoteFileCommandArgs {
+	hostId?: number;
+	path?: string;
+	entry?: RemoteFileEntry;
+}
+
+async function resolveRemoteFileTarget(
+	service: ConnectionService,
+	state: FilesState,
+	element: unknown,
+): Promise<RemoteFileCommandTarget | undefined> {
+	const args = normalizeRemoteFileCommandArgs(element);
+	const hostId = args.hostId ?? await resolveHostId(service, element, { connectedOnly: true });
+	if (hostId === undefined) {
+		return undefined;
+	}
+	const conn = await getOrConnect(service, hostId);
+	if (conn === null) {
+		return undefined;
+	}
+	const path = args.path ?? resolveTargetPath(element) ?? await vscode.window.showInputBox({
+		prompt: vscode.l10n.t('Remote file path'),
+		value: '~',
+	});
+	if (path === undefined || !path.trim()) {
+		return undefined;
+	}
+	const client = await state.client(hostId, conn);
+	const remotePath = path.trim().startsWith('/')
+		? path.trim()
+		: await client.realpath(path.trim());
+	return {
+		hostId,
+		conn,
+		path: remotePath,
+		entry: args.entry,
+	};
+}
+
+function normalizeRemoteFileCommandArgs(element: unknown): RemoteFileCommandArgs {
+	if (!element || typeof element !== 'object') {
+		return {};
+	}
+	const value = element as {
+		hostId?: unknown;
+		path?: unknown;
+		remotePath?: unknown;
+		entry?: unknown;
+	};
+	const entry = normalizeRemoteFileEntry(value.entry);
+	return {
+		hostId: typeof value.hostId === 'number' ? value.hostId : undefined,
+		path: typeof value.path === 'string'
+			? value.path
+			: typeof value.remotePath === 'string'
+				? value.remotePath
+				: entry?.path,
+		entry,
+	};
+}
+
+function normalizeRemoteFileEntry(input: unknown): RemoteFileEntry | undefined {
+	if (!input || typeof input !== 'object') {
+		return undefined;
+	}
+	const value = input as Partial<RemoteFileEntry>;
+	if (typeof value.path !== 'string' || typeof value.name !== 'string') {
+		return undefined;
+	}
+	return {
+		name: value.name,
+		path: value.path,
+		isDirectory: value.isDirectory === true,
+		isFile: value.isFile !== false,
+		isSymbolicLink: value.isSymbolicLink === true,
+		size: typeof value.size === 'number' ? value.size : 0,
+		modifiedAt: typeof value.modifiedAt === 'number' ? value.modifiedAt : 0,
+		permissions: value.permissions,
+	};
+}
+
+async function resolvePreviewPlan(
+	state: FilesState,
+	conn: SshConnection,
+	hostId: number,
+	path: string,
+	entry?: RemoteFileEntry,
+): Promise<{ client: SftpClient; plan: RemoteFilePreviewPlan }> {
+	const client = await state.client(hostId, conn);
+	if (entry) {
+		return { client, plan: classifyRemoteFileEntryPreview(entry) };
+	}
+	const stat = await client.stat(path);
+	return { client, plan: classifyRemoteFileStatPreview(path, stat) };
+}
+
+async function openRemoteFilePreview(
+	state: FilesState,
+	conn: SshConnection,
+	hostId: number,
+	path: string,
+	entry?: RemoteFileEntry,
+): Promise<void> {
+	const { client, plan } = await resolvePreviewPlan(state, conn, hostId, path, entry);
+	if (plan.kind === 'text' || plan.kind === 'markdown') {
+		if (await textPlanLooksBinary(client, plan)) {
+			await showRemoteFileStatusPanel(hostId, {
+				...plan,
+				kind: 'unsupported',
+				reason: 'File contents appear to be binary.',
+			});
+			return;
+		}
+		const uri = vscode.Uri.from(remoteFileUriParts(hostId, path));
+		const doc = await vscode.workspace.openTextDocument(uri);
+		if (plan.kind === 'markdown') {
+			await vscode.commands.executeCommand('markdown.showPreview', uri);
+		} else {
+			await vscode.window.showTextDocument(doc);
+		}
+		return;
+	}
+	if (plan.kind === 'image') {
+		const data = await client.readFile(path);
+		await showRemoteImagePanel(hostId, plan, data);
+		return;
+	}
+	await showRemoteFileStatusPanel(hostId, plan);
+}
+
+async function textPlanLooksBinary(client: SftpClient, plan: RemoteFilePreviewPlan): Promise<boolean> {
+	if (plan.size === 0) {
+		return false;
+	}
+	const data = await client.readFile(plan.path);
+	return looksLikeBinarySample(data.subarray(0, Math.min(data.length, 4096)));
+}
+
+async function attachRemoteFileReviewPrompt(
+	state: FilesState,
+	conn: SshConnection,
+	hostId: number,
+	path: string,
+	entry?: RemoteFileEntry,
+): Promise<void> {
+	const { plan } = await resolvePreviewPlan(state, conn, hostId, path, entry);
+	const prompt = buildRemoteFileReviewPrompt({
+		hostLabel: hostLabel(hostId),
+		path,
+		size: plan.size,
+		previewKind: plan.kind,
+		reason: plan.reason,
+	});
+	await vscode.commands.executeCommand('pocketshell.promptComposer.open', {
+		prefillText: prompt,
+	});
+}
+
+async function showRemoteImagePanel(hostId: number, plan: RemoteFilePreviewPlan, data: Buffer): Promise<void> {
+	const panel = vscode.window.createWebviewPanel(
+		'pocketshell.remoteFilePreview',
+		vscode.l10n.t('Remote Preview: {0}', plan.displayName),
+		vscode.ViewColumn.Active,
+		{ enableScripts: true },
+	);
+	wirePreviewPanelMessages(panel, hostId, plan);
+	const src = `data:${plan.mediaType ?? 'application/octet-stream'};base64,${data.toString('base64')}`;
+	panel.webview.html = renderRemoteFilePreviewHtml(plan, {
+		body: `<img class="preview-image" src="${src}" alt="${escapeHtml(plan.displayName)}">`,
+	});
+}
+
+async function showRemoteFileStatusPanel(hostId: number, plan: RemoteFilePreviewPlan): Promise<void> {
+	const panel = vscode.window.createWebviewPanel(
+		'pocketshell.remoteFilePreview',
+		vscode.l10n.t('Remote Preview: {0}', plan.displayName),
+		vscode.ViewColumn.Active,
+		{ enableScripts: true },
+	);
+	wirePreviewPanelMessages(panel, hostId, plan);
+	panel.webview.html = renderRemoteFilePreviewHtml(plan, {
+		body: `<div class="state ${plan.kind}">
+			<h2>${escapeHtml(plan.kind === 'large' ? 'Preview skipped' : 'Preview unavailable')}</h2>
+			<p>${escapeHtml(plan.reason ?? 'This file type is not supported for preview.')}</p>
+			<p class="muted">Size: ${escapeHtml(formatBytes(plan.size))}. Preview limit: ${escapeHtml(formatBytes(plan.previewLimit))}.</p>
+		</div>`,
+	});
+}
+
+function wirePreviewPanelMessages(
+	panel: vscode.WebviewPanel,
+	hostId: number,
+	plan: RemoteFilePreviewPlan,
+): void {
+	panel.webview.onDidReceiveMessage(async (message: { action?: string }) => {
+		if (message.action !== 'review') {
+			return;
+		}
+		const prompt = buildRemoteFileReviewPrompt({
+			hostLabel: hostLabel(hostId),
+			path: plan.path,
+			size: plan.size,
+			previewKind: plan.kind,
+			reason: plan.reason,
+		});
+		await vscode.commands.executeCommand('pocketshell.promptComposer.open', {
+			prefillText: prompt,
+		});
+	});
+}
+
+function renderRemoteFilePreviewHtml(plan: RemoteFilePreviewPlan, options: { body: string }): string {
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escapeHtml(plan.displayName)}</title>
+<style>
+body { margin: 0; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+.toolbar { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
+.title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { color: var(--vscode-descriptionForeground); font-size: 12px; }
+button { margin-left: auto; color: var(--vscode-button-foreground); background: var(--vscode-button-background); border: 0; border-radius: 2px; padding: 5px 10px; cursor: pointer; }
+button:hover { background: var(--vscode-button-hoverBackground); }
+main { padding: 16px; }
+.preview-image { display: block; max-width: 100%; max-height: calc(100vh - 86px); object-fit: contain; margin: 0 auto; }
+.state { max-width: 680px; border: 1px solid var(--vscode-panel-border); padding: 16px; }
+.state h2 { margin: 0 0 8px; font-size: 18px; }
+.state p { margin: 0 0 8px; }
+.muted { color: var(--vscode-descriptionForeground); }
+</style>
+</head>
+<body>
+<header class="toolbar">
+<div class="title">${escapeHtml(plan.displayName)}</div>
+<div class="meta">${escapeHtml(plan.path)} · ${escapeHtml(formatBytes(plan.size))}</div>
+<button type="button" id="review">Review with Agent</button>
+</header>
+<main>${options.body}</main>
+<script>
+const vscode = acquireVsCodeApi();
+document.getElementById('review').addEventListener('click', () => vscode.postMessage({ action: 'review' }));
+</script>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;');
 }
