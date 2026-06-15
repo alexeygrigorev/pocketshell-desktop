@@ -48,6 +48,14 @@ export interface ExecResult {
   exitCode: number | null;
 }
 
+/** Parameters for opening an SSH direct-tcpip channel. */
+export interface ForwardOutParams {
+  srcHost: string;
+  srcPort: number;
+  dstHost: string;
+  dstPort: number;
+}
+
 /** An active SSH connection. */
 export interface SshConnection {
   readonly connected: boolean;
@@ -60,6 +68,9 @@ export interface SshConnection {
 
   /** Get an SFTP session. */
   sftp(): Promise<SFTPWrapper>;
+
+  /** Open a direct-tcpip stream through the SSH connection. */
+  forwardOut?(params: ForwardOutParams): Promise<stream.Duplex>;
 
   /** Gracefully disconnect. Idempotent. */
   disconnect(): void;
@@ -262,6 +273,30 @@ export class SshClient implements SshConnection {
           resolve(sftp);
         }
       });
+    });
+  }
+
+  /** Open a direct-tcpip stream through the SSH connection. */
+  forwardOut(params: ForwardOutParams): Promise<stream.Duplex> {
+    return new Promise((resolve, reject) => {
+      if (!this._connected) {
+        reject(new Error('Not connected'));
+        return;
+      }
+
+      this.client.forwardOut(
+        params.srcHost,
+        params.srcPort,
+        params.dstHost,
+        params.dstPort,
+        (err, channel) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(channel as unknown as stream.Duplex);
+          }
+        },
+      );
     });
   }
 

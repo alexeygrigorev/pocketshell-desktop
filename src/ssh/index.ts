@@ -58,6 +58,7 @@ export type {
   KnownHostsPolicy,
   SshConnectParams,
   ExecResult,
+  ForwardOutParams,
   SshConnection,
   ShellOptions,
   SshShell,
