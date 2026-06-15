@@ -188,6 +188,18 @@
 				"category": "PocketShell"
 			},
 			{
+				"command": "pocketshell.usage.panel",
+				"title": "Usage: Show Panel",
+				"category": "PocketShell",
+				"icon": "$(graph)"
+			},
+			{
+				"command": "pocketshell.usage.refresh",
+				"title": "Usage: Refresh",
+				"category": "PocketShell",
+				"icon": "$(refresh)"
+			},
+			{
 				"command": "pocketshell.usage.provider",
 				"title": "Usage: By Provider",
 				"category": "PocketShell"
@@ -401,6 +413,26 @@
 					"command": "pocketshell.deleteHost",
 					"when": "view == pocketshell.hosts",
 					"group": "1_manage"
+				},
+				{
+					"command": "pocketshell.usage.show",
+					"when": "view == pocketshell.hosts",
+					"group": "2_usage"
+				},
+				{
+					"command": "pocketshell.usage.refresh",
+					"when": "view == pocketshell.hosts",
+					"group": "2_usage"
+				}
+			],
+			"terminal/context": [
+				{
+					"command": "pocketshell.usage.panel",
+					"group": "pocketshell_usage"
+				},
+				{
+					"command": "pocketshell.usage.refresh",
+					"group": "pocketshell_usage"
 				}
 			]
 		},
