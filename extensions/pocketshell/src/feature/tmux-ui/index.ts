@@ -21,6 +21,7 @@ export const TMUX_UI_FEATURE: FeatureRegistration = {
 			{ command: 'pocketshell.tmux-ui.killTreeItem', title: 'Tmux UI: Kill', category: 'PocketShell', icon: '$(trash)' },
 			{ command: 'pocketshell.tmux-ui.detachTreeSession', title: 'Tmux UI: Detach', category: 'PocketShell', icon: '$(debug-disconnect)' },
 			{ command: 'pocketshell.tmux-ui.capturePane', title: 'Tmux UI: Capture Pane', category: 'PocketShell', icon: '$(eye)' },
+			{ command: 'pocketshell.tmux-ui.forgetRestoreState', title: 'Tmux UI: Forget Restore State', category: 'PocketShell', icon: '$(discard)' },
 		],
 	},
 	register: registerTmuxUi,

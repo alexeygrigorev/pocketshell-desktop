@@ -533,6 +533,12 @@
 				"title": "Tmux UI: Capture Pane",
 				"category": "PocketShell",
 				"icon": "$(eye)"
+			},
+			{
+				"command": "pocketshell.tmux-ui.forgetRestoreState",
+				"title": "Tmux UI: Forget Restore State",
+				"category": "PocketShell",
+				"icon": "$(discard)"
 			}
 		],
 		"menus": {

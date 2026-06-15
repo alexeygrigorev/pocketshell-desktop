@@ -31,6 +31,8 @@ describe('SettingsStore', () => {
 
       expect(settings.autoConnect).toBe(true);
       expect(settings.lastHostId).toBeNull();
+      expect(settings.restoreSessionOnStartup).toBe(true);
+      expect(settings.sessionRestoreBehavior).toBe('ask');
       expect(settings.theme).toBe('dark');
       expect(settings.diagnosticsEnabled).toBe(true);
       expect(settings.diagnosticsMaxEvents).toBe(500);
@@ -43,6 +45,8 @@ describe('SettingsStore', () => {
       const custom: AppSettings = {
         autoConnect: false,
         lastHostId: 42,
+        restoreSessionOnStartup: false,
+        sessionRestoreBehavior: 'skip',
         theme: 'light',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,
@@ -64,6 +68,8 @@ describe('SettingsStore', () => {
       store.save({
         autoConnect: true,
         lastHostId: 1,
+        restoreSessionOnStartup: true,
+        sessionRestoreBehavior: 'ask',
         theme: 'dark',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,
@@ -72,6 +78,8 @@ describe('SettingsStore', () => {
       store.save({
         autoConnect: false,
         lastHostId: 2,
+        restoreSessionOnStartup: true,
+        sessionRestoreBehavior: 'restore-ready',
         theme: 'system',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,
@@ -95,6 +103,8 @@ describe('SettingsStore', () => {
       expect(settings.autoConnect).toBe(false);
       // Other fields should keep their defaults
       expect(settings.lastHostId).toBeNull();
+      expect(settings.restoreSessionOnStartup).toBe(true);
+      expect(settings.sessionRestoreBehavior).toBe('ask');
       expect(settings.theme).toBe('dark');
     });
 
@@ -129,6 +139,8 @@ describe('SettingsStore', () => {
       expect(settings).toEqual({
         autoConnect: true,
         lastHostId: null,
+        restoreSessionOnStartup: true,
+        sessionRestoreBehavior: 'ask',
         theme: 'dark',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,
@@ -143,6 +155,8 @@ describe('SettingsStore', () => {
       deepStore.save({
         autoConnect: true,
         lastHostId: null,
+        restoreSessionOnStartup: true,
+        sessionRestoreBehavior: 'ask',
         theme: 'dark',
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,

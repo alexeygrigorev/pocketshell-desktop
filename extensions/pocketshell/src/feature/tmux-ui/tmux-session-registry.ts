@@ -8,6 +8,7 @@ export interface RegisteredTmuxSession {
   hostId: number;
   hostLabel: string;
   sessionName: string;
+  path?: string;
   terminal: vscode.Terminal;
   pty: TmuxSessionPseudoterminal;
 }
@@ -18,6 +19,7 @@ export interface TmuxSessionTreeEntry {
   hostId: number;
   hostLabel: string;
   sessionName: string;
+  path?: string;
   terminal: vscode.Terminal;
   pty: TmuxSessionPseudoterminal;
   snapshot: TmuxTreeSnapshot | undefined;
@@ -42,6 +44,15 @@ export class TmuxSessionRegistry implements vscode.Disposable {
     this.changeEmitter.fire();
 
     return new vscode.Disposable(() => this.unregister(id));
+  }
+
+  addEntryDisposable(id: string, disposable: vscode.Disposable): void {
+    const disposables = this.disposables.get(id);
+    if (!disposables) {
+      disposable.dispose();
+      return;
+    }
+    disposables.push(disposable);
   }
 
   get(id: string): RegisteredTmuxSession | undefined {

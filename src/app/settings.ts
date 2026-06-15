@@ -21,6 +21,12 @@ export interface AppSettings {
   /** ID of the most recently connected host (used as a hint, not authoritative). */
   lastHostId: number | null;
 
+  /** Whether to restore the last PocketShell session layout when the app starts. */
+  restoreSessionOnStartup: boolean;
+
+  /** How startup restore should handle missing or disconnected session hosts. */
+  sessionRestoreBehavior: 'ask' | 'restore-ready' | 'skip';
+
   /** UI color theme. */
   theme: 'dark' | 'light' | 'system';
 
@@ -43,6 +49,8 @@ const UI_DEFAULTS = getDefaultsMap();
 export const DEFAULT_SETTINGS: AppSettings = {
   autoConnect: UI_DEFAULTS.autoConnect as boolean,
   lastHostId: UI_DEFAULTS.lastHostId as number | null,
+  restoreSessionOnStartup: UI_DEFAULTS.restoreSessionOnStartup as boolean,
+  sessionRestoreBehavior: UI_DEFAULTS.sessionRestoreBehavior as AppSettings['sessionRestoreBehavior'],
   theme: UI_DEFAULTS.theme as AppSettings['theme'],
   diagnosticsEnabled: UI_DEFAULTS.diagnosticsEnabled as boolean,
   diagnosticsMaxEvents: UI_DEFAULTS.diagnosticsMaxEvents as number,

@@ -14,6 +14,8 @@ export interface FeatureManifest {
 export interface FeatureDeps {
 	/** Refresh the host tree after a feature mutates state. */
 	refreshTrees: () => void;
+	/** Read the current PocketShell app settings from the shared SettingsStore. */
+	getSettings?: () => Record<string, unknown>;
 	/** Reserved for cross-feature deps filled in later batches (e.g. terminalManager). */
 	[key: string]: unknown;
 }

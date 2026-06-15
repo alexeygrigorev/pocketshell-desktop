@@ -1045,7 +1045,10 @@ export function activate(context: vscode.ExtensionContext): void {
 	);
 
 	// -- Feature modules (auto-registered) -------------------------------------
-	const deps: FeatureDeps = { refreshTrees: () => treeProvider.refresh() };
+	const deps: FeatureDeps = {
+		refreshTrees: () => treeProvider.refresh(),
+		getSettings: () => ({ ...settings.get() } as Record<string, unknown>),
+	};
 	for (const feature of FEATURES) {
 		const disposables = registerFeatureWithDiagnostics(feature.register, service, context, deps, recordDiagnostics);
 		context.subscriptions.push(...disposables);

@@ -13,16 +13,34 @@ import { buildSnapshot } from '../../backend/tmux-ui/snapshot-builder';
 import { getTerminalManager } from '../terminal';
 import type { FeatureDeps } from '../manifest';
 import type { SplitDirection } from '../../backend/tmux-ui/types';
+import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
+import { quoteShellArg } from '../../backend/sessions/create-session';
+import {
+	decideTmuxStartupRestore,
+	parseTmuxRestoreTarget,
+	readTmuxRestoreSettings,
+	serializeTmuxRestoreTarget,
+	targetFromSnapshot,
+	type TmuxRestoreTarget,
+} from '../../backend/tmux-ui/restore-state';
 import { TmuxSessionPseudoterminal } from './tmux-session-terminal';
 import { TmuxSessionRegistry, type RegisteredTmuxSession } from './tmux-session-registry';
 import { TmuxTreeProvider } from './tmux-tree-provider';
 import { getKillTargetFromTmuxTreeNode, type TmuxTreeNode, type TmuxTreePaneNode, type TmuxTreeSessionNode, type TmuxTreeWindowNode } from '../../backend/tmux-ui/tree-model';
 import type { TmuxPaneInfo, TmuxSessionInfo, TmuxWindowInfo } from '../../backend/tmux-ui/types';
 
+const RESTORE_STATE_KEY = 'pocketshell.tmuxUi.lastTarget';
+
 interface TmuxUiCommandTarget {
 	hostId?: number;
 	path?: string;
+	cwd?: string;
 	sessionName?: string;
+	sessionId?: string;
+	windowId?: string;
+	paneId?: string;
+	restore?: boolean;
+	requireExisting?: boolean;
 }
 
 /**
@@ -42,8 +60,8 @@ interface TmuxUiCommandTarget {
  */
 export function registerTmuxUi(
 	service: ConnectionService,
-	_ctx: vscode.ExtensionContext,
-	_deps: FeatureDeps,
+	ctx: vscode.ExtensionContext,
+	deps: FeatureDeps,
 ): vscode.Disposable[] {
 	const disposables: vscode.Disposable[] = [];
 
@@ -56,6 +74,7 @@ export function registerTmuxUi(
 		showCollapseAll: true,
 	});
 	disposables.push(registry, treeView);
+	const restoreStore = new TmuxRestoreStore(ctx);
 
 	// -------------------------------------------------------------------------
 	// pocketshell.tmux-ui.showTree — read: render a hierarchical snapshot
@@ -184,41 +203,14 @@ export function registerTmuxUi(
 	disposables.push(
 		vscode.commands.registerCommand('pocketshell.tmux-ui.openSession', async (element?: unknown) => {
 			const target = resolveTmuxUiTarget(element);
-			const hostId = await resolveHostId(service, target?.hostId ?? element, { connectedOnly: false });
-			if (hostId === undefined) {
-				return;
-			}
-			const host = await service.getHost(hostId);
-			if (!host) {
-				void vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'));
-				return;
-			}
-			const sessionName = target?.sessionName ?? await vscode.window.showInputBox({
-				prompt: vscode.l10n.t('tmux session name to open or create'),
-				value: target?.path ? sessionNameFromPath(target.path) : 'pocketshell',
-			});
-			if (!sessionName) {
-				return;
-			}
-			const conn = await getOrConnect(service, hostId);
-			if (!conn) {
-				return;
-			}
-			const pty = new TmuxSessionPseudoterminal(conn, sessionName, target?.path);
+			await openTmuxUiSession(service, registry, restoreStore, target, element);
+		}),
+	);
 
-			const terminal = vscode.window.createTerminal({
-				name: `tmux -CC: ${sessionName}`,
-				pty,
-				iconPath: new vscode.ThemeIcon('terminal-tmux'),
-			});
-			registry.register({
-				hostId,
-				hostLabel: host.name || host.hostname,
-				sessionName,
-				terminal,
-				pty,
-			});
-			terminal.show();
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.tmux-ui.forgetRestoreState', async () => {
+			await restoreStore.clear();
+			void vscode.window.showInformationMessage(vscode.l10n.t('Forgot the last tmux UI session restore state.'));
 		}),
 	);
 
@@ -235,6 +227,7 @@ export function registerTmuxUi(
 			try {
 				await target.entry.pty.selectPane(target.pane.id, target.session.id, target.window.id);
 				target.entry.terminal.show();
+				await persistRestoreTarget(restoreStore, target.entry);
 			} catch (err) {
 				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to select pane: {0}', String(err)));
 			}
@@ -339,6 +332,8 @@ export function registerTmuxUi(
 		}),
 	);
 
+	void restoreTmuxUiSessionOnStartup(service, registry, restoreStore, deps);
+
 	return disposables;
 }
 
@@ -406,6 +401,280 @@ async function withSessionManager<T>(
 	}
 }
 
+class TmuxRestoreStore {
+	constructor(private readonly ctx: vscode.ExtensionContext) {}
+
+	load(): TmuxRestoreTarget | null {
+		return parseTmuxRestoreTarget(this.ctx.globalState.get(RESTORE_STATE_KEY));
+	}
+
+	async save(target: TmuxRestoreTarget): Promise<void> {
+		await this.ctx.globalState.update(RESTORE_STATE_KEY, serializeTmuxRestoreTarget(target));
+	}
+
+	async clear(): Promise<void> {
+		await this.ctx.globalState.update(RESTORE_STATE_KEY, undefined);
+	}
+}
+
+async function openTmuxUiSession(
+	service: ConnectionService,
+	registry: TmuxSessionRegistry,
+	restoreStore: TmuxRestoreStore,
+	target: TmuxUiCommandTarget | undefined,
+	element: unknown,
+): Promise<RegisteredTmuxSession | undefined> {
+	const hostId = await resolveHostId(service, target?.hostId ?? element, { connectedOnly: false });
+	if (hostId === undefined) {
+		return undefined;
+	}
+	const host = await service.getHost(hostId);
+	if (!host) {
+		await restoreStore.clear();
+		void vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'), vscode.l10n.t('Forget Restore State'))
+			.then((choice) => choice && restoreStore.clear());
+		return undefined;
+	}
+	const sessionName = target?.sessionName ?? await vscode.window.showInputBox({
+		prompt: vscode.l10n.t('tmux session name to open or create'),
+		value: target?.path ? sessionNameFromPath(target.path) : 'pocketshell',
+	});
+	if (!sessionName) {
+		return undefined;
+	}
+	const conn = await getOrConnect(service, hostId);
+	if (!conn) {
+		await showReconnectMessage(hostId, host.name || host.hostname, restoreStore);
+		return undefined;
+	}
+	if (target?.requireExisting && !(await hasTmuxSession(conn, sessionName))) {
+		await restoreStore.clear();
+		void vscode.window.showWarningMessage(
+			vscode.l10n.t('The restored tmux session "{0}" no longer exists on {1}.', sessionName, host.name || host.hostname),
+			vscode.l10n.t('Open Host Detail'),
+		).then((choice) => {
+			if (choice) {
+				void vscode.commands.executeCommand('pocketshell.hostDetail.open', hostId);
+			}
+		});
+		await vscode.commands.executeCommand('pocketshell.hostDetail.open', hostId);
+		return undefined;
+	}
+
+	const hostLabel = host.name || host.hostname;
+	const pty = new TmuxSessionPseudoterminal(conn, sessionName, target?.path ?? target?.cwd);
+	const terminal = vscode.window.createTerminal({
+		name: `tmux -CC: ${sessionName}`,
+		pty,
+		iconPath: new vscode.ThemeIcon('terminal-tmux'),
+	});
+	const entry = {
+		hostId,
+		hostLabel,
+		sessionName,
+		terminal,
+		pty,
+		path: target?.path,
+	};
+	registry.register(entry);
+	const registered = registry.entries().find((candidate) => candidate.terminal === terminal && candidate.pty === pty);
+	const liveEntry = registered ? registry.get(registered.id) : undefined;
+	if (liveEntry) {
+		registry.addEntryDisposable(liveEntry.id, attachRestorePersistence(restoreStore, liveEntry));
+		if (target?.restore || target?.requireExisting) {
+			registry.addEntryDisposable(liveEntry.id, attachRestoreOpenFailureActions(restoreStore, liveEntry));
+		}
+	}
+	terminal.show();
+
+	await restoreStore.save({
+		hostId,
+		hostLabel,
+		sessionName,
+		sessionId: target?.sessionId,
+		windowId: target?.windowId,
+		paneId: target?.paneId,
+		cwd: target?.cwd,
+		path: target?.path,
+		updatedAt: Date.now(),
+	});
+
+	if (liveEntry && target?.paneId) {
+		void selectRestoredPaneWhenReady(liveEntry, target);
+	}
+
+	return liveEntry;
+}
+
+function attachRestorePersistence(
+	restoreStore: TmuxRestoreStore,
+	entry: RegisteredTmuxSession,
+): vscode.Disposable {
+	const update = () => {
+		void persistRestoreTarget(restoreStore, entry);
+	};
+	const stateSub = entry.pty.onDidChangeState(update);
+	const closeSub = entry.pty.onDidClose(() => {
+		stateSub.dispose();
+		closeSub.dispose();
+	});
+	return new vscode.Disposable(() => {
+		stateSub.dispose();
+		closeSub.dispose();
+	});
+}
+
+function attachRestoreOpenFailureActions(
+	restoreStore: TmuxRestoreStore,
+	entry: RegisteredTmuxSession,
+): vscode.Disposable {
+	const closeSub = entry.pty.onDidClose((exitCode) => {
+		closeSub.dispose();
+		if (exitCode === 0) {
+			return;
+		}
+		const hostDetailLabel = vscode.l10n.t('Open Host Detail');
+		const forgetLabel = vscode.l10n.t('Forget Restore State');
+		void vscode.window.showErrorMessage(
+			vscode.l10n.t('Could not restore tmux session "{0}" on {1}.', entry.sessionName, entry.hostLabel),
+			hostDetailLabel,
+			forgetLabel,
+		).then(async (choice) => {
+			if (choice === hostDetailLabel) {
+				await vscode.commands.executeCommand('pocketshell.hostDetail.open', entry.hostId);
+			} else if (choice === forgetLabel) {
+				await restoreStore.clear();
+			}
+		});
+	});
+	return closeSub;
+}
+
+async function persistRestoreTarget(
+	restoreStore: TmuxRestoreStore,
+	entry: RegisteredTmuxSession,
+): Promise<void> {
+	const state = entry.pty.getState();
+	if (!state) {
+		return;
+	}
+	const snapshot = buildSnapshot(state, new Map());
+	await restoreStore.save(targetFromSnapshot({
+		hostId: entry.hostId,
+		hostLabel: entry.hostLabel,
+		sessionName: entry.sessionName,
+		path: entry.path,
+	}, snapshot, Date.now()));
+}
+
+async function selectRestoredPaneWhenReady(
+	entry: RegisteredTmuxSession,
+	target: TmuxUiCommandTarget,
+): Promise<void> {
+	const paneId = target.paneId;
+	if (!paneId) {
+		return;
+	}
+	const started = Date.now();
+	while (Date.now() - started < 5_000) {
+		const state = entry.pty.getState();
+		const snapshot = state ? buildSnapshot(state, new Map()) : undefined;
+		const pane = snapshot?.sessions
+			.flatMap((session) => session.windows.flatMap((window) => window.panes.map((candidate) => ({ session, window, pane: candidate }))))
+			.find((candidate) => candidate.pane.id === paneId);
+		if (pane) {
+			await entry.pty.selectPane(pane.pane.id, pane.session.id, pane.window.id);
+			return;
+		}
+		await delay(100);
+	}
+}
+
+async function restoreTmuxUiSessionOnStartup(
+	service: ConnectionService,
+	registry: TmuxSessionRegistry,
+	restoreStore: TmuxRestoreStore,
+	deps: FeatureDeps,
+): Promise<void> {
+	const target = restoreStore.load();
+	const settings = readTmuxRestoreSettings(deps.getSettings?.());
+	const hostReady = target ? service.getConnection(target.hostId) !== null : false;
+	const decision = decideTmuxStartupRestore({
+		enabled: settings.restoreSessionOnStartup,
+		behavior: settings.sessionRestoreBehavior,
+		target,
+		hostReady,
+	});
+	if (decision.action === 'skip') {
+		return;
+	}
+
+	const restore = async () => openTmuxUiSession(service, registry, restoreStore, {
+		...decision.target,
+		restore: true,
+		requireExisting: true,
+	}, decision.target);
+
+	if (decision.action === 'restore') {
+		await restore();
+		return;
+	}
+
+	const label = decision.target.hostLabel ?? String(decision.target.hostId);
+	const restoreLabel = vscode.l10n.t('Restore');
+	const hostDetailLabel = vscode.l10n.t('Open Host Detail');
+	const forgetLabel = vscode.l10n.t('Forget Restore State');
+	const choice = await vscode.window.showInformationMessage(
+		vscode.l10n.t('Restore tmux session "{0}" on {1}?', decision.target.sessionName, label),
+		restoreLabel,
+		hostDetailLabel,
+		forgetLabel,
+	);
+	if (choice === restoreLabel) {
+		await restore();
+	} else if (choice === hostDetailLabel) {
+		await vscode.commands.executeCommand('pocketshell.hostDetail.open', decision.target.hostId);
+	} else if (choice === forgetLabel) {
+		await restoreStore.clear();
+	}
+}
+
+async function hasTmuxSession(conn: SshConnection, sessionName: string): Promise<boolean> {
+	try {
+		const result = await conn.exec(`tmux has-session -t ${quoteShellArg(sessionName)}`, 3_000);
+		return result.exitCode === 0;
+	} catch {
+		return false;
+	}
+}
+
+async function showReconnectMessage(
+	hostId: number,
+	hostLabel: string,
+	restoreStore: TmuxRestoreStore,
+): Promise<void> {
+	const connectLabel = vscode.l10n.t('Connect');
+	const hostDetailLabel = vscode.l10n.t('Open Host Detail');
+	const forgetLabel = vscode.l10n.t('Forget Restore State');
+	const choice = await vscode.window.showWarningMessage(
+		vscode.l10n.t('Could not connect to {0} for tmux restore.', hostLabel),
+		connectLabel,
+		hostDetailLabel,
+		forgetLabel,
+	);
+	if (choice === connectLabel) {
+		await vscode.commands.executeCommand('pocketshell.connect', hostId);
+	} else if (choice === hostDetailLabel) {
+		await vscode.commands.executeCommand('pocketshell.hostDetail.open', hostId);
+	} else if (choice === forgetLabel) {
+		await restoreStore.clear();
+	}
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function resolveTmuxUiTarget(element: unknown): TmuxUiCommandTarget | undefined {
 	if (!element || typeof element !== 'object') {
 		return undefined;
@@ -414,7 +683,13 @@ function resolveTmuxUiTarget(element: unknown): TmuxUiCommandTarget | undefined 
 	return {
 		hostId: typeof value.hostId === 'number' ? value.hostId : undefined,
 		path: typeof value.path === 'string' ? value.path : undefined,
+		cwd: typeof value.cwd === 'string' ? value.cwd : undefined,
 		sessionName: typeof value.sessionName === 'string' ? value.sessionName : undefined,
+		sessionId: typeof value.sessionId === 'string' ? value.sessionId : undefined,
+		windowId: typeof value.windowId === 'string' ? value.windowId : undefined,
+		paneId: typeof value.paneId === 'string' ? value.paneId : undefined,
+		restore: value.restore === true,
+		requireExisting: value.requireExisting === true,
 	};
 }
 
