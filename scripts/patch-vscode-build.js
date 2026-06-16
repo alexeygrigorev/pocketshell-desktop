@@ -142,6 +142,102 @@ function patchPaneCompositeBar() {
   }
 }
 
+function patchWelcomeOnboarding() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'workbench', 'contrib', 'welcomeOnboarding', 'browser', 'onboardingVariationA.ts');
+  let content = read(file);
+  content = content.replace(
+    "import { assertDefined } from '../../../../base/common/types.js';\n",
+    ''
+  );
+  content = content.replace(
+    "assertDefined(product.defaultChatAgent, 'Onboarding requires a default chat agent product configuration.');\nconst defaultChat = product.defaultChatAgent;",
+    `const defaultChat = product.defaultChatAgent ?? {
+\tprovider: {
+\t\tdefault: { id: 'pocketshell', name: 'PocketShell' },
+\t\tenterprise: { id: 'pocketshell', name: 'PocketShell' },
+\t},
+\tproviderUriSetting: 'pocketshell.providerUri',
+\ttermsStatementUrl: 'https://github.com/alexeygrigorev/pocketshell-desktop',
+\tprivacyStatementUrl: 'https://github.com/alexeygrigorev/pocketshell-desktop',
+\tpublicCodeMatchesUrl: 'https://github.com/alexeygrigorev/pocketshell-desktop',
+};`
+  );
+  if (writeIfChanged(file, content)) {
+    log('patched welcome onboarding default chat dependency');
+  }
+}
+
+function patchWelcomeOnboardingContribution() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'workbench', 'contrib', 'welcomeOnboarding', 'browser', 'welcomeOnboarding.contribution.ts');
+  let content = read(file);
+  const original = `// Load styles for the remaining onboarding variant.
+import './media/variationA.css';
+
+import { localize2 } from '../../../../nls.js';
+import { Categories } from '../../../../platform/action/common/actionCommonCategories.js';
+import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
+import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { IOnboardingService } from '../common/onboardingService.js';
+import { OnboardingVariationA } from './onboardingVariationA.js';
+
+registerSingleton(IOnboardingService, OnboardingVariationA, InstantiationType.Delayed);`;
+  const replacement = `import { Event } from '../../../../base/common/event.js';
+import { localize2 } from '../../../../nls.js';
+import { Categories } from '../../../../platform/action/common/actionCommonCategories.js';
+import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
+import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { IOnboardingService } from '../common/onboardingService.js';
+
+class PocketShellNoopOnboardingService implements IOnboardingService {
+\tdeclare readonly _serviceBrand: undefined;
+\treadonly onDidComplete = Event.None;
+\treadonly onDidDismiss = Event.None;
+\tshow(): void {}
+}
+
+registerSingleton(IOnboardingService, PocketShellNoopOnboardingService, InstantiationType.Delayed);`;
+  content = content.replace(original, replacement);
+  content = content.replace(
+    "\t\tconst onboardingService = accessor.get(IOnboardingService);\n\t\tonboardingService.show();",
+    "\t\taccessor.get(IOnboardingService).show();"
+  );
+  if (writeIfChanged(file, content)) {
+    log('disabled welcome onboarding contribution');
+  }
+}
+
+function patchSessionsWelcome() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'sessions', 'browser', 'sessionsSetUpService.ts');
+  let content = read(file);
+  content = content.replace(
+    "\t\tif (!this.productService.defaultChatAgent?.chatExtensionId) {\n\t\t\tthis.onCompleted();\n\t\t\treturn;\n\t\t}\n",
+    "\t\tif (!this.productService.defaultChatAgent?.chatExtensionId || this.productService.defaultChatAgent.provider?.default?.id === 'pocketshell') {\n\t\t\tthis.onCompleted();\n\t\t\treturn;\n\t\t}\n"
+  );
+  if (writeIfChanged(file, content)) {
+    log('patched sessions welcome for PocketShell');
+  }
+}
+
+function patchAgentHostStartup() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'code', 'electron-main', 'app.ts');
+  let content = read(file);
+  content = content.replace(
+    `\t\t// Agent Host
+\t\tif (isAgentHostEnabled(this.configurationService)) {
+\t\t\tconst agentHostStarter = new ElectronAgentHostStarter(this.configurationService, this.environmentMainService, this.lifecycleMainService, this.logService);
+\t\t\tthis._register(new AgentHostProcessManager(agentHostStarter, this.logService, this.loggerService));
+\t\t}
+`,
+    `\t\t// PocketShell does not ship VS Code's local agent host.
+`
+  );
+  if (writeIfChanged(file, content)) {
+    log('disabled Electron agent host startup');
+  }
+}
+
 if (!fs.existsSync(vscodeDir)) {
   throw new Error(`VS Code source not found at ${vscodeDir}`);
 }
@@ -155,3 +251,7 @@ patchGulpfileVscode();
 patchExtensionGulpfile();
 patchExtensionsLib();
 patchPaneCompositeBar();
+patchWelcomeOnboarding();
+patchWelcomeOnboardingContribution();
+patchSessionsWelcome();
+patchAgentHostStartup();

@@ -41,6 +41,21 @@
     "controlUrl": "",
     "recommendationsUrl": ""
   },
+  "defaultChatAgent": {
+    "extensionId": "pocketshell.chat-placeholder",
+    "chatExtensionId": "pocketshell.chat-placeholder",
+    "provider": {
+      "default": {
+        "id": "pocketshell",
+        "name": "PocketShell"
+      },
+      "enterprise": {
+        "id": "pocketshell",
+        "name": "PocketShell"
+      }
+    },
+    "providerScopes": []
+  },
   "extensionEnabledApiProposals": {},
   "builtInExtensions": [],
   "trustedExtensionAuthAccess": {},
@@ -57,6 +72,7 @@
     "extensions.autoUpdate": false,
     "extensions.ignoreRecommendations": true,
     "extensions.showRecommendationsOnlyOnDemand": true,
+    "chat.agentHost.enabled": false,
     "git.enabled": false,
     "scm.alwaysShowRepositories": false,
     "debug.showInStatusBar": "never"

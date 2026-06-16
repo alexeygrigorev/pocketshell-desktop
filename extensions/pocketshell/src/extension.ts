@@ -1274,6 +1274,8 @@ async function focusPocketShellViewOnStartup(
 	recordDiagnostics: (input: DiagnosticRecordInput) => void,
 ): Promise<void> {
 	try {
+		await executeStartupCommand('workbench.action.closeAllEditors', recordDiagnostics);
+		await executeStartupCommand('workbench.action.closeAuxiliaryBar', recordDiagnostics);
 		await vscode.commands.executeCommand('workbench.view.extension.pocketshell');
 		recordDiagnostics({ category: 'navigation', name: 'startup_focus_pocketshell_view' });
 	} catch (err) {
@@ -1281,6 +1283,24 @@ async function focusPocketShellViewOnStartup(
 			category: 'navigation',
 			name: 'startup_focus_pocketshell_view_failed',
 			metadata: normalizeDiagnosticError(err),
+		});
+	}
+}
+
+async function executeStartupCommand(
+	commandId: string,
+	recordDiagnostics: (input: DiagnosticRecordInput) => void,
+): Promise<void> {
+	try {
+		await vscode.commands.executeCommand(commandId);
+	} catch (err) {
+		recordDiagnostics({
+			category: 'navigation',
+			name: 'startup_command_failed',
+			metadata: {
+				commandId,
+				...normalizeDiagnosticError(err),
+			},
 		});
 	}
 }
