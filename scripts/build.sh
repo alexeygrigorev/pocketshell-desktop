@@ -82,12 +82,31 @@ if [[ -f "$PROJECT_ROOT/product.json" ]]; then
     cp "$PROJECT_ROOT/product.json" "$VSCODE_DIR/product.json"
 fi
 
+# --- Apply PocketShell build patches ---
+info "Applying PocketShell VS Code build patches..."
+node "$PROJECT_ROOT/scripts/patch-vscode-build.js"
+
+# --- Sync PocketShell extension ---
+info "Syncing PocketShell extension..."
+mkdir -p "$VSCODE_DIR/extensions/pocketshell"
+cp -r "$PROJECT_ROOT/extensions/pocketshell/." "$VSCODE_DIR/extensions/pocketshell/"
+rm -rf "$VSCODE_DIR/extensions/pocketshell/node_modules"
+rm -rf "$VSCODE_DIR/extensions/pocketshell/out"
+rm -f "$VSCODE_DIR/extensions/pocketshell/tsconfig.tsbuildinfo"
+
 # --- Install dependencies ---
 if [[ ! -d "$VSCODE_DIR/node_modules" ]]; then
     info "Installing dependencies..."
     (cd "$VSCODE_DIR" && npm install)
 else
     info "Dependencies already installed (node_modules exists)."
+fi
+
+if [[ ! -d "$VSCODE_DIR/extensions/pocketshell/node_modules" ]]; then
+    info "Installing PocketShell extension dependencies..."
+    (cd "$VSCODE_DIR/extensions/pocketshell" && npm install --omit=optional)
+else
+    info "PocketShell extension dependencies already installed."
 fi
 
 # --- Build ---

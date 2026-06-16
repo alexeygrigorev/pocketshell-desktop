@@ -4,6 +4,7 @@ node_modules/
 # VS Code source (cloned at build time)
 vendor/vscode/
 vendor/vscode-*/
+vendor/VSCode-*/
 
 # Build output
 dist/

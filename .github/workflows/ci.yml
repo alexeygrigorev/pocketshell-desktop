@@ -63,7 +63,7 @@ jobs:
           path: vendor/vscode
           key: vscode-${{ env.VSCODE_REF }}-ext-compile-v1
 
-      # ── Clone + install + patch (cache miss only) ──────────────────────
+      # ── Clone + install (cache miss only) ──────────────────────────────
       - name: Clone VS Code source
         if: steps.cache-base.outputs.cache-hit != 'true'
         shell: bash
@@ -79,33 +79,9 @@ jobs:
         shell: bash
         run: cd vendor/vscode && npm install
 
-      - name: Patch gulpfile for PocketShell extension
-        if: steps.cache-base.outputs.cache-hit != 'true'
+      - name: Apply PocketShell VS Code build patches
         shell: bash
-        run: |
-          cat > /tmp/patch-gulpfile.js << 'PATCH_EOF'
-          const fs = require('fs');
-          const filePath = 'vendor/vscode/build/gulpfile.extensions.ts';
-          let content = fs.readFileSync(filePath, 'utf8');
-          const compilationsMatch = content.match(/^const compilations = \[$/m);
-          if (!compilationsMatch) { process.exit(1); }
-          const compilationsStart = compilationsMatch.index;
-          const compilationsEnd = content.indexOf('];', compilationsStart);
-          if (compilationsEnd === -1) { process.exit(1); }
-          const arrayBlock = content.slice(compilationsStart, compilationsEnd + 2);
-          if (arrayBlock.includes('pocketshell')) { process.exit(0); }
-          const newArrayBlock = arrayBlock.replace(/\];$/, "\t'extensions/pocketshell/tsconfig.json'\n];");
-          content = content.slice(0, compilationsStart) + newArrayBlock + content.slice(compilationsEnd + 2);
-          fs.writeFileSync(filePath, content, 'utf8');
-          PATCH_EOF
-          node /tmp/patch-gulpfile.js
-
-      - name: Patch extensions.ts nodir fix
-        if: steps.cache-base.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          sed -i "s/gulp.src(dependenciesSrc, { base: '.' })/gulp.src(dependenciesSrc, { base: '.', nodir: true })/g" \
-            vendor/vscode/build/lib/extensions.ts
+        run: node scripts/patch-vscode-build.js
 
       # ── PocketShell extension (every run) ──────────────────────────────
       - name: Sync extension source

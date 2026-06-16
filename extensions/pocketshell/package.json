@@ -3,7 +3,7 @@
 	"displayName": "PocketShell",
 	"description": "Terminal-first, agent-aware SSH client",
 	"publisher": "pocketshell",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"license": "MIT",
 	"engines": {
 		"vscode": "^1.70.0"
@@ -889,7 +889,13 @@
 					"icon": "$(terminal-tmux)"
 				}
 			]
-		}
+		},
+		"viewsWelcome": [
+			{
+				"view": "pocketshell.hosts",
+				"contents": "[Import SSH Config](command:pocketshell.importSshConfig)\n[Add Host](command:pocketshell.addHost)"
+			}
+		]
 	},
 	"devDependencies": {
 		"@types/node": "^24.13.2"

@@ -124,32 +124,9 @@ jobs:
         shell: bash
         run: cp product.json vendor/vscode/product.json
 
-      - name: Patch gulpfile for PocketShell extension
+      - name: Apply PocketShell VS Code build patches
         shell: bash
-        run: |
-          cat > /tmp/patch-gulpfile.js << 'PATCH_EOF'
-          const fs = require('fs');
-          const filePath = 'vendor/vscode/build/gulpfile.extensions.ts';
-          let content = fs.readFileSync(filePath, 'utf8');
-          const compilationsMatch = content.match(/^const compilations = \[$/m);
-          if (!compilationsMatch) { process.exit(1); }
-          const compilationsStart = compilationsMatch.index;
-          const compilationsEnd = content.indexOf('];', compilationsStart);
-          if (compilationsEnd === -1) { process.exit(1); }
-          const arrayBlock = content.slice(compilationsStart, compilationsEnd + 2);
-          if (arrayBlock.includes('pocketshell')) { process.exit(0); }
-          const newArrayBlock = arrayBlock.replace(/\];$/, "\t'extensions/pocketshell/tsconfig.json'\n];");
-          content = content.slice(0, compilationsStart) + newArrayBlock + content.slice(compilationsEnd + 2);
-          fs.writeFileSync(filePath, content, 'utf8');
-          PATCH_EOF
-          node /tmp/patch-gulpfile.js
-
-      - name: Patch extensions.ts nodir fix
-        shell: bash
-        run: |
-          sed -i.bak "s/gulp.src(dependenciesSrc, { base: '.' })/gulp.src(dependenciesSrc, { base: '.', nodir: true })/g" \
-            vendor/vscode/build/lib/extensions.ts
-          rm -f vendor/vscode/build/lib/extensions.ts.bak
+        run: node scripts/patch-vscode-build.js
 
       - name: Sync extension source
         shell: bash

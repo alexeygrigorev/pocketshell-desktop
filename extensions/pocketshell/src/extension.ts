@@ -164,6 +164,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(treeView);
 	let hostDetailPanel: vscode.WebviewPanel | undefined;
 
+	void focusPocketShellViewOnStartup(recordDiagnostics);
+
 	// -- Commands ----------------------------------------------------------------
 
 	context.subscriptions.push(
@@ -1266,6 +1268,21 @@ function settingsToDiagnosticsConfig(settings: AppSettings): DiagnosticsConfig {
 		maxEvents: settings.diagnosticsMaxEvents,
 		redactionMode: settings.diagnosticsRedactionMode,
 	};
+}
+
+async function focusPocketShellViewOnStartup(
+	recordDiagnostics: (input: DiagnosticRecordInput) => void,
+): Promise<void> {
+	try {
+		await vscode.commands.executeCommand('workbench.view.extension.pocketshell');
+		recordDiagnostics({ category: 'navigation', name: 'startup_focus_pocketshell_view' });
+	} catch (err) {
+		recordDiagnostics({
+			category: 'navigation',
+			name: 'startup_focus_pocketshell_view_failed',
+			metadata: normalizeDiagnosticError(err),
+		});
+	}
 }
 
 function createDiagnosticCommandRegistrar(record: (input: DiagnosticRecordInput) => void) {
