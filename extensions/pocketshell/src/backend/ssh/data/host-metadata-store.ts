@@ -56,7 +56,7 @@ export interface HostMetadata {
 
 /** Fields that can be patched on an existing metadata row. */
 export type HostMetadataPatch = Partial<
-  Omit<HostMetadata, 'identity' | 'createdAt'> & { alias: string }
+  Omit<HostMetadata, 'identity'> & { alias: string }
 >;
 
 // ---------------------------------------------------------------------------
