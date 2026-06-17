@@ -351,36 +351,14 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 	);
 
-	// Connect to a host (optionally passed hostId from tree item click)
+	// Connect to a host (optionally passed hostId from tree item click).
+	// The terminal-surface rework routes connect through the surface feature so
+	// the terminal opens as a full-width EDITOR TAB (one per session, backed by
+	// tmux -CC) instead of the VS Code bottom panel. The surface command owns
+	// the tab-reuse + tmux wiring; see feature/surface/surface-commands.ts.
 	context.subscriptions.push(
 		registerCommand('pocketshell.connect', async (element?: Host | number) => {
-			const id = await resolveHostId(service, element, { connectedOnly: false });
-			if (id === undefined) {
-				return;
-			}
-
-			const host = await service.getHost(id);
-			if (!host) {
-				vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'));
-				return;
-			}
-
-			// Check if already connected
-			const conn = await getOrConnect(service, id);
-			if (!conn) {
-				return;
-			}
-
-			// Open terminal
-			const pty = new SshPseudoterminal(conn, host.name || host.hostname, recordDiagnostics);
-			const terminal = vscode.window.createTerminal({
-				name: `PocketShell: ${host.name || host.hostname}`,
-				pty,
-				iconPath: new vscode.ThemeIcon('remote'),
-			});
-			terminal.show();
-
-			// Refresh tree to show updated status
+			await vscode.commands.executeCommand('pocketshell.surface.connect', element);
 			treeProvider.refresh();
 		}),
 	);

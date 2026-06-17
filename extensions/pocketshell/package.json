@@ -698,6 +698,24 @@
 				"title": "Tmux UI: Forget Restore State",
 				"category": "PocketShell",
 				"icon": "$(discard)"
+			},
+			{
+				"command": "pocketshell.surface.connect",
+				"title": "PocketShell: Connect & Open Terminal",
+				"category": "PocketShell",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "pocketshell.session.focusTerminal",
+				"title": "Sessions: Focus Terminal",
+				"category": "PocketShell",
+				"icon": "$(terminal-tmux)"
+			},
+			{
+				"command": "pocketshell.session.closeTerminal",
+				"title": "Sessions: Close Terminal",
+				"category": "PocketShell",
+				"icon": "$(trash)"
 			}
 		],
 		"menus": {
@@ -705,6 +723,16 @@
 				{
 					"command": "pocketshell.hostDetail.open",
 					"when": "view == pocketshell.hosts",
+					"group": "inline"
+				},
+				{
+					"command": "pocketshell.surface.connect",
+					"when": "view == pocketshell.hosts",
+					"group": "0_terminal"
+				},
+				{
+					"command": "pocketshell.session.closeTerminal",
+					"when": "view == pocketshell.sessions && viewItem == pocketshellSession",
 					"group": "inline"
 				},
 				{
@@ -886,6 +914,11 @@
 					"id": "pocketshell.hosts",
 					"name": "SSH Hosts",
 					"icon": "$(server)"
+				},
+				{
+					"id": "pocketshell.sessions",
+					"name": "Sessions",
+					"icon": "$(terminal-tmux)"
 				},
 				{
 					"id": "pocketshell.tmuxSessions",
