@@ -708,7 +708,9 @@
 				"title": "Sessions: Close Terminal",
 				"category": "PocketShell",
 				"icon": "$(trash)"
-			}
+			},
+			{ "command": "pocketshell.settingsView.open", "title": "PocketShell: Open Settings View", "category": "PocketShell", "icon": "$(gear)" },
+			{ "command": "pocketshell.settingsView.refresh", "title": "Settings View: Refresh", "category": "PocketShell", "icon": "$(refresh)" }
 		],
 		"menus": {
 			"view/item/context": [
@@ -916,8 +918,23 @@
 					"id": "pocketshell.tmuxSessions",
 					"name": "tmux Sessions",
 					"icon": "$(terminal-tmux)"
-				}
+				},
+				{ "id": "pocketshell.settings", "name": "Settings", "type": "webview", "icon": "$(gear)" },
+				{ "id": "pocketshell.conversation.sidebar", "name": "Conversation", "type": "webview", "icon": "$(comment-discussion)" },
+				{ "id": "pocketshell.promptComposer.sidebar", "name": "Prompt Composer", "type": "webview", "icon": "$(edit)" }
 			]
+		},
+		"configuration": {
+			"title": "PocketShell",
+			"properties": {
+				"pocketshell.terminal.defaultShell": { "type": "string", "default": "", "description": "Shell launched in new remote terminals when the host does not pin one (e.g. /bin/bash).", "scope": "machine" },
+				"pocketshell.terminal.scrollback": { "type": "number", "default": 10000, "minimum": 0, "maximum": 1000000, "description": "Number of lines retained in the terminal scrollback buffer.", "scope": "machine" },
+				"pocketshell.tmux.autoAttach": { "type": "boolean", "default": true, "description": "When creating a terminal on a host with tmux, automatically attach to the last session instead of opening a bare shell.", "scope": "machine" },
+				"pocketshell.tmux.sessionPrefix": { "type": "string", "default": "psh-", "description": "Prefix applied to PocketShell-created tmux session names.", "scope": "machine" },
+				"pocketshell.cli.minVersion": { "type": "string", "default": "0.1.0", "description": "Lowest PocketShell CLI version treated as compatible. Hosts running older versions are flagged for upgrade.", "scope": "machine" },
+				"pocketshell.connection.connectTimeoutMs": { "type": "number", "default": 15000, "minimum": 1000, "maximum": 300000, "description": "Milliseconds to wait for an SSH connection before failing.", "scope": "machine" },
+				"pocketshell.diagnostics.capture": { "type": "boolean", "default": true, "description": "Record local diagnostic events for the PocketShell report.", "scope": "window" }
+			}
 		},
 		"viewsWelcome": [
 			{

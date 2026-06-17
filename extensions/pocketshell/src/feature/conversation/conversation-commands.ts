@@ -11,6 +11,7 @@ import type { FeatureDeps } from '../manifest';
 import type { ConversationAttributionResult } from '../../backend/agents';
 import type { AgentType, ConversationMessage } from '../../backend/agents/conversation';
 import { AgentMessenger, ReplyQueue } from '../../backend/agents/reply';
+import { registerConversationSidebar } from './conversation-sidebar-provider';
 import {
 	appendConversationMessage,
 	clearConversationSearch,
@@ -145,6 +146,8 @@ export function registerConversation(
 			panels.clear();
 		},
 	});
+
+	disposables.push(...registerConversationSidebar(service, ctx, _deps));
 
 	return disposables;
 }

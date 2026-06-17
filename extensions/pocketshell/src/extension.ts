@@ -12,6 +12,7 @@ import { SftpFsProvider } from './sftp-fs-provider';
 import { HostTreeProvider } from './host-tree-provider';
 import { pickHost, resolveHostId } from './host-picking';
 import { FEATURES, type FeatureDeps } from './feature';
+import { registerPocketshellSettings } from './feature/settings';
 import { resolveHostsFromConfig, type SkippedHost } from './backend/ssh/data/ssh-host-resolver';
 import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
 import { SettingsStore, type AppSettings } from './backend/app/settings';
@@ -917,6 +918,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		const disposables = registerFeatureWithDiagnostics(feature.register, service, context, deps, recordDiagnostics);
 		context.subscriptions.push(...disposables);
 	}
+
+	// -- PocketShell Settings view (#89) ---------------------------------------
+	context.subscriptions.push(...registerPocketshellSettings(context));
 
 	// -- Cleanup on deactivate ---------------------------------------------------
 

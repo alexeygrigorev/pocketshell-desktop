@@ -14,6 +14,7 @@ import { AgentMessenger } from '../../backend/agents/reply';
 import type { ConversationAttributionResult } from '../../backend/agents';
 import type { QuoteReplyPayload } from '../../backend/agents/conversation';
 import { SftpClient } from '../../backend/files/sftp-client';
+import { registerPromptComposerSidebar } from './prompt-composer-sidebar-provider';
 import {
 	addPromptComposerAttachments,
 	appendPromptComposerTranscript,
@@ -137,6 +138,8 @@ export function registerPromptComposer(
 			panels.clear();
 		},
 	});
+
+	disposables.push(...registerPromptComposerSidebar(service, ctx, deps));
 
 	return disposables;
 }
