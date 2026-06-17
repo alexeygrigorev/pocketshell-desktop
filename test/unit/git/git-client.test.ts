@@ -458,4 +458,178 @@ describe('GitClient', () => {
       );
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Remote exec wiring: pin the exact command string issued over the SSH
+  // connection for each read/mutate op. These prove the operations run over
+  // the remote connection (issue #83) and guard against accidental local
+  // execution or command-shape regressions.
+  // -------------------------------------------------------------------------
+
+  describe('remote exec wiring', () => {
+    it('status issues git status --porcelain=v2 --branch over the connection with cwd', async () => {
+      const conn = createMockConnection(new Map([
+        ['git status', {
+          stdout: '# branch.oid abc\n# branch.head main\n# branch.ab +0 -0\n',
+          stderr: '',
+          exitCode: 0,
+        }],
+      ]));
+      await new GitClient(conn).status('/srv/repo');
+
+      expect(conn.exec).toHaveBeenCalledTimes(1);
+      expect(conn.exec).toHaveBeenCalledWith(
+        "cd '/srv/repo' && git status --porcelain=v2 --branch",
+      );
+    });
+
+    it('log issues the expected git log command over the connection with cwd and default count', async () => {
+      const conn = createMockConnection(new Map([
+        ['git log', { stdout: '', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).log('/srv/repo');
+
+      expect(conn.exec).toHaveBeenCalledTimes(1);
+      const [[command]] = (conn.exec as unknown as { mock: { calls: string[][] } }).mock.calls;
+      expect(command).toMatch(/^cd '\/srv\/repo' && git log --format=ENDCOMMIT%x00%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00 -n 50 --numstat$/);
+    });
+
+    it('log forwards maxCount and branch as remote git arguments', async () => {
+      const conn = createMockConnection(new Map([
+        ['git log', { stdout: '', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).log('/srv/repo', { maxCount: 25, branch: 'feature/x' });
+
+      expect(conn.exec).toHaveBeenCalledWith(
+        "cd '/srv/repo' && git log --format=ENDCOMMIT%x00%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00 -n 25 --numstat 'feature/x'",
+      );
+    });
+
+    it('pull issues a plain git pull over the connection with cwd', async () => {
+      const conn = createMockConnection(new Map([
+        ['git pull', { stdout: 'Already up to date.', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).pull('/srv/repo');
+
+      expect(conn.exec).toHaveBeenCalledWith("cd '/srv/repo' && git pull");
+    });
+
+    it('fetch issues git fetch over the connection with cwd', async () => {
+      const conn = createMockConnection(new Map([
+        ['git fetch', { stdout: '', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).fetch('/srv/repo');
+
+      expect(conn.exec).toHaveBeenCalledWith("cd '/srv/repo' && git fetch");
+    });
+
+    it('checkout issues git checkout <ref> over the connection with cwd', async () => {
+      const conn = createMockConnection(new Map([
+        ['git checkout', { stdout: '', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).checkout('/srv/repo', 'main');
+
+      expect(conn.exec).toHaveBeenCalledWith(
+        "cd '/srv/repo' && git checkout 'main'",
+      );
+    });
+
+    it('branches issues git branch -a -vv over the connection with cwd', async () => {
+      const conn = createMockConnection(new Map([
+        ['git branch', { stdout: '* main 7a3 [origin/main] x', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).branches('/srv/repo');
+
+      expect(conn.exec).toHaveBeenCalledWith("cd '/srv/repo' && git branch -a -vv");
+    });
+
+    it('currentBranch issues git rev-parse over the connection with cwd', async () => {
+      const conn = createMockConnection(new Map([
+        ['rev-parse', { stdout: 'main\n', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).currentBranch('/srv/repo');
+
+      expect(conn.exec).toHaveBeenCalledWith(
+        "cd '/srv/repo' && git rev-parse --abbrev-ref HEAD",
+      );
+    });
+
+    it('diff issues git diff for a single cached file over the connection', async () => {
+      const conn = createMockConnection(new Map([
+        ['git diff', { stdout: 'diff body', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).diff('/srv/repo', { file: 'a.txt', cached: true });
+
+      expect(conn.exec).toHaveBeenCalledWith(
+        "cd '/srv/repo' && git diff --cached -- 'a.txt'",
+      );
+    });
+
+    it('blame issues git blame --porcelain over the connection', async () => {
+      const conn = createMockConnection(new Map([
+        ['git blame', { stdout: 'hash 1 1 1\nauthor A\n\tline', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).blame('/srv/repo', 'file.ts');
+
+      expect(conn.exec).toHaveBeenCalledWith(
+        "cd '/srv/repo' && git blame --porcelain 'file.ts'",
+      );
+    });
+
+    it('clone issues git clone over the connection (no cwd)', async () => {
+      const conn = createMockConnection(new Map([
+        ['git clone', { stdout: '', stderr: '', exitCode: 0 }],
+      ]));
+      await new GitClient(conn).clone('https://github.com/o/r.git', '/srv/r');
+
+      expect(conn.exec).toHaveBeenCalledWith(
+        "git clone 'https://github.com/o/r.git' '/srv/r'",
+      );
+    });
+
+    it('does not touch any local filesystem — only the connection exec', async () => {
+      const conn = createMockConnection(new Map([
+        ['git status', {
+          stdout: '# branch.oid abc\n# branch.head main\n# branch.ab +0 -0\n',
+          stderr: '',
+          exitCode: 0,
+        }],
+      ]));
+      await new GitClient(conn).status('/srv/repo');
+
+      // The only interaction surface is exec(); shell/sftp/disconnect are
+      // never invoked for git ops.
+      expect(conn.exec).toHaveBeenCalledTimes(1);
+      expect((conn as unknown as { shell: { mock: { calls: unknown[] } } }).shell.mock.calls).toHaveLength(0);
+      expect((conn as unknown as { sftp: { mock: { calls: unknown[] } } }).sftp.mock.calls).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Robustness: clear error when the remote `git` binary is missing.
+  // -------------------------------------------------------------------------
+
+  describe('remote git missing', () => {
+    it('status surfaces an actionable message when git is not on PATH', async () => {
+      const conn = createMockConnection(new Map([
+        ['git status', {
+          stdout: '',
+          stderr: 'bash: git: command not found',
+          exitCode: 127,
+        }],
+      ]));
+      await expect(new GitClient(conn).status('/srv/repo')).rejects.toThrow(
+        /'git' is not installed or not on PATH on the remote host/,
+      );
+    });
+
+    it('status still reports a normal git failure for other errors', async () => {
+      const conn = createMockConnection(new Map([
+        ['git status', { stdout: '', stderr: 'fatal: not a git repository', exitCode: 128 }],
+      ]));
+      await expect(new GitClient(conn).status('/srv/repo')).rejects.toThrow(
+        'git status failed',
+      );
+    });
+  });
 });

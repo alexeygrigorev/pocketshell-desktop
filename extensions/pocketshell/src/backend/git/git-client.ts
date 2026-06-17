@@ -64,7 +64,7 @@ export class GitClient {
   async clone(url: string, path: string): Promise<void> {
     const result = await this.exec(`git clone ${quote(url)} ${quote(path)}`);
     if (result.exitCode !== 0) {
-      throw new Error(`git clone failed: ${result.stderr}`);
+      throwGitCommandError('git clone', result.stderr);
     }
   }
 
@@ -75,7 +75,7 @@ export class GitClient {
       cwd,
     );
     if (result.exitCode !== 0) {
-      throw new Error(`git status failed: ${result.stderr}`);
+      throwGitCommandError('git status', result.stderr);
     }
     return parseStatus(result.stdout);
   }
@@ -116,7 +116,7 @@ export class GitClient {
 
     const result = await this.exec(cmd, cwd);
     if (result.exitCode !== 0) {
-      throw new Error(`git diff failed: ${result.stderr}`);
+      throwGitCommandError('git diff', result.stderr);
     }
     return result.stdout;
   }
@@ -125,7 +125,7 @@ export class GitClient {
   async branches(cwd: string): Promise<GitBranch[]> {
     const result = await this.exec('git branch -a -vv', cwd);
     if (result.exitCode !== 0) {
-      throw new Error(`git branch failed: ${result.stderr}`);
+      throwGitCommandError('git branch', result.stderr);
     }
     return parseBranches(result.stdout);
   }
@@ -137,7 +137,7 @@ export class GitClient {
       cwd,
     );
     if (result.exitCode !== 0) {
-      throw new Error(`git current-branch failed: ${result.stderr}`);
+      throwGitCommandError('git current-branch', result.stderr);
     }
     return result.stdout.trim();
   }
@@ -146,7 +146,7 @@ export class GitClient {
   async checkout(cwd: string, ref: string): Promise<void> {
     const result = await this.exec(`git checkout ${quote(ref)}`, cwd);
     if (result.exitCode !== 0) {
-      throw new Error(`git checkout failed: ${result.stderr}`);
+      throwGitCommandError('git checkout', result.stderr);
     }
   }
 
@@ -157,7 +157,7 @@ export class GitClient {
       : 'git fetch';
     const result = await this.exec(cmd, cwd);
     if (result.exitCode !== 0) {
-      throw new Error(`git fetch failed: ${result.stderr}`);
+      throwGitCommandError('git fetch', result.stderr);
     }
   }
 
@@ -165,7 +165,7 @@ export class GitClient {
   async pull(cwd: string): Promise<GitPullResult> {
     const result = await this.exec('git pull', cwd);
     if (result.exitCode !== 0) {
-      throw new Error(`git pull failed: ${result.stderr}`);
+      throwGitCommandError('git pull', result.stderr);
     }
     return parsePullResult(result.stdout);
   }
@@ -181,7 +181,7 @@ export class GitClient {
       cwd,
     );
     if (result.exitCode !== 0) {
-      throw new Error(`git show failed: ${result.stderr}`);
+      throwGitCommandError('git show', result.stderr);
     }
     return result.stdout;
   }
@@ -193,7 +193,7 @@ export class GitClient {
       cwd,
     );
     if (result.exitCode !== 0) {
-      throw new Error(`git blame failed: ${result.stderr}`);
+      throwGitCommandError('git blame', result.stderr);
     }
     return parseBlame(result.stdout);
   }
@@ -223,11 +223,22 @@ function throwGitCommandError(command: string, stderr: string): never {
   if (isNotRepositoryMessage(stderr)) {
     throw new GitNotRepositoryError(`${command} failed: ${stderr}`);
   }
+  if (isGitNotFound(stderr)) {
+    throw new Error(
+      `${command} failed: 'git' is not installed or not on PATH on the ` +
+        `remote host (install git on the host and retry).`,
+    );
+  }
   throw new Error(`${command} failed: ${stderr}`);
 }
 
 function isNotRepositoryMessage(stderr: string): boolean {
   return /not a git repository/i.test(stderr);
+}
+
+/** Detect a missing remote `git` binary from its stderr text. */
+function isGitNotFound(stderr: string): boolean {
+  return /git: (command )?not found|command not found: git/i.test(stderr);
 }
 
 /**

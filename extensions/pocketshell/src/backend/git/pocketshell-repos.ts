@@ -32,7 +32,7 @@ export class PocketShellRepos {
   async list(): Promise<GitRepoInfo[]> {
     const result = await this.connection.exec('pocketshell repos list');
     if (result.exitCode !== 0) {
-      throw new Error(`pocketshell repos list failed: ${result.stderr}`);
+      throw reposFailure('list', result);
     }
 
     const paths = result.stdout
@@ -63,7 +63,7 @@ export class PocketShellRepos {
       `pocketshell repos list --remote --json${limit}`,
     );
     if (result.exitCode !== 0) {
-      throw new Error(`pocketshell repos list --remote failed: ${failureText(result)}`);
+      throw reposFailure('list --remote', result);
     }
     return parseRepoListJson(result.stdout);
   }
@@ -77,7 +77,7 @@ export class PocketShellRepos {
       `pocketshell repos list --local --json${root}`,
     );
     if (result.exitCode !== 0) {
-      throw new Error(`pocketshell repos list --local failed: ${failureText(result)}`);
+      throw reposFailure('list --local', result);
     }
     return parseRepoListJson(result.stdout);
   }
@@ -101,7 +101,7 @@ export class PocketShellRepos {
       `pocketshell repos open ${quoteArg(fullName)}`,
     );
     if (result.exitCode !== 0) {
-      throw new Error(`pocketshell repos open failed: ${failureText(result)}`);
+      throw reposFailure('open', result);
     }
     return parseRepoPath(result.stdout);
   }
@@ -114,7 +114,7 @@ export class PocketShellRepos {
       `pocketshell repos clone ${quoteArg(fullName)} --root ${quoteArg(root)} --protocol ssh`,
     );
     if (result.exitCode !== 0) {
-      throw new Error(`pocketshell repos clone failed: ${failureText(result)}`);
+      throw reposFailure('clone', result);
     }
     return parseRepoPath(result.stdout);
   }
@@ -127,9 +127,7 @@ export class PocketShellRepos {
       `pocketshell repos add ${quoteArg(path)}`,
     );
     if (result.exitCode !== 0) {
-      throw new Error(
-        `pocketshell repos add failed: ${result.stderr}`,
-      );
+      throw reposFailure('add', result);
     }
   }
 
@@ -141,9 +139,7 @@ export class PocketShellRepos {
       `pocketshell repos remove ${quoteArg(path)}`,
     );
     if (result.exitCode !== 0) {
-      throw new Error(
-        `pocketshell repos remove failed: ${result.stderr}`,
-      );
+      throw reposFailure('remove', result);
     }
   }
 
@@ -225,8 +221,52 @@ function quoteArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
-function failureText(result: { stdout: string; stderr: string }): string {
-  return result.stderr.trim() || result.stdout.trim();
+/**
+ * Build a clear error for a failed `pocketshell repos ...` remote call.
+ *
+ * Distinguishes the two common operational failures so the user gets an
+ * actionable message rather than a raw shell error:
+ *  - the `pocketshell` CLI is missing/not installed on the remote host
+ *    (exit 127 / "command not found"),
+ *  - `gh` is not authenticated (the CLI delegates repo listing to `gh`).
+ * Otherwise falls back to the underlying stderr/stdout text.
+ */
+function reposFailure(
+  subcommand: string,
+  result: { stdout: string; stderr: string; exitCode: number | null },
+): Error {
+  const text = (result.stderr.trim() || result.stdout.trim());
+  if (isCommandNotFound(result, text)) {
+    return new Error(
+      `pocketshell repos ${subcommand} failed: the 'pocketshell' CLI is not ` +
+        `installed or not on PATH on the remote host (install PocketShell on ` +
+        `the host and ensure 'pocketshell' is reachable over the connection).`,
+    );
+  }
+  if (/gh: command not found|gh not found/i.test(text)) {
+    return new Error(
+      `pocketshell repos ${subcommand} failed: the GitHub CLI ('gh') is not ` +
+        `installed on the remote host (PocketShell uses it to list repos).`,
+    );
+  }
+  if (/not logged in|no account|authoriz/i.test(text)) {
+    return new Error(
+      `pocketshell repos ${subcommand} failed: GitHub is not authenticated ` +
+        `on the remote host. Run 'gh auth login' on the host and retry.`,
+    );
+  }
+  return new Error(`pocketshell repos ${subcommand} failed: ${text}`);
+}
+
+/** Detect a "command not found" / missing-binary failure from exit + text. */
+function isCommandNotFound(
+  result: { exitCode: number | null },
+  text: string,
+): boolean {
+  // A thin remote `pocketshell` wrapper may propagate exit 127 when its child
+  // `gh` is absent. Don't misclassify a missing `gh` as a missing `pocketshell`.
+  return /pocketshell: (command )?not found|command not found: pocketshell/i.test(text)
+    || (result.exitCode === 127 && !/gh: command not found|gh not found/i.test(text));
 }
 
 function parseRepoPath(stdout: string): string {
