@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { ConnectionService } from './connection-service';
 import { SshPseudoterminal } from './ssh-terminal';
@@ -12,7 +13,7 @@ import { SftpFsProvider } from './sftp-fs-provider';
 import { HostTreeProvider } from './host-tree-provider';
 import { pickHost, resolveHostId, getOrConnect } from './host-picking';
 import { FEATURES, type FeatureDeps } from './feature';
-import { createSshConfigImportPlan, type SshConfigImportCandidate, type SshConfigImportSkipped } from './backend/ssh/data/ssh-config-import';
+import { resolveHostsFromConfig, type SkippedHost } from './backend/ssh/data/ssh-host-resolver';
 import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
 import { SettingsStore, type AppSettings } from './backend/app/settings';
 import { SettingsPanel, type SettingsStoreLike } from './backend/ui/settings/settings-panel';
@@ -165,6 +166,11 @@ export function activate(context: vscode.ExtensionContext): void {
 	let hostDetailPanel: vscode.WebviewPanel | undefined;
 
 	void focusPocketShellViewOnStartup(recordDiagnostics);
+
+	// ~/.ssh/config is the single source of truth for hosts. Migrate any
+	// legacy stored rows into the metadata store once, then refresh the tree
+	// so the live config parse is shown.
+	void migrateLegacyHostsOnStartup(service, recordDiagnostics).then(() => treeProvider.refresh());
 
 	// -- Commands ----------------------------------------------------------------
 
@@ -379,20 +385,38 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 	);
 
-	// Add a new host
+	// Add a new host — ~/.ssh/config is the single source of truth, so this
+	// helps the user add a Host stanza to the config (the entry then appears
+	// live in the host list) instead of copying details into a separate store.
 	context.subscriptions.push(
 		registerCommand('pocketshell.addHost', async () => {
+			const action = await vscode.window.showQuickPick(
+				[
+					{ label: vscode.l10n.t('Add Host Stanza...'), value: 'stanza' as const },
+					{ label: vscode.l10n.t('Open ~/.ssh/config'), value: 'open' as const },
+				],
+				{ placeHolder: vscode.l10n.t('Hosts live in ~/.ssh/config. How do you want to add one?') },
+			);
+			if (!action) {
+				return;
+			}
+
+			if (action.value === 'open') {
+				await openSshConfigForEditing();
+				return;
+			}
+
 			const name = await vscode.window.showInputBox({
 				placeHolder: vscode.l10n.t('My Server'),
-				prompt: vscode.l10n.t('Host display name'),
+				prompt: vscode.l10n.t('Host alias (the `Host` line in ~/.ssh/config)'),
 			});
-			if (name === undefined) {
+			if (name === undefined || name.trim() === '') {
 				return;
 			}
 
 			const hostname = await vscode.window.showInputBox({
 				placeHolder: vscode.l10n.t('example.com'),
-				prompt: vscode.l10n.t('Hostname or IP address'),
+				prompt: vscode.l10n.t('HostName (hostname or IP address)'),
 			});
 			if (hostname === undefined) {
 				return;
@@ -400,7 +424,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 			const portStr = await vscode.window.showInputBox({
 				placeHolder: '22',
-				prompt: vscode.l10n.t('SSH port'),
+				prompt: vscode.l10n.t('Port'),
 				value: '22',
 			});
 			if (portStr === undefined) {
@@ -414,7 +438,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 			const username = await vscode.window.showInputBox({
 				placeHolder: vscode.l10n.t('user'),
-				prompt: vscode.l10n.t('SSH username'),
+				prompt: vscode.l10n.t('User'),
 			});
 			if (username === undefined) {
 				return;
@@ -422,7 +446,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 			const keyPath = await vscode.window.showInputBox({
 				placeHolder: '~/.ssh/id_rsa',
-				prompt: vscode.l10n.t('Path to SSH private key'),
+				prompt: vscode.l10n.t('IdentityFile (path to SSH private key)'),
 				value: '~/.ssh/id_rsa',
 			});
 			if (keyPath === undefined) {
@@ -430,8 +454,8 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 
 			const newHost: NewHost = {
-				name: name || hostname,
-				hostname,
+				name: name.trim(),
+				hostname: hostname || name.trim(),
 				port,
 				username,
 				keyPath: keyPath || '~/.ssh/id_rsa',
@@ -442,12 +466,12 @@ export function activate(context: vscode.ExtensionContext): void {
 			};
 
 			try {
-				const id = await service.addHost(newHost);
+				await service.addHost(newHost);
 				recordDiagnostics({
 					category: 'ssh',
-					name: 'host_added',
+					name: 'host_added_to_config',
 					metadata: {
-						hostId: id,
+						alias: newHost.name,
 						hostname: newHost.hostname,
 						username: newHost.username,
 						port: newHost.port,
@@ -455,13 +479,14 @@ export function activate(context: vscode.ExtensionContext): void {
 					},
 				});
 				vscode.window.showInformationMessage(
-					vscode.l10n.t('Host "{0}" added (id={1}).', newHost.name, String(id)),
+					vscode.l10n.t('Added Host "{0}" to ~/.ssh/config.', newHost.name),
 				);
 			} catch (err) {
 				recordDiagnostics({
 					category: 'ssh',
 					name: 'host_add_failed',
 					metadata: {
+						alias: newHost.name,
 						hostname: newHost.hostname,
 						username: newHost.username,
 						port: newHost.port,
@@ -470,7 +495,7 @@ export function activate(context: vscode.ExtensionContext): void {
 					},
 				});
 				vscode.window.showErrorMessage(
-					vscode.l10n.t('Failed to add host: {0}', String(err)),
+					vscode.l10n.t('Failed to add host to ~/.ssh/config: {0}', String(err)),
 				);
 				return;
 			}
@@ -479,121 +504,19 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 	);
 
-	// Import hosts from ~/.ssh/config
+	// Open ~/.ssh/config for editing (the single source of truth).
 	context.subscriptions.push(
-		registerCommand('pocketshell.importSshConfig', async () => {
-			const output = vscode.window.createOutputChannel('PocketShell SSH Import');
-			context.subscriptions.push(output);
+		registerCommand('pocketshell.openSshConfig', async () => {
+			await openSshConfigForEditing();
+		}),
+	);
 
-			let parsed: ReturnType<typeof parseSshConfig>;
-			try {
-				parsed = parseSshConfig();
-			} catch (err) {
-				recordDiagnostics({
-					category: 'ssh',
-					name: 'ssh_config_import_failed',
-					metadata: normalizeDiagnosticError(err),
-				});
-				vscode.window.showErrorMessage(
-					vscode.l10n.t('Failed to read SSH config: {0}', String(err)),
-				);
-				return;
-			}
-
-			if (parsed.length === 0) {
-				vscode.window.showInformationMessage(vscode.l10n.t('No hosts found in ~/.ssh/config.'));
-				return;
-			}
-
-			const existingHosts = await service.getHosts();
-			const plan = createSshConfigImportPlan(parsed, existingHosts);
-			reportSshImportSkipped(output, plan.skipped);
-
-			if (plan.importable.length === 0) {
-				const detail = plan.skipped.length > 0
-					? vscode.l10n.t('See "PocketShell SSH Import" output for skipped entries.')
-					: '';
-				vscode.window.showWarningMessage(
-					vscode.l10n.t('No importable SSH config hosts found. {0}', detail),
-				);
-				if (plan.skipped.length > 0) {
-					output.show(true);
-				}
-				return;
-			}
-
-			if (plan.skipped.length > 0) {
-				vscode.window.showWarningMessage(
-					vscode.l10n.t(
-						'Skipped {0} SSH config entr{1}. See "PocketShell SSH Import" output for details.',
-						String(plan.skipped.length),
-						plan.skipped.length === 1 ? 'y' : 'ies',
-					),
-				);
-			}
-
-			const items = plan.importable.map(candidate => ({
-				label: candidate.alias,
-				description: `${candidate.host.username}@${candidate.host.hostname}:${candidate.host.port}`,
-				detail: formatImportCandidateDetail(candidate),
-				candidate,
-				picked: true,
-			}));
-
-			const picked = await vscode.window.showQuickPick(items, {
-				canPickMany: true,
-				placeHolder: vscode.l10n.t('Select SSH config hosts to import'),
-			});
-			if (!picked || picked.length === 0) {
-				return;
-			}
-
-			let imported = 0;
-			for (const item of picked) {
-				try {
-					await service.addHost(item.candidate.host);
-					imported += 1;
-				} catch (err) {
-					recordDiagnostics({
-						category: 'ssh',
-						name: 'ssh_config_host_import_failed',
-						metadata: {
-							alias: item.candidate.alias,
-							hostname: item.candidate.host.hostname,
-							username: item.candidate.host.username,
-							port: item.candidate.host.port,
-							keyPath: item.candidate.host.keyPath,
-							...normalizeDiagnosticError(err),
-						},
-					});
-					output.appendLine(`Failed to import ${item.candidate.alias}: ${String(err)}`);
-				}
-			}
-			recordDiagnostics({
-				category: 'ssh',
-				name: 'ssh_config_import_completed',
-				metadata: {
-					selectedCount: picked.length,
-					importedCount: imported,
-					skippedCount: plan.skipped.length,
-				},
-			});
-
-			treeProvider.refresh();
-			if (imported === picked.length) {
-				vscode.window.showInformationMessage(
-					vscode.l10n.t('Imported {0} SSH config host{1}.', String(imported), imported === 1 ? '' : 's'),
-				);
-			} else {
-				output.show(true);
-				vscode.window.showWarningMessage(
-					vscode.l10n.t(
-						'Imported {0} of {1} selected SSH config hosts. See output for details.',
-						String(imported),
-						String(picked.length),
-					),
-				);
-			}
+	// Report SSH config entries that cannot be used as PocketShell hosts.
+	context.subscriptions.push(
+		registerCommand('pocketshell.sshConfig.skipped', async () => {
+			const parsed = parseSshConfig();
+			const { skipped } = resolveHostsFromConfig(parsed);
+			reportSkippedHosts(skipped);
 		}),
 	);
 
@@ -1241,25 +1164,77 @@ function parseHostDetailTmuxPanes(output: string): HostDetailTmuxPane[] {
 		.filter((pane): pane is HostDetailTmuxPane => pane !== undefined);
 }
 
-function reportSshImportSkipped(
-	output: vscode.OutputChannel,
-	skipped: SshConfigImportSkipped[],
-): void {
+function reportSkippedHosts(skipped: SkippedHost[]): void {
+	const output = vscode.window.createOutputChannel('PocketShell SSH Config');
 	output.clear();
 	if (skipped.length === 0) {
+		vscode.window.showInformationMessage(
+			vscode.l10n.t('All ~/.ssh/config entries are usable. Nothing skipped.'),
+		);
 		return;
 	}
 
-	output.appendLine('Skipped SSH config entries:');
+	output.appendLine('SSH config entries not usable as PocketShell hosts:');
 	for (const entry of skipped) {
-		const proxy = entry.proxyMetadata ? ` (${entry.proxyMetadata})` : '';
-		output.appendLine(`- ${entry.alias}: ${entry.reason}${proxy}`);
+		output.appendLine(`- ${entry.alias}: ${entry.reason}`);
 	}
+	output.show(true);
+	vscode.window.showWarningMessage(
+		vscode.l10n.t(
+			'{0} SSH config entr{1} not usable. See "PocketShell SSH Config" output.',
+			String(skipped.length),
+			skipped.length === 1 ? 'y' : 'ies',
+		),
+	);
 }
 
-function formatImportCandidateDetail(candidate: SshConfigImportCandidate): string {
-	const key = `IdentityFile ${candidate.host.keyPath}`;
-	return candidate.proxyMetadata ? `${key}; ${candidate.proxyMetadata}` : key;
+async function openSshConfigForEditing(): Promise<void> {
+	const configPath = path.join(os.homedir(), '.ssh', 'config');
+	const document = await vscode.workspace.openTextDocument(vscode.Uri.file(configPath));
+	await vscode.window.showTextDocument(document);
+}
+
+async function migrateLegacyHostsOnStartup(
+	svc: ConnectionService,
+	recordDiagnostics: (input: DiagnosticRecordInput) => void,
+): Promise<void> {
+	try {
+		const result = await svc.migrateLegacyHostMetadata();
+		if (result.matched.length === 0 && result.unmatched.length === 0) {
+			return;
+		}
+		recordDiagnostics({
+			category: 'ssh',
+			name: 'legacy_host_migration',
+			metadata: {
+				matched: result.matched.length,
+				unmatched: result.unmatched.length,
+			},
+		});
+		if (result.matched.length > 0) {
+			vscode.window.showInformationMessage(
+				vscode.l10n.t(
+					'Kept PocketShell metadata for {0} host{1} from your previous setup (now read from ~/.ssh/config).',
+					String(result.matched.length),
+					result.matched.length === 1 ? '' : 's',
+				),
+			);
+		}
+		if (result.unmatched.length > 0) {
+			const output = vscode.window.createOutputChannel('PocketShell SSH Migration');
+			output.appendLine('Hosts from the previous setup with no matching ~/.ssh/config entry:');
+			for (const u of result.unmatched) {
+				output.appendLine(`- ${u.legacyName} (${u.username}@${u.hostname}:${u.port}): ${u.reason}`);
+			}
+			output.show(true);
+		}
+	} catch (err) {
+		recordDiagnostics({
+			category: 'ssh',
+			name: 'legacy_host_migration_failed',
+			metadata: normalizeDiagnosticError(err),
+		});
+	}
 }
 
 function settingsToDiagnosticsConfig(settings: AppSettings): DiagnosticsConfig {

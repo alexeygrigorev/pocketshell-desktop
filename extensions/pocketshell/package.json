@@ -103,8 +103,12 @@
 				"title": "PocketShell: Add Host"
 			},
 			{
-				"command": "pocketshell.importSshConfig",
-				"title": "PocketShell: Import SSH Config"
+				"command": "pocketshell.openSshConfig",
+				"title": "PocketShell: Open SSH Config"
+			},
+			{
+				"command": "pocketshell.sshConfig.skipped",
+				"title": "PocketShell: Show Unusable SSH Config Entries"
 			},
 			{
 				"command": "pocketshell.keys.manage",
@@ -893,7 +897,7 @@
 		"viewsWelcome": [
 			{
 				"view": "pocketshell.hosts",
-				"contents": "[Import SSH Config](command:pocketshell.importSshConfig)\n[Add Host](command:pocketshell.addHost)"
+				"contents": "Hosts come from ~/.ssh/config.\n[Open SSH Config](command:pocketshell.openSshConfig)\n[Add Host](command:pocketshell.addHost)"
 			}
 		]
 	},

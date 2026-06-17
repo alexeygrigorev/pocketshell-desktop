@@ -6,7 +6,15 @@
 
 import { describe, it, expect } from 'vitest';
 import { parseSshConfigString, filterConcreteHosts } from '../../../src/ssh/data/ssh-config-parser';
-import { createSshConfigImportPlan } from '../../../src/ssh/data/ssh-config-import';
+import {
+  resolveHostsFromConfig,
+  resolveHostForConnection,
+  getHostSkipReason,
+  collectConcreteAliases,
+  resolveHostForAlias,
+  hostIdentityForAlias,
+  stableHostIdFromAlias,
+} from '../../../src/ssh/data/ssh-host-resolver';
 
 describe('parseSshConfigString', () => {
   it('parses a simple Host block', () => {
@@ -224,8 +232,8 @@ Host too-high
   });
 });
 
-describe('createSshConfigImportPlan', () => {
-  it('creates PocketShell hosts from concrete SSH config entries', () => {
+describe('resolveHostsFromConfig (live host list)', () => {
+  it('builds usable hosts from concrete SSH config entries, no copy', () => {
     const parsed = parseSshConfigString(`
 Host prod
   HostName prod.example.com
@@ -233,31 +241,33 @@ Host prod
   User deploy
   IdentityFile ~/.ssh/prod
 `);
-    const plan = createSshConfigImportPlan(parsed, [], { defaultUsername: 'local' });
+    const { hosts, skipped } = resolveHostsFromConfig(parsed, { defaultUsername: 'local' });
 
-    expect(plan.skipped).toEqual([]);
-    expect(plan.importable).toHaveLength(1);
-    expect(plan.importable[0].host).toMatchObject({
+    expect(skipped).toEqual([]);
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0].host).toMatchObject({
       name: 'prod',
       hostname: 'prod.example.com',
       port: 2222,
       username: 'deploy',
+      keyPath: expect.stringContaining('.ssh/prod'),
       maxAutoPort: 10000,
       skipPortsBelow: 1000,
       scanIntervalSec: 5,
       enabled: true,
     });
-    expect(plan.importable[0].host.keyPath).toContain('.ssh/prod');
+    expect(hosts[0].alias).toBe('prod');
+    expect(hosts[0].identity).toBe(hostIdentityForAlias('prod'));
   });
 
-  it('uses alias, default port, and default username when OpenSSH would', () => {
+  it('uses alias as hostname and default username/port when OpenSSH would', () => {
     const parsed = parseSshConfigString(`
 Host staging
   IdentityFile ~/.ssh/staging
 `);
-    const plan = createSshConfigImportPlan(parsed, [], { defaultUsername: 'alice' });
+    const { hosts } = resolveHostsFromConfig(parsed, { defaultUsername: 'alice' });
 
-    expect(plan.importable[0].host).toMatchObject({
+    expect(hosts[0].host).toMatchObject({
       name: 'staging',
       hostname: 'staging',
       port: 22,
@@ -274,20 +284,21 @@ Host *
   User deploy
   IdentityFile ~/.ssh/id_ed25519
 `);
-    const plan = createSshConfigImportPlan(parsed, [], { defaultUsername: 'local' });
+    const { hosts, skipped } = resolveHostsFromConfig(parsed, { defaultUsername: 'local' });
 
-    expect(plan.importable).toHaveLength(1);
-    expect(plan.importable[0].host).toMatchObject({
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0].host).toMatchObject({
       name: 'prod',
       hostname: 'prod.example.com',
       port: 22,
       username: 'deploy',
     });
-    expect(plan.importable[0].host.keyPath).toContain('.ssh/id_ed25519');
-    expect(plan.skipped.map(entry => entry.alias)).toEqual(['*']);
+    expect(hosts[0].host.keyPath).toContain('.ssh/id_ed25519');
+    // The wildcard block is reported as skipped, not silently dropped.
+    expect(skipped.map(s => s.alias)).toContain('*');
   });
 
-  it('keeps earlier host-specific scalar values before later wildcard defaults', () => {
+  it('keeps earlier host-specific scalars before later wildcard defaults', () => {
     const parsed = parseSshConfigString(`
 Host prod
   HostName prod.example.com
@@ -300,9 +311,9 @@ Host *
   Port 2222
   IdentityFile ~/.ssh/id_ed25519
 `);
-    const plan = createSshConfigImportPlan(parsed, [], { defaultUsername: 'local' });
+    const { hosts } = resolveHostsFromConfig(parsed, { defaultUsername: 'local' });
 
-    expect(plan.importable[0].host).toMatchObject({
+    expect(hosts[0].host).toMatchObject({
       name: 'prod',
       hostname: 'prod.example.com',
       port: 2200,
@@ -310,7 +321,7 @@ Host *
     });
   });
 
-  it('skips wildcard entries, missing keys, proxy entries, and tokenized keys clearly', () => {
+  it('reports wildcard, missing-key, proxy, token, bad-port, and none entries as skipped', () => {
     const parsed = parseSshConfigString(`
 Host *.example.com
   IdentityFile ~/.ssh/id_ed25519
@@ -341,10 +352,10 @@ Host no-identity
   User user
   IdentityFile none
 `);
-    const plan = createSshConfigImportPlan(parsed, [], { defaultUsername: 'local' });
+    const { hosts, skipped } = resolveHostsFromConfig(parsed, { defaultUsername: 'local' });
 
-    expect(plan.importable).toEqual([]);
-    expect(plan.skipped.map(entry => entry.alias)).toEqual([
+    expect(hosts).toEqual([]);
+    expect(skipped.map(s => s.alias)).toEqual([
       '*.example.com',
       'no-key',
       'via-bastion',
@@ -352,7 +363,7 @@ Host no-identity
       'bad-port',
       'no-identity',
     ]);
-    expect(plan.skipped.map(entry => entry.reason)).toEqual([
+    expect(skipped.map(s => s.reason)).toEqual([
       expect.stringContaining('wildcard'),
       expect.stringContaining('IdentityFile is required'),
       expect.stringContaining('ProxyJump is not supported'),
@@ -360,7 +371,6 @@ Host no-identity
       expect.stringContaining('Port is invalid'),
       expect.stringContaining('IdentityFile none'),
     ]);
-    expect(plan.skipped[2].proxyMetadata).toBe('ProxyJump bastion');
   });
 
   it('skips hosts with invalid effective Port values', () => {
@@ -385,11 +395,16 @@ Host too-high
   User user
   IdentityFile ~/.ssh/too-high
 `);
-    const plan = createSshConfigImportPlan(parsed, [], { defaultUsername: 'local' });
+    const { hosts, skipped } = resolveHostsFromConfig(parsed, { defaultUsername: 'local' });
 
-    expect(plan.importable).toEqual([]);
-    expect(plan.skipped.map(entry => entry.alias)).toEqual(['partial', 'zero', 'negative', 'too-high']);
-    expect(plan.skipped.map(entry => entry.reason)).toEqual([
+    expect(hosts).toEqual([]);
+    expect(skipped.map(s => s.alias)).toEqual([
+      'partial',
+      'zero',
+      'negative',
+      'too-high',
+    ]);
+    expect(skipped.map(s => s.reason)).toEqual([
       'Port is invalid (22abc)',
       'Port is invalid (0)',
       'Port is invalid (-1)',
@@ -397,41 +412,7 @@ Host too-high
     ]);
   });
 
-  it('skips duplicate existing hosts by connection tuple or name', () => {
-    const parsed = parseSshConfigString(`
-Host same-connection
-  HostName existing.example.com
-  User deploy
-  IdentityFile ~/.ssh/existing
-
-Host existing-name
-  HostName other.example.com
-  User deploy
-  IdentityFile ~/.ssh/other
-
-Host new-host
-  HostName new.example.com
-  User deploy
-  IdentityFile ~/.ssh/new
-`);
-    const existing = [
-      {
-        name: 'existing-name',
-        hostname: 'existing.example.com',
-        port: 22,
-        username: 'deploy',
-        keyPath: parsed[0].identityFile!,
-      },
-    ];
-    const plan = createSshConfigImportPlan(parsed, existing, { defaultUsername: 'local' });
-
-    expect(plan.importable.map(entry => entry.alias)).toEqual(['new-host']);
-    expect(plan.skipped.map(entry => entry.alias)).toEqual(['same-connection', 'existing-name']);
-    expect(plan.skipped[0].reason).toContain('same hostname');
-    expect(plan.skipped[1].reason).toContain('same host name');
-  });
-
-  it('skips duplicate hosts within the same config file', () => {
+  it('does not duplicate a host that appears twice (alias de-dup)', () => {
     const parsed = parseSshConfigString(`
 Host first
   HostName same.example.com
@@ -443,11 +424,133 @@ Host second
   User deploy
   IdentityFile ~/.ssh/same
 `);
-    const plan = createSshConfigImportPlan(parsed, [], { defaultUsername: 'local' });
+    const { hosts } = resolveHostsFromConfig(parsed, { defaultUsername: 'local' });
 
-    expect(plan.importable.map(entry => entry.alias)).toEqual(['first']);
-    expect(plan.skipped.map(entry => entry.alias)).toEqual(['second']);
-    expect(plan.skipped[0].reason).toContain('same hostname');
+    // Both aliases are distinct concrete hosts (different aliases), so both
+    // appear - the live model keys by alias, not by connection tuple.
+    expect(hosts.map(h => h.alias)).toEqual(['first', 'second']);
+  });
+
+  it('merges stored metadata into the live host', () => {
+    const parsed = parseSshConfigString(`
+Host prod
+  HostName prod.example.com
+  User deploy
+  IdentityFile ~/.ssh/prod
+`);
+    const metadata = new Map([
+      [
+        hostIdentityForAlias('prod'),
+        {
+          identity: hostIdentityForAlias('prod'),
+          alias: 'prod',
+          maxAutoPort: 33333,
+          skipPortsBelow: 200,
+          scanIntervalSec: 9,
+          enabled: false,
+          createdAt: 123,
+          lastConnectedAt: 456,
+          tmuxInstalled: true,
+          lastBootstrapAt: null,
+          pocketshellInstalled: null,
+          pocketshellLastDetectedAt: null,
+          pocketshellCliVersion: '1.2.3',
+          pocketshellExpectedCliVersion: null,
+          pocketshellVersionCompatible: null,
+          pocketshellDaemonRunning: null,
+          pocketshellDaemonEnabled: null,
+          usageCommandOverride: null,
+          claudeProfilesJson: null,
+          codexProfilesJson: null,
+        },
+      ],
+    ]);
+
+    const { hosts } = resolveHostsFromConfig(parsed, { defaultUsername: 'local', metadata });
+    expect(hosts[0].host).toMatchObject({
+      maxAutoPort: 33333,
+      skipPortsBelow: 200,
+      scanIntervalSec: 9,
+      enabled: false,
+      lastConnectedAt: 456,
+      tmuxInstalled: true,
+      pocketshellCliVersion: '1.2.3',
+    });
+    // Connection details still come from the config, not the store.
+    expect(hosts[0].host.hostname).toBe('prod.example.com');
+    expect(hosts[0].host.username).toBe('deploy');
+  });
+});
+
+describe('host identity + stability', () => {
+  it('stable ids are deterministic and positive for the same alias', () => {
+    const a = stableHostIdFromAlias('prod');
+    const b = stableHostIdFromAlias('prod');
+    const c = stableHostIdFromAlias('staging');
+    expect(a).toBe(b);
+    expect(a).toBeGreaterThan(0);
+    expect(a).not.toBe(c);
+  });
+
+  it('collectConcreteAliases separates concrete aliases from wildcards', () => {
+    const parsed = parseSshConfigString(`
+Host prod
+  HostName prod.example.com
+Host *
+  User deploy
+`);
+    const { aliases, wildcards } = collectConcreteAliases(parsed);
+    expect(aliases.map(a => a.alias)).toEqual(['prod']);
+    expect(wildcards).toHaveLength(1);
+  });
+});
+
+describe('resolveHostForConnection (connect-time resolution)', () => {
+  it('resolves a usable alias live from the config', () => {
+    const parsed = parseSshConfigString(`
+Host prod
+  HostName prod.example.com
+  Port 2222
+  User deploy
+  IdentityFile ~/.ssh/prod
+`);
+    const host = resolveHostForConnection('prod', parsed, { defaultUsername: 'local' });
+    expect(host).toMatchObject({
+      name: 'prod',
+      hostname: 'prod.example.com',
+      port: 2222,
+      username: 'deploy',
+    });
+    expect(host.id).toBe(stableHostIdFromAlias('prod'));
+  });
+
+  it('throws for an absent alias', () => {
+    const parsed = parseSshConfigString(`Host prod
+  HostName prod.example.com
+  IdentityFile ~/.ssh/prod
+`);
+    expect(() => resolveHostForConnection('ghost', parsed)).toThrow(/not present/);
+  });
+
+  it('throws with the skip reason for an unusable alias', () => {
+    const parsed = parseSshConfigString(`Host via-bastion
+  HostName private.example.com
+  IdentityFile ~/.ssh/private
+  ProxyJump bastion
+`);
+    expect(() => resolveHostForConnection('via-bastion', parsed)).toThrow(/ProxyJump/);
+  });
+});
+
+describe('getHostSkipReason (preserved usability helper)', () => {
+  it('returns undefined for a fully-specified host', () => {
+    const parsed = parseSshConfigString(`Host ok
+  HostName ok.example.com
+  User user
+  IdentityFile ~/.ssh/ok
+`);
+    const resolved = resolveHostForAlias('ok', parsed, parsed[0]);
+    expect(getHostSkipReason('ok', resolved, { defaultUsername: 'local' })).toBeUndefined();
   });
 });
 

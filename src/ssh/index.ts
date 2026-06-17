@@ -43,13 +43,24 @@ export {
   filterConcreteHosts,
 } from './data/ssh-config-parser';
 export type { SshConfigHost } from './data/ssh-config-parser';
-export { createSshConfigImportPlan } from './data/ssh-config-import';
+export {
+  getHostSkipReason,
+  resolveHostForAlias,
+  collectConcreteAliases,
+  resolveHostsFromConfig,
+  resolveHostForConnection,
+  hostIdentityForAlias,
+  stableHostIdFromAlias,
+} from './data/ssh-host-resolver';
 export type {
-  SshConfigImportCandidate,
-  SshConfigImportHost,
-  SshConfigImportPlan,
-  SshConfigImportSkipped,
-} from './data/ssh-config-import';
+  ResolvedHost,
+  ResolvedHostList,
+  SkippedHost,
+  SkipReasonOptions,
+} from './data/ssh-host-resolver';
+export { formatHostStanza, patchIdentityFileForAlias } from './data/ssh-config-writer';
+export { HostMetadataStore } from './data/host-metadata-store';
+export type { HostMetadata, HostMetadataPatch } from './data/host-metadata-store';
 
 // Connection layer
 export { SshClient, ConnectionPool } from './connection/ssh-client';
