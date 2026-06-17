@@ -14,7 +14,7 @@ import {
 } from './backend/ssh/data/host-metadata-store';
 import { migrateLegacyHosts, type MigrationResult } from './backend/ssh/data/host-metadata-migration';
 import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
-import { formatHostStanza, patchIdentityFileForAlias } from './backend/ssh/data/ssh-config-writer';
+import { formatHostStanza, patchIdentityFileForAlias, removeHostStanzaForAlias } from './backend/ssh/data/ssh-config-writer';
 import {
 	resolveHostForConnection,
 	resolveHostsFromConfig,
@@ -277,21 +277,20 @@ export class ConnectionService {
 	}
 
 	/**
-	 * Remove PocketShell metadata for a host. The host entry in ~/.ssh/config
-	 * is NOT touched (the config is the source of truth); remove the stanza
-	 * there to drop the host from the list.
+	 * Remove a host from ~/.ssh/config (the source of truth for the host list)
+	 * AND drop its PocketShell metadata row. Returns true only if the host was
+	 * actually removed from the config; metadata cleanup is best-effort.
 	 */
 	async deleteHost(id: number): Promise<boolean> {
 		const alias = await this.getAliasForId(id);
 		if (!alias) {
 			return false;
 		}
+		const configRemoved = await removeHostStanzaFromConfig(alias);
 		const identity = hostIdentityForAlias(alias);
 		const store = await this.ensureMetadataStore();
-		if (!store) {
-			throw new Error('Database not available');
-		}
-		return store.delete(identity);
+		store?.delete(identity);
+		return configRemoved;
 	}
 
 	/** Update the lastConnectedAt timestamp for a host (by id -> alias). */
@@ -572,5 +571,21 @@ export async function updateIdentityFileInConfig(alias: string, keyPath: string)
 	if (updated !== original) {
 		fs.writeFileSync(configPath, updated, { mode: 0o600 });
 	}
+}
+
+/**
+ * Remove the Host stanza for `alias` from ~/.ssh/config. Returns true if the
+ * config changed (i.e. the stanza was present and removed), false otherwise.
+ */
+export async function removeHostStanzaFromConfig(alias: string): Promise<boolean> {
+	const configPath = path.join(os.homedir(), '.ssh', 'config');
+	await ensureSshConfigExists(configPath);
+	const original = fs.readFileSync(configPath, 'utf-8');
+	const updated = removeHostStanzaForAlias(original, alias);
+	if (updated !== original) {
+		fs.writeFileSync(configPath, updated, { mode: 0o600 });
+		return true;
+	}
+	return false;
 }
 

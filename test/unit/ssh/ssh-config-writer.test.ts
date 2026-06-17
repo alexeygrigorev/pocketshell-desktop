@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { formatHostStanza, patchIdentityFileForAlias } from '../../../src/ssh/data/ssh-config-writer';
+import { formatHostStanza, patchIdentityFileForAlias, removeHostStanzaForAlias } from '../../../src/ssh/data/ssh-config-writer';
 import type { NewHost } from '../../../src/ssh/data/host-store';
 
 function newHost(over: Partial<NewHost> = {}): NewHost {
@@ -75,5 +75,109 @@ Host staging
   IdentityFile ~/.ssh/wild
 `;
     expect(patchIdentityFileForAlias(config, 'prod.example.com', '~/.ssh/x')).toBe(config);
+  });
+});
+
+describe('removeHostStanzaForAlias', () => {
+  it('removes the matching stanza', () => {
+    const config = `Host prod
+  HostName prod.example.com
+  User deploy
+`;
+    const result = removeHostStanzaForAlias(config, 'prod');
+    expect(result).not.toContain('Host prod');
+    expect(result).not.toContain('prod.example.com');
+  });
+
+  it('leaves other stanzas intact', () => {
+    const config = `Host prod
+  HostName prod.example.com
+  User deploy
+
+Host staging
+  HostName staging.example.com
+  User deploy
+`;
+    const result = removeHostStanzaForAlias(config, 'prod');
+    expect(result).not.toContain('Host prod');
+    expect(result).toContain('Host staging');
+    expect(result).toContain('HostName staging.example.com');
+  });
+
+  it('is a no-op (returns input unchanged) when the alias is absent', () => {
+    const config = `Host prod
+  HostName prod.example.com
+`;
+    expect(removeHostStanzaForAlias(config, 'staging')).toBe(config);
+  });
+
+  it('handles multi-stanza files, removing only the targeted one', () => {
+    const config = `Host alpha
+  HostName alpha.example.com
+
+Host beta
+  HostName beta.example.com
+
+Host gamma
+  HostName gamma.example.com
+`;
+    const result = removeHostStanzaForAlias(config, 'beta');
+    expect(result).not.toContain('Host beta');
+    expect(result).not.toContain('beta.example.com');
+    // alpha and gamma survive, content unchanged
+    expect(result).toContain('Host alpha');
+    expect(result).toContain('HostName alpha.example.com');
+    expect(result).toContain('Host gamma');
+    expect(result).toContain('HostName gamma.example.com');
+  });
+
+  it('preserves unrelated stanzas content byte-for-byte (modulo the removed block)', () => {
+    const gamma = `Host gamma
+  HostName gamma.example.com
+  User deploy
+  IdentityFile ~/.ssh/gamma`;
+    const config = `Host prod
+  HostName prod.example.com
+
+${gamma}
+`;
+    const result = removeHostStanzaForAlias(config, 'prod');
+    expect(result).toContain(gamma);
+  });
+
+  it('does not remove a stanza whose Host line has multiple patterns', () => {
+    // Conservative: alias appears alongside another pattern. Don't corrupt.
+    const config = `Host prod prod.example.com
+  HostName prod.example.com
+`;
+    expect(removeHostStanzaForAlias(config, 'prod')).toBe(config);
+  });
+
+  it('does not match wildcard or negated patterns', () => {
+    const config = `Host *.example.com
+  HostName wildcard
+`;
+    expect(removeHostStanzaForAlias(config, 'prod.example.com')).toBe(config);
+  });
+
+  it('matches case-insensitively', () => {
+    const config = `Host Prod
+  HostName prod.example.com
+`;
+    const result = removeHostStanzaForAlias(config, 'prod');
+    expect(result).not.toContain('Host Prod');
+  });
+
+  it('removes only the first matching stanza', () => {
+    const config = `Host prod
+  HostName prod.example.com
+
+Host prod
+  HostName prod2.example.com
+`;
+    const result = removeHostStanzaForAlias(config, 'prod');
+    expect(result).toContain('Host prod');
+    expect(result).toContain('prod2.example.com');
+    expect(result).not.toContain('prod.example.com');
   });
 });

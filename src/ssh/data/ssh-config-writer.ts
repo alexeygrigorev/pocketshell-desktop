@@ -72,6 +72,61 @@ export function patchIdentityFileForAlias(
   return configText;
 }
 
+/**
+ * Remove the first Host stanza whose Host line is a single pattern equal to
+ * `alias` (case-insensitive). Stanzas with multiple patterns, wildcards, or
+ * negated patterns are left intact — this is conservative so we never corrupt
+ * another host. Returns the original text unchanged when no stanza matches.
+ * Exported for testing and reuse.
+ */
+export function removeHostStanzaForAlias(
+  configText: string,
+  alias: string,
+): string {
+  const lines = configText.split('\n');
+  const aliasLower = alias.toLowerCase();
+  for (let i = 0; i < lines.length; i++) {
+    const parsed = parseLine(lines[i]);
+    if (!parsed || parsed.keyword !== 'host') {
+      continue;
+    }
+    const patterns = parsed.value.split(/\s+/).filter(Boolean);
+    if (patterns.length !== 1) {
+      continue;
+    }
+    const pattern = patterns[0];
+    if (
+      pattern.startsWith('!') ||
+      pattern.includes('*') ||
+      pattern.includes('?') ||
+      pattern.toLowerCase() !== aliasLower
+    ) {
+      continue;
+    }
+    // Found the stanza to remove: lines[i] through the line before the next
+    // Host keyword (or EOF). Find the exclusive end index.
+    let end = lines.length;
+    for (let j = i + 1; j < lines.length; j++) {
+      const body = parseLine(lines[j]);
+      if (body && body.keyword === 'host') {
+        end = j;
+        break;
+      }
+    }
+    // When the removed stanza sat between other stanzas, also drop the single
+    // blank separator line that followed it so we don't leave a doubled gap.
+    // (The blank line preceding the stanza, which belongs to the prior stanza's
+    // trailing whitespace, is preserved.)
+    let removeCount = end - i;
+    if (end < lines.length && lines[end].trim() === '') {
+      removeCount += 1;
+    }
+    lines.splice(i, removeCount);
+    return lines.join('\n');
+  }
+  return configText;
+}
+
 function parseLine(raw: string): { keyword: string; value: string } | null {
   const commentIdx = raw.indexOf('#');
   const line = (commentIdx >= 0 ? raw.slice(0, commentIdx) : raw).trim();

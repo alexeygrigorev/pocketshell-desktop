@@ -813,10 +813,16 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 
 			try {
-				await service.deleteHost(host.id);
-				vscode.window.showInformationMessage(
-					vscode.l10n.t('Host "{0}" deleted.', host.name),
-				);
+				const removed = await service.deleteHost(host.id);
+				if (removed) {
+					vscode.window.showInformationMessage(
+						vscode.l10n.t('Host "{0}" removed from ~/.ssh/config.', host.name),
+					);
+				} else {
+					vscode.window.showWarningMessage(
+						vscode.l10n.t('Host "{0}" was not found in ~/.ssh/config; nothing removed.', host.name),
+					);
+				}
 			} catch (err) {
 				vscode.window.showErrorMessage(
 					vscode.l10n.t('Failed to delete host: {0}', String(err)),
