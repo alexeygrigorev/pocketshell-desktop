@@ -154,4 +154,94 @@ Host prod
     );
     expect(deleted).toEqual([]);
   });
+
+  it('reports an unmatched row on run 1 and suppresses it on run 2 (same store)', () => {
+    const parsed = parseSshConfigString(`
+Host other
+  HostName other.example.com
+  User someone
+  IdentityFile ~/.ssh/other
+`);
+    const legacy = legacyHost(); // prod.example.com — no matching config stanza
+
+    // Run 1: unmatched row is reported.
+    const r1 = migrateLegacyHosts([legacy], parsed, store, () => undefined);
+    expect(r1.matched).toEqual([]);
+    expect(r1.unmatched).toHaveLength(1);
+    expect(r1.unmatched[0].hostname).toBe('prod.example.com');
+
+    // Run 2: same legacy row, same store — suppressed (already seen).
+    const r2 = migrateLegacyHosts([legacy], parsed, store, () => undefined);
+    expect(r2.matched).toEqual([]);
+    expect(r2.unmatched).toHaveLength(0);
+  });
+
+  it('still migrates+deletes a matched row even after it was seen as unmatched', () => {
+    // Run 1: legacy row is unmatched against this config.
+    const parsedNoMatch = parseSshConfigString(`
+Host other
+  HostName other.example.com
+  User someone
+`);
+    const legacy = legacyHost();
+    const r1 = migrateLegacyHosts([legacy], parsedNoMatch, store, () => undefined);
+    expect(r1.unmatched).toHaveLength(1);
+
+    // Run 2: config now has the stanza; the row matches and migrates normally
+    // (the seen marker is inert for the matched path). It is also deleted.
+    const parsedMatch = parseSshConfigString(`
+Host prod
+  HostName prod.example.com
+  User deploy
+  IdentityFile ~/.ssh/prod
+`);
+    const r2 = migrateLegacyHosts([legacy], parsedMatch, store, id => deleted.push(id));
+    expect(r2.matched).toHaveLength(1);
+    expect(r2.matched[0].alias).toBe('prod');
+    expect(r2.unmatched).toHaveLength(0);
+    expect(deleted).toEqual([1]);
+    expect(store.get(hostIdentityForAlias('prod'))?.pocketshellCliVersion).toBe('1.2.3');
+  });
+
+  it('marks collision-unmatched rows as seen too (not re-reported on run 2)', () => {
+    const parsed = parseSshConfigString(`
+Host prod
+  HostName prod.example.com
+  User deploy
+  IdentityFile ~/.ssh/prod
+`);
+    const a = legacyHost({ id: 1, pocketshellCliVersion: 'first' });
+    const b = legacyHost({ id: 2, name: 'prod', pocketshellCliVersion: 'second' });
+
+    const r1 = migrateLegacyHosts([a, b], parsed, store, () => undefined);
+    expect(r1.matched).toHaveLength(1);
+    expect(r1.unmatched).toHaveLength(1);
+
+    const r2 = migrateLegacyHosts([a, b], parsed, store, () => undefined);
+    expect(r2.matched).toHaveLength(1);
+    expect(r2.unmatched).toHaveLength(0);
+  });
+});
+
+describe('migration: unmatched "seen" suppression across stores', () => {
+  let store: HostMetadataStore;
+
+  beforeEach(async () => {
+    store = new HostMetadataStore(await createTestDb(), ':memory:');
+  });
+
+  it('clearMigrationSeen re-surfaces a previously suppressed unmatched row', () => {
+    const parsed = parseSshConfigString(`
+Host other
+  HostName other.example.com
+  User someone
+`);
+    const legacy = legacyHost();
+
+    expect(migrateLegacyHosts([legacy], parsed, store, () => undefined).unmatched).toHaveLength(1);
+    expect(migrateLegacyHosts([legacy], parsed, store, () => undefined).unmatched).toHaveLength(0);
+
+    store.clearMigrationSeen();
+    expect(migrateLegacyHosts([legacy], parsed, store, () => undefined).unmatched).toHaveLength(1);
+  });
 });

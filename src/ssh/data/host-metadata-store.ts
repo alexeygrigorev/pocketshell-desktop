@@ -92,6 +92,18 @@ CREATE TABLE IF NOT EXISTS host_metadata (
 );
 `;
 
+/**
+ * Side table recording which unmatched legacy rows the migration has already
+ * reported, so each is surfaced at most once across activations (see
+ * `host-metadata-migration.ts`). Keyed by `hostname|port|user` (lowercased).
+ */
+const CREATE_SEEN_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS migration_seen_unmatched (
+  key    TEXT PRIMARY KEY,
+  seen_at INTEGER NOT NULL
+);
+`;
+
 interface MetadataRow {
   identity: string;
   alias: string;
@@ -153,6 +165,7 @@ function rowToMetadata(row: MetadataRow): HostMetadata {
 export class HostMetadataStore {
   constructor(private db: SqlJsDatabase, private dbPath: string) {
     this.db.run(CREATE_TABLE_SQL);
+    this.db.run(CREATE_SEEN_TABLE_SQL);
   }
 
   /** Persist the database to disk. Skipped for in-memory databases. */
@@ -276,6 +289,46 @@ export class HostMetadataStore {
     this.db.run('DELETE FROM host_metadata WHERE identity = ?', [identity]);
     this.save();
     return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Migration "seen" set (unmatched legacy rows already reported once).
+  // -------------------------------------------------------------------------
+
+  /** Has the given unmatched-row key already been reported on a prior run? */
+  isMigrationSeen(key: string): boolean {
+    const stmt = this.db.prepare(
+      'SELECT 1 FROM migration_seen_unmatched WHERE key = ?',
+    );
+    stmt.bind([key]);
+    try {
+      return stmt.step();
+    } finally {
+      stmt.free();
+    }
+  }
+
+  /**
+   * Record that an unmatched row with the given key has been reported.
+   * Returns `true` if this is the first time (key newly inserted), `false` if
+   * it was already present. Idempotent.
+   */
+  markMigrationSeen(key: string): boolean {
+    const before = this.isMigrationSeen(key);
+    this.db.run(
+      'INSERT OR IGNORE INTO migration_seen_unmatched (key, seen_at) VALUES (?, ?)',
+      [key, Date.now()],
+    );
+    if (!before) {
+      this.save();
+    }
+    return !before;
+  }
+
+  /** Forget all reported-unmatched markers (test/reset helper). */
+  clearMigrationSeen(): void {
+    this.db.run('DELETE FROM migration_seen_unmatched');
+    this.save();
   }
 
   private insertRow(m: HostMetadata): void {

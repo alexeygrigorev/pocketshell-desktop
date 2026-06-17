@@ -138,3 +138,34 @@ describe('HostMetadataStore', () => {
     }
   });
 });
+
+describe('HostMetadataStore: migration "seen" set', () => {
+  let store: HostMetadataStore;
+
+  beforeEach(async () => {
+    store = new HostMetadataStore(await createTestDb(), ':memory:');
+  });
+
+  it('marks a key seen once and reports it as already seen afterwards', () => {
+    expect(store.isMigrationSeen('prod.example.com|22|deploy')).toBe(false);
+    expect(store.markMigrationSeen('prod.example.com|22|deploy')).toBe(true);
+    expect(store.isMigrationSeen('prod.example.com|22|deploy')).toBe(true);
+    // Second mark is a no-op (returns false, key stays present).
+    expect(store.markMigrationSeen('prod.example.com|22|deploy')).toBe(false);
+    expect(store.isMigrationSeen('prod.example.com|22|deploy')).toBe(true);
+  });
+
+  it('keeps distinct keys independent', () => {
+    store.markMigrationSeen('a|22|u');
+    expect(store.isMigrationSeen('a|22|u')).toBe(true);
+    expect(store.isMigrationSeen('b|22|u')).toBe(false);
+  });
+
+  it('clearMigrationSeen forgets all reported keys', () => {
+    store.markMigrationSeen('a|22|u');
+    store.markMigrationSeen('b|22|u');
+    store.clearMigrationSeen();
+    expect(store.isMigrationSeen('a|22|u')).toBe(false);
+    expect(store.isMigrationSeen('b|22|u')).toBe(false);
+  });
+});

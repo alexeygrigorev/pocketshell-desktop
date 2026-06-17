@@ -12,7 +12,10 @@
  *
  * Legacy rows whose connection details no longer match any SSH config entry
  * are reported (not silently dropped) so the user can re-add the stanza or
- * discard them deliberately.
+ * discard them deliberately. Because migration runs on every activation and
+ * unmatched rows are never deleted (we don't own the legacy table from here),
+ * each unmatched row is marked "seen" in the metadata store so it is surfaced
+ * at most ONCE — not re-reported on every launch.
  */
 
 import type { SshConfigHost } from './ssh-config-parser';
@@ -83,11 +86,30 @@ function connectionKey(hostname: string, port: number, user: string): string {
 }
 
 /**
+ * Stable identity for a legacy row used to remember that we've already
+ * reported it as unmatched. This is the same `hostname|port|user` (lowercased)
+ * key used for matching, so a row that later gains a matching config stanza
+ * simply migrates normally — the seen marker is inert in that path.
+ */
+export function unmatchedSeenKey(hostname: string, port: number, user: string): string {
+  return connectionKey(hostname.toLowerCase(), port, user.toLowerCase());
+}
+
+/**
  * Migrate legacy `hosts` rows into the metadata store.
+ *
+ * Matched rows are upserted (keyed by alias identity) and, when
+ * `options.deleteLegacy` is true, deleted from the legacy table — idempotent
+ * across re-runs. Unmatched rows are reported via the returned `unmatched`
+ * list, but each distinct row (by hostname|port|user) is surfaced at most ONCE
+ * across activations: the metadata store remembers which unmatched keys have
+ * already been reported, so subsequent launches stay quiet without silently
+ * dropping data. A row that later gains a matching config stanza migrates
+ * normally regardless of any prior seen marker.
  *
  * @param legacyHosts rows from the old table (read by the caller).
  * @param parsedHosts live parse of ~/.ssh/config.
- * @param store metadata store to write into.
+ * @param store metadata store to write into (also persists the seen set).
  * @param deleteLegacy callback invoked once per matched legacy id when
  *   `options.deleteLegacy` is true (the caller owns the legacy table).
  */
@@ -114,6 +136,13 @@ export function migrateLegacyHosts(
     const alias = aliasByConnection.get(key);
 
     if (!alias) {
+      // Surface at most once: if we've already reported this unmatched row
+      // on a previous activation, suppress it now (no silent drop on first
+      // encounter, no noise on later launches).
+      const seenKey = unmatchedSeenKey(legacy.hostname || '', legacy.port, legacy.username || '');
+      if (store.isMigrationSeen(seenKey)) {
+        continue;
+      }
       unmatched.push({
         legacyId: legacy.id,
         legacyName: legacy.name,
@@ -123,12 +152,18 @@ export function migrateLegacyHosts(
         reason:
           'no matching Host entry in ~/.ssh/config (add a Host stanza with this hostname/port/user to keep its PocketShell metadata)',
       });
+      store.markMigrationSeen(seenKey);
       continue;
     }
 
     // If two legacy rows map to the same alias, keep the first and report the
-    // rest as unmatched so no data is silently lost.
+    // rest as unmatched so no data is silently lost. These collisions are also
+    // marked seen so they don't recur on every launch.
     if (usedAliases.has(alias)) {
+      const seenKey = unmatchedSeenKey(legacy.hostname || '', legacy.port, legacy.username || '');
+      if (store.isMigrationSeen(seenKey)) {
+        continue;
+      }
       unmatched.push({
         legacyId: legacy.id,
         legacyName: legacy.name,
@@ -137,6 +172,7 @@ export function migrateLegacyHosts(
         username: legacy.username,
         reason: `another legacy row already migrated to alias "${alias}"`,
       });
+      store.markMigrationSeen(seenKey);
       continue;
     }
     usedAliases.add(alias);
