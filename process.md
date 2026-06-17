@@ -20,6 +20,21 @@ Typical parallel dispatch patterns:
 Rule: agents must not touch the same files. If overlap is unavoidable, run
 them sequentially instead.
 
+## Delegation: testing and on-call monitoring
+
+The orchestrator never blocks its own thread on testing or long waits — it
+delegates both to subagents and keeps dispatching backlog work.
+
+- **Testing**: the reviewer subagent runs the build and tests for the change
+  under review. For broader validation (full unit/e2e suite, reproducing a
+  failure, checking a regression) dispatch a dedicated tester subagent
+  rather than running it inline on the orchestrator thread.
+- **On-call monitoring**: long-running waits (CI runs, builds, deploys,
+  remote operations) go to a background subagent or background shell that
+  watches and reports back. Do NOT run `gh run watch` (or similar) on the
+  orchestrator thread. Green → proceed; red → dispatch a diagnostic/fix
+  subagent with the failing job's error.
+
 ## Non-Negotiable Loop
 
 Every issue moves through this state machine:
