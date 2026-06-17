@@ -8,10 +8,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { ConnectionService } from './connection-service';
-import { SshPseudoterminal } from './ssh-terminal';
 import { SftpFsProvider } from './sftp-fs-provider';
 import { HostTreeProvider } from './host-tree-provider';
-import { pickHost, resolveHostId, getOrConnect } from './host-picking';
+import { pickHost, resolveHostId } from './host-picking';
 import { FEATURES, type FeatureDeps } from './feature';
 import { resolveHostsFromConfig, type SkippedHost } from './backend/ssh/data/ssh-host-resolver';
 import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
@@ -37,7 +36,6 @@ import { PortForwardManager } from './backend/port-forwarding';
  * Extension entry point.
  *
  * Registers:
- *   - Terminal profile provider for "pocketshell.ssh"
  *   - FileSystemProvider for "pocketshell" scheme
  *   - TreeDataProvider for the host list sidebar
  *   - Commands: connect, addHost, disconnect, editHost, deleteHost, openRemoteFile
@@ -95,55 +93,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		},
 	});
 	const registerCommand = createDiagnosticCommandRegistrar(recordDiagnostics);
-
-	// -- Terminal profile provider -----------------------------------------------
-
-	const profileProvider: vscode.TerminalProfileProvider = {
-		async provideTerminalProfile(_token: vscode.CancellationToken): Promise<vscode.TerminalProfile | undefined> {
-			recordDiagnostics({ category: 'navigation', name: 'terminal_profile_requested' });
-			const hosts = await service.getHosts();
-			if (hosts.length === 0) {
-				vscode.window.showWarningMessage(vscode.l10n.t('No hosts configured. Use "PocketShell: Add Host" first.'));
-				return undefined;
-			}
-
-			// Show quick-pick of hosts
-			const items = hosts.map(host => ({
-				label: host.name || host.hostname,
-				description: `${host.username}@${host.hostname}:${host.port}`,
-				hostId: host.id,
-			}));
-
-			const picked = await vscode.window.showQuickPick(items, {
-				placeHolder: vscode.l10n.t('Select a host for terminal'),
-			});
-
-			if (!picked) {
-				return undefined;
-			}
-
-			const host = hosts.find(h => h.id === picked.hostId);
-			if (!host) {
-				return undefined;
-			}
-
-			// Connect if not already connected
-			const conn = await getOrConnect(service, host.id);
-			if (!conn) {
-				return undefined;
-			}
-
-			return new vscode.TerminalProfile({
-				name: `PocketShell: ${host.name || host.hostname}`,
-				pty: new SshPseudoterminal(conn, host.name || host.hostname, recordDiagnostics),
-				iconPath: new vscode.ThemeIcon('remote'),
-			});
-		},
-	};
-
-	context.subscriptions.push(
-		vscode.window.registerTerminalProfileProvider('pocketshell.ssh', profileProvider),
-	);
 
 	// -- FileSystem provider -----------------------------------------------------
 

@@ -20,14 +20,6 @@
 		"*"
 	],
 	"contributes": {
-		"terminal": {
-			"profiles": [
-				{
-					"id": "pocketshell.ssh",
-					"title": "PocketShell SSH"
-				}
-			]
-		},
 		"commands": [
 			{
 				"command": "pocketshell.connect",
