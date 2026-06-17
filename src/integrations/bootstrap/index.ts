@@ -5,5 +5,10 @@
  */
 
 export { BootstrapManager } from './bootstrap-manager';
-export { compareVersions, isUpdateAvailable } from './version-checker';
+export {
+  compareVersions,
+  isUpdateAvailable,
+  isVersionCompatible,
+  MIN_POCKETSHELL_CLI_VERSION,
+} from './version-checker';
 export type { PocketshellStatus, InstallResult, UpgradeResult } from './types';
