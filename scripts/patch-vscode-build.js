@@ -35,6 +35,20 @@ function writeIfChanged(file, next) {
   return true;
 }
 
+// Like String.replace, but throws a clear error when the target is not present
+// in the file. This makes build-time patches fail loudly when upstream VS Code
+// source drifts, instead of silently no-op-ing.
+function replaceRequired(content, target, replacement, label) {
+  if (typeof target === 'string') {
+    if (!content.includes(target)) {
+      throw new Error(`Patch target not found${label ? ` for ${label}` : ''}: ${target.split('\n')[0]}`);
+    }
+  } else if (!target.test(content)) {
+    throw new Error(`Patch pattern not found${label ? ` for ${label}` : ''}: ${target}`);
+  }
+  return content.replace(target, replacement);
+}
+
 function rmrf(relativePath) {
   const target = path.join(vscodeDir, relativePath);
   if (fs.existsSync(target)) {
@@ -139,6 +153,106 @@ function patchPaneCompositeBar() {
   );
   if (writeIfChanged(file, content)) {
     log('patched paneCompositeBar default pins');
+  }
+}
+
+// Built-in view containers that must NOT appear in PocketShell's activity bar.
+// Only the PocketShell view container ('workbench.view.extension.pocketshell')
+// should remain. 'workbench.panel.chat' is Copilot's chat container (registered
+// in the auxiliary bar) and is stripped here too.
+const HIDDEN_VIEW_CONTAINER_IDS = [
+  'workbench.view.explorer',
+  'workbench.view.search',
+  'workbench.view.scm',
+  'workbench.view.debug',
+  'workbench.view.extensions',
+  'workbench.panel.chat',
+];
+
+// Issue #87: Strip the activity bar down to PocketShell-only. PaneCompositeBar
+// powers every activity-bar/auxiliary-bar composite strip and asks
+// `getViewContainers()` for the list of containers to render. We filter the
+// built-in VS Code containers (Explorer, Search, SCM, Run and Debug, Extensions)
+// and the Copilot chat container out of that list so only the PocketShell view
+// container survives. Because this is the single chokepoint used by both the
+// primary activity bar (Sidebar) and the secondary side bar (AuxiliaryBar),
+// one patch covers both locations.
+function patchActivityBarViewContainers() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'workbench', 'browser', 'parts', 'paneCompositeBar.ts');
+  let content = read(file);
+  const original = '\tprivate getViewContainers(): readonly ViewContainer[] {\n\t\treturn this.viewDescriptorService.getViewContainersByLocation(this.location);\n\t}';
+  const hiddenArray = HIDDEN_VIEW_CONTAINER_IDS.map((id) => `'${id}'`).join(', ');
+  const replacement = '\tprivate getViewContainers(): readonly ViewContainer[] {\n\t\tconst hiddenPocketShellContainers = new Set<string>([' + hiddenArray + ']);\n\t\treturn this.viewDescriptorService.getViewContainersByLocation(this.location).filter(viewContainer => !hiddenPocketShellContainers.has(viewContainer.id));\n\t}';
+  content = replaceRequired(content, original, replacement, 'patchActivityBarViewContainers getViewContainers');
+  if (writeIfChanged(file, content)) {
+    log('patched paneCompositeBar to hide built-in view containers');
+  }
+}
+
+// Issue #88(a): Hide the remote-window status indicator. PocketShell uses the
+// remote-window machinery internally but must not SHOW the indicator in the
+// status bar. There is no configuration setting for this, so we stop the
+// RemoteStatusIndicator workbench contribution from being registered.
+function patchRemoteIndicator() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'workbench', 'contrib', 'remote', 'browser', 'remote.contribution.ts');
+  let content = read(file);
+  content = replaceRequired(
+    content,
+    "registerWorkbenchContribution2(RemoteStatusIndicator.ID, RemoteStatusIndicator, WorkbenchPhase.BlockStartup);\n",
+    '// PocketShell: remote-window indicator hidden (uses the machinery, must not display it).\n',
+    'patchRemoteIndicator RemoteStatusIndicator registration'
+  );
+  if (writeIfChanged(file, content)) {
+    log('disabled remote status indicator contribution');
+  }
+}
+
+// Issue #88(b) + #88(c): Hide the Accounts menu and the Manage (gear) menu.
+// GlobalCompositeBar drives both icons in the activity bar; isAccountsActionVisible()
+// is also consulted by the title bar tile code. We (1) make the gear never push
+// into the activity bar, (2) force isAccountsActionVisible() to false so neither
+// the activity bar nor the title bar renders the Accounts icon. There are no
+// configuration settings for either of these.
+function patchGlobalCompositeBar() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'workbench', 'browser', 'parts', 'globalCompositeBar.ts');
+  let content = read(file);
+
+  // Do not push the Manage (gear) action into the activity bar.
+  content = replaceRequired(
+    content,
+    '\n\t\tthis.globalActivityActionBar.push(this.globalActivityAction);\n',
+    '\n\t\t// PocketShell: Manage (gear) action removed from the activity bar.\n',
+    'patchGlobalCompositeBar globalActivityAction push'
+  );
+
+  // Force the Accounts icon to never be visible in any host (activity bar or
+  // title bar). isAccountsActionVisible() guards both render paths.
+  content = replaceRequired(
+    content,
+    'export function isAccountsActionVisible(storageService: IStorageService): boolean {\n\treturn storageService.getBoolean(AccountsActivityActionViewItem.ACCOUNTS_VISIBILITY_PREFERENCE_KEY, StorageScope.PROFILE, true);\n}',
+    'export function isAccountsActionVisible(storageService: IStorageService): boolean {\n\t// PocketShell: Accounts menu hidden.\n\treturn false;\n}',
+    'patchGlobalCompositeBar isAccountsActionVisible'
+  );
+
+  if (writeIfChanged(file, content)) {
+    log('disabled Accounts and Manage (gear) composite bar entries');
+  }
+}
+
+// Issue #88(c): Hide the Manage (gear) menu from the title bar as well. When
+// the activity bar is relocated to the top/bottom, the global-activity tile
+// action is rendered in the title bar; strip that push.
+function patchTitleBarGlobalActivityTile() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'workbench', 'browser', 'parts', 'titlebar', 'titlebarPart.ts');
+  let content = read(file);
+  content = replaceRequired(
+    content,
+    '\n\t\t\t\tactions.primary.push(GLOBAL_ACTIVITY_TITLE_ACTION);\n',
+    '\n\t\t\t\t// PocketShell: Manage (gear) tile action removed from the title bar.\n',
+    'patchTitleBarGlobalActivityTile GLOBAL_ACTIVITY_TITLE_ACTION'
+  );
+  if (writeIfChanged(file, content)) {
+    log('disabled Manage (gear) title bar tile action');
   }
 }
 
@@ -251,6 +365,10 @@ patchGulpfileVscode();
 patchExtensionGulpfile();
 patchExtensionsLib();
 patchPaneCompositeBar();
+patchActivityBarViewContainers();
+patchRemoteIndicator();
+patchGlobalCompositeBar();
+patchTitleBarGlobalActivityTile();
 patchWelcomeOnboarding();
 patchWelcomeOnboardingContribution();
 patchSessionsWelcome();
