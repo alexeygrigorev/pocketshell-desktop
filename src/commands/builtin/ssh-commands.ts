@@ -1,8 +1,7 @@
 /**
  * Built-in SSH connection commands.
  *
- * Commands for managing SSH hosts: connect, disconnect, host management,
- * and SSH config import.
+ * Commands for managing SSH hosts: connect, disconnect, host management.
  */
 
 import type { Command } from '../types';
@@ -51,16 +50,6 @@ export const sshCommands: Command[] = [
 		icon: 'server',
 		execute: async () => {
 			return { action: 'manageHosts' };
-		},
-	},
-
-	{
-		id: 'pocketshell.importSshConfig',
-		title: 'Import SSH Config',
-		category: 'PocketShell',
-		icon: 'folder-opened',
-		execute: async () => {
-			return { action: 'importSshConfig' };
 		},
 	},
 ];
