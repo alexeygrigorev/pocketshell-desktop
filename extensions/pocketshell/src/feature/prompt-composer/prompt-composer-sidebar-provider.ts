@@ -61,20 +61,19 @@ export class PromptComposerSidebarProvider implements vscode.WebviewViewProvider
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     };
-    view.webview.onDidReceiveMessage(
-      (message: { action?: string }) => this.handleMessage(message),
-      undefined,
-      view,
+    const msgSub = view.webview.onDidReceiveMessage((message: { action?: string }) =>
+      this.handleMessage(message),
     );
-    view.onDidChangeVisibility(
-      () => {
-        if (view.visible) {
-          void this.refreshAttribution();
-        }
-      },
-      undefined,
-      view,
-    );
+    const visSub = view.onDidChangeVisibility(() => {
+      if (view.visible) {
+        void this.refreshAttribution();
+      }
+    });
+    view.onDidDispose(() => {
+      msgSub.dispose();
+      visSub.dispose();
+      this.view = undefined;
+    });
     void this.refreshAttribution().then(() => this.render());
   }
 
