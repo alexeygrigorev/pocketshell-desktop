@@ -118,41 +118,29 @@ export class StartupAutoConnector {
 /**
  * Deferred-wire hook for the startup auto-connect feature.
  *
- * Matches the {@link FeatureRegistration.register} shape
- * `(service, ctx, deps) => vscode.Disposable[]` so the integration step can
- * either call it inline from `extension.ts` or add a `STARTUP_FEATURE`
- * `FeatureRegistration` to `FEATURES`.
+ * Returns a tuple `[disposables, connector]`: the connector is constructed
+ * here but NOT run — the "run on startup" trigger is deferred to the
+ * integration step (`extension.ts` activate()), which decides when activation
+ * is complete and then `await connector.run(settings)`.
  *
- * This hook does NOT run the connector itself — the "run on startup" trigger
- * is deferred to the integration step (which decides when activation /
- * host-tree readiness has occurred). It only constructs the connector and
- * exposes it so the caller can `await connector.run(deps)` at the right time.
+ * This hook owns no manifest/commands/views, so it is NOT added to `FEATURES`.
+ * It is invoked inline from `extension.ts` (mirroring
+ * `registerPocketshellSettings`), which destructures the connector.
  *
- * The constructed connector is stashed on `ctx` via a typed extension so a
- * later integration step can retrieve it without re-reading deps.
- *
- * @returns A `Disposable[]` (possibly empty). Currently always empty because
- *          this feature registers no commands/views/listeners of its own; the
- *          array is returned for shape compatibility and to leave room for
- *          future disposables (e.g. a settings-change listener that re-runs
- *          the decision) without changing the signature.
+ * @returns `[Disposable[], StartupAutoConnector]`. The disposables array is
+ *          currently always empty (the feature registers no commands/views);
+ *          returned for shape compatibility and to leave room for future
+ *          disposables (e.g. a settings-change listener that re-runs the
+ *          decision) without changing the signature.
  */
 export function registerStartupAutoConnect(
 	service: ConnectionService,
 	_ctx: vscode.ExtensionContext,
-	deps: FeatureDeps,
-): vscode.Disposable[] {
+	_deps: FeatureDeps,
+): [vscode.Disposable[], StartupAutoConnector] {
 	const disposables: vscode.Disposable[] = [];
-
-	// Build the connector eagerly; the integration step reads it back and
-	// invokes run() once the host tree / activation is ready.
 	const connector = new StartupAutoConnector(service);
-
-	// Surface the connector through deps so the integration step can drive it.
-	// (FeatureDeps is an open record type; we attach without mutating input.)
-	(deps as FeatureDeps & { startupConnector?: StartupAutoConnector }).startupConnector = connector;
-
-	return disposables;
+	return [disposables, connector];
 }
 
 // Re-export the pure types for convenience.

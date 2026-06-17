@@ -13,6 +13,7 @@ import { HostTreeProvider } from './host-tree-provider';
 import { pickHost, resolveHostId } from './host-picking';
 import { FEATURES, type FeatureDeps } from './feature';
 import { registerPocketshellSettings } from './feature/settings';
+import { registerStartupAutoConnect } from './feature/startup';
 import { resolveHostsFromConfig, type SkippedHost } from './backend/ssh/data/ssh-host-resolver';
 import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
 import { SettingsStore, type AppSettings } from './backend/app/settings';
@@ -921,6 +922,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// -- PocketShell Settings view (#89) ---------------------------------------
 	context.subscriptions.push(...registerPocketshellSettings(context));
+
+	// -- Startup auto-connect (#94) ------------------------------------------
+	// Construct the connector (inline, like registerPocketshellSettings above)
+	// and fire it once. The connector internally awaits service.getHosts(),
+	// so no pre-fetch is needed; errors surface via the pocketshell.surface
+	// connect command path it invokes. Fire-and-forget: activate() is sync.
+	const [startupAutoConnectDisposables, connector] = registerStartupAutoConnect(service, context, deps);
+	context.subscriptions.push(...startupAutoConnectDisposables);
+	void connector.run(appSettings);
 
 	// -- Cleanup on deactivate ---------------------------------------------------
 
