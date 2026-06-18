@@ -1,0 +1,26 @@
+appId: com.pocketshell.desktop
+productName: PocketShell
+copyright: Copyright © 2026 Alexey Grigorev
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**/*
+  - package.json
+  - '!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}'
+  - '!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}'
+  - '!**/*.{md,markdown}'
+  - '!**/.{idea,git,cache,vscode,DS_Store}'
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+win:
+  target:
+    - nsis
+linux:
+  category: Development
+  target:
+    - AppImage
+    - deb

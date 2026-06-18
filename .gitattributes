@@ -1,0 +1,9 @@
+# Normalise line endings: LF in the repo, checked out as-is per platform.
+# Critical for the committed SSH test key (CRLF corrupts OpenSSH PEM parsing).
+* text=auto eol=lf
+
+# Binary files — never touch.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary

@@ -1,0 +1,52 @@
+# Deterministic Docker SSH targets for PocketShell Desktop tests.
+# Mirrors the Android project's tests/docker fleet. See docs/TESTING.md.
+#
+# Layers:
+#   ssh    (3202) — base ssh + sftp; core-ssh / core-sftp integration
+#   tmux   (3204) — + tmux; attach / terminal integration
+#   helper (3205) — + real `pocketshell` helper + stub agents + fixtures
+#                   (added in Phase 1; the helper image build is defined there)
+#   flaky  (3206) — + forced disconnect; reconnect tests (Phase 3)
+#
+# Port choice: 3202-3206 is deliberately offset from the Android project's
+# 2222-2235 so the two projects can run their Docker fleets side by side on
+# the same dev box without a bind clash.
+#
+# Build order matters: the tmux image does `FROM pocketshell-test:ssh`, so the
+# ssh image tag must exist first. `scripts/build-docker.sh` builds them in
+# order; `docker compose up` builds each service from its own Dockerfile.
+#
+# The shared healthcheck runs an in-container ssh probe so `compose up` only
+# reports healthy once sshd is accepting the committed test_key.
+
+x-ssh-healthcheck: &ssh-healthcheck
+  test:
+    - CMD-SHELL
+    - >-
+      ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null -i /root/test_key testuser@localhost true
+  interval: 2s
+  timeout: 5s
+  retries: 10
+  start_period: 5s
+
+services:
+  ssh:
+    build:
+      context: .
+      dockerfile: Dockerfile.ssh
+    image: pocketshell-test:ssh
+    ports:
+      - "3202:22"
+    healthcheck:
+      <<: *ssh-healthcheck
+
+  tmux:
+    build:
+      context: .
+      dockerfile: Dockerfile.tmux
+    image: pocketshell-test:tmux
+    ports:
+      - "3204:22"
+    healthcheck:
+      <<: *ssh-healthcheck

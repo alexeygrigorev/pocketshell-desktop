@@ -1,0 +1,27 @@
+# Base deterministic SSH test image for PocketShell Desktop.
+#
+# Byte-for-byte model of the Android project's tests/docker/Dockerfile.ssh:
+# Alpine + openssh, non-root `testuser` (password-locked, pubkey-only), sshd
+# on port 22 in the foreground. The committed ed25519 test_key.pub is the
+# authorized_keys file. See docs/TESTING.md.
+FROM alpine:latest
+
+RUN apk add --no-cache openssh-server openssh-client \
+    && ssh-keygen -A \
+    && adduser -D -s /bin/sh testuser \
+    && passwd -u testuser \
+    && mkdir -p /home/testuser/.ssh \
+    && chmod 700 /home/testuser/.ssh
+
+COPY sshd_config /etc/ssh/sshd_config
+COPY test_key.pub /home/testuser/.ssh/authorized_keys
+# Compose healthcheck probes ssh from inside the container; the private key
+# is a committed test fixture used only for that probe.
+COPY test_key /root/test_key
+
+RUN chmod 600 /home/testuser/.ssh/authorized_keys /root/test_key \
+    && chown -R testuser:testuser /home/testuser/.ssh
+
+EXPOSE 22
+
+CMD ["/usr/sbin/sshd", "-D", "-e"]
