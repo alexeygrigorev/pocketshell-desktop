@@ -10,17 +10,17 @@
  *
  * This is the declared floor: when the installed remote CLI is strictly older
  * than this version, the desktop surfaces a warning and offers the existing
- * "Upgrade CLI" action (`pocketshell.bootstrap.upgrade`).
+ * "Upgrade CLI" action (`pocketshell.bootstrap.upgrade`). The PocketShell CLI
+ * is versioned independently of the desktop (its releases live at
+ * github.com/alexeygrigorev/pocketshell; the desktop reads the live "latest"
+ * separately via BootstrapManager.fetchLatestVersion).
  *
- * The exact number is a product decision that is not yet finalized; the
- * conservative default below pins the lowest version the desktop was
- * validated against. Bump this when a desktop feature starts depending on
- * CLI behaviour that did not exist below a given release.
- *
- * TODO(product): finalize the supported CLI floor once the CLI release
- * schedule stabilizes.
+ * Pinned to the current CLI release, 0.4.7 (published 2026-06-17). Bump this
+ * when the desktop is validated against a newer CLI release, or when a desktop
+ * feature starts depending on CLI behaviour that did not exist below a given
+ * release.
  */
-export const MIN_POCKETSHELL_CLI_VERSION = '0.1.0';
+export const MIN_POCKETSHELL_CLI_VERSION = '0.4.7';
 
 /**
  * Compare two semver-style version strings.
