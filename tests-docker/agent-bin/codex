@@ -1,0 +1,6 @@
+#!/bin/sh
+# codex stub: credential-free version string for the bootstrap version probe.
+case "$1" in
+  --version|-V) echo "OpenAI Codex v0.0.0-stub (pocketshell test fixture)" ;;
+  *) echo "codex stub — no real provider credentials in the test image" ;;
+esac

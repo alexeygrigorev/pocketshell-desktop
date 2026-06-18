@@ -4,7 +4,8 @@
  * typed `window.api` (see src/preload/index.ts).
  *
  * Convention: request/response channels use `<domain>:<verb>`; streaming
- * events (main -> renderer) use `<domain>:event:<name>`.
+ * events (main -> renderer) use `<domain>:event:<name>` and carry a payload
+ * keyed by the relevant id (connectionId / shellId).
  */
 
 export const ipc = {
@@ -14,11 +15,20 @@ export const ipc = {
     exec: 'ssh:exec',
     close: 'ssh:close',
     state: 'ssh:event:state', // event: ConnectionState per connectionId
-    // shell + tail arrive in Phase 1/4
+  },
+  shell: {
+    open: 'shell:open', // open a PTY shell (optionally running a command)
+    input: 'shell:input', // write bytes to a shell's stdin
+    resize: 'shell:resize', // setWindow(cols, rows)
+    close: 'shell:close', // close a shell
+    data: 'shell:event:data', // event: { shellId, data: Uint8Array }
+    exited: 'shell:event:exited', // event: { shellId, exitCode }
   },
   helper: {
     bootstrap: 'helper:bootstrap',
     sessionsList: 'helper:sessionsList',
+    sessionsCreate: 'helper:sessionsCreate',
+    usage: 'helper:usage',
   },
 } as const;
 

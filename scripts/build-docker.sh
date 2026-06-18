@@ -15,5 +15,8 @@ docker build -t pocketshell-test:ssh -f "$DOCKER_DIR/Dockerfile.ssh" "$DOCKER_DI
 echo "==> Building pocketshell-test:tmux"
 docker build -t pocketshell-test:tmux -f "$DOCKER_DIR/Dockerfile.tmux" "$DOCKER_DIR"
 
+echo "==> Building pocketshell-test:helper"
+docker build -t pocketshell-test:helper -f "$DOCKER_DIR/Dockerfile.helper" "$DOCKER_DIR"
+
 echo "==> Done. Images:"
 docker images --filter=reference='pocketshell-test:*' --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}'

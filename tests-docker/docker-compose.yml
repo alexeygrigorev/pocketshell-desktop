@@ -50,3 +50,13 @@ services:
       - "3204:22"
     healthcheck:
       <<: *ssh-healthcheck
+
+  helper:
+    build:
+      context: .
+      dockerfile: Dockerfile.helper
+    image: pocketshell-test:helper
+    ports:
+      - "3205:22"
+    healthcheck:
+      <<: *ssh-healthcheck

@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConnectionRegistry } from './ssh/ConnectionRegistry.js';
 import { SshService } from './ssh/SshService.js';
+import { PocketshellClient } from './helper/PocketshellClient.js';
 import { registerIpcHandlers } from './ipc.js';
 
 // Electron + ESM: __dirname is not defined for the bundled output under some
@@ -12,6 +13,7 @@ const __dir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPa
 
 const registry = new ConnectionRegistry();
 const ssh = new SshService(registry);
+const helper = new PocketshellClient(ssh);
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -62,7 +64,12 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
-    registerIpcHandlers({ registry, ssh });
+    registerIpcHandlers({
+      registry,
+      ssh,
+      helper,
+      getWindows: () => BrowserWindow.getAllWindows(),
+    });
     createWindow();
 
     app.on('activate', () => {

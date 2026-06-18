@@ -1,0 +1,4 @@
+#!/bin/sh
+# quse stub: emits the deterministic usage NDJSON `pocketshell usage` delegates to.
+# No credentials, no network. Output matches tests-docker/fixtures/pocketshell-usage.ndjson.
+cat /opt/pocketshell-fixtures/pocketshell-usage.ndjson

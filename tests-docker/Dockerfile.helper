@@ -1,0 +1,49 @@
+# Helper image: real `pocketshell` CLI + stub agent CLIs + seeded fixtures.
+#
+# This is the PRIMARY end-to-end test target (port 3205). It installs the real
+# server-side `pocketshell` helper (via uv) so the desktop app exercises the
+# actual `pocketshell sessions list` / `usage` / `agent-log` code paths, and
+# stubs the provider CLIs (claude/codex/opencode/quse) with deterministic
+# fixtures so no real credentials or network are needed.
+#
+# Extends pocketshell-test:tmux (=> pocketshell-test:ssh + tmux).
+FROM pocketshell-test:tmux
+
+# python3 + pip + uv for installing the real helper. git for `repos` later.
+RUN apk add --no-cache python3 py3-pip git bash \
+    && python3 -m pip install --break-system-packages --no-cache-dir uv
+
+# Install the real pocketshell helper + its tmuxctl runtime dependency.
+# `uv tool install` puts each tool in its OWN isolated venv and only symlinks
+# the named package's entrypoints to ~/.local/bin — so pocketshell's
+# `shutil.which("tmuxctl")` finds nothing unless tmuxctl is installed as its
+# own tool too. Install both so their CLIs land on PATH.
+RUN su testuser -c 'uv tool install pocketshell && uv tool install tmuxctl' \
+    && mkdir -p /home/testuser/.local/bin
+
+ENV PATH="/home/testuser/.local/bin:${PATH}"
+
+# Stub provider CLIs + quse with deterministic, credential-free output.
+COPY agent-bin/ /usr/local/bin/
+RUN chmod +x /usr/local/bin/claude /usr/local/bin/codex /usr/local/bin/opencode /usr/local/bin/quse
+
+# Seed the agent-conversation fixtures under the canonical paths the helper reads.
+COPY fixtures/ /opt/pocketshell-fixtures/
+COPY helper-entrypoint.sh /usr/local/bin/pocketshell-helper-entrypoint
+RUN chmod +x /usr/local/bin/pocketshell-helper-entrypoint \
+    && mkdir -p /home/testuser/.claude/projects/-workspace-demo \
+                /home/testuser/.codex/sessions/2026/05/23 \
+                /home/testuser/.local/share/opencode \
+    && cp /opt/pocketshell-fixtures/claude-session.jsonl \
+          /home/testuser/.claude/projects/-workspace-demo/demo-claude.jsonl \
+    && cp /opt/pocketshell-fixtures/codex-session.jsonl \
+          /home/testuser/.codex/sessions/2026/05/23/demo-codex.jsonl \
+    && cp /opt/pocketshell-fixtures/opencode-rows.jsonl \
+          /home/testuser/.local/share/opencode/demo-opencode.jsonl \
+    && chown -R testuser:testuser /home/testuser/.claude /home/testuser/.codex /home/testuser/.local
+
+EXPOSE 22
+
+# The entrypoint starts sshd in the foreground AND seeds two live tmux sessions
+# (so `pocketshell sessions list` returns a non-empty tree) as the testuser.
+CMD ["/usr/local/bin/pocketshell-helper-entrypoint"]

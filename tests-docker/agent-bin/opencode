@@ -1,0 +1,6 @@
+#!/bin/sh
+# opencode stub: credential-free version string for the bootstrap version probe.
+case "$1" in
+  --version|-V) echo "opencode 0.0.0-stub (pocketshell test fixture)" ;;
+  *) echo "opencode stub — no real provider credentials in the test image" ;;
+esac

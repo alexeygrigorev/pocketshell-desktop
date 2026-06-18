@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import type { ClientChannel, PseudoTtyOptions } from 'ssh2';
-import type { ConnectResult, ExecResult } from '../../shared/types.js';
+import type { ConnectResult, ExecResult, ShellId } from '../../shared/types.js';
 import { newClient, ConnectionRegistry, type ConnectionRecord } from './ConnectionRegistry.js';
+import { ShellTracker } from './ShellTracker.js';
 import type { KnownHosts } from '../ssh-config/KnownHosts.js';
 
 /**
@@ -62,7 +63,18 @@ export interface TailHandle {
 }
 
 export class SshService {
-  constructor(private readonly registry: ConnectionRegistry = new ConnectionRegistry()) {}
+  private readonly shells: ShellTracker;
+  constructor(
+    private readonly registry: ConnectionRegistry = new ConnectionRegistry(),
+    shells?: ShellTracker,
+  ) {
+    this.shells = shells ?? new ShellTracker();
+  }
+
+  /** Expose the shell tracker so the IPC layer can route input/resize/close. */
+  get shellTracker(): ShellTracker {
+    return this.shells;
+  }
 
   /** Attempt a connection. Resolves a {@link ConnectResult}; never rejects. */
   connect(opts: ConnectOptions): Promise<ConnectResult> {
@@ -175,6 +187,71 @@ export class SshService {
     };
   }
 
+  /**
+   * Open a tracked PTY shell and return its id. Output bytes are delivered via
+   * `onData`; exit via `onExit`. This is the form the IPC layer uses so the
+   * renderer can address the shell across separate calls (input/resize/close)
+   * by id alone.
+   *
+   * @param command Optional command to run inside the PTY (e.g. `tmux attach -t main`).
+   *                When omitted, an interactive shell is opened.
+   */
+  async openTrackedShell(
+    connectionId: string,
+    opts: {
+      cols?: number;
+      rows?: number;
+      term?: string;
+      command?: string;
+      onData: (data: Buffer) => void;
+      onExit?: (exitCode: number) => void;
+    },
+  ): Promise<ShellId> {
+    const rec = this.registry.require(connectionId);
+    const channel = await openShell(rec, {
+      term: opts.term ?? PTY_TERM,
+      cols: opts.cols ?? PTY_DEFAULT_COLS,
+      rows: opts.rows ?? PTY_DEFAULT_ROWS,
+    });
+    const id = this.shells.register({ channel, connectionId });
+    channel.on('data', (chunk: Buffer) => opts.onData(chunk));
+    channel.on('close', () => {
+      opts.onExit?.(0);
+      this.shells.remove(id);
+    });
+    // If a command was requested, write it to the shell's stdin (the PTY runs
+    // an interactive login shell; we send the command as if the user typed it).
+    if (opts.command) {
+      channel.write(opts.command + '\n');
+    }
+    return id;
+  }
+
+  /** Write input bytes to a tracked shell's stdin (xterm.js -> remote). */
+  shellInput(shellId: ShellId, data: string | Buffer): void {
+    const rec = this.shells.get(shellId);
+    if (rec) rec.channel.write(data);
+  }
+
+  /** Resize a tracked shell's PTY. */
+  shellResize(shellId: ShellId, cols: number, rows: number): void {
+    const rec = this.shells.get(shellId);
+    if (rec) rec.channel.setWindow(rows, cols, rows, cols);
+  }
+
+  /** Close a tracked shell. */
+  shellClose(shellId: ShellId): void {
+    const rec = this.shells.remove(shellId);
+    if (rec) {
+      try {
+        rec.channel.end();
+        rec.channel.close();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   /** Tail a file via `tail -F`; caller re-launches after a transport drop. */
   tail(
     connectionId: string,
@@ -211,8 +288,9 @@ export class SshService {
     };
   }
 
-  /** Close a connection idempotently. */
+  /** Close a connection idempotently (also tears down its shells). */
   close(connectionId: string): void {
+    this.shells.closeAllForConnection(connectionId);
     const rec = this.registry.remove(connectionId);
     if (rec) {
       try {

@@ -9,6 +9,9 @@
 /** Opaque handle for a live SSH connection in the main process. */
 export type ConnectionId = string;
 
+/** Opaque handle for a live PTY shell opened on a connection. */
+export type ShellId = string;
+
 /** A host parsed from ~/.ssh/config or entered manually. */
 export interface HostEntry {
   /** Friendly name from the `Host` directive, or a generated one. */
