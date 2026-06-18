@@ -25,17 +25,36 @@ import * as vscode from 'vscode';
 
 import { SettingsStore, type AppSettings } from '../../backend/app/settings';
 import { checkForUpdate, applyUpdate, type UpdateManifest } from '../../backend/updates/updater';
+import { UpdatePermissionError } from '../../backend/updates/installer';
 
 // ---------------------------------------------------------------------------
 // Constants & contracts
 // ---------------------------------------------------------------------------
 
 /**
- * Release channel: the `latest.json` manifest is attached to the latest
- * GitHub release (uploaded by `.github/workflows/release.yml`).
+ * Base path for release assets attached to the "latest" GitHub release
+ * (uploaded by `.github/workflows/release.yml`).
  */
-const MANIFEST_URL =
-	'https://github.com/alexeygrigorev/pocketshell-desktop/releases/latest/download/latest.json';
+const RELEASE_BASE =
+	'https://github.com/alexeygrigorev/pocketshell-desktop/releases/latest/download';
+
+/**
+ * Build the per-platform update-manifest URL for the running process.
+ *
+ * release.yml publishes ONE manifest per matrix platform — `latest-<platform>.json`
+ * — because the extension vendors a platform-specific native (ssh2's
+ * sshcrypto.node), so the delta zip is platform-keyed. There is no longer a
+ * single `latest.json`.
+ *
+ * Platform key contract: the manifest asset is named
+ * `latest-${process.platform}-${process.arch}.json`, where the key MUST equal
+ * release.yml's matrix `platform` values exactly: `linux-x64`, `win32-x64`,
+ * `darwin-arm64`. Node's `process.platform`+`-'+process.arch` yields precisely
+ * those on the three release targets, so no mapping table is required.
+ */
+function manifestUrlForCurrentPlatform(): string {
+	return `${RELEASE_BASE}/latest-${process.platform}-${process.arch}.json`;
+}
 
 /**
  * Full-download URL shown to the user when only a base (core) update is
@@ -137,6 +156,19 @@ export class UpdateController {
 			if (this.settings.get().autoUpdateCheckOnStartup === false) {
 				return;
 			}
+			// Dev builds (and CI Playwright runs) have no base-version.json, so
+			// readRuntimeBaseVersion returns 'dev'. Once per-platform manifests
+			// are published, a dev-build auto-check would fetch a real manifest,
+			// see a baseVersion mismatch ('dev' vs the real base), and pop an
+			// unwanted "full update available" modal — breaking automated UI
+			// tests and annoying devs. Skip silently in the auto path only; the
+			// manual `pocketshell.update.check` command still runs (so devs can
+			// test the updater). The activate() caller additionally gates on
+			// POCKETSHELL_E2E — that gate is independent and stays.
+			if (readRuntimeBaseVersion(this.context) === DEV_BASE_VERSION) {
+				console.debug('[PocketShell] Skipping auto update check: dev build (no base-version.json).');
+				return;
+			}
 			await this.runCheck({ silentWhenCurrent: true });
 		} catch {
 			// Never propagate to activate().
@@ -154,7 +186,7 @@ export class UpdateController {
 		const currentVersion = readRuntimeAppVersion(this.context);
 		const currentBaseVersion = readRuntimeBaseVersion(this.context);
 
-		const result = await checkForUpdate(MANIFEST_URL, {
+		const result = await checkForUpdate(manifestUrlForCurrentPlatform(), {
 			currentVersion,
 			currentBaseVersion,
 		});
@@ -206,9 +238,10 @@ export class UpdateController {
 			await applyUpdate(manifest, this.context.extensionPath);
 			await vscode.commands.executeCommand('workbench.action.reloadWindow');
 		} catch (err) {
-			vscode.window.showErrorMessage(
-				`PocketShell update failed: ${String(err)}`,
-			);
+			const msg = err instanceof UpdatePermissionError
+				? `PocketShell cannot write to its install folder (${String(err.message)}). A manual update is needed — download the latest from the releases page.`
+				: `PocketShell update failed: ${String(err)}`;
+			vscode.window.showErrorMessage(msg);
 		}
 	}
 
@@ -241,7 +274,7 @@ export class UpdateController {
 				try {
 					const currentVersion = readRuntimeAppVersion(this.context);
 					const currentBaseVersion = readRuntimeBaseVersion(this.context);
-					const result = await checkForUpdate(MANIFEST_URL, {
+					const result = await checkForUpdate(manifestUrlForCurrentPlatform(), {
 						currentVersion,
 						currentBaseVersion,
 					});
@@ -253,9 +286,10 @@ export class UpdateController {
 						await this.runCheck({ silentWhenCurrent: false });
 					}
 				} catch (err) {
-					vscode.window.showErrorMessage(
-						`PocketShell update failed: ${String(err)}`,
-					);
+					const msg = err instanceof UpdatePermissionError
+						? `PocketShell cannot write to its install folder (${String(err.message)}). A manual update is needed — download the latest from the releases page.`
+						: `PocketShell update failed: ${String(err)}`;
+					vscode.window.showErrorMessage(msg);
 				}
 			},
 		);
