@@ -76,10 +76,21 @@ jobs:
       # Running the patcher here makes the patched src/ the source of truth that
       # gets compiled into the cached out/. The patcher is idempotent, so the
       # build job's later re-run is a harmless safety net.
+      #
+      # `--core-only`: prepare-base runs BEFORE the PocketShell extension source
+      # is synced (that happens in the build job) and BEFORE stock extensions
+      # are pruned, so the full patcher would break this compile — its
+      # patchExtensionGulpfile() rewrites the compilations array to
+      # extensions/pocketshell/tsconfig.json (which does not exist yet → TS5058),
+      # and pruneBundledExtensions() deletes tsconfig.json files the compile
+      # then chases. `--core-only` runs ONLY the src/vs/ chrome patches (baked
+      # into out/ here). The build job's safety-net step runs the FULL patcher,
+      # which then does the pruning + build-config surgery once pocketshell is
+      # synced.
       - name: Apply PocketShell VS Code build patches
         if: steps.cache-base.outputs.cache-hit != 'true'
         shell: bash
-        run: node scripts/patch-vscode-build.js
+        run: node scripts/patch-vscode-build.js --core-only
 
       - name: Compile VS Code core
         if: steps.cache-base.outputs.cache-hit != 'true'

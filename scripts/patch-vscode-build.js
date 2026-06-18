@@ -488,14 +488,38 @@ function main() {
     throw new Error(`VS Code source not found at ${vscodeDir}`);
   }
 
-  rmrf('extensions/copilot');
-  rmrf('.build/extensions/copilot');
-  rmrf('out/extensions/copilot');
-  pruneBundledExtensions();
+  // Split into two phases via `--core-only`:
+  //
+  // prepare-base (the load-bearing pre-compile run) invokes this script with
+  // `--core-only`. In that job the PocketShell extension source is NOT synced
+  // into vendor/vscode/extensions/pocketshell yet (the sync happens in the
+  // build job), and the stock extensions have NOT been pruned yet. Running the
+  // full patcher here would (a) rewrite build/gulpfile.extensions.ts's
+  // compilations array to ['extensions/pocketshell/tsconfig.json'] — and since
+  // pocketshell/tsconfig.json does not exist yet, `gulp compile` errors with
+  // TS5058 "The specified path does not exist"; and (b) prune every stock
+  // extension, leaving the (un-pruned-list-aware) extensions compile chasing
+  // now-deleted tsconfig.json files. Both break prepare-base's compile.
+  //
+  // So `--core-only` runs ONLY the src/vs/ chrome patches (which must be baked
+  // into the cached out/). The build job then runs the FULL patcher as a safety
+  // net: by then pocketshell is synced and pruning is expected, so the
+  // build-config + extension patches apply cleanly.
+  const coreOnly = process.argv.includes('--core-only');
+  if (coreOnly) {
+    log('--core-only: running src/vs/ chrome patches only; skipping copilot rmrf, prune, and build-config/extension patches (deferred to the build job).');
+  }
 
-  patchGulpfileVscode();
-  patchExtensionGulpfile();
-  patchExtensionsLib();
+  if (!coreOnly) {
+    rmrf('extensions/copilot');
+    rmrf('.build/extensions/copilot');
+    rmrf('out/extensions/copilot');
+    pruneBundledExtensions();
+
+    patchGulpfileVscode();
+    patchExtensionGulpfile();
+    patchExtensionsLib();
+  }
   patchPaneCompositeBar();
   patchActivityBarViewContainers();
   patchRemoteIndicator();
