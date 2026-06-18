@@ -104,4 +104,45 @@ export class PocketshellClient {
     if (res.exitCode !== 0) return null; // 66 = not found
     return parseAgentLogJson(res.stdout);
   }
+
+  /** Agent config-dir profiles (`pocketshell profiles list --json`). */
+  async listProfiles(connectionId: string): Promise<unknown[]> {
+    const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell profiles list --json'));
+    if (res.exitCode !== 0) return [];
+    try {
+      const parsed = JSON.parse(res.stdout.trim());
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Env keys for a folder (`pocketshell env list --dir D --json`). */
+  async envList(connectionId: string, dir: string): Promise<unknown[]> {
+    const res = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(`pocketshell env list --dir '${dir.replace(/'/g, "'\\''")}' --json`),
+    );
+    if (res.exitCode !== 0) return [];
+    try {
+      const parsed = JSON.parse(res.stdout.trim());
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Env values for a folder (`pocketshell env get --dir D --json`). */
+  async envGet(connectionId: string, dir: string): Promise<Record<string, string>> {
+    const res = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(`pocketshell env get --dir '${dir.replace(/'/g, "'\\''")}' --json`),
+    );
+    if (res.exitCode !== 0) return {};
+    try {
+      return JSON.parse(res.stdout.trim()) as Record<string, string>;
+    } catch {
+      return {};
+    }
+  }
 }

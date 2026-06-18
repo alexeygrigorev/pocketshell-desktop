@@ -1,7 +1,10 @@
 <script setup lang="ts">
-// Host workspace: the shell for a connected host. Two tabs:
+// Host workspace: the shell for a connected host. Tabs:
 //   - Sessions: session tree + attached terminal (Phase 1 core flow)
 //   - Files:    SFTP browser + editor (Phase 2)
+//   - Ports:    port-forward panel (Phase 3)
+//   - Conversation: agent conversation view (Phase 4)
+//   - Usage:    provider quota dashboard (Phase 4)
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useConnectionStore } from '../stores/connection';
@@ -9,12 +12,14 @@ import SessionTree from '../components/SessionTree.vue';
 import TerminalView from '../components/TerminalView.vue';
 import FilesView from './FilesView.vue';
 import PortPanelView from './PortPanelView.vue';
+import ConversationView from './ConversationView.vue';
+import UsageView from './UsageView.vue';
 import type { SessionSummary } from '../../shared/types';
 
 const router = useRouter();
 const connection = useConnectionStore();
 const selected = ref<SessionSummary | null>(null);
-const tab = ref<'sessions' | 'files' | 'ports'>('sessions');
+const tab = ref<'sessions' | 'files' | 'ports' | 'conversation' | 'usage'>('sessions');
 
 const command = computed(() => {
   if (!selected.value) return undefined;
@@ -65,6 +70,12 @@ function onBack(): void {
       <button :class="['tab', { active: tab === 'ports' }]" @click="tab = 'ports'">
         Ports
       </button>
+      <button :class="['tab', { active: tab === 'conversation' }]" @click="tab = 'conversation'">
+        Conversation
+      </button>
+      <button :class="['tab', { active: tab === 'usage' }]" @click="tab = 'usage'">
+        Usage
+      </button>
     </nav>
 
     <div class="body">
@@ -89,6 +100,12 @@ function onBack(): void {
 
       <!-- Ports tab: port-forward panel -->
       <PortPanelView v-else-if="tab === 'ports' && connection.connectionId" />
+
+      <!-- Conversation tab: agent conversation view -->
+      <ConversationView v-else-if="tab === 'conversation' && connection.connectionId" />
+
+      <!-- Usage tab: provider quota dashboard -->
+      <UsageView v-else-if="tab === 'usage' && connection.connectionId" />
     </div>
   </div>
 </template>

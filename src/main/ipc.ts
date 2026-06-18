@@ -278,6 +278,37 @@ export function registerIpcHandlers(deps: {
     return forwards.list(connectionId);
   });
 
+  // --- agent:* ------------------------------------------------------------
+  // Agent-awareness: conversation logs, resumable conversations, profiles,
+  // and the env editor — all delegated to the server-side pocketshell helper.
+  ipcMain.handle(
+    ipc.agent.log,
+    async (
+      _evt,
+      connectionId: string,
+      engine: 'claude' | 'codex' | 'opencode',
+      session: string,
+      cwd?: string,
+    ) => {
+      return helper.agentLog(connectionId, engine, session, cwd);
+    },
+  );
+  ipcMain.handle(ipc.agent.resumable, async (_evt, connectionId: string) => {
+    return helper.listResumable(connectionId, true);
+  });
+  ipcMain.handle(ipc.agent.profiles, async (_evt, connectionId: string) => {
+    return helper.listProfiles(connectionId);
+  });
+  ipcMain.handle(
+    ipc.agent.envList,
+    async (_evt, connectionId: string, dir: string) => {
+      return helper.envList(connectionId, dir);
+    },
+  );
+  ipcMain.handle(ipc.agent.envGet, async (_evt, connectionId: string, dir: string) => {
+    return helper.envGet(connectionId, dir);
+  });
+
   // Plumbing: keep references used by the main process bookkeeping.
   void registry;
 }

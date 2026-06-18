@@ -53,6 +53,13 @@ export const ipc = {
     list: 'forwards:list', // current snapshot
     states: 'forwards:event:states', // event: { connectionId, states[] }
   },
+  agent: {
+    log: 'agent:log', // agent-log --json for an engine+session
+    resumable: 'agent:resumable', // sessions resumable
+    profiles: 'agent:profiles', // profiles list --json
+    envList: 'agent:envList', // env list --dir --json
+    envGet: 'agent:envGet', // env get --dir --json
+  },
 } as const;
 
 export type IpcChannelMap = typeof ipc;

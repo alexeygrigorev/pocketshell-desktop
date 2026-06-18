@@ -218,6 +218,45 @@ const api = {
       return () => ipcRenderer.removeListener(ipc.forwards.states, listener);
     },
   },
+
+  agent: {
+    /** Read an agent conversation log (raw JSONL envelope). */
+    log: (
+      connectionId: string,
+      engine: 'claude' | 'codex' | 'opencode',
+      session: string,
+      cwd?: string,
+    ): Promise<{
+      count: number;
+      engine: string;
+      lines: string[];
+      path: string;
+      session: string;
+    } | null> => ipcRenderer.invoke(ipc.agent.log, connectionId, engine, session, cwd),
+
+    /** List resumable AI-CLI conversations. */
+    resumable: (connectionId: string): Promise<
+      {
+        engine: string;
+        project: string;
+        when: string;
+        label: string;
+        running: boolean;
+      }[]
+    > => ipcRenderer.invoke(ipc.agent.resumable, connectionId),
+
+    /** Agent config-dir profiles. */
+    profiles: (connectionId: string): Promise<unknown[]> =>
+      ipcRenderer.invoke(ipc.agent.profiles, connectionId),
+
+    /** Env keys for a folder. */
+    envList: (connectionId: string, dir: string): Promise<unknown[]> =>
+      ipcRenderer.invoke(ipc.agent.envList, connectionId, dir),
+
+    /** Env values for a folder. */
+    envGet: (connectionId: string, dir: string): Promise<Record<string, string>> =>
+      ipcRenderer.invoke(ipc.agent.envGet, connectionId, dir),
+  },
 } as const;
 
 export type Api = typeof api;
