@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor/vscode
-          key: vscode-${{ env.VSCODE_REF }}-${{ matrix.platform }}-base-v2
+          key: vscode-${{ env.VSCODE_REF }}-${{ matrix.platform }}-base-v3
 
       # ── Clone + install + compile (cache miss only) ───────
       - name: Clone VS Code source
@@ -68,6 +68,18 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cd vendor/vscode && npm install --foreground-scripts --no-audit --no-fund
+
+      # Apply the PocketShell VS Code source patches BEFORE compiling the core.
+      # `gulp compile` bakes src/ into out/; if we patched after compile (as the
+      # build job used to), the cached out/ stayed unpatched and the production
+      # `gulp vscode-{platform}` step shipped unpatched chrome (issue #97).
+      # Running the patcher here makes the patched src/ the source of truth that
+      # gets compiled into the cached out/. The patcher is idempotent, so the
+      # build job's later re-run is a harmless safety net.
+      - name: Apply PocketShell VS Code build patches
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        shell: bash
+        run: node scripts/patch-vscode-build.js
 
       - name: Compile VS Code core
         if: steps.cache-base.outputs.cache-hit != 'true'
@@ -126,7 +138,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor/vscode
-          key: vscode-${{ env.VSCODE_REF }}-${{ matrix.platform }}-base-v2
+          key: vscode-${{ env.VSCODE_REF }}-${{ matrix.platform }}-base-v3
           fail-on-cache-miss: true
 
       # ── PocketShell extension (every run) ──────────────────
@@ -134,7 +146,12 @@ jobs:
         shell: bash
         run: cp product.json vendor/vscode/product.json
 
-      - name: Apply PocketShell VS Code build patches
+      # Re-apply the patches as a safety net. The load-bearing run is in
+      # prepare-base (before `gulp compile`); the cached vendor tree already has
+      # patched src/ + patched out/. The patcher is idempotent (replaceRequired
+      # short-circuits when a patch marker is already present), so this is a
+      # no-op on a cache hit and only catches drift if the cache was bypassed.
+      - name: Apply PocketShell VS Code build patches (safety net)
         shell: bash
         run: node scripts/patch-vscode-build.js
 

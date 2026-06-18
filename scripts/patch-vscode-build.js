@@ -46,7 +46,24 @@ function writeIfChanged(file, next) {
 // Like String.replace, but throws a clear error when the target is not present
 // in the file. This makes build-time patches fail loudly when upstream VS Code
 // source drifts, instead of silently no-op-ing.
+//
+// IDEMPOTENT: if the replacement is already present in the content (the patch
+// was applied on a prior run — e.g. prepare-base baked it into the cached
+// vendor tree, then the build job re-applied it), the call is a no-op instead
+// of throwing "Patch target not found". This lets the same patcher run in both
+// prepare-base (pre-compile, the load-bearing run) and the build job (a safety
+// net) without the second run exploding on already-patched source.
 function replaceRequired(content, target, replacement, label) {
+  // Idempotency short-circuit (string target + string replacement only): if the
+  // FULL replacement is already in the content, the patch was applied on a prior
+  // run (e.g. prepare-base baked it into the cached vendor tree, then the build
+  // job re-ran the patcher). Return unchanged instead of throwing "Patch target
+  // not found". We require the FULL replacement (not a substring marker) because
+  // patches commonly reuse lines from the original target, so any partial marker
+  // would false-positive on pristine source and silently skip the patch.
+  if (typeof target === 'string' && typeof replacement === 'string' && replacement.length > 0 && content.includes(replacement)) {
+    return content;
+  }
   if (typeof target === 'string') {
     if (!content.includes(target)) {
       throw new Error(`Patch target not found${label ? ` for ${label}` : ''}: ${target.split('\n')[0]}`);
