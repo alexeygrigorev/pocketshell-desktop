@@ -11,7 +11,7 @@ import type { FeatureDeps } from '../manifest';
 import type { ConversationAttributionResult } from '../../backend/agents';
 import type { AgentType, ConversationMessage } from '../../backend/agents/conversation';
 import { AgentMessenger, ReplyQueue } from '../../backend/agents/reply';
-import { registerConversationSidebar } from './conversation-sidebar-provider';
+import { registerConversationSidebar, type ConversationSidebarProvider } from './conversation-sidebar-provider';
 import {
 	appendConversationMessage,
 	clearConversationSearch,
@@ -46,6 +46,18 @@ interface ConversationPanelEntry {
 	searchRenderTimer?: ReturnType<typeof setTimeout>;
 	queueRenderTimer?: ReturnType<typeof setTimeout>;
 	stopTail?: () => void;
+}
+
+/**
+ * The live conversation sidebar provider instance, captured during
+ * registration so the E2E TestBridge (#90) can read its model. Undefined
+ * until `registerConversation` has run (and after a theoretical re-register).
+ */
+let conversationSidebarProvider: ConversationSidebarProvider | undefined;
+
+/** Test-only accessor for the live conversation sidebar provider (#90). */
+export function getConversationSidebarProvider(): ConversationSidebarProvider | undefined {
+	return conversationSidebarProvider;
 }
 
 export function registerConversation(
@@ -147,7 +159,9 @@ export function registerConversation(
 		},
 	});
 
-	disposables.push(...registerConversationSidebar(service, ctx, _deps));
+	const sidebar = registerConversationSidebar(service, ctx, _deps);
+	disposables.push(...sidebar.disposables);
+	conversationSidebarProvider = sidebar.provider;
 
 	return disposables;
 }

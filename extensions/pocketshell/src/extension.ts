@@ -14,6 +14,8 @@ import { pickHost, resolveHostId } from './host-picking';
 import { FEATURES, type FeatureDeps } from './feature';
 import { registerPocketshellSettings } from './feature/settings';
 import { registerStartupAutoConnect } from './feature/startup';
+import { getConversationSidebarProvider } from './feature/conversation/conversation-commands';
+import { getPromptComposerSidebarProvider } from './feature/prompt-composer/prompt-composer-commands';
 import { UpdateController, registerSettingsTestBridge } from './feature/updates/update-controller';
 import { resolveHostsFromConfig, type SkippedHost } from './backend/ssh/data/ssh-host-resolver';
 import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
@@ -940,6 +942,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	const updateController = new UpdateController(context, settings);
 	context.subscriptions.push(...updateController.register());
 	context.subscriptions.push(...registerSettingsTestBridge(settings));
+	context.subscriptions.push(...registerProvidersTestBridge());
 	if (process.env.POCKETSHELL_E2E !== '1') {
 		// Fire-and-forget: activate() is sync and must not block on the network.
 		void updateController.checkAndNotify().catch(() => { /* never propagate */ });
@@ -1546,4 +1549,67 @@ function formatSettingValue(value: unknown): string {
 		return '';
 	}
 	return String(value);
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar providers TestBridge (E2E only — see issue #90)
+// ---------------------------------------------------------------------------
+
+/**
+ * Register test-only commands exposing the LIVE conversation + prompt-composer
+ * sidebar provider instances.
+ *
+ * Mirrors {@link registerSettingsTestBridge}: registered ONLY when
+ * `process.env.POCKETSHELL_E2E === '1'`. The in-host E2E suite calls these to
+ * prove both sidebar views were registered and that the bridge wires to the
+ * live instances. The snapshot is read-only and defensive (never throws — a
+ * failure returns `{ viewId, error }` so the test driver can distinguish a
+ * wiring failure from an empty model).
+ *
+ *   - `pocketshell.__test.conversation.getState`    → conversation snapshot.
+ *   - `pocketshell.__test.promptComposer.getState`  → prompt-composer snapshot.
+ */
+function registerProvidersTestBridge(): vscode.Disposable[] {
+	if (process.env.POCKETSHELL_E2E !== '1') {
+		return [];
+	}
+	const safeGetState = (
+		viewId: string,
+		getProvider: () =>
+			| { getState(): Record<string, unknown> }
+			| undefined,
+	): Record<string, unknown> => {
+		try {
+			const provider = getProvider();
+			if (!provider) {
+				return { viewId, error: 'provider not registered' };
+			}
+			const state = provider.getState();
+			return { viewId, ...state };
+		} catch (err) {
+			return { viewId, error: String(err) };
+		}
+	};
+
+	const conversationCmd = vscode.commands.registerCommand(
+		'pocketshell.__test.conversation.getState',
+		() => safeGetState(
+			'pocketshell.conversation.sidebar',
+			() => {
+				const provider = getConversationSidebarProvider();
+				return provider ? { getState: () => provider.getState() } : undefined;
+			},
+		),
+	);
+	const promptComposerCmd = vscode.commands.registerCommand(
+		'pocketshell.__test.promptComposer.getState',
+		() => safeGetState(
+			'pocketshell.promptComposer.sidebar',
+			() => {
+				const provider = getPromptComposerSidebarProvider();
+				return provider ? { getState: () => provider.getState() } : undefined;
+			},
+		),
+	);
+	return [conversationCmd, promptComposerCmd];
 }

@@ -82,6 +82,38 @@ export class PromptComposerSidebarProvider implements vscode.WebviewViewProvider
     void this.refreshAttribution().then(() => this.render());
   }
 
+  /**
+   * Read-only snapshot of the provider's model + view state, for the E2E
+   * TestBridge (#90). Never throws: any serialization error is returned as
+   * `{ viewId, error }` so the test driver can distinguish a wiring failure
+   * from a passing (but empty) model.
+   */
+  getState(): {
+    viewId: string;
+    visible: boolean;
+    resolved: boolean;
+    session: LauncherSessionHint | undefined;
+    ambiguous: boolean;
+    hasConnection: boolean;
+    status: { kind: string; message?: string; error?: string };
+    revision: number;
+  } {
+    return {
+      viewId: PromptComposerSidebarProvider.viewType,
+      visible: this.view?.visible ?? false,
+      resolved: this.view !== undefined,
+      session: this.model.session,
+      ambiguous: this.model.ambiguous,
+      hasConnection: this.model.hasConnection,
+      status: {
+        kind: this.model.status.kind,
+        ...(this.model.status.message === undefined ? {} : { message: this.model.status.message }),
+        ...(this.model.status.error === undefined ? {} : { error: this.model.status.error }),
+      },
+      revision: this.model.revision,
+    };
+  }
+
   private async handleMessage(message: { action?: string }): Promise<void> {
     if (message.action !== 'open-composer') {
       return;
@@ -141,22 +173,23 @@ export class PromptComposerSidebarProvider implements vscode.WebviewViewProvider
 /**
  * Register the prompt-composer sidebar view provider.
  *
- * Returns disposables only; it does NOT register any commands or manifest
- * contributions. The owning feature wires the `view` contribution
- * (`pocketshell.promptComposer.sidebar`) into `package.json` in a later batch.
+ * Returns the registration disposable AND the live provider instance. The
+ * owning feature wires the `view` contribution (`pocketshell.promptComposer.sidebar`)
+ * into `package.json`; the returned provider instance is captured so the E2E
+ * TestBridge (#90) can read its model without disturbing the registration flow.
  */
 export function registerPromptComposerSidebar(
   service: ConnectionService,
   ctx: vscode.ExtensionContext,
   _deps: FeatureDeps,
-): vscode.Disposable[] {
+): { disposables: vscode.Disposable[]; provider: PromptComposerSidebarProvider } {
   const provider = new PromptComposerSidebarProvider(service, ctx.extensionUri);
   const registration = vscode.window.registerWebviewViewProvider(
     PromptComposerSidebarProvider.viewType,
     provider,
     { webviewOptions: { retainContextWhenHidden: true } },
   );
-  return [registration];
+  return { disposables: [registration], provider };
 }
 
 function toAttributionResult(
