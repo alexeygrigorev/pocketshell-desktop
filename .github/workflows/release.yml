@@ -149,6 +149,126 @@ jobs:
             npx tsc -p extensions/pocketshell/tsconfig.json
           test -f extensions/pocketshell/out/extension.js
 
+      # ── Stamp built extension before any packaging ───────────────────
+      # Both the delta zip (below) and the production gulp build consume the
+      # SAME files in vendor/vscode/extensions/pocketshell, so these stamps
+      # MUST run before either consumer touches the dir.
+
+      # Write base-version.json as a dedicated, explicit step (single source
+      # of truth). The updater reads <extensionPath>/base-version.json and
+      # string-compares it to the manifest's baseVersion, so this value must
+      # be byte-identical to BASE_VERSION used in the delta step below.
+      # Previously this was written inline inside the delta step, which meant
+      # the full-archive production build only got it as an ordering side
+      # effect; reordering/gating the delta step would leave fresh installs
+      # with baseVersion='dev' and unable to ever delta-update.
+      - name: Write base-version.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXT_DIR="vendor/vscode/extensions/pocketshell"
+          BASE_VERSION="${VSCODE_REF:0:12}"
+          printf '{"baseVersion":"%s"}\n' "$BASE_VERSION" > "$EXT_DIR/base-version.json"
+          echo "Wrote $EXT_DIR/base-version.json:"
+          cat "$EXT_DIR/base-version.json"
+
+      # Bump the BUILT extension's package.json version to the git tag (tag
+      # without leading 'v', e.g. v0.1.4 -> 0.1.4). The updater reads
+      # currentVersion from context.extension.packageJSON.version; without
+      # this bump the manifest says 0.1.4 but the built extension (and the
+      # delta zip's package.json) still report the old version, so
+      # isNewer("0.1.4","0.1.3") stays true forever and the updater re-offers
+      # the same delta indefinitely. Avoids `npm version` (it mutates
+      # package-lock and fires lifecycle hooks).
+      - name: Bump built extension version to tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXT_DIR="vendor/vscode/extensions/pocketshell"
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          VERSION_NO_V="${VERSION#v}"
+          cd "$EXT_DIR"
+          node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json","utf8"));p.version=process.argv[1];fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")' "${VERSION_NO_V}"
+          echo "Bumped $EXT_DIR/package.json version to ${VERSION_NO_V}:"
+          node -e 'console.log(JSON.parse(require("fs").readFileSync("package.json","utf8")).version)'
+
+      # ── Extension-delta artifacts (issue #96) ────────────────────────
+      # Package a small (~MB) zip of the PocketShell extension layer so the
+      # in-app updater can offer incremental updates instead of re-downloading
+      # the ~300MB full archive. The extension vendors a platform-specific
+      # native (ssh2's sshcrypto.node), so this MUST run per-platform on each
+      # matrix runner and produce platform-keyed assets.
+      #
+      # baseVersion source: the pinned VS Code ref's short sha (first 12 chars
+      # of VSCODE_REF). This same value is written into BOTH base-version.json
+      # (read by the updater from the running extension dir) and the manifest's
+      # baseVersion field, so the updater's string comparison matches
+      # byte-for-byte. VSCODE_REF is defined at the top of this workflow.
+      - name: Package extension-delta zip + manifest (${{ matrix.platform }})
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXT_DIR="vendor/vscode/extensions/pocketshell"
+          # Tag; fall back to "dev" off-tag. version (manifest) is the tag
+          # WITHOUT the leading 'v' (e.g. v0.1.4 -> 0.1.4) to match the
+          # extension's own package.json version the updater reads. Asset
+          # filenames use the full tag (e.g. v0.1.4), matching the full-archive
+          # naming (pocketshell-v0.1.4-<platform>).
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          VERSION_NO_V="${VERSION#v}"
+          # Short form of the pinned VS Code base (identical source in every
+          # artifact: env.VSCODE_REF defined at the top of this workflow).
+          # base-version.json itself is written by the dedicated
+          # "Write base-version.json" step above; we only reference the value
+          # here for the manifest's baseVersion field.
+          BASE_VERSION="${VSCODE_REF:0:12}"
+          PLATFORM="${{ matrix.platform }}"
+          ZIP_NAME="pocketshell-extension-${VERSION}-${PLATFORM}.zip"
+          MANIFEST_NAME="latest-${PLATFORM}.json"
+          ZIP_PATH="$GITHUB_WORKSPACE/$ZIP_NAME"
+          MANIFEST_PATH="$GITHUB_WORKSPACE/$MANIFEST_NAME"
+          REPO="${GITHUB_REPOSITORY}"
+
+          # 1. Zip the extension dir's CONTENTS at the top level (flat layout).
+          #    The updater's installer extracts entries directly over
+          #    context.extensionPath with no parent-dir stripping, so a nested
+          #    `pocketshell/` wrapper would break installation.
+          ( cd "$EXT_DIR" && zip -r -X "$ZIP_PATH" . )
+          # Verify the layout is flat: no entry's path may start with
+          # `pocketshell/`. `if cmd; then` is exempt from `set -e`.
+          if unzip -Z1 "$ZIP_PATH" | grep -q '^pocketshell/'; then
+            echo "ERROR: delta zip is not flat (contains pocketshell/ entries)" >&2
+            exit 1
+          fi
+          echo "Flat-layout check passed. Top entries:"
+          unzip -Z1 "$ZIP_PATH" | head -5
+
+          # 2. sha256 of the zip (lowercase hex, as parseManifest requires).
+          SHA="$(sha256sum "$ZIP_PATH" | awk '{print $1}')"
+          echo "sha256($ZIP_NAME) = $SHA"
+
+          # 3. Manifest. downloadUrl MUST match the uploaded asset filename
+          #    exactly ($ZIP_NAME). Built with printf to keep JSON deterministic
+          #    and avoid heredoc indentation pitfalls.
+          printf '{\n  "version": "%s",\n  "downloadUrl": "https://github.com/%s/releases/download/%s/%s",\n  "sha256": "%s",\n  "baseVersion": "%s"\n}\n' \
+            "$VERSION_NO_V" "$REPO" "$VERSION" "$ZIP_NAME" "$SHA" "$BASE_VERSION" \
+            > "$MANIFEST_PATH"
+          echo "--- $MANIFEST_NAME ---"
+          cat "$MANIFEST_PATH"
+
+          # Stash paths for the upload step.
+          echo "DELTA_ZIP=$ZIP_PATH" >> "$GITHUB_ENV"
+          echo "DELTA_MANIFEST=$MANIFEST_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload extension-delta artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketshell-extension-${{ matrix.platform }}
+          path: |
+            ${{ env.DELTA_ZIP }}
+            ${{ env.DELTA_MANIFEST }}
+          if-no-files-found: error
+
       - name: Add Windows SDK to PATH (signtool.exe)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -259,7 +379,13 @@ jobs:
       - name: Flatten release assets
         run: |
           mkdir -p release-files
-          find release-assets -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} release-files/ \;
+          # Full archives (*.zip / *.tar.gz) plus the per-platform extension-delta
+          # zips and their manifests (issue #96). The delta zips are *.zip so they
+          # are already caught by the first glob; the manifests are gathered
+          # explicitly.
+          find release-assets -type f \
+            \( -name '*.zip' -o -name '*.tar.gz' -o -name 'latest-*.json' \) \
+            -exec cp {} release-files/ \;
           ls -lh release-files/
 
       - name: Create GitHub Release
