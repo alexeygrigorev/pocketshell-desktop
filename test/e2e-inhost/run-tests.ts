@@ -22,8 +22,12 @@ import { CONTEXT_FILENAME } from './e2e-context';
 
 // --- Spike-validated constants ------------------------------------------------
 
+/** Repo root. This file is at <repo>/test/e2e-inhost/ (source) and compiles to
+ * <repo>/out/e2e-inhost/ — two levels below the repo root in both cases. */
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+
 /** Absolute path to the vendored VS Code fork root. */
-const VSCODE_ROOT = '/home/alexey/git/pocketshell-desktop/vendor/vscode';
+const VSCODE_ROOT = path.join(REPO_ROOT, 'vendor', 'vscode');
 
 /** The forked binary. Built by `scripts/build-base.sh`. */
 const VSCODE_EXECUTABLE_PATH = path.join(VSCODE_ROOT, '.build', 'electron', 'pocketshell');
@@ -93,6 +97,10 @@ async function main(): Promise<void> {
 	// Surface the context JSON path to the in-host tests. test-electron forks
 	// the host as a child process inheriting this env, so the value survives.
 	process.env.POCKETSHELL_E2E_CONTEXT = path.join(ctx.userDataDir, CONTEXT_FILENAME);
+
+	// Expose the built extension out/ dir so the host spec can locate the
+	// compiled ConnectionService module without a hardcoded absolute path.
+	process.env.POCKETSHELL_E2E_EXT_OUT = path.join(EXTENSION_DEVELOPMENT_PATH, 'out');
 
 	try {
 		// (2) The FIRST launchArg MUST be the workspace path (positional, = form

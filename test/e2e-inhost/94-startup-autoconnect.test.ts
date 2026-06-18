@@ -25,9 +25,9 @@
  * ConnectionService import: this module is compiled under
  * `out/e2e-inhost/`, NOT inside the extension's `out/` tree, so the bare
  * `'pocketshell/...'` alias does not resolve. We require the singleton from the
- * BUILT extension via its absolute path at runtime. (The built `out/` is on the
- * extension host module path once the extension activates, but an explicit
- * absolute require is unambiguous and survives module-resolution quirks.)
+ * BUILT extension; the built `out/` dir is passed in via the
+ * `POCKETSHELL_E2E_EXT_OUT` env var (set by run-tests.ts) and the require is
+ * performed inside suiteSetup so it resolves against a path read from the env.
  */
 
 import * as assert from 'assert';
@@ -35,9 +35,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { E2eContext } from './e2e-context';
-
-/** Absolute path to the BUILT extension root (matches the runner constant). */
-const EXTENSION_OUT = '/home/alexey/git/pocketshell-desktop/vendor/vscode/.build/extensions/pocketshell/out';
 
 // Minimal structural type for the ConnectionService singleton surface this
 // spec exercises. We import the real instance at runtime from the BUILT
@@ -59,11 +56,6 @@ interface ConnectionServiceLike {
 	getState(hostId: number): string;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { ConnectionService } = require(path.join(EXTENSION_OUT, 'connection-service')) as {
-	ConnectionService: ConnectionServiceCtor;
-};
-
 suite('E2E #94 — startup auto-connect', function () {
 	this.timeout(60000);
 
@@ -71,7 +63,6 @@ suite('E2E #94 — startup auto-connect', function () {
 	let service: ConnectionServiceLike;
 
 	suiteSetup(function () {
-		service = ConnectionService.getInstance();
 		// The runner set POCKETSHELL_E2E_CONTEXT to <userDataDir>/e2e-context.json
 		// before forking the host; test-electron forwards process.env.
 		const contextPath = process.env.POCKETSHELL_E2E_CONTEXT;
@@ -79,6 +70,21 @@ suite('E2E #94 — startup auto-connect', function () {
 			contextPath && fs.existsSync(contextPath),
 			`POCKETSHELL_E2E_CONTEXT not set or missing: ${contextPath}`,
 		);
+
+		// The runner exposes the built extension out/ dir via env so we don't
+		// hardcode an absolute path. Loaded here (not at module load) because the
+		// path is only known after reading the env.
+		const extensionOut = process.env.POCKETSHELL_E2E_EXT_OUT;
+		assert.ok(
+			extensionOut && fs.existsSync(extensionOut),
+			`POCKETSHELL_E2E_EXT_OUT not set or missing: ${extensionOut}`,
+		);
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const { ConnectionService } = require(path.join(extensionOut!, 'connection-service')) as {
+			ConnectionService: ConnectionServiceCtor;
+		};
+		service = ConnectionService.getInstance();
+
 		ctx = JSON.parse(fs.readFileSync(contextPath!, 'utf-8'));
 		console.log('[e2e-inhost#94] context:', {
 			alias: ctx.alias,
