@@ -38,6 +38,7 @@ describe('SettingsStore', () => {
       expect(settings.diagnosticsEnabled).toBe(true);
       expect(settings.diagnosticsMaxEvents).toBe(500);
       expect(settings.diagnosticsRedactionMode).toBe('balanced');
+      expect(settings.autoUpdateCheckOnStartup).toBe(true);
     });
   });
 
@@ -151,6 +152,7 @@ describe('SettingsStore', () => {
         diagnosticsEnabled: true,
         diagnosticsMaxEvents: 500,
         diagnosticsRedactionMode: 'balanced',
+        autoUpdateCheckOnStartup: true,
       });
     });
 

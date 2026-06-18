@@ -14,6 +14,7 @@ import { pickHost, resolveHostId } from './host-picking';
 import { FEATURES, type FeatureDeps } from './feature';
 import { registerPocketshellSettings } from './feature/settings';
 import { registerStartupAutoConnect } from './feature/startup';
+import { UpdateController, registerSettingsTestBridge } from './feature/updates/update-controller';
 import { resolveHostsFromConfig, type SkippedHost } from './backend/ssh/data/ssh-host-resolver';
 import { parseSshConfig } from './backend/ssh/data/ssh-config-parser';
 import { SettingsStore, type AppSettings } from './backend/app/settings';
@@ -931,6 +932,18 @@ export function activate(context: vscode.ExtensionContext): void {
 	const [startupAutoConnectDisposables, connector] = registerStartupAutoConnect(service, context, deps);
 	context.subscriptions.push(...startupAutoConnectDisposables);
 	void connector.run(appSettings);
+
+	// -- In-app extension-delta updater (#96) ----------------------------------
+	// Register the manual commands + the E2E TestBridge unconditionally (they
+	// are user-/test-initiated, never spontaneous). The activate-time auto
+	// check is gated by POCKETSHELL_E2E below so E2E stays offline/modal-free.
+	const updateController = new UpdateController(context, settings);
+	context.subscriptions.push(...updateController.register());
+	context.subscriptions.push(...registerSettingsTestBridge(settings));
+	if (process.env.POCKETSHELL_E2E !== '1') {
+		// Fire-and-forget: activate() is sync and must not block on the network.
+		void updateController.checkAndNotify().catch(() => { /* never propagate */ });
+	}
 
 	// -- Cleanup on deactivate ---------------------------------------------------
 

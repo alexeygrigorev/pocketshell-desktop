@@ -710,7 +710,11 @@
 				"icon": "$(trash)"
 			},
 			{ "command": "pocketshell.settingsView.open", "title": "PocketShell: Open Settings View", "category": "PocketShell", "icon": "$(gear)" },
-			{ "command": "pocketshell.settingsView.refresh", "title": "Settings View: Refresh", "category": "PocketShell", "icon": "$(refresh)" }
+			{ "command": "pocketshell.settingsView.refresh", "title": "Settings View: Refresh", "category": "PocketShell", "icon": "$(refresh)" },
+			{ "command": "pocketshell.update.check", "title": "Update: Check for Extension Update", "category": "PocketShell", "icon": "$(refresh)" },
+			{ "command": "pocketshell.update.apply", "title": "Update: Apply Latest Extension Update", "category": "PocketShell", "icon": "$(cloud-download)" },
+			{ "command": "pocketshell.__test.settings.get", "title": "__test: Settings Get", "category": "PocketShell", "enablement": "false" },
+			{ "command": "pocketshell.__test.settings.update", "title": "__test: Settings Update", "category": "PocketShell", "enablement": "false" }
 		],
 		"menus": {
 			"view/item/context": [

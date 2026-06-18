@@ -41,6 +41,13 @@ export interface AppSettings {
 
   /** Privacy mode for copied diagnostics reports. */
   diagnosticsRedactionMode: 'strict' | 'balanced' | 'off';
+
+  /**
+   * Whether to check for an extension-delta update on startup (#96).
+   * Defaults to true. The manual `pocketshell.update.check` command ignores
+   * this and always checks.
+   */
+  autoUpdateCheckOnStartup?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +66,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   diagnosticsEnabled: UI_DEFAULTS.diagnosticsEnabled as boolean,
   diagnosticsMaxEvents: UI_DEFAULTS.diagnosticsMaxEvents as number,
   diagnosticsRedactionMode: UI_DEFAULTS.diagnosticsRedactionMode as AppSettings['diagnosticsRedactionMode'],
+  // Not part of the UI settings schema; defaulted here.
+  autoUpdateCheckOnStartup: true,
 };
 
 // ---------------------------------------------------------------------------
