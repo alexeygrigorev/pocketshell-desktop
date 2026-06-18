@@ -196,6 +196,19 @@ export class SshService {
   }
 
   /**
+   * Fire-and-forget a background command (e.g. starting a remote listener).
+   * Unlike {@link exec}, this does NOT wait for the exec channel to close —
+   * a backgrounded process (`setsid ... &`) holds the channel's fds open, so
+   * awaiting `close` would hang forever. Returns once the command is sent.
+   */
+  execBackground(connectionId: string, command: string): void {
+    const rec = this.registry.require(connectionId);
+    rec.client.exec(command, () => {
+      /* intentionally ignored — the bg job owns its own lifetime */
+    });
+  }
+
+  /**
    * Open a tracked PTY shell and return its id. Output bytes are delivered via
    * `onData`; exit via `onExit`. This is the form the IPC layer uses so the
    * renderer can address the shell across separate calls (input/resize/close)

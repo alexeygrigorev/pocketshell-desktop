@@ -10,7 +10,10 @@ FROM alpine:latest
 # recent releases; the older Android project image didn't need it. We install
 # it so the `Subsystem sftp /usr/lib/ssh/sftp-server` directive resolves and
 # the Files (SFTP) feature + its tests work against every layer.
-RUN apk add --no-cache openssh-server openssh-client openssh-sftp-server \
+#
+# iproute2 (ss) + net-tools (netstat) so the port-scanner's three strategies
+# all resolve; busybox netstat alone has gaps in process attribution.
+RUN apk add --no-cache openssh-server openssh-client openssh-sftp-server iproute2 net-tools python3 \
     && ssh-keygen -A \
     && adduser -D -s /bin/sh testuser \
     && passwd -u testuser \

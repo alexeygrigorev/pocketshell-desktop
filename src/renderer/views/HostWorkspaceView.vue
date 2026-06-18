@@ -8,12 +8,13 @@ import { useConnectionStore } from '../stores/connection';
 import SessionTree from '../components/SessionTree.vue';
 import TerminalView from '../components/TerminalView.vue';
 import FilesView from './FilesView.vue';
+import PortPanelView from './PortPanelView.vue';
 import type { SessionSummary } from '../../shared/types';
 
 const router = useRouter();
 const connection = useConnectionStore();
 const selected = ref<SessionSummary | null>(null);
-const tab = ref<'sessions' | 'files'>('sessions');
+const tab = ref<'sessions' | 'files' | 'ports'>('sessions');
 
 const command = computed(() => {
   if (!selected.value) return undefined;
@@ -61,6 +62,9 @@ function onBack(): void {
       <button :class="['tab', { active: tab === 'files' }]" @click="tab = 'files'">
         Files
       </button>
+      <button :class="['tab', { active: tab === 'ports' }]" @click="tab = 'ports'">
+        Ports
+      </button>
     </nav>
 
     <div class="body">
@@ -81,7 +85,10 @@ function onBack(): void {
       </template>
 
       <!-- Files tab: SFTP browser + editor -->
-      <FilesView v-else-if="connection.connectionId" />
+      <FilesView v-else-if="tab === 'files' && connection.connectionId" />
+
+      <!-- Ports tab: port-forward panel -->
+      <PortPanelView v-else-if="tab === 'ports' && connection.connectionId" />
     </div>
   </div>
 </template>

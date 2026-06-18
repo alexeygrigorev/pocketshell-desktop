@@ -9,6 +9,9 @@ import { readSshConfig } from './ssh-config/SshConfigParser.js';
 import { KnownHosts } from './ssh-config/KnownHosts.js';
 import type { UsageRow } from './helper/parsers.js';
 import { SftpService, type DirEntry, type FileStat, type TransferProgress } from './sftp/SftpService.js';
+import { ForwardService } from './portfwd/ForwardService.js';
+import type { RemotePort } from './portfwd/PortScanner.js';
+import type { ForwardSpec } from '../shared/types.js';
 
 /**
  * Registers all ipcMain handlers. Called once from the main process entry.
@@ -25,9 +28,15 @@ export function registerIpcHandlers(deps: {
   ssh: SshService;
   helper: PocketshellClient;
   sftp: SftpService;
+  forwards: ForwardService;
   getWindows: () => BrowserWindow[];
 }): void {
-  const { registry, ssh, helper, sftp, getWindows } = deps;
+  const { registry, ssh, helper, sftp, forwards, getWindows } = deps;
+
+  // Subscribe to forward-state changes and broadcast them to the renderer.
+  forwards.onStates((connectionId, states) => {
+    broadcast(ipc.forwards.states, { connectionId, states });
+  });
 
   const broadcast = (channel: string, payload: unknown): void => {
     for (const win of getWindows()) {
@@ -233,6 +242,41 @@ export function registerIpcHandlers(deps: {
       return true;
     },
   );
+
+  // --- forwards:* ---------------------------------------------------------
+  // Port forwarding: scan remote listeners, start/stop the auto-forwarder,
+  // and add/remove manual -L/-R/-D forwards. State snapshots stream over
+  // `forwards:event:states` (subscribed above).
+  ipcMain.handle(
+    ipc.forwards.scan,
+    async (_evt, connectionId: string): Promise<RemotePort[]> => {
+      return forwards.scan(connectionId);
+    },
+  );
+  ipcMain.handle(ipc.forwards.startAuto, async (_evt, connectionId: string): Promise<boolean> => {
+    forwards.startAuto(connectionId);
+    return true;
+  });
+  ipcMain.handle(ipc.forwards.stopAuto, async (_evt, connectionId: string): Promise<boolean> => {
+    forwards.stopAuto(connectionId);
+    return true;
+  });
+  ipcMain.handle(
+    ipc.forwards.addManual,
+    async (_evt, connectionId: string, spec: ForwardSpec): Promise<boolean> => {
+      return forwards.addManual(connectionId, spec);
+    },
+  );
+  ipcMain.handle(
+    ipc.forwards.remove,
+    async (_evt, connectionId: string, key: string): Promise<boolean> => {
+      await forwards.remove(connectionId, key);
+      return true;
+    },
+  );
+  ipcMain.handle(ipc.forwards.list, async (_evt, connectionId: string) => {
+    return forwards.list(connectionId);
+  });
 
   // Plumbing: keep references used by the main process bookkeeping.
   void registry;

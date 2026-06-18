@@ -5,6 +5,7 @@ import { ConnectionRegistry } from './ssh/ConnectionRegistry.js';
 import { SshService } from './ssh/SshService.js';
 import { PocketshellClient } from './helper/PocketshellClient.js';
 import { SftpService } from './sftp/SftpService.js';
+import { ForwardService } from './portfwd/ForwardService.js';
 import { registerIpcHandlers } from './ipc.js';
 
 // Electron + ESM: __dirname is not defined for the bundled output under some
@@ -16,9 +17,12 @@ const registry = new ConnectionRegistry();
 const ssh = new SshService(registry);
 const helper = new PocketshellClient(ssh);
 const sftp = new SftpService(registry);
-// Evict the cached SFTP wrapper when a connection closes so a reconnect
-// does not reuse a dead ssh2 sftp channel.
-ssh.onCloseConnection((id) => sftp.evict(id));
+const forwards = new ForwardService(ssh, registry);
+// Evict cached per-connection state (SFTP wrapper, forwarders) on close.
+ssh.onCloseConnection((id) => {
+  sftp.evict(id);
+  forwards.evict(id);
+});
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -74,6 +78,7 @@ if (!gotLock) {
       ssh,
       helper,
       sftp,
+      forwards,
       getWindows: () => BrowserWindow.getAllWindows(),
     });
     createWindow();

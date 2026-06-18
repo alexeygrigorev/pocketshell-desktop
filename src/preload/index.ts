@@ -10,6 +10,9 @@ import type {
 } from '../shared/types.js';
 import type { UsageRow } from '../main/helper/parsers.js';
 import type { DirEntry, FileStat, TransferProgress } from '../main/sftp/SftpService.js';
+import type { RemotePort } from '../main/portfwd/PortScanner.js';
+import type { ForwardState } from '../main/portfwd/Forwarder.js';
+import type { ForwardSpec } from '../shared/types.js';
 
 /**
  * The typed API surface exposed to the renderer as `window.api`.
@@ -175,6 +178,44 @@ const api = {
       ) => handler(payload);
       ipcRenderer.on(ipc.sftp.progress, listener);
       return () => ipcRenderer.removeListener(ipc.sftp.progress, listener);
+    },
+  },
+
+  forwards: {
+    /** One-shot remote port scan. */
+    scan: (connectionId: string): Promise<RemotePort[]> =>
+      ipcRenderer.invoke(ipc.forwards.scan, connectionId),
+
+    /** Start the auto-forwarder for a connection. */
+    startAuto: (connectionId: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.startAuto, connectionId),
+
+    /** Stop the auto-forwarder for a connection. */
+    stopAuto: (connectionId: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.stopAuto, connectionId),
+
+    /** Add a manual -L/-R/-D forward. */
+    addManual: (connectionId: string, spec: ForwardSpec): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.addManual, connectionId, spec),
+
+    /** Remove a forward by its key. */
+    remove: (connectionId: string, key: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.remove, connectionId, key),
+
+    /** Current snapshot for a connection. */
+    list: (connectionId: string): Promise<ForwardState[]> =>
+      ipcRenderer.invoke(ipc.forwards.list, connectionId),
+
+    /** Subscribe to forward-state snapshots. Returns an unsubscribe fn. */
+    onStates: (
+      handler: (payload: { connectionId: string; states: ForwardState[] }) => void,
+    ): Unsubscribe => {
+      const listener = (
+        _evt: IpcRendererEvent,
+        payload: { connectionId: string; states: ForwardState[] },
+      ) => handler(payload);
+      ipcRenderer.on(ipc.forwards.states, listener);
+      return () => ipcRenderer.removeListener(ipc.forwards.states, listener);
     },
   },
 } as const;

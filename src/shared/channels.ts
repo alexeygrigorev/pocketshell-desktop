@@ -44,6 +44,15 @@ export const ipc = {
     download: 'sftp:download',
     progress: 'sftp:event:progress', // event: { transferId, bytes, total? }
   },
+  forwards: {
+    scan: 'forwards:scan', // run a one-shot port scan, return RemotePort[]
+    startAuto: 'forwards:startAuto', // start the auto-forwarder for a connection
+    stopAuto: 'forwards:stopAuto',
+    addManual: 'forwards:addManual', // add a -L/-R/-D forward
+    remove: 'forwards:remove', // remove a forward by key
+    list: 'forwards:list', // current snapshot
+    states: 'forwards:event:states', // event: { connectionId, states[] }
+  },
 } as const;
 
 export type IpcChannelMap = typeof ipc;
