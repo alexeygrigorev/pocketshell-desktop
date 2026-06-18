@@ -64,6 +64,8 @@ export interface TailHandle {
 
 export class SshService {
   private readonly shells: ShellTracker;
+  /** Listeners fired (best-effort) when a connection is closed. */
+  private readonly closeListeners = new Set<(connectionId: string) => void>();
   constructor(
     private readonly registry: ConnectionRegistry = new ConnectionRegistry(),
     shells?: ShellTracker,
@@ -74,6 +76,12 @@ export class SshService {
   /** Expose the shell tracker so the IPC layer can route input/resize/close. */
   get shellTracker(): ShellTracker {
     return this.shells;
+  }
+
+  /** Subscribe to connection-close events (for evicting cached per-conn state). */
+  onCloseConnection(listener: (connectionId: string) => void): () => void {
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
   }
 
   /** Attempt a connection. Resolves a {@link ConnectResult}; never rejects. */
@@ -292,6 +300,13 @@ export class SshService {
   close(connectionId: string): void {
     this.shells.closeAllForConnection(connectionId);
     const rec = this.registry.remove(connectionId);
+    for (const listener of this.closeListeners) {
+      try {
+        listener(connectionId);
+      } catch {
+        // a listener failure must not break teardown
+      }
+    }
     if (rec) {
       try {
         rec.client.end();

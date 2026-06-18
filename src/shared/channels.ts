@@ -30,6 +30,20 @@ export const ipc = {
     sessionsCreate: 'helper:sessionsCreate',
     usage: 'helper:usage',
   },
+  sftp: {
+    list: 'sftp:list',
+    stat: 'sftp:stat',
+    readFile: 'sftp:readFile',
+    writeFile: 'sftp:writeFile',
+    mkdir: 'sftp:mkdir',
+    rename: 'sftp:rename',
+    deleteFile: 'sftp:deleteFile',
+    rmdir: 'sftp:rmdir',
+    realPath: 'sftp:realPath',
+    upload: 'sftp:upload',
+    download: 'sftp:download',
+    progress: 'sftp:event:progress', // event: { transferId, bytes, total? }
+  },
 } as const;
 
 export type IpcChannelMap = typeof ipc;

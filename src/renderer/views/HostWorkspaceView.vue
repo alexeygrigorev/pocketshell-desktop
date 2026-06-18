@@ -1,22 +1,22 @@
 <script setup lang="ts">
-// Host workspace: the shell for a connected host. Left rail = session tree;
-// right = the attached terminal for the selected session. Clicking a session
-// re-opens the xterm with `tmux attach -t <name>`.
+// Host workspace: the shell for a connected host. Two tabs:
+//   - Sessions: session tree + attached terminal (Phase 1 core flow)
+//   - Files:    SFTP browser + editor (Phase 2)
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useConnectionStore } from '../stores/connection';
 import SessionTree from '../components/SessionTree.vue';
 import TerminalView from '../components/TerminalView.vue';
+import FilesView from './FilesView.vue';
 import type { SessionSummary } from '../../shared/types';
 
 const router = useRouter();
 const connection = useConnectionStore();
 const selected = ref<SessionSummary | null>(null);
+const tab = ref<'sessions' | 'files'>('sessions');
 
 const command = computed(() => {
   if (!selected.value) return undefined;
-  // Attach to the named tmux session. `-f` would fail if the session is gone;
-  // `attach -t` reattaches or errors visibly in the terminal.
   return `tmux attach -t '${selected.value.name.replace(/'/g, "'\\''")}'`;
 });
 
@@ -53,19 +53,35 @@ function onBack(): void {
       </span>
       <button class="icon-btn disconnect" @click="onDisconnect">disconnect</button>
     </header>
+
+    <nav class="tabs">
+      <button :class="['tab', { active: tab === 'sessions' }]" @click="tab = 'sessions'">
+        Sessions
+      </button>
+      <button :class="['tab', { active: tab === 'files' }]" @click="tab = 'files'">
+        Files
+      </button>
+    </nav>
+
     <div class="body">
-      <SessionTree @attach="onAttach" />
-      <div class="terminal-area">
-        <TerminalView
-          v-if="selected && connection.connectionId"
-          :connection-id="connection.connectionId"
-          :command="command"
-          :session-key="selected.name"
-        />
-        <div v-else class="placeholder">
-          <p class="muted">select a session to attach</p>
+      <!-- Sessions tab: tree + terminal -->
+      <template v-if="tab === 'sessions'">
+        <SessionTree @attach="onAttach" />
+        <div class="terminal-area">
+          <TerminalView
+            v-if="selected && connection.connectionId"
+            :connection-id="connection.connectionId"
+            :command="command"
+            :session-key="selected.name"
+          />
+          <div v-else class="placeholder">
+            <p class="muted">select a session to attach</p>
+          </div>
         </div>
-      </div>
+      </template>
+
+      <!-- Files tab: SFTP browser + editor -->
+      <FilesView v-else-if="connection.connectionId" />
     </div>
   </div>
 </template>
@@ -91,7 +107,6 @@ function onBack(): void {
 .bootstrap {
   display: flex;
   gap: 0.4rem;
-  margin-left: auto;
 }
 .chip {
   font-size: 0.72rem;
@@ -104,6 +119,29 @@ function onBack(): void {
 }
 .chip.warn {
   color: #f9e2af;
+}
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--border);
+  background: #181825;
+}
+.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.tab:hover {
+  color: var(--fg);
+}
+.tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
 }
 .body {
   display: flex;
@@ -132,12 +170,6 @@ function onBack(): void {
   padding: 0.2rem 0.6rem;
   cursor: pointer;
   font-size: 0.85rem;
-}
-.icon-btn.disconnect {
-  margin-left: auto;
-}
-.icon-btn.disconnect {
-  margin-left: 0;
 }
 .disconnect {
   margin-left: auto;

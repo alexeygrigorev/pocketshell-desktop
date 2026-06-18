@@ -9,6 +9,7 @@ import type {
   ShellId,
 } from '../shared/types.js';
 import type { UsageRow } from '../main/helper/parsers.js';
+import type { DirEntry, FileStat, TransferProgress } from '../main/sftp/SftpService.js';
 
 /**
  * The typed API surface exposed to the renderer as `window.api`.
@@ -109,6 +110,72 @@ const api = {
     /** Provider usage/quota rows. */
     usage: (connectionId: string): Promise<UsageRow[]> =>
       ipcRenderer.invoke(ipc.helper.usage, connectionId),
+  },
+
+  sftp: {
+    /** List directory entries. */
+    list: (connectionId: string, path: string): Promise<DirEntry[]> =>
+      ipcRenderer.invoke(ipc.sftp.list, connectionId, path),
+
+    /** Stat a path. Rejects if it does not exist. */
+    stat: (connectionId: string, path: string): Promise<FileStat> =>
+      ipcRenderer.invoke(ipc.sftp.stat, connectionId, path),
+
+    /** Read a file as UTF-8 text. */
+    readFile: (connectionId: string, path: string): Promise<string> =>
+      ipcRenderer.invoke(ipc.sftp.readFile, connectionId, path),
+
+    /** Write UTF-8 text to a file (overwrites). */
+    writeFile: (connectionId: string, path: string, content: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.sftp.writeFile, connectionId, path, content),
+
+    /** Create a directory. */
+    mkdir: (connectionId: string, path: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.sftp.mkdir, connectionId, path),
+
+    /** Rename/move a path. */
+    rename: (connectionId: string, fromPath: string, toPath: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.sftp.rename, connectionId, fromPath, toPath),
+
+    /** Delete a file. */
+    deleteFile: (connectionId: string, path: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.sftp.deleteFile, connectionId, path),
+
+    /** Remove an empty directory. */
+    rmdir: (connectionId: string, path: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.sftp.rmdir, connectionId, path),
+
+    /** Resolve a path to its absolute form (follows symlinks). */
+    realPath: (connectionId: string, path: string): Promise<string> =>
+      ipcRenderer.invoke(ipc.sftp.realPath, connectionId, path),
+
+    /** Upload a local file to a remote path, streaming progress. */
+    upload: (payload: {
+      connectionId: string;
+      localPath: string;
+      remotePath: string;
+      transferId: string;
+    }): Promise<boolean> => ipcRenderer.invoke(ipc.sftp.upload, payload),
+
+    /** Download a remote file to a local path, streaming progress. */
+    download: (payload: {
+      connectionId: string;
+      remotePath: string;
+      localPath: string;
+      transferId: string;
+    }): Promise<boolean> => ipcRenderer.invoke(ipc.sftp.download, payload),
+
+    /** Subscribe to transfer-progress events. Returns an unsubscribe fn. */
+    onProgress: (
+      handler: (payload: { transferId: string } & TransferProgress) => void,
+    ): Unsubscribe => {
+      const listener = (
+        _evt: IpcRendererEvent,
+        payload: { transferId: string } & TransferProgress,
+      ) => handler(payload);
+      ipcRenderer.on(ipc.sftp.progress, listener);
+      return () => ipcRenderer.removeListener(ipc.sftp.progress, listener);
+    },
   },
 } as const;
 

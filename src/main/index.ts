@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { ConnectionRegistry } from './ssh/ConnectionRegistry.js';
 import { SshService } from './ssh/SshService.js';
 import { PocketshellClient } from './helper/PocketshellClient.js';
+import { SftpService } from './sftp/SftpService.js';
 import { registerIpcHandlers } from './ipc.js';
 
 // Electron + ESM: __dirname is not defined for the bundled output under some
@@ -14,6 +15,10 @@ const __dir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPa
 const registry = new ConnectionRegistry();
 const ssh = new SshService(registry);
 const helper = new PocketshellClient(ssh);
+const sftp = new SftpService(registry);
+// Evict the cached SFTP wrapper when a connection closes so a reconnect
+// does not reuse a dead ssh2 sftp channel.
+ssh.onCloseConnection((id) => sftp.evict(id));
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -68,6 +73,7 @@ if (!gotLock) {
       registry,
       ssh,
       helper,
+      sftp,
       getWindows: () => BrowserWindow.getAllWindows(),
     });
     createWindow();

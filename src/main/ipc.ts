@@ -8,6 +8,7 @@ import { runBootstrap } from './helper/bootstrap.js';
 import { readSshConfig } from './ssh-config/SshConfigParser.js';
 import { KnownHosts } from './ssh-config/KnownHosts.js';
 import type { UsageRow } from './helper/parsers.js';
+import { SftpService, type DirEntry, type FileStat, type TransferProgress } from './sftp/SftpService.js';
 
 /**
  * Registers all ipcMain handlers. Called once from the main process entry.
@@ -16,17 +17,17 @@ import type { UsageRow } from './helper/parsers.js';
  * `window.api` surface exposed by the preload, which forwards to these
  * channels. Keys/passphrases never leave this module.
  *
- * Streaming events (terminal bytes, shell exit) are pushed to every
- * BrowserWindow via `webContents.send` — keyed by the shell id so the
- * renderer routes them to the right view.
+ * Streaming events (terminal bytes, shell exit, transfer progress) are pushed
+ * to every BrowserWindow via `webContents.send` — keyed by the relevant id.
  */
 export function registerIpcHandlers(deps: {
   registry: ConnectionRegistry;
   ssh: SshService;
   helper: PocketshellClient;
+  sftp: SftpService;
   getWindows: () => BrowserWindow[];
 }): void {
-  const { registry, ssh, helper, getWindows } = deps;
+  const { registry, ssh, helper, sftp, getWindows } = deps;
 
   const broadcast = (channel: string, payload: unknown): void => {
     for (const win of getWindows()) {
@@ -150,6 +151,88 @@ export function registerIpcHandlers(deps: {
   ipcMain.handle(ipc.helper.usage, async (_evt, connectionId: string): Promise<UsageRow[]> => {
     return helper.usage(connectionId);
   });
+
+  // --- sftp:* --------------------------------------------------------------
+  // File operations over SFTP on the existing connection. Upload/download
+  // stream progress back over `sftp:event:progress` keyed by a transferId the
+  // renderer supplies so it can update the right progress bar.
+  ipcMain.handle(
+    ipc.sftp.list,
+    async (_evt, connectionId: string, path: string): Promise<DirEntry[]> => {
+      return sftp.list(connectionId, path);
+    },
+  );
+  ipcMain.handle(
+    ipc.sftp.stat,
+    async (_evt, connectionId: string, path: string): Promise<FileStat> => {
+      return sftp.stat(connectionId, path);
+    },
+  );
+  ipcMain.handle(
+    ipc.sftp.readFile,
+    async (_evt, connectionId: string, path: string): Promise<string> => {
+      return sftp.readFile(connectionId, path);
+    },
+  );
+  ipcMain.handle(
+    ipc.sftp.writeFile,
+    async (_evt, connectionId: string, path: string, content: string): Promise<boolean> => {
+      await sftp.writeFile(connectionId, path, content);
+      return true;
+    },
+  );
+  ipcMain.handle(ipc.sftp.mkdir, async (_evt, connectionId: string, path: string): Promise<boolean> => {
+    await sftp.mkdir(connectionId, path);
+    return true;
+  });
+  ipcMain.handle(
+    ipc.sftp.rename,
+    async (_evt, connectionId: string, fromPath: string, toPath: string): Promise<boolean> => {
+      await sftp.rename(connectionId, fromPath, toPath);
+      return true;
+    },
+  );
+  ipcMain.handle(
+    ipc.sftp.deleteFile,
+    async (_evt, connectionId: string, path: string): Promise<boolean> => {
+      await sftp.deleteFile(connectionId, path);
+      return true;
+    },
+  );
+  ipcMain.handle(ipc.sftp.rmdir, async (_evt, connectionId: string, path: string): Promise<boolean> => {
+    await sftp.rmdir(connectionId, path);
+    return true;
+  });
+  ipcMain.handle(
+    ipc.sftp.realPath,
+    async (_evt, connectionId: string, path: string): Promise<string> => {
+      return sftp.realPath(connectionId, path);
+    },
+  );
+  ipcMain.handle(
+    ipc.sftp.upload,
+    async (
+      _evt,
+      payload: { connectionId: string; localPath: string; remotePath: string; transferId: string },
+    ): Promise<boolean> => {
+      await sftp.upload(payload.connectionId, payload.localPath, payload.remotePath, (p: TransferProgress) => {
+        broadcast(ipc.sftp.progress, { transferId: payload.transferId, ...p });
+      });
+      return true;
+    },
+  );
+  ipcMain.handle(
+    ipc.sftp.download,
+    async (
+      _evt,
+      payload: { connectionId: string; remotePath: string; localPath: string; transferId: string },
+    ): Promise<boolean> => {
+      await sftp.download(payload.connectionId, payload.remotePath, payload.localPath, (p: TransferProgress) => {
+        broadcast(ipc.sftp.progress, { transferId: payload.transferId, ...p });
+      });
+      return true;
+    },
+  );
 
   // Plumbing: keep references used by the main process bookkeeping.
   void registry;
