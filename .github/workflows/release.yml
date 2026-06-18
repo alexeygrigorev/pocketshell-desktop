@@ -260,11 +260,29 @@ jobs:
           MANIFEST_PATH="$GITHUB_WORKSPACE/$MANIFEST_NAME"
           REPO="${GITHUB_REPOSITORY}"
 
-          # 1. Zip the extension dir's CONTENTS at the top level (flat layout).
-          #    The updater's installer extracts entries directly over
-          #    context.extensionPath with no parent-dir stripping, so a nested
-          #    `pocketshell/` wrapper would break installation.
-          ( cd "$EXT_DIR" && zip -r -X "$ZIP_PATH" . )
+          # 1. Package the extension dir's CONTENTS at the top level (flat
+          #    layout) into a deflate zip. The updater's installer extracts
+          #    entries directly over context.extensionPath with no parent-dir
+          #    stripping, so a nested `pocketshell/` wrapper would break
+          #    installation.
+          #
+          #    This is a portable Node packager (scripts/package-extension-delta.mjs,
+          #    using `yazl` — the library npm uses to CREATE zips). It replaces
+          #    the previous `( cd "$EXT_DIR" && zip -r -X ... )` shell-out
+          #    because `zip` is NOT available on the windows-2022 runner
+          #    (actions/runner-images lists only `7zip`, not `zip`; MSYS2/
+          #    Git-Bash require `pacman -S zip`), so the old step FAILED on
+          #    the win32-x64 matrix job and broke every Windows release.
+          #    Neither create nor validate may shell out to a system archive
+          #    tool — Node IS guaranteed on all three runners.
+          #
+          #    yazl is resolved from vendor/vscode/node_modules/yazl in CI
+          #    (it is a declared VS Code dep; prepare-base runs `npm install`
+          #    there and caches vendor/vscode). The build job does NOT run a
+          #    root `npm install`, so $GITHUB_WORKSPACE/node_modules is absent
+          #    here — the script's fallback to the vendored path is what makes
+          #    this work in CI.
+          node "$GITHUB_WORKSPACE/scripts/package-extension-delta.mjs" "$EXT_DIR" "$ZIP_PATH"
           # Validate the zip layout with a portable Node helper. The previous
           # `unzip -Z1 | grep` check was NOT portable: `unzip` is not guaranteed
           # on the windows-2022 runner's Git-Bash, so it silently no-oped on
@@ -272,8 +290,8 @@ jobs:
           # on all three runners. The helper also asserts the POSITIVE case
           # (required entries present), not just the negative (no pocketshell/
           # prefix). The helper is at the repo root ($GITHUB_WORKSPACE/scripts)
-          # and the zip is an absolute path, so this is correct regardless of
-          # the `cd "$EXT_DIR"` above (the subshell already returned).
+          # and the zip is an absolute path, so this works regardless of the
+          # packager's cwd.
           node "$GITHUB_WORKSPACE/scripts/check-delta-zip.mjs" "$ZIP_PATH"
 
           # 2. sha256 of the zip (lowercase hex, as parseManifest requires).
