@@ -3,7 +3,7 @@
 	"displayName": "PocketShell",
 	"description": "Terminal-first, agent-aware SSH client",
 	"publisher": "pocketshell",
-	"version": "0.1.3",
+	"version": "0.1.4",
 	"license": "MIT",
 	"engines": {
 		"vscode": "^1.70.0"
