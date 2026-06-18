@@ -181,6 +181,14 @@ jobs:
       # the same delta indefinitely. Avoids `npm version` (it mutates
       # package-lock and fires lifecycle hooks).
       - name: Bump built extension version to tag
+        # Only stamp a real version on tag builds. The trigger also allows
+        # workflow_dispatch (manual runs off a branch); on those, GITHUB_REF_NAME
+        # is the branch name (e.g. "main"), which would write a bogus
+        # package.json version ("main") and, via the delta manifest, cause the
+        # updater to re-offer the same delta indefinitely. Skip the bump on
+        # non-tag runs — the full-archive build still works with the in-tree
+        # dev version for manual/CI smoke builds; only tag builds ship.
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           set -euo pipefail
@@ -188,15 +196,33 @@ jobs:
           VERSION="${GITHUB_REF_NAME:-dev}"
           VERSION_NO_V="${VERSION#v}"
           cd "$EXT_DIR"
-          node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json","utf8"));p.version=process.argv[1];fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")' "${VERSION_NO_V}"
+          # SURGICAL version bump: edit only the "version" value via regex so we
+          # do NOT reformat the rest of package.json (the source uses tabs; a
+          # JSON.parse -> JSON.stringify round-trip would rewrite it to 2-space
+          # indent and create a noisy/meaningless diff in the shipped package).
+          # Fails loudly if the version line isn't found rather than no-oping.
+          node -e '
+            const fs = require("fs");
+            const file = "package.json";
+            const src = fs.readFileSync(file, "utf8");
+            const re = /(^|\n)([ \t]*"version"[ \t]*:[ \t]*)"[^"\n]*"([ \t]*(,\n|\n))/;
+            if (!re.test(src)) {
+              console.error("ERROR: could not find a \"version\" field to bump in " + file);
+              process.exit(1);
+            }
+            const next = src.replace(re, (m, lead, key, tail) => `${lead}${key}"${process.argv[1]}"${tail}`);
+            fs.writeFileSync(file, next);
+          ' "${VERSION_NO_V}"
           echo "Bumped $EXT_DIR/package.json version to ${VERSION_NO_V}:"
           node -e 'console.log(JSON.parse(require("fs").readFileSync("package.json","utf8")).version)'
 
       # ── Extension-delta artifacts (issue #96) ────────────────────────
-      # Package a small (~MB) zip of the PocketShell extension layer so the
-      # in-app updater can offer incremental updates instead of re-downloading
-      # the ~300MB full archive. The extension vendors a platform-specific
-      # native (ssh2's sshcrypto.node), so this MUST run per-platform on each
+      # Package a zip of the PocketShell extension layer so the in-app updater
+      # can offer incremental updates instead of re-downloading the ~300MB full
+      # archive. This bundles the extension's node_modules (incl. ssh2's
+      # platform-specific native sshcrypto.node), so it is ~tens of MB — still
+      # roughly an order of magnitude smaller than the full archive. Because it
+      # ships a platform-specific native, this MUST run per-platform on each
       # matrix runner and produce platform-keyed assets.
       #
       # baseVersion source: the pinned VS Code ref's short sha (first 12 chars
@@ -205,6 +231,11 @@ jobs:
       # baseVersion field, so the updater's string comparison matches
       # byte-for-byte. VSCODE_REF is defined at the top of this workflow.
       - name: Package extension-delta zip + manifest (${{ matrix.platform }})
+        # Tag-only: the manifest's version/downloadUrl encode the tag, and the
+        # updater re-offers deltas whose version it can't order. Off-tag
+        # (workflow_dispatch) runs must NOT produce a delta manifest (they'd
+        # publish a bogus "main"/"dev" version keyed to the wrong release URL).
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           set -euo pipefail
@@ -234,14 +265,16 @@ jobs:
           #    context.extensionPath with no parent-dir stripping, so a nested
           #    `pocketshell/` wrapper would break installation.
           ( cd "$EXT_DIR" && zip -r -X "$ZIP_PATH" . )
-          # Verify the layout is flat: no entry's path may start with
-          # `pocketshell/`. `if cmd; then` is exempt from `set -e`.
-          if unzip -Z1 "$ZIP_PATH" | grep -q '^pocketshell/'; then
-            echo "ERROR: delta zip is not flat (contains pocketshell/ entries)" >&2
-            exit 1
-          fi
-          echo "Flat-layout check passed. Top entries:"
-          unzip -Z1 "$ZIP_PATH" | head -5
+          # Validate the zip layout with a portable Node helper. The previous
+          # `unzip -Z1 | grep` check was NOT portable: `unzip` is not guaranteed
+          # on the windows-2022 runner's Git-Bash, so it silently no-oped on
+          # Windows and a nested zip could ship undetected. Node IS guaranteed
+          # on all three runners. The helper also asserts the POSITIVE case
+          # (required entries present), not just the negative (no pocketshell/
+          # prefix). The helper is at the repo root ($GITHUB_WORKSPACE/scripts)
+          # and the zip is an absolute path, so this is correct regardless of
+          # the `cd "$EXT_DIR"` above (the subshell already returned).
+          node "$GITHUB_WORKSPACE/scripts/check-delta-zip.mjs" "$ZIP_PATH"
 
           # 2. sha256 of the zip (lowercase hex, as parseManifest requires).
           SHA="$(sha256sum "$ZIP_PATH" | awk '{print $1}')"
@@ -261,6 +294,10 @@ jobs:
           echo "DELTA_MANIFEST=$MANIFEST_PATH" >> "$GITHUB_ENV"
 
       - name: Upload extension-delta artifacts
+        # Skip on non-tag runs: the delta step (tag-only) did not produce any
+        # files, so DELTA_ZIP/DELTA_MANIFEST are unset. Without this guard the
+        # upload step's `if-no-files-found: error` would fail the build.
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: pocketshell-extension-${{ matrix.platform }}
