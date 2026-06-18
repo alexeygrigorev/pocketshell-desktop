@@ -100,6 +100,16 @@ jobs:
             runner: macos-latest
             artifact: pocketshell-darwin-arm64
 
+    env:
+      # Force LF checkout on all runners. On windows-2022, git's autocrlf would
+      # otherwise check the repo out with CRLF, which breaks steps that match
+      # \n-anchored patterns in checked-out files (e.g. the version bump). The
+      # vendored VS Code source (restored from cache, CRLF) is handled
+      # separately by read()-normalization in scripts/patch-vscode-build.js.
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: 'core.autocrlf'
+      GIT_CONFIG_VALUE_0: 'false'
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -201,11 +211,16 @@ jobs:
           # JSON.parse -> JSON.stringify round-trip would rewrite it to 2-space
           # indent and create a noisy/meaningless diff in the shipped package).
           # Fails loudly if the version line isn't found rather than no-oping.
+          # The \r?\n anchors (not \n) make this CRLF-tolerant: on windows-2022
+          # the Sync extension source step `cp`s this package.json from the
+          # checked-out repo, which actions/checkout@v4 may hand out with CRLF
+          # (git autocrlf); a \n-only regex would fail to match and break the
+          # build. See also the build job's GIT_CONFIG_COUNT below.
           node -e '
             const fs = require("fs");
             const file = "package.json";
             const src = fs.readFileSync(file, "utf8");
-            const re = /(^|\n)([ \t]*"version"[ \t]*:[ \t]*)"[^"\n]*"([ \t]*(,\n|\n))/;
+            const re = /(^|\r?\n)([ \t]*"version"[ \t]*:[ \t]*)"[^"\r\n]*"([ \t]*(,\r?\n|\r?\n))/;
             if (!re.test(src)) {
               console.error("ERROR: could not find a \"version\" field to bump in " + file);
               process.exit(1);
