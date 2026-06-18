@@ -309,16 +309,18 @@ jobs:
           # packager's cwd.
           node "$GITHUB_WORKSPACE/scripts/check-delta-zip.mjs" "$ZIP_PATH"
 
-          # 2. sha256 of the zip (lowercase hex, as parseManifest requires).
-          SHA="$(sha256sum "$ZIP_PATH" | awk '{print $1}')"
-          echo "sha256($ZIP_NAME) = $SHA"
-
-          # 3. Manifest. downloadUrl MUST match the uploaded asset filename
-          #    exactly ($ZIP_NAME). Built with printf to keep JSON deterministic
-          #    and avoid heredoc indentation pitfalls.
-          printf '{\n  "version": "%s",\n  "downloadUrl": "https://github.com/%s/releases/download/%s/%s",\n  "sha256": "%s",\n  "baseVersion": "%s"\n}\n' \
-            "$VERSION_NO_V" "$REPO" "$VERSION" "$ZIP_NAME" "$SHA" "$BASE_VERSION" \
-            > "$MANIFEST_PATH"
+          # 2/3. sha256 + manifest. Written by a portable Node helper that hashes
+          #    the zip in-process (node:crypto) and SELF-VALIDATES the output
+          #    JSON + sha format, so a corrupt manifest can never ship. This
+          #    replaces an earlier `sha256sum | awk` + `printf` pair that
+          #    injected a stray backslash into the hash on the win32 Git-Bash
+          #    runner (value-triggered: the hash began with "db" -> "\db"),
+          #    producing invalid JSON and breaking the in-app updater (#96).
+          #    downloadUrl is built inside the helper as
+          #    https://github.com/$REPO/releases/download/$VERSION/$ZIP_NAME,
+          #    matching the uploaded asset filename exactly.
+          node "$GITHUB_WORKSPACE/scripts/write-delta-manifest.mjs" \
+            "$VERSION_NO_V" "$REPO" "$VERSION" "$ZIP_NAME" "$ZIP_PATH" "$BASE_VERSION" "$MANIFEST_PATH"
           echo "--- $MANIFEST_NAME ---"
           cat "$MANIFEST_PATH"
 
