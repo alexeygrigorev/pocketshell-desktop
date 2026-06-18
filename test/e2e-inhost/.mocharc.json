@@ -1,0 +1,5 @@
+{
+  "timeout": 60000,
+  "exit": true,
+  "color": true
+}
