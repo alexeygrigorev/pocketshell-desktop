@@ -4,15 +4,19 @@
  * Extracts a verified delta zip into a sibling directory then performs an
  * atomic rename swap with rollback. Pure backend logic: no `vscode` import.
  *
- * ZIP extraction is implemented in pure Node (parse the End-of-Central-Directory
- * record and central directory, inflate each entry with `node:zlib`'s
- * `inflateRaw`). No third-party zip dependency is required, so the canonical
+ * ZIP extraction uses `yauzl` — the same pure-JavaScript zip library VS Code
+ * and npm use (no native binding, no system `unzip`/Python required). yauzl
+ * handles data-descriptor and zip64 archives that the previous hand-rolled
+ * reader could not. We layer our own zip-slip containment and stored-entry
+ * CRC verification on top (yauzl validates sizes by default but does not
+ * check the CRC-32 of stored, uncompressed entries), so the canonical
  * `src/updates/` and the byte-identical extension mirror compile identically.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { inflateRawSync } from 'node:zlib';
+import * as yauzl from 'yauzl';
+import type { Entry, ZipFile } from 'yauzl';
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -43,21 +47,14 @@ export interface InstallResult {
 }
 
 // ---------------------------------------------------------------------------
-// ZIP extraction (pure node, no deps)
+// ZIP extraction (yauzl)
 // ---------------------------------------------------------------------------
 
-const SIG_EOCD = 0x06054b50; // End of central directory record
-const SIG_CDH = 0x02014b50; // Central directory file header
-
-function readUInt16LE(buf: Buffer, off: number): number {
-  return buf.readUInt16LE(off);
-}
-function readUInt32LE(buf: Buffer, off: number): number {
-  return buf.readUInt32LE(off);
-}
-
-// CRC-32 (IEEE 802.3) table-based implementation, used to verify the integrity
-// of stored (uncompressed) entries.
+// CRC-32 (IEEE 802.3) table-based implementation. yauzl validates the sizes of
+// entries (when validateEntrySizes is on, the default) and lets zlib catch
+// corruption of deflated data, but it does NOT verify the CRC-32 of stored
+// (uncompressed) entries — so we keep this check at the write site to preserve
+// the integrity guarantee the previous hand-rolled reader enforced.
 const CRC_TABLE: number[] = (() => {
   const table: number[] = [];
   for (let n = 0; n < 256; n++) {
@@ -78,134 +75,109 @@ function crc32(buf: Buffer): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-interface ZipEntry {
-  name: string;
-  compressionMethod: number;
-  compressedSize: number;
-  localHeaderOffset: number;
-  /** CRC-32 of the uncompressed data, from the central directory. */
-  crc32: number;
+/** Open a yauzl ZipFile from a buffer (promise wrapper around fromBuffer). */
+function openZip(buf: Buffer): Promise<ZipFile> {
+  return new Promise((resolve, reject) => {
+    // lazyEntries: true so we drive iteration via readEntry() and can apply our
+    // containment check before reading any entry's bytes. validateEntrySizes
+    // is on by default; decodeStrings is on by default (entry names are utf8).
+    yauzl.fromBuffer(buf, { lazyEntries: true }, (err, zipfile) => {
+      if (err || !zipfile) reject(err ?? new Error('yauzl: failed to open zip'));
+      else resolve(zipfile);
+    });
+  });
+}
+
+/** Read a single entry's decompressed bytes into a Buffer. */
+function readEntryBytes(zipfile: ZipFile, entry: Entry): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    zipfile.openReadStream(entry, (err, stream) => {
+      if (err || !stream) {
+        reject(err ?? new Error('yauzl: failed to open read stream'));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+      stream.on('error', reject);
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+  });
 }
 
 /**
- * Find the End-of-Central-Directory record and return its offset.
- *
- * The EOCD is near the end of the file; we scan the last 64KiB + header.
+ * Extract a zip buffer into `destDir`. Directories (entries whose name ends in
+ * `/`) are created; file entries are read via yauzl and written. No entry may
+ * escape `destDir` via `..` or absolute paths (zip-slip protection). Async
+ * because yauzl is callback/stream based.
  */
-function findEocdOffset(buf: Buffer): number {
-  // EOCD is at least 22 bytes; comment can be up to 65535 bytes.
-  const minEocd = 22;
-  const maxBack = Math.min(buf.length, 65557);
-  const startSearch = buf.length - maxBack;
-  for (let i = buf.length - minEocd; i >= startSearch; i--) {
-    if (readUInt32LE(buf, i) === SIG_EOCD) return i;
-  }
-  throw new Error('ZIP extraction failed: end-of-central-directory record not found');
-}
+export async function extractZipBuffer(buf: Buffer, destDir: string): Promise<void> {
+  fs.mkdirSync(destDir, { recursive: true });
+  const zipfile = await openZip(buf);
 
-/** Parse the central directory and return all file entries. */
-function readCentralDirectory(buf: Buffer): ZipEntry[] {
-  const eocd = findEocdOffset(buf);
-  const totalEntries = readUInt16LE(buf, eocd + 10);
-  const cdOffset = readUInt32LE(buf, eocd + 16);
+  await new Promise<void>((resolve, reject) => {
+    zipfile.on('error', reject);
 
-  const entries: ZipEntry[] = [];
-  let off = cdOffset;
-  for (let i = 0; i < totalEntries; i++) {
-    if (readUInt32LE(buf, off) !== SIG_CDH) {
-      throw new Error(`ZIP extraction failed: bad central directory header at ${off}`);
-    }
-    const compressionMethod = readUInt16LE(buf, off + 10);
-    const crc32 = readUInt32LE(buf, off + 16);
-    const compressedSize = readUInt32LE(buf, off + 20);
-    const nameLen = readUInt16LE(buf, off + 28);
-    const extraLen = readUInt16LE(buf, off + 30);
-    const commentLen = readUInt16LE(buf, off + 32);
-    const localHeaderOffset = readUInt32LE(buf, off + 42);
-    const name = buf.toString('utf8', off + 46, off + 46 + nameLen);
+    zipfile.on('entry', (entry: Entry) => {
+      // Robust zip-slip containment. We reject Windows drive-letter absolutes
+      // Robust zip-slip containment. We reject Windows drive-letter absolutes
+      // (e.g. `C:\windows\win.ini`, `C:/evil`) explicitly because, on posix-node,
+      // path.isAbsolute('C:\\...') is false and path.relative() would treat the
+      // drive prefix as an ordinary relative segment. Then we resolve the entry
+      // under destDir and assert the relative path stays strictly inside it:
+      // this catches posix absolutes (`/etc/passwd`) and `..` traversal on every
+      // platform.
+      const name = entry.fileName;
+      if (/^[A-Za-z]:/.test(name)) {
+        reject(new Error(`zip-slip rejected: entry "${name}" escapes destDir`));
+        zipfile.close();
+        return;
+      }
+      const normalized = path.normalize(name).replace(/\\/g, '/');
+      const resolved = path.resolve(destDir, normalized);
+      const rel = path.relative(destDir, resolved);
+      if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+        reject(new Error(`zip-slip rejected: entry "${name}" escapes destDir`));
+        zipfile.close();
+        return;
+      }
+      const target = path.join(destDir, normalized);
 
-    entries.push({
-      name,
-      compressionMethod,
-      compressedSize,
-      localHeaderOffset,
-      crc32,
+      if (normalized.endsWith('/')) {
+        // Directory entry.
+        fs.mkdirSync(target, { recursive: true });
+        zipfile.readEntry();
+        return;
+      }
+
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+
+      // Read the decompressed bytes then verify the stored-entry CRC-32. yauzl
+      // validates sizes and lets zlib catch deflate corruption, but it does not
+      // verify the CRC of stored (uncompressed) entries, so we enforce it here
+      // to preserve the integrity guarantee (this also covers deflated entries,
+      // which is a stricter check than yauzl alone).
+      readEntryBytes(zipfile, entry)
+        .then((bytes) => {
+          if (crc32(bytes) !== entry.crc32) {
+            throw new Error(
+              `ZIP extraction failed: CRC mismatch for stored entry "${name}"`,
+            );
+          }
+          fs.writeFileSync(target, bytes);
+          zipfile.readEntry();
+        })
+        .catch((err) => {
+          zipfile.close();
+          reject(err);
+        });
     });
 
-    off += 46 + nameLen + extraLen + commentLen;
-  }
-  return entries;
-}
+    zipfile.on('end', resolve);
 
-/** Read the raw compressed bytes for a single entry from its local header. */
-function readEntryBytes(buf: Buffer, entry: ZipEntry): Buffer {
-  const lh = entry.localHeaderOffset;
-  if (readUInt32LE(buf, lh) !== 0x04034b50) {
-    throw new Error(`ZIP extraction failed: bad local header at ${lh}`);
-  }
-  const nameLen = readUInt16LE(buf, lh + 26);
-  const extraLen = readUInt16LE(buf, lh + 28);
-  const dataStart = lh + 30 + nameLen + extraLen;
-  return buf.subarray(dataStart, dataStart + entry.compressedSize);
-}
-
-/**
- * Extract a zip buffer into `destDir`. Directories (entries ending in `/`) are
- * created; file entries are inflated and written. No entry may escape `destDir`
- * via `..` or absolute paths (zip-slip protection).
- */
-export function extractZipBuffer(buf: Buffer, destDir: string): void {
-  fs.mkdirSync(destDir, { recursive: true });
-  const entries = readCentralDirectory(buf);
-
-  for (const entry of entries) {
-    // Robust zip-slip containment. We reject Windows drive-letter absolutes
-    // (e.g. `C:\windows\win.ini`, `C:/evil`) explicitly because, on posix-node,
-    // path.isAbsolute('C:\\...') is false and path.relative() would treat the
-    // drive prefix as an ordinary relative segment. Then we resolve the entry
-    // under destDir and assert the relative path stays strictly inside it:
-    // this catches posix absolutes (`/etc/passwd`) and `..` traversal on every
-    // platform.
-    if (/^[A-Za-z]:/.test(entry.name)) {
-      throw new Error(`zip-slip rejected: entry "${entry.name}" escapes destDir`);
-    }
-    const normalized = path.normalize(entry.name).replace(/\\/g, '/');
-    const resolved = path.resolve(destDir, normalized);
-    const rel = path.relative(destDir, resolved);
-    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
-      throw new Error(`zip-slip rejected: entry "${entry.name}" escapes destDir`);
-    }
-    const target = path.join(destDir, normalized);
-
-    if (normalized.endsWith('/')) {
-      fs.mkdirSync(target, { recursive: true });
-      continue;
-    }
-
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const compressed = readEntryBytes(buf, entry);
-
-    let bytes: Buffer;
-    if (entry.compressionMethod === 0) {
-      bytes = compressed; // stored, no compression
-      // Deflate entries are decompressed by zlib, which itself detects
-      // corruption. Stored entries bypass that, so we verify the CRC-32
-      // (read from the central directory) against the uncompressed bytes to
-      // catch tampering or truncation.
-      if (crc32(bytes) !== entry.crc32) {
-        throw new Error(
-          `ZIP extraction failed: CRC mismatch for stored entry "${entry.name}"`,
-        );
-      }
-    } else if (entry.compressionMethod === 8) {
-      bytes = inflateRawSync(compressed); // deflate
-    } else {
-      throw new Error(
-        `ZIP extraction failed: unsupported compression method ${entry.compressionMethod} for ${entry.name}`,
-      );
-    }
-    fs.writeFileSync(target, bytes);
-  }
+    // With lazyEntries: true, yauzl does not emit the first entry automatically;
+    // kick off iteration once the listeners above are registered.
+    zipfile.readEntry();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +228,7 @@ export async function installExtensionUpdate(
   //    extraction fails so a later run does not see stale partial files.
   const zipBuf = fs.readFileSync(zipPath);
   try {
-    extractZipBuffer(zipBuf, stagingDir);
+    await extractZipBuffer(zipBuf, stagingDir);
   } catch (err) {
     rmrfSync(stagingDir);
     throw err;

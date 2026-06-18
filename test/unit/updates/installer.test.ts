@@ -24,7 +24,7 @@ describe('extractZipBuffer', () => {
     fs.rmSync(dest, { recursive: true, force: true });
   });
 
-  it('extracts stored and deflated entries with directory structure', () => {
+  it('extracts stored and deflated entries with directory structure', async () => {
     const zip = new ZipBuilder()
       .dir('ext/')
       .store('ext/package.json', '{"name":"ext"}')
@@ -33,7 +33,7 @@ describe('extractZipBuffer', () => {
       .store('ext/sub/note.txt', 'nested')
       .build();
 
-    extractZipBuffer(zip, dest);
+    await extractZipBuffer(zip, dest);
 
     expect(fs.readFileSync(path.join(dest, 'ext', 'package.json'), 'utf8')).toBe(
       '{"name":"ext"}',
@@ -46,24 +46,35 @@ describe('extractZipBuffer', () => {
     );
   });
 
-  it('rejects a zip-slip entry traversing above the dest', () => {
+  it('rejects a zip-slip entry traversing above the dest', async () => {
     const zip = new ZipBuilder().store('../escape.txt', 'evil').build();
-    expect(() => extractZipBuffer(zip, dest)).toThrow(/zip-slip rejected/);
+    // The entry is rejected — by yauzl's filename validation at parse time
+    // ("invalid relative path") or by the installer's write-site containment
+    // ("zip-slip rejected"). Either layer escaping is enough; both must fire.
+    await expect(extractZipBuffer(zip, dest)).rejects.toThrow(
+      /zip-slip rejected|invalid relative path|absolute path/,
+    );
   });
 
-  it('rejects a Windows drive-letter absolute entry (backslash form)', () => {
+  it('rejects a Windows drive-letter absolute entry (backslash form)', async () => {
     const zip = new ZipBuilder().store('C:\\windows\\win.ini', 'evil').build();
-    expect(() => extractZipBuffer(zip, dest)).toThrow(/zip-slip rejected/);
+    await expect(extractZipBuffer(zip, dest)).rejects.toThrow(
+      /zip-slip rejected|invalid relative path|absolute path/,
+    );
   });
 
-  it('rejects a Windows drive-letter absolute entry (forward-slash form)', () => {
+  it('rejects a Windows drive-letter absolute entry (forward-slash form)', async () => {
     const zip = new ZipBuilder().store('C:/evil', 'evil').build();
-    expect(() => extractZipBuffer(zip, dest)).toThrow(/zip-slip rejected/);
+    await expect(extractZipBuffer(zip, dest)).rejects.toThrow(
+      /zip-slip rejected|invalid relative path|absolute path/,
+    );
   });
 
-  it('rejects a stored entry whose bytes do not match its header CRC-32', () => {
+  it('rejects a stored entry whose bytes do not match its header CRC-32', async () => {
     // Build a valid zip with one stored entry, then flip a payload byte so the
     // CRC-32 in the header no longer matches the actual (uncompressed) bytes.
+    // yauzl does not validate the CRC of stored entries, so the installer
+    // enforces it at the write site; this confirms that check still fires.
     const name = 'payload.txt';
     const zip = new ZipBuilder().store(name, 'hello world').build();
 
@@ -73,7 +84,19 @@ describe('extractZipBuffer', () => {
     const dataStart = findStoredDataOffset(zip, name);
     const tampered = Buffer.from(zip);
     tampered[dataStart] = (tampered[dataStart] + 1) & 0xff;
-    expect(() => extractZipBuffer(tampered, dest)).toThrow(/CRC mismatch/);
+    await expect(extractZipBuffer(tampered, dest)).rejects.toThrow(/CRC mismatch/);
+  });
+
+  it('extracts a data-descriptor zip (CRC/sizes after the payload)', async () => {
+    // A data-descriptor entry sets general-purpose bit 3 and writes the CRC,
+    // compressed size, and uncompressed size in a trailing record AFTER the
+    // file data rather than in the local file header. This layout was a known
+    // gap of the previous hand-rolled reader; yauzl handles it natively.
+    const zip = new ZipBuilder().storeDataDescriptor('dd.txt', 'descriptor body').build();
+    await extractZipBuffer(zip, dest);
+    expect(fs.readFileSync(path.join(dest, 'dd.txt'), 'utf8')).toBe(
+      'descriptor body',
+    );
   });
 });
 

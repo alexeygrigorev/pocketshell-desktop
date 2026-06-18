@@ -12,6 +12,8 @@ interface BuiltEntry {
   name: string;
   data: Buffer; // uncompressed
   deflate: boolean;
+  /** Emits a data-descriptor entry (GP bit 3; sizes/CRC after the payload). */
+  useDataDescriptor?: boolean;
 }
 
 /** Builder fluent API for constructing a small zip archive. */
@@ -33,6 +35,21 @@ export class ZipBuilder {
     return this.store(name, '');
   }
 
+  /**
+   * Add a stored entry that uses the data-descriptor layout: the local file
+   * header has general-purpose bit 3 set and carries zeroes for the CRC and
+   * sizes, with the real values emitted in a trailing data-descriptor record
+   * (signature 0x08074b50 + CRC-32 + compressed size + uncompressed size) AFTER
+   * the file data. The central-directory entry always carries the true values.
+   * This mirrors how streaming zip writers (the dominant data-descriptor
+   * producer) emit entries and exercises a layout the old hand-rolled reader
+   * could not parse.
+   */
+  storeDataDescriptor(name: string, data: string | Buffer): this {
+    this.entries.push({ name, data: Buffer.from(data), deflate: false, useDataDescriptor: true });
+    return this;
+  }
+
   /** Serialize to a ZIP file buffer. */
   build(): Buffer {
     const localParts: Buffer[] = [];
@@ -45,29 +62,46 @@ export class ZipBuilder {
       const compressed = entry.deflate && !isDir ? deflateRawSync(entry.data) : entry.data;
       const method = entry.deflate && !isDir ? 8 : 0;
       const crc = crc32(entry.data);
+      const useDD = !!entry.useDataDescriptor;
+      // General-purpose bit 3 (0x08) signals a trailing data descriptor.
+      const flags = useDD ? 0x08 : 0;
 
-      // Local file header (30 bytes + name).
+      // Local file header (30 bytes + name). For data-descriptor entries the
+      // CRC and sizes are zero here and carried in the trailing record instead.
       const local = Buffer.alloc(30);
       local.writeUInt32LE(0x04034b50, 0);
       local.writeUInt16LE(20, 4); // version needed
-      local.writeUInt16LE(0, 6); // flags
+      local.writeUInt16LE(flags, 6); // flags
       local.writeUInt16LE(method, 8);
       local.writeUInt16LE(0, 10); // mod time
       local.writeUInt16LE(0, 12); // mod date
-      local.writeUInt32LE(crc, 14);
-      local.writeUInt32LE(compressed.length, 18);
-      local.writeUInt32LE(entry.data.length, 22);
+      local.writeUInt32LE(useDD ? 0 : crc, 14);
+      local.writeUInt32LE(useDD ? 0 : compressed.length, 18);
+      local.writeUInt32LE(useDD ? 0 : entry.data.length, 22);
       local.writeUInt16LE(nameBuf.length, 26);
       local.writeUInt16LE(0, 28); // extra len
 
       localParts.push(local, nameBuf, compressed);
 
-      // Central directory header (46 bytes + name).
+      // Trailing data descriptor (16 bytes, with optional signature).
+      let descriptorLen = 0;
+      if (useDD) {
+        const dd = Buffer.alloc(16);
+        dd.writeUInt32LE(0x08074b50, 0); // data descriptor signature
+        dd.writeUInt32LE(crc, 4);
+        dd.writeUInt32LE(compressed.length, 8);
+        dd.writeUInt32LE(entry.data.length, 12);
+        localParts.push(dd);
+        descriptorLen = dd.length;
+      }
+
+      // Central directory header (46 bytes + name). Always carries the true
+      // CRC/sizes; the flag must mirror the local header's bit 3.
       const central = Buffer.alloc(46);
       central.writeUInt32LE(0x02014b50, 0);
       central.writeUInt16LE(20, 4); // version made by
       central.writeUInt16LE(20, 6); // version needed
-      central.writeUInt16LE(0, 8); // flags
+      central.writeUInt16LE(flags, 8); // flags
       central.writeUInt16LE(method, 10);
       central.writeUInt16LE(0, 12); // mod time
       central.writeUInt16LE(0, 14); // mod date
@@ -83,7 +117,7 @@ export class ZipBuilder {
       central.writeUInt32LE(offset, 42); // local header offset
       centralParts.push(central, nameBuf);
 
-      offset += local.length + nameBuf.length + compressed.length;
+      offset += local.length + nameBuf.length + compressed.length + descriptorLen;
     }
 
     const cdStart = offset;

@@ -37,6 +37,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/mocha": "^10.0.10",
     "@types/ssh2": "^1.15.5",
+    "@types/yauzl": "^2.10.3",
     "@types/vscode": "1.125.0",
     "@vscode/test-electron": "3.0.0",
     "glob": "^10.5.0",
@@ -48,6 +49,7 @@
   "dependencies": {
     "better-sqlite3": "^12.10.0",
     "sql.js": "^1.14.1",
-    "sshpk": "^1.18.0"
+    "sshpk": "^1.18.0",
+    "yauzl": "^3.3.1"
   }
 }
