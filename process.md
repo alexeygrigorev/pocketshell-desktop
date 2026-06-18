@@ -17,8 +17,54 @@ Typical parallel dispatch patterns:
   fixing compilation errors)
 - Reviewer agents for completed implementers while other implementers are still running
 
-Rule: agents must not touch the same files. If overlap is unavoidable, run
-them sequentially instead.
+Rule: prefer non-overlapping file scope so branches merge cleanly. With
+worktree isolation (below), agents CAN edit the same files in parallel — each
+gets its own checkout — but overlapping scope still risks merge conflicts, so
+keep scope disjoint when you can and run sequentially when overlap is
+unavoidable.
+
+## Worktree isolation
+
+Implementer and reviewer agents work in **dedicated git worktrees** under
+`.worktrees/` (gitignored). This gives every parallel agent an isolated source
+tree, so they can edit, build, and test without stomping on each other or on
+the orchestrator's main checkout.
+
+Helper scripts (run with `bash`, not `node`):
+
+- `bash scripts/worktree-create.sh <branch> [--full]` — creates
+  `.worktrees/<branch>` on a new branch from current HEAD. **Symlinks** the
+  heavy gitignored dirs from the main checkout so the worktree can build/test
+  without a multi-GB reinstall (this is the mechanism that makes worktrees
+  viable here — `vendor/vscode/` is ~5G and `node_modules/` is gitignored, so a
+  plain `git worktree add` has no deps).
+  - default: links **`node_modules`** only — enough for source edits + Vitest
+    unit tests.
+  - `--full`: also links **`vendor/vscode`, `out`, `.build`, `.dev-data`** —
+    needed for `gulp` builds, in-host E2E, or launching the app.
+- `bash scripts/worktree-remove.sh <branch> [-f]` — removes the worktree and
+  deletes the branch (`-f` discards uncommitted changes).
+
+Workflow for an issue:
+
+1. Orchestrator: `bash scripts/worktree-create.sh <issue-slug>` (default unless
+   the task builds/runs the app).
+2. Implementer: `cd .worktrees/<issue-slug>`, edits + runs tests, commits to the
+   branch. Does NOT push.
+3. Reviewer: reviews the branch (`git diff main...<branch>`) and runs tests in
+   the worktree. Posts APPROVED / CHANGES REQUESTED.
+4. Orchestrator: verifies, fast-forwards the branch into `main`, pushes, closes
+   the issue, then `bash scripts/worktree-remove.sh <issue-slug>`.
+
+**Concurrency rule:** multiple *default* (unit-test-only) worktrees are safe to
+run in parallel — Vitest only reads `node_modules`. Multiple `--full` worktrees
+must NOT run `gulp` / in-host E2E / app launches concurrently — they write into
+the shared (symlinked) `vendor/vscode/out` and would corrupt each other. Run
+build-heavy tasks one at a time.
+
+Caveat (Windows): the symlinks are created on the dev/CI Linux host where agents
+run. If a worktree is ever used on a Windows checkout, enable Developer Mode
+(`core.symlinks true`) or copy `node_modules` instead.
 
 ## Delegation: testing and on-call monitoring
 
