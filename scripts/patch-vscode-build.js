@@ -23,7 +23,15 @@ function log(message) {
 }
 
 function read(file) {
-  return fs.readFileSync(file, 'utf8');
+  // Normalize CRLF -> LF. On Windows, git's autocrlf checks the vendored VS
+  // Code source out with \r\n, but the patch targets use \n (literal string
+  // includes/replace). Without normalization, multi-line string targets (e.g.
+  // patchActivityBarViewContainers) fail to match on Windows and break the
+  // build. On linux/mac the source is already LF, so this is a no-op there.
+  // gulp/tsc compile LF source fine on every platform, and the vendored tree
+  // is ephemeral (cloned per CI run, never committed), so writing LF back is
+  // safe.
+  return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 }
 
 function writeIfChanged(file, next) {
@@ -352,24 +360,36 @@ function patchAgentHostStartup() {
   }
 }
 
-if (!fs.existsSync(vscodeDir)) {
-  throw new Error(`VS Code source not found at ${vscodeDir}`);
+function main() {
+  if (!fs.existsSync(vscodeDir)) {
+    throw new Error(`VS Code source not found at ${vscodeDir}`);
+  }
+
+  rmrf('extensions/copilot');
+  rmrf('.build/extensions/copilot');
+  rmrf('out/extensions/copilot');
+  pruneBundledExtensions();
+
+  patchGulpfileVscode();
+  patchExtensionGulpfile();
+  patchExtensionsLib();
+  patchPaneCompositeBar();
+  patchActivityBarViewContainers();
+  patchRemoteIndicator();
+  patchGlobalCompositeBar();
+  patchTitleBarGlobalActivityTile();
+  patchWelcomeOnboarding();
+  patchWelcomeOnboardingContribution();
+  patchSessionsWelcome();
+  patchAgentHostStartup();
 }
 
-rmrf('extensions/copilot');
-rmrf('.build/extensions/copilot');
-rmrf('out/extensions/copilot');
-pruneBundledExtensions();
+// Only run the patches when invoked directly as a script
+// (`node scripts/patch-vscode-build.js`). When required from a test, exporting
+// the helpers below lets us unit-test read()/replaceRequired() without mutating
+// the real vendored VS Code tree.
+if (require.main === module) {
+  main();
+}
 
-patchGulpfileVscode();
-patchExtensionGulpfile();
-patchExtensionsLib();
-patchPaneCompositeBar();
-patchActivityBarViewContainers();
-patchRemoteIndicator();
-patchGlobalCompositeBar();
-patchTitleBarGlobalActivityTile();
-patchWelcomeOnboarding();
-patchWelcomeOnboardingContribution();
-patchSessionsWelcome();
-patchAgentHostStartup();
+module.exports = { read, replaceRequired };
