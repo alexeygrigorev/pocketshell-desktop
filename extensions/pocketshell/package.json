@@ -714,9 +714,7 @@
 			{ "command": "pocketshell.update.check", "title": "Update: Check for Extension Update", "category": "PocketShell", "icon": "$(refresh)" },
 			{ "command": "pocketshell.update.apply", "title": "Update: Apply Latest Extension Update", "category": "PocketShell", "icon": "$(cloud-download)" },
 			{ "command": "pocketshell.__test.settings.get", "title": "__test: Settings Get", "category": "PocketShell", "enablement": "false" },
-			{ "command": "pocketshell.__test.settings.update", "title": "__test: Settings Update", "category": "PocketShell", "enablement": "false" },
-			{ "command": "pocketshell.__test.conversation.getState", "title": "__test: Conversation Sidebar Get State", "category": "PocketShell", "enablement": "false" },
-			{ "command": "pocketshell.__test.promptComposer.getState", "title": "__test: Prompt Composer Sidebar Get State", "category": "PocketShell", "enablement": "false" }
+			{ "command": "pocketshell.__test.settings.update", "title": "__test: Settings Update", "category": "PocketShell", "enablement": "false" }
 		],
 		"menus": {
 			"view/item/context": [
@@ -924,10 +922,7 @@
 					"id": "pocketshell.tmuxSessions",
 					"name": "tmux Sessions",
 					"icon": "$(terminal-tmux)"
-				},
-				{ "id": "pocketshell.settings", "name": "Settings", "type": "webview", "icon": "$(gear)" },
-				{ "id": "pocketshell.conversation.sidebar", "name": "Conversation", "type": "webview", "icon": "$(comment-discussion)" },
-				{ "id": "pocketshell.promptComposer.sidebar", "name": "Prompt Composer", "type": "webview", "icon": "$(edit)" }
+				}
 			]
 		},
 		"configuration": {

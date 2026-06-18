@@ -5,24 +5,26 @@
 
 import * as vscode from 'vscode';
 import { SettingsConfigStore } from './settings-config-store';
-import { SettingsViewProvider } from './settings-view-provider';
+import { SettingsViewPanel } from './settings-view-provider';
 
 /**
- * Register the dedicated PocketShell Settings view and its open command.
+ * Register the on-demand PocketShell Settings editor-area panel and its
+ * commands (#89, relocated out of the sidebar by #99).
  *
- * This is the single entry point the integration step calls. It:
- *   - registers a WebviewView provider for `pocketshell.settings` (the view
- *     id a future `views` contribution will declare), and
- *   - registers a `pocketshell.settingsView.open` command that focuses the
- *     view, so it can be surfaced from the Command Palette / host detail.
+ * The sidebar used to host a `WebviewView` (id `pocketshell.settings`). Per
+ * #99 the sidebar now hosts ONLY the session tree, so Settings opens on
+ * demand as an editor-area `WebviewPanel` via `pocketshell.settingsView.open`
+ * (reachable from the Command Palette; the title `PocketShell: Open Settings
+ * View` carries the `PocketShell` category).
+ *
+ * NOTE: The command ids `pocketshell.settingsView.open` and
+ * `pocketshell.settingsView.refresh` are declared in `package.json`
+ * `contributes.commands` by the integration step — this module does not touch
+ * package.json. `pocketshell.settings.open` (a separate QuickPick command
+ * registered in extension.ts) is unaffected.
  *
  * @param context The extension activation context (subscriptions are pushed here).
  * @returns The list of disposables created (also pushed onto `context.subscriptions`).
- *
- * NOTE: The view id `pocketshell.settings` and the command
- * `pocketshell.settingsView.open` must be declared in `package.json`
- * `contributes.views` / `contributes.commands` by the integration step —
- * this module does not touch package.json.
  */
 export function registerPocketshellSettings(
 	context: vscode.ExtensionContext,
@@ -30,23 +32,21 @@ export function registerPocketshellSettings(
 	const disposables: vscode.Disposable[] = [];
 
 	const store = new SettingsConfigStore(vscode.ConfigurationTarget.Global);
-	const provider = new SettingsViewProvider(context, store);
+
+	// Keep a handle so the refresh command can target the live panel. Undefined
+	// when no panel is open; SettingsViewPanel.open re-focuses an existing panel.
+	let current: SettingsViewPanel | undefined;
 
 	disposables.push(
-		vscode.window.registerWebviewViewProvider(SettingsViewProvider.viewType, provider, {
-			webviewOptions: { retainContextWhenHidden: true },
-		}),
-	);
-
-	disposables.push(
-		vscode.commands.registerCommand('pocketshell.settingsView.open', async () => {
-			await vscode.commands.executeCommand(`${SettingsViewProvider.viewType}.focus`);
+		vscode.commands.registerCommand('pocketshell.settingsView.open', () => {
+			current = SettingsViewPanel.open(store);
+			return current;
 		}),
 	);
 
 	disposables.push(
 		vscode.commands.registerCommand('pocketshell.settingsView.refresh', async () => {
-			await provider.refresh();
+			await current?.refresh();
 		}),
 	);
 

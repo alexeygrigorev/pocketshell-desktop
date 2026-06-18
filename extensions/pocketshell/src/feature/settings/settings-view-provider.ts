@@ -9,47 +9,70 @@ import { readSettings, writeSetting, resetSetting } from '../../backend/pocketsh
 import type { SettingEntry } from '../../backend/pocketshell-settings';
 
 /**
- * WebviewView provider backing the dedicated PocketShell Settings view.
+ * On-demand PocketShell Settings panel.
  *
- * Renders every setting from `POCKETSHELL_SETTINGS` grouped by category,
- * with a control per type (toggle / number input / text input). Reads via
- * the pure `readSettings` model; writes round-trip back through
- * `writeSetting` (which validates before persisting) and then re-render the
- * snapshot. The webview is stateless beyond the current snapshot: every
- * edit posts a message, the extension validates+p persists, and the new
- * snapshot is pushed back.
+ * Renders every setting from `POCKETSHELL_SETTINGS` grouped by category, with
+ * a control per type (toggle / number input / text input / enum). Reads via
+ * the pure `readSettings` model; writes round-trip back through `writeSetting`
+ * (which validates before persisting) and then re-render the snapshot. The
+ * webview is stateless beyond the current snapshot: every edit posts a
+ * message, the extension validates + persists, and the new snapshot is pushed
+ * back.
+ *
+ * This used to back a sidebar `WebviewView` (id `pocketshell.settings`). Per
+ * #99 the sidebar now hosts ONLY the session tree, so Settings lives in an
+ * on-demand editor-area `WebviewPanel` opened by the
+ * `pocketshell.settingsView.open` command (see `feature/settings/index.ts`).
  */
-export class SettingsViewProvider implements vscode.WebviewViewProvider {
+export class SettingsViewPanel {
 	public static readonly viewType = 'pocketshell.settings';
 
-	private view?: vscode.WebviewView;
+	/** The single live panel, so re-opening focuses instead of stacking. */
+	private static current: SettingsViewPanel | undefined;
 
-	constructor(
-		private readonly context: vscode.ExtensionContext,
-		private readonly store: ConfigStore,
-	) {}
+	private readonly panel: vscode.WebviewPanel;
+	private readonly store: ConfigStore;
+	/** Disposables tied to THIS panel's lifetime (cleared on dispose). */
+	private readonly panelDisposables: vscode.Disposable[] = [];
 
-	resolveWebviewView(view: vscode.WebviewView): void {
-		this.view = view;
-		view.webview.options = {
+	private constructor(panel: vscode.WebviewPanel, store: ConfigStore) {
+		this.panel = panel;
+		this.store = store;
+
+		panel.webview.options = {
 			enableScripts: true,
 			localResourceRoots: [],
 		};
-		view.webview.html = this.renderShell();
+		panel.webview.html = this.renderShell(panel.webview);
 
-		view.webview.onDidReceiveMessage(
-			(msg) => {
+		this.panelDisposables.push(
+			panel.webview.onDidReceiveMessage((msg) => {
 				void this.handleMessage(msg);
-			},
-			undefined,
-			this.context.subscriptions,
+			}),
 		);
-
-		view.onDidDispose(() => {
-			this.view = undefined;
-		});
+		panel.onDidDispose(() => this.dispose(), null, this.panelDisposables);
 
 		void this.pushSnapshot();
+	}
+
+	/** Open (or focus) the Settings editor-area panel on demand. */
+	static open(store: ConfigStore): SettingsViewPanel {
+		if (SettingsViewPanel.current) {
+			SettingsViewPanel.current.panel.reveal(vscode.ViewColumn.Active);
+			return SettingsViewPanel.current;
+		}
+		const panel = vscode.window.createWebviewPanel(
+			SettingsViewPanel.viewType,
+			vscode.l10n.t('PocketShell Settings'),
+			vscode.ViewColumn.Active,
+			{
+				enableScripts: true,
+				retainContextWhenHidden: true,
+			},
+		);
+		const instance = new SettingsViewPanel(panel, store);
+		SettingsViewPanel.current = instance;
+		return instance;
 	}
 
 	/** Re-render the current settings into the webview. */
@@ -57,15 +80,25 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 		await this.pushSnapshot();
 	}
 
+	dispose(): void {
+		for (const disposable of this.panelDisposables) {
+			try {
+				disposable.dispose();
+			} catch {
+				/* best-effort */
+			}
+		}
+		this.panelDisposables.length = 0;
+		if (SettingsViewPanel.current === this) {
+			SettingsViewPanel.current = undefined;
+		}
+	}
+
 	// -----------------------------------------------------------------------
 	// Message handling
 	// -----------------------------------------------------------------------
 
 	private async handleMessage(msg: SettingsViewMessage): Promise<void> {
-		if (!this.view) {
-			return;
-		}
-
 		if (msg.kind === 'update') {
 			const result = await writeSetting(this.store, msg.key, msg.value);
 			if (!result.ok) {
@@ -87,16 +120,13 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async pushSnapshot(): Promise<void> {
-		if (!this.view) {
-			return;
-		}
 		const snapshot = readSettings(this.store);
 		const payload = snapshot.categories.map((c) => ({
 			category: c.category,
 			title: c.title,
 			entries: c.entries.map((e) => this.entryToWire(e)),
 		}));
-		await this.view.webview.postMessage({ kind: 'snapshot', categories: payload });
+		await this.panel.webview.postMessage({ kind: 'snapshot', categories: payload });
 	}
 
 	private entryToWire(entry: SettingEntry) {
@@ -117,11 +147,11 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 	// HTML
 	// -----------------------------------------------------------------------
 
-	private renderShell(): string {
+	private renderShell(webview: vscode.Webview): string {
 		const nonce = getNonce();
 		const csp = [
 			`default-src 'none'`,
-			`img-src ${this.view?.webview.cspSource ?? ''} https:`,
+			`img-src ${webview.cspSource} https:`,
 			`style-src 'unsafe-inline'`,
 			`script-src 'nonce-${nonce}'`,
 		].join('; ');

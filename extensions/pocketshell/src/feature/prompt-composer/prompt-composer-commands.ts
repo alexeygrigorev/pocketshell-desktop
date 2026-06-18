@@ -14,7 +14,6 @@ import { AgentMessenger } from '../../backend/agents/reply';
 import type { ConversationAttributionResult } from '../../backend/agents';
 import type { QuoteReplyPayload } from '../../backend/agents/conversation';
 import { SftpClient } from '../../backend/files/sftp-client';
-import { registerPromptComposerSidebar, type PromptComposerSidebarProvider } from './prompt-composer-sidebar-provider';
 import {
 	addPromptComposerAttachments,
 	appendPromptComposerTranscript,
@@ -62,18 +61,6 @@ interface PromptComposerPanelEntry {
 interface ResolvedPromptComposerTarget {
 	target: PromptComposerTarget;
 	insertTarget?: PromptComposerPaneTarget;
-}
-
-/**
- * The live prompt-composer sidebar provider instance, captured during
- * registration so the E2E TestBridge (#90) can read its model. Undefined
- * until `registerPromptComposer` has run (and after a theoretical re-register).
- */
-let promptComposerSidebarProvider: PromptComposerSidebarProvider | undefined;
-
-/** Test-only accessor for the live prompt-composer sidebar provider (#90). */
-export function getPromptComposerSidebarProvider(): PromptComposerSidebarProvider | undefined {
-	return promptComposerSidebarProvider;
 }
 
 export function registerPromptComposer(
@@ -150,10 +137,6 @@ export function registerPromptComposer(
 			panels.clear();
 		},
 	});
-
-	const sidebar = registerPromptComposerSidebar(service, ctx, deps);
-	disposables.push(...sidebar.disposables);
-	promptComposerSidebarProvider = sidebar.provider;
 
 	return disposables;
 }
