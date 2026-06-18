@@ -210,6 +210,14 @@ function patchRemoteIndicator() {
     '// PocketShell: remote-window indicator hidden (uses the machinery, must not display it).\n',
     'patchRemoteIndicator RemoteStatusIndicator registration'
   );
+  // The registration above was the only use of the RemoteStatusIndicator import
+  // in this file; drop it so tsgo/noUnusedLocals does not flag the patched file.
+  content = replaceRequired(
+    content,
+    "import { RemoteStatusIndicator } from './remoteIndicator.js';\n",
+    '// PocketShell: RemoteStatusIndicator import removed (registration stripped).\n',
+    'patchRemoteIndicator RemoteStatusIndicator import'
+  );
   if (writeIfChanged(file, content)) {
     log('disabled remote status indicator contribution');
   }
@@ -231,6 +239,16 @@ function patchGlobalCompositeBar() {
     '\n\t\tthis.globalActivityActionBar.push(this.globalActivityAction);\n',
     '\n\t\t// PocketShell: Manage (gear) action removed from the activity bar.\n',
     'patchGlobalCompositeBar globalActivityAction push'
+  );
+
+  // The gear field above was its only consumer; drop the now-unused field so
+  // tsgo/noUnusedLocals does not flag the patched file. GLOBAL_ACTIVITY_ID (the
+  // id constant) is still used elsewhere in this file, so its import stays.
+  content = replaceRequired(
+    content,
+    '\tprivate readonly globalActivityAction = this._register(new Action(GLOBAL_ACTIVITY_ID));\n',
+    '\t// PocketShell: globalActivityAction field removed (Manage gear stripped).\n',
+    'patchGlobalCompositeBar globalActivityAction field'
   );
 
   // Force the Accounts icon to never be visible in any host (activity bar or
@@ -258,6 +276,14 @@ function patchTitleBarGlobalActivityTile() {
     '\n\t\t\t\tactions.primary.push(GLOBAL_ACTIVITY_TITLE_ACTION);\n',
     '\n\t\t\t\t// PocketShell: Manage (gear) tile action removed from the title bar.\n',
     'patchTitleBarGlobalActivityTile GLOBAL_ACTIVITY_TITLE_ACTION'
+  );
+  // The push above was the only use of GLOBAL_ACTIVITY_TITLE_ACTION in this
+  // file; drop it from the import so tsgo/noUnusedLocals does not flag the file.
+  content = replaceRequired(
+    content,
+    "import { ACCOUNTS_ACTIVITY_TILE_ACTION, GLOBAL_ACTIVITY_TITLE_ACTION, TitleBarLeadingActionsGroup } from './titlebarActions.js';\n",
+    "import { ACCOUNTS_ACTIVITY_TILE_ACTION, TitleBarLeadingActionsGroup } from './titlebarActions.js';\n",
+    'patchTitleBarGlobalActivityTile import'
   );
   if (writeIfChanged(file, content)) {
     log('disabled Manage (gear) title bar tile action');
@@ -342,10 +368,81 @@ function patchSessionsWelcome() {
   }
 }
 
+// Issue #100: Kill the "Open in Agents Window" surface entirely. VS Code's chat
+// contrib registers a title-bar widget ("Open in Agents"), a command palette
+// action, a title-bar toggle setting, and an input-handoff tip — none of which
+// PocketShell ships. We remove the registerAction2 / registerWorkbenchContribution2
+// calls (and the now-unused import) from the chat electron-browser contribution.
+// The action/contribution classes themselves stay defined (removing them would
+// require touching many call sites); only their REGISTRATION is stripped, so the
+// UI never appears and the commands are unreachable.
+function patchOpenInAgents() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'workbench', 'contrib', 'chat', 'electron-browser', 'chat.contribution.ts');
+  let content = read(file);
+
+  // Remove the four agents-window action registrations.
+  content = replaceRequired(
+    content,
+    "registerAction2(OpenWorkspaceInAgentsWindowAction);\nregisterAction2(ToggleOpenInAgentsWindowTitleBarAction);\nregisterAction2(OpenAgentsWindowAction);\nregisterAction2(OpenChatSessionInAgentsWindowAction);\n",
+    '// PocketShell: "Open in Agents Window" actions removed.\n',
+    'patchOpenInAgents action registrations'
+  );
+
+  // Remove the title-bar widget contribution + the handoff-tip contribution.
+  content = replaceRequired(
+    content,
+    "registerWorkbenchContribution2(OpenWorkspaceInAgentsContribution.ID, OpenWorkspaceInAgentsContribution, WorkbenchPhase.BlockRestore);\nregisterWorkbenchContribution2(AgentsHandoffInputTipContribution.ID, AgentsHandoffInputTipContribution, WorkbenchPhase.Eventually);\n",
+    '// PocketShell: "Open in Agents Window" contributions removed.\n',
+    'patchOpenInAgents contribution registrations'
+  );
+
+  // Drop the now-unused import so tsc does not flag it as an unused import
+  // (noUnusedLocals). Keep the rest of the import line intact.
+  content = replaceRequired(
+    content,
+    "import { OpenWorkspaceInAgentsWindowAction, OpenWorkspaceInAgentsContribution, OpenAgentsWindowAction, OpenChatSessionInAgentsWindowAction, AgentsHandoffInputTipContribution, ToggleOpenInAgentsWindowTitleBarAction } from './agentSessions/agentSessionsActions.js';\n",
+    '// PocketShell: agents-window actions import removed (registrations stripped).\n',
+    'patchOpenInAgents import'
+  );
+
+  if (writeIfChanged(file, content)) {
+    log('removed "Open in Agents Window" actions and contributions');
+  }
+}
+
+// Issue #100: Remove the sidebar / panel / auxiliary-bar toggle buttons from the
+// title-bar layout control. These inline toggle buttons are shown when
+// `workbench.layoutControl.type` is 'toggles' or 'both' (the upstream default is
+// 'both'). Switching the default to 'menu' makes the layout control render only
+// a single dropdown button — the toggle buttons (and their `when` clauses in
+// layoutActions.ts / panelActions.ts / auxiliaryBarActions.ts) never match, so
+// they are gone from the shipped UI. The underlying toggle ACTIONS and their
+// keybindings (Ctrl+B / Ctrl+J) are left intact; only the buttons are removed.
+function patchLayoutControlDefault() {
+  const file = path.join(vscodeDir, 'src', 'vs', 'workbench', 'browser', 'workbench.contribution.ts');
+  let content = read(file);
+  content = replaceRequired(
+    content,
+    "\t\t\t'workbench.layoutControl.type': {\n\t\t\t\t'type': 'string',\n\t\t\t\t'enum': ['menu', 'toggles', 'both'],\n",
+    "\t\t\t'workbench.layoutControl.type': {\n\t\t\t\t'type': 'string',\n\t\t\t\t// PocketShell: 'menu' removes the sidebar/panel/auxiliary toggle buttons.\n\t\t\t\t'enum': ['menu', 'toggles', 'both'],\n",
+    'patchLayoutControlDefault enum block'
+  );
+  content = replaceRequired(
+    content,
+    "\t\t\t\t'default': 'both',\n\t\t\t\t'description': localize('layoutControlType', \"Controls whether the layout control in the custom title bar is displayed as a single menu button or with multiple UI toggles.\"),\n",
+    "\t\t\t\t'default': 'menu',\n\t\t\t\t'description': localize('layoutControlType', \"Controls whether the layout control in the custom title bar is displayed as a single menu button or with multiple UI toggles.\"),\n",
+    'patchLayoutControlDefault default value'
+  );
+  if (writeIfChanged(file, content)) {
+    log('set workbench.layoutControl.type default to menu (removes toggle buttons)');
+  }
+}
+
 function patchAgentHostStartup() {
   const file = path.join(vscodeDir, 'src', 'vs', 'code', 'electron-main', 'app.ts');
   let content = read(file);
-  content = content.replace(
+  content = replaceRequired(
+    content,
     `\t\t// Agent Host
 \t\tif (isAgentHostEnabled(this.configurationService)) {
 \t\t\tconst agentHostStarter = new ElectronAgentHostStarter(this.configurationService, this.environmentMainService, this.lifecycleMainService, this.logService);
@@ -353,7 +450,16 @@ function patchAgentHostStartup() {
 \t\t}
 `,
     `\t\t// PocketShell does not ship VS Code's local agent host.
-`
+`,
+    'patchAgentHostStartup agent host block'
+  );
+  // The block above was the only consumer of these three imports; drop them so
+  // tsgo/noUnusedLocals does not flag the patched file.
+  content = replaceRequired(
+    content,
+    "import { ElectronAgentHostStarter } from '../../platform/agentHost/electron-main/electronAgentHostStarter.js';\nimport { AgentHostProcessManager } from '../../platform/agentHost/node/agentHostService.js';\nimport { isAgentHostEnabled } from '../../platform/agentHost/common/agentService.js';\n",
+    '// PocketShell: agent-host imports removed (startup block stripped).\n',
+    'patchAgentHostStartup agent host imports'
   );
   if (writeIfChanged(file, content)) {
     log('disabled Electron agent host startup');
@@ -381,6 +487,8 @@ function main() {
   patchWelcomeOnboarding();
   patchWelcomeOnboardingContribution();
   patchSessionsWelcome();
+  patchOpenInAgents();
+  patchLayoutControlDefault();
   patchAgentHostStartup();
 }
 
