@@ -698,6 +698,12 @@
 				"icon": "$(terminal)"
 			},
 			{
+				"command": "pocketshell.surface.openSession",
+				"title": "PocketShell: Open Additional Session",
+				"category": "PocketShell",
+				"icon": "$(add)"
+			},
+			{
 				"command": "pocketshell.session.focusTerminal",
 				"title": "Sessions: Focus Terminal",
 				"category": "PocketShell",
@@ -864,6 +870,11 @@
 					"command": "pocketshell.tmux-ui.refreshTree",
 					"when": "view == pocketshell.tmuxSessions",
 					"group": "navigation"
+				},
+				{
+					"command": "pocketshell.surface.openSession",
+					"when": "view == pocketshell.sessions",
+					"group": "navigation"
 				}
 			],
 			"terminal/context": [
@@ -917,11 +928,6 @@
 					"id": "pocketshell.sessions",
 					"name": "Sessions",
 					"icon": "$(terminal-tmux)"
-				},
-				{
-					"id": "pocketshell.tmuxSessions",
-					"name": "tmux Sessions",
-					"icon": "$(terminal-tmux)"
 				}
 			]
 		},
@@ -941,6 +947,10 @@
 			{
 				"view": "pocketshell.hosts",
 				"contents": "Hosts come from ~/.ssh/config.\n[Open SSH Config](command:pocketshell.openSshConfig)\n[Add Host](command:pocketshell.addHost)"
+			},
+			{
+				"view": "pocketshell.sessions",
+				"contents": "No open sessions.\nConnect to a host to open its default session, or open an additional session on a connected host.\n[Open Additional Session](command:pocketshell.surface.openSession)"
 			}
 		]
 	},

@@ -88,12 +88,14 @@ export function registerTmuxUi(
 	const output = vscode.window.createOutputChannel('PocketShell tmux-ui');
 	disposables.push(output);
 	const registry = new TmuxSessionRegistry();
+	// The sidebar now shows ONE canonical session tree (pocketshell.sessions,
+	// driven by the surface SessionTerminalRegistry — see surface-commands.ts).
+	// This tmux-ui registry still backs the open-session/select-pane/etc. commands
+	// and their restore-state machinery; only the separate sidebar view was removed.
+	// treeProvider is retained for the refresh-tree command (a no-op now that no
+	// sidebar view consumes it, but harmless and keeps the command path intact).
 	const treeProvider = new TmuxTreeProvider(registry);
-	const treeView = vscode.window.createTreeView('pocketshell.tmuxSessions', {
-		treeDataProvider: treeProvider,
-		showCollapseAll: true,
-	});
-	disposables.push(registry, treeView);
+	disposables.push(registry);
 	const restoreStore = new TmuxRestoreStore(ctx);
 	const attributionService = new ConversationAttributionService();
 
