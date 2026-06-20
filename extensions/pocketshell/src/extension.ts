@@ -308,10 +308,23 @@ export function activate(context: vscode.ExtensionContext): void {
 	// the terminal opens as a full-width EDITOR TAB (one per session, backed by
 	// tmux -CC) instead of the VS Code bottom panel. The surface command owns
 	// the tab-reuse + tmux wiring; see feature/surface/surface-commands.ts.
+	//
+	// #98 landing flow: after connecting, reveal THIS server's sessions (the
+	// canonical `pocketshell.sessions` tree) so the user lands on the app's
+	// "FolderList" equivalent: server list → server's sessions → session.
 	context.subscriptions.push(
 		registerCommand('pocketshell.connect', async (element?: Host | number) => {
 			await vscode.commands.executeCommand('pocketshell.surface.connect', element);
 			treeProvider.refresh();
+			// Navigate the user's attention to the just-connected server's
+			// sessions. `pocketshell.sessions.focus` is the auto-generated
+			// focus command for the tree view; failing to focus is non-fatal.
+			try {
+				await vscode.commands.executeCommand('pocketshell.sessions.focus');
+			} catch {
+				// View not yet registered (early activation) — the sessions tree
+				// still updates via its registry; focusing is a best-effort UX nudge.
+			}
 		}),
 	);
 

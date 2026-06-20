@@ -1,10 +1,13 @@
 /**
- * Unit-integration test for `StartupAutoConnector.run` (#94).
+ * Unit-integration test for `StartupAutoConnector.run` (#94 + #98 landing).
  *
  * The pure decider (`decideStartupAction`) is covered by `decision.test.ts`.
- * This file targets the THIN DISPATCH in `StartupAutoConnector.run` — does it
- * actually fire `pocketshell.surface.connect` on the `connect` branch, show a
- * quick-pick on `pick`, and do nothing on `noop`?
+ * This file targets the THIN DISPATCH in `StartupAutoConnector.run`:
+ *
+ *   - `connect` → fires `pocketshell.surface.connect` with the last host id.
+ *   - `pick`    → focuses the `pocketshell.hosts` landing view (#98: the
+ *                 server list IS the picker — no transient quick-pick).
+ *   - `noop`    → does nothing.
  *
  * The SUT does `import * as vscode from 'vscode'`. vitest.config.ts has NO
  * vscode alias/stub, so we mock the bare specifier at the top of the file with
@@ -75,40 +78,39 @@ describe('StartupAutoConnector.run', () => {
 		expect(action.kind).toBe('connect');
 	});
 
-	it('pick → connect: shows quick-pick and connects to the chosen host', async () => {
+	it('pick: focuses the pocketshell.hosts landing view (#98) and does NOT auto-connect or show a quick-pick', async () => {
 		const service = makeService([
 			host({ id: 7, name: 'seven' }),
 			host({ id: 8, name: 'eight', hostname: 'eight.example' }),
 		]);
 		const connector = new StartupAutoConnector(service);
 
-		// Resolve the quick-pick to the item whose hostId === 8.
-		showQuickPick.mockImplementation((items: Array<{ hostId: number }>) => {
-			return Promise.resolve(items.find((i) => i.hostId === 8));
-		});
-
 		const action = await connector.run({ autoConnect: false, lastHostId: null });
 
-		expect(showQuickPick).toHaveBeenCalledTimes(1);
+		// The landing view is surfaced; the user picks from the persistent list.
 		expect(executeCommand).toHaveBeenCalledTimes(1);
-		expect(executeCommand).toHaveBeenCalledWith('pocketshell.surface.connect', 8);
+		expect(executeCommand).toHaveBeenCalledWith('pocketshell.hosts.focus');
+		// No transient quick-pick anymore (#98 landing integration).
+		expect(showQuickPick).not.toHaveBeenCalled();
+		// Crucially, pick does NOT auto-connect — the user selects a server.
+		const connectCalls = (executeCommand.mock.calls as unknown[][]).filter(
+			([cmd]) => cmd === 'pocketshell.surface.connect',
+		);
+		expect(connectCalls).toHaveLength(0);
 		expect(action.kind).toBe('pick');
 	});
 
-	it('pick → dismiss: dismiss (undefined) issues no connect command', async () => {
-		const service = makeService([
-			host({ id: 7, name: 'seven' }),
-			host({ id: 8, name: 'eight', hostname: 'eight.example' }),
-		]);
+	it('pick: focus failure is swallowed (landing view not yet registered during early activation)', async () => {
+		const service = makeService([host({ id: 7, name: 'seven' })]);
 		const connector = new StartupAutoConnector(service);
 
-		// User dismissed the quick-pick.
-		showQuickPick.mockResolvedValue(undefined);
+		// Simulate the view focus command throwing (view not registered yet).
+		executeCommand.mockRejectedValueOnce(new Error('view not found'));
 
+		// Must not throw — focus is best-effort.
 		const action = await connector.run({ autoConnect: false, lastHostId: null });
 
-		expect(showQuickPick).toHaveBeenCalledTimes(1);
-		expect(executeCommand).not.toHaveBeenCalled();
+		expect(executeCommand).toHaveBeenCalledWith('pocketshell.hosts.focus');
 		expect(action.kind).toBe('pick');
 	});
 

@@ -879,7 +879,7 @@
 			"pocketshell": [
 				{
 					"id": "pocketshell.hosts",
-					"name": "SSH Hosts",
+					"name": "Servers",
 					"icon": "$(server)"
 				},
 				{
@@ -904,11 +904,11 @@
 		"viewsWelcome": [
 			{
 				"view": "pocketshell.hosts",
-				"contents": "Hosts come from ~/.ssh/config.\n[Open SSH Config](command:pocketshell.openSshConfig)\n[Add Host](command:pocketshell.addHost)"
+				"contents": "No servers yet.\nServers come from ~/.ssh/config — add one to connect.\n[Add Server](command:pocketshell.addHost)\n[Open SSH Config](command:pocketshell.openSshConfig)"
 			},
 			{
 				"view": "pocketshell.sessions",
-				"contents": "No open sessions.\nConnect to a host to open its default session, or open an additional session on a connected host.\n[Open Additional Session](command:pocketshell.surface.openSession)"
+				"contents": "No open sessions.\nSelect a server to connect and open its default session, or open an additional session on a connected server.\n[Open Additional Session](command:pocketshell.surface.openSession)"
 			}
 		]
 	},

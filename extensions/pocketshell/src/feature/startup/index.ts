@@ -40,11 +40,16 @@ export interface StartupSettingsSource {
 /**
  * Resolves the startup action for the current settings + host list and runs it.
  *
- *   - `connect` → fires `pocketshell.surface.connect` with the host id.
- *   - `pick`    → shows a quick-pick of host labels, then fires
- *                 `pocketshell.surface.connect` with the chosen id on selection
- *                 (dismiss is a no-op).
- *   - `noop`    → does nothing.
+ *   - `connect` → fires `pocketshell.surface.connect` with the host id
+ *                 (auto-connect to the last host; the landing's server list is
+ *                 still shown alongside).
+ *   - `pick`    → focuses the `pocketshell.hosts` landing view so the user
+ *                 selects a server from the persistent server list (the
+ *                 landing surface itself), instead of a transient modal
+ *                 quick-pick. This is the #98 landing integration: the server
+ *                 list IS the picker.
+ *   - `noop`    → does nothing (no hosts; the landing view shows the empty
+ *                 state with an add-server action).
  *
  * `pocketshell.surface.connect` accepts a `Host | number` (see
  * `feature/surface/surface-commands.ts` → `resolveHostId`); we pass a bare
@@ -70,7 +75,7 @@ export class StartupAutoConnector {
 				await vscode.commands.executeCommand('pocketshell.surface.connect', action.hostId);
 				break;
 			case 'pick':
-				await this.pickAndConnect(action.hosts);
+				await this.focusLanding();
 				break;
 			case 'noop':
 				break;
@@ -80,23 +85,23 @@ export class StartupAutoConnector {
 	}
 
 	/**
-	 * Show a quick-pick of the available hosts and connect to the chosen one.
-	 * Dismissal (undefined) is a silent no-op.
+	 * Focus the `pocketshell.hosts` landing view (#98).
+	 *
+	 * The landing view is the persistent server list (the app's HostList). When
+	 * the decider returns `pick`, instead of popping a transient quick-pick we
+	 * surface the landing view itself — the user picks a server from the list,
+	 * and selecting it runs `pocketshell.connect` (connect → reveal sessions).
+	 * Focusing is best-effort: if the view is not yet registered (early in
+	 * activation), the failure is swallowed (the landing is still shown by
+	 * `focusPocketShellViewOnStartup` in `extension.ts`).
 	 */
-	private async pickAndConnect(hosts: StartupHost[]): Promise<void> {
-		const items = hosts.map((host) => ({
-			label: host.name || host.hostname,
-			description: `${host.username}@${host.hostname}:${host.port}`,
-			hostId: host.id,
-		}));
-
-		const picked = await vscode.window.showQuickPick(items, {
-			placeHolder: vscode.l10n.t('Select a host to connect to'),
-		});
-		if (!picked) {
-			return;
+	private async focusLanding(): Promise<void> {
+		try {
+			await vscode.commands.executeCommand('pocketshell.hosts.focus');
+		} catch {
+			// Landing view focus is best-effort; the sidebar is already
+			// focused by extension.ts's focusPocketShellViewOnStartup().
 		}
-		await vscode.commands.executeCommand('pocketshell.surface.connect', picked.hostId);
 	}
 
 	/** Narrow the richer Host type to the structural subset the decider needs. */
