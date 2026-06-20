@@ -55,14 +55,69 @@ export function registerConversation(
 	const disposables: vscode.Disposable[] = [];
 	const panels = new Map<string, ConversationPanelEntry>();
 
+	/**
+	 * Open (or focus) the per-session Conversation editor tab for an already-
+	 * attributed agent session. Shared by the active-pane command (which
+	 * attributes via the tmux-ui hint) and the surface open-for-session command
+	 * (which attributes via the surface registry's pty). Keyed on
+	 * `${hostId}:${agentType}:${sessionId}` so each session gets its own tab and
+	 * re-opening focuses the existing one (#106 per-session tab).
+	 */
+	async function openConversationForSession(
+		hostId: number,
+		sessionRef: { id: string; agentType: AgentType },
+		viewColumn?: vscode.ViewColumn,
+	): Promise<void> {
+		const key = `${hostId}:${sessionRef.agentType}:${sessionRef.id}`;
+		const existing = panels.get(key);
+		if (existing) {
+			existing.panel.reveal(viewColumn ?? vscode.ViewColumn.Active);
+			return;
+		}
+
+		const connection = await getOrConnect(service, hostId);
+		if (!connection) {
+			return;
+		}
+
+		try {
+			const reader = new SessionReader(connection);
+			const session = await reader.readSession(sessionRef.id, sessionRef.agentType);
+			const model = createConversationPanelModel(session);
+			const panel = vscode.window.createWebviewPanel(
+				'pocketshell.conversation',
+				vscode.l10n.t('Conversation: {0}', model.title),
+				viewColumn ?? vscode.ViewColumn.Active,
+				{
+					enableScripts: true,
+					retainContextWhenHidden: true,
+				},
+			);
+			const messenger = new AgentMessenger(connection);
+			const queue = new ReplyQueue(messenger);
+			const entry: ConversationPanelEntry = { key, hostId, panel, model, reader, messenger, queue, nonce: createNonce() };
+			panels.set(key, entry);
+			wireQueue(entry);
+			wirePanelMessages(panel, entry);
+			renderPanel(entry);
+
+			entry.stopTail = await startTail(reader, sessionRef.id, sessionRef.agentType, entry);
+			panel.onDidDispose(() => {
+				clearScheduledSearchRender(entry);
+				clearScheduledQueueRender(entry);
+				entry.stopTail?.();
+				reader.dispose();
+				panels.delete(key);
+			}, null, disposables);
+		} catch (err) {
+			void vscode.window.showErrorMessage(vscode.l10n.t('Failed to open conversation: {0}', String(err)));
+		}
+	}
+
 	disposables.push(
 		vscode.commands.registerCommand('pocketshell.conversation.openActivePane', async (element?: unknown) => {
 			const hostId = await resolveHostId(service, element, { connectedOnly: true });
 			if (hostId === undefined) {
-				return;
-			}
-			const connection = await getOrConnect(service, hostId);
-			if (!connection) {
 				return;
 			}
 
@@ -75,45 +130,24 @@ export function registerConversation(
 				return;
 			}
 
-			const key = `${hostId}:${sessionRef.agentType}:${sessionRef.id}`;
-			const existing = panels.get(key);
-			if (existing) {
-				existing.panel.reveal(vscode.ViewColumn.Active);
+			await openConversationForSession(hostId, sessionRef);
+		}),
+	);
+
+	/**
+	 * Open the Conversation tab for an explicitly-resolved session identity
+	 * `{hostId, agentType, sessionId}` — the path used by the surface layer
+	 * (#106), which attributes the session via the surface registry's pty and
+	 * then hands the resolved ref here (skipping the tmux-ui active-pane hint).
+	 */
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.conversation.openForSession', async (arg?: unknown) => {
+			const ref = resolveSessionRefArgs(arg);
+			if (!ref) {
 				return;
 			}
-
-			try {
-				const reader = new SessionReader(connection);
-				const session = await reader.readSession(sessionRef.id, sessionRef.agentType);
-				const model = createConversationPanelModel(session);
-				const panel = vscode.window.createWebviewPanel(
-					'pocketshell.conversation',
-					vscode.l10n.t('Conversation: {0}', model.title),
-					vscode.ViewColumn.Active,
-					{
-						enableScripts: true,
-						retainContextWhenHidden: true,
-					},
-				);
-				const messenger = new AgentMessenger(connection);
-				const queue = new ReplyQueue(messenger);
-				const entry: ConversationPanelEntry = { key, hostId, panel, model, reader, messenger, queue, nonce: createNonce() };
-				panels.set(key, entry);
-				wireQueue(entry);
-				wirePanelMessages(panel, entry);
-				renderPanel(entry);
-
-				entry.stopTail = await startTail(reader, sessionRef.id, sessionRef.agentType, entry);
-				panel.onDidDispose(() => {
-					clearScheduledSearchRender(entry);
-					clearScheduledQueueRender(entry);
-					entry.stopTail?.();
-					reader.dispose();
-					panels.delete(key);
-				}, null, disposables);
-			} catch (err) {
-				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to open conversation: {0}', String(err)));
-			}
+			const viewColumn = resolveViewColumnArg(arg);
+			await openConversationForSession(ref.hostId, { id: ref.sessionId, agentType: ref.agentType }, viewColumn);
 		}),
 	);
 
@@ -161,6 +195,55 @@ async function resolveAttributedSession(
 		return undefined;
 	}
 	void vscode.window.showWarningMessage(vscode.l10n.t('Multiple agent conversations match the active tmux pane. Select the pane running the active agent session and try again.'));
+	return undefined;
+}
+
+/**
+ * Parse the `{hostId, agentType, sessionId}` argument for
+ * `pocketshell.conversation.openForSession`. Accepts a plain object or a
+ * canonical-tree-style node carrying those fields. Returns undefined (no error)
+ * for a malformed arg so the surface layer can fall back gracefully.
+ */
+export function resolveSessionRefArgs(
+	arg: unknown,
+): { hostId: number; agentType: AgentType; sessionId: string } | undefined {
+	if (!arg || typeof arg !== 'object') {
+		return undefined;
+	}
+	const value = arg as Record<string, unknown>;
+	const hostId = typeof value.hostId === 'number' ? value.hostId : undefined;
+	const agentType = typeof value.agentType === 'string' ? (value.agentType as AgentType) : undefined;
+	const sessionId = typeof value.sessionId === 'string' ? value.sessionId : undefined;
+	if (hostId === undefined || agentType === undefined || sessionId === undefined) {
+		return undefined;
+	}
+	return { hostId, agentType, sessionId };
+}
+
+/**
+ * Parse an optional `viewColumn` from the open-for-session argument. The
+ * conversation-default controller passes `ViewColumn.Beside` (-2) so the
+ * conversation opens as a sibling without stealing focus from the terminal
+ * (#106: never yank a user mid-session). Accepts the two symbolic columns
+ * (`Active` = -1, `Beside` = -2) and the concrete columns `One`..`Nine` (1..9).
+ * Returns undefined (→ `ViewColumn.Active`) by default.
+ */
+export function resolveViewColumnArg(arg: unknown): vscode.ViewColumn | undefined {
+	if (!arg || typeof arg !== 'object') {
+		return undefined;
+	}
+	const value = (arg as Record<string, unknown>).viewColumn;
+	if (typeof value !== 'number') {
+		return undefined;
+	}
+	// Symbolic columns (negative) or a concrete editor column (One..Nine).
+	if (
+		value === vscode.ViewColumn.Active
+		|| value === vscode.ViewColumn.Beside
+		|| (value >= vscode.ViewColumn.One && value <= vscode.ViewColumn.Nine)
+	) {
+		return value as vscode.ViewColumn;
+	}
 	return undefined;
 }
 

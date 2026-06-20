@@ -28,8 +28,7 @@ export const TMUX_UI_FEATURE: FeatureRegistration = {
 		],
 		menus: {
 			'view/item/context': [
-				{ command: 'pocketshell.tmux-ui.detectPortsTreePane', when: 'view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)', group: '1_pane' },
-				{ command: 'pocketshell.tmux-ui.browseFiles', when: 'view == pocketshell.tmuxSessions && (viewItem == tmuxUiSession || viewItem == tmuxUiWindow || viewItem == tmuxUiPane)', group: '2_session' },
+				{ command: 'pocketshell.tmux-ui.detectPortsActivePane', when: 'view == pocketshell.sessions && viewItem == pocketshellSession', group: '1_pane@3' },
 			],
 			'terminal/context': [
 				{ command: 'pocketshell.tmux-ui.detectPortsActivePane', group: 'pocketshell_ports' },

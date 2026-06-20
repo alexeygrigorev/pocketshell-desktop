@@ -14,7 +14,7 @@ export const CONVERSATION_FEATURE: FeatureRegistration = {
 		],
 		menus: {
 			'view/item/context': [
-				{ command: 'pocketshell.conversation.openActivePane', when: 'view == pocketshell.tmuxSessions', group: '2_session' },
+				{ command: 'pocketshell.conversation.openActivePane', when: 'view == pocketshell.sessions && viewItem == pocketshellSession', group: '0_conversation@1' },
 			],
 			'terminal/context': [
 				{ command: 'pocketshell.conversation.openActivePane', group: 'pocketshell_conversation' },

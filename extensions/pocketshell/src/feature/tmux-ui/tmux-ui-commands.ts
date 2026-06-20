@@ -40,7 +40,6 @@ import {
 } from '../../backend/tmux-ui/restore-state';
 import { TmuxSessionPseudoterminal } from './tmux-session-terminal';
 import { TmuxSessionRegistry, type RegisteredTmuxSession } from './tmux-session-registry';
-import { TmuxTreeProvider } from './tmux-tree-provider';
 import { getKillTargetFromTmuxTreeNode, type TmuxTreeNode, type TmuxTreePaneNode, type TmuxTreeSessionNode, type TmuxTreeWindowNode } from '../../backend/tmux-ui/tree-model';
 import type { TmuxPaneInfo, TmuxSessionInfo, TmuxWindowInfo } from '../../backend/tmux-ui/types';
 
@@ -92,9 +91,6 @@ export function registerTmuxUi(
 	// driven by the surface SessionTerminalRegistry — see surface-commands.ts).
 	// This tmux-ui registry still backs the open-session/select-pane/etc. commands
 	// and their restore-state machinery; only the separate sidebar view was removed.
-	// treeProvider is retained for the refresh-tree command (a no-op now that no
-	// sidebar view consumes it, but harmless and keeps the command path intact).
-	const treeProvider = new TmuxTreeProvider(registry);
 	disposables.push(registry);
 	const restoreStore = new TmuxRestoreStore(ctx);
 	const attributionService = new ConversationAttributionService();
@@ -236,7 +232,6 @@ export function registerTmuxUi(
 	disposables.push(
 		vscode.commands.registerCommand('pocketshell.tmux-ui.refreshTree', async () => {
 			await Promise.all(registry.entries().map((entry) => entry.pty.refreshState()));
-			treeProvider.refresh();
 		}),
 		vscode.commands.registerCommand('pocketshell.tmux-ui.selectPane', async (element?: unknown) => {
 			const target = await resolvePaneTarget(registry, element);

@@ -26,13 +26,13 @@ export const SNIPPETS_FEATURE: FeatureRegistration = {
 			'view/item/context': [
 				{
 					command: 'pocketshell.snippets.insertTerminal',
-					when: 'view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)',
-					group: '1_pane',
+					when: 'view == pocketshell.sessions && viewItem == pocketshellSession',
+					group: '1_pane@1',
 				},
 				{
 					command: 'pocketshell.snippets.openComposer',
-					when: 'view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)',
-					group: '1_pane',
+					when: 'view == pocketshell.sessions && viewItem == pocketshellSession',
+					group: '1_pane@2',
 				},
 			],
 		},

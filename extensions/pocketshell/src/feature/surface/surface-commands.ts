@@ -11,6 +11,8 @@ import { TmuxSessionPseudoterminal } from '../tmux-ui/tmux-session-terminal';
 import { tmuxSessionNameForHost } from '../../backend/terminal/session-terminal-map';
 import { SessionTerminalRegistry } from './session-terminal-registry';
 import { CanonicalSessionTreeProvider } from './canonical-session-tree-provider';
+import { SessionConversationDefaultController } from './session-conversation-default-controller';
+import { attributeSurfaceSession } from './surface-attribution';
 
 /**
  * Terminal-surface commands.
@@ -206,6 +208,116 @@ export function registerSurface(
 			registry.remove(target.hostId, target.sessionName);
 		}),
 	);
+
+	// -------------------------------------------------------------------------
+	// pocketshell.session.openConversation (#106) — open THIS session's
+	// Conversation editor tab. Resolves (hostId, sessionName) from a canonical
+	// tree node (or args), focuses that session's terminal so the user is
+	// oriented (never yanked away), attributes the active pane via the surface
+	// registry's pty, and opens the per-session Conversation WebviewPanel as a
+	// sibling editor tab. Switch terminal ↔ conversation via normal editor tabs.
+	// -------------------------------------------------------------------------
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.session.openConversation', async (arg?: unknown, sessionName?: string) => {
+			const target = resolveSessionTarget(arg, sessionName);
+			if (!target) {
+				return;
+			}
+			const entry = registry.get(target.hostId, target.sessionName);
+			if (!entry) {
+				return;
+			}
+			// Focus the session's terminal first so the user sees which session
+			// the conversation belongs to (mirrors the app's terminal↔tab switch).
+			entry.terminal.show(true);
+
+			const pty = registry.getPty(target.hostId, entry.sessionName);
+			const connection = pty?.getConnection();
+			if (!pty || !connection) {
+				void vscode.window.showWarningMessage(vscode.l10n.t('Connect to the host before opening the conversation.'));
+				return;
+			}
+			const ref = await attributeSurfaceSession(pty, connection);
+			if (!ref) {
+				void vscode.window.showInformationMessage(vscode.l10n.t('No agent conversation was detected for this session. The terminal is shown.'));
+				return;
+			}
+			// Open beside the terminal (not over it) so a right-click never yanks the
+			// user off the terminal mid-session (#106: never yank a user).
+			await vscode.commands.executeCommand('pocketshell.conversation.openForSession', {
+				hostId: target.hostId,
+				agentType: ref.agentType,
+				sessionId: ref.id,
+				viewColumn: vscode.ViewColumn.Beside,
+			});
+		}),
+	);
+
+	// -------------------------------------------------------------------------
+	// pocketshell.session.openPromptComposer (#106) — open the Prompt Composer
+	// scoped to THIS session's agent. Mirrors the app: the composer sends text
+	// to the session's pane via `tmux send-keys`. Resolves (hostId, sessionName)
+	// from a canonical tree node (or args), focuses the terminal, then opens the
+	// composer. When an agent is detected, the composer targets that agent
+	// session; otherwise it falls back to the pane target (raw send-keys).
+	// -------------------------------------------------------------------------
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.session.openPromptComposer', async (arg?: unknown, sessionName?: string) => {
+			const target = resolveSessionTarget(arg, sessionName);
+			if (!target) {
+				return;
+			}
+			const entry = registry.get(target.hostId, target.sessionName);
+			if (!entry) {
+				return;
+			}
+			entry.terminal.show(true);
+			const pty = registry.getPty(target.hostId, entry.sessionName);
+			const connection = pty?.getConnection();
+			if (!pty || !connection) {
+				void vscode.window.showWarningMessage(vscode.l10n.t('Connect to the host before opening the prompt composer.'));
+				return;
+			}
+			const metadata = pty.getActivePaneMetadata();
+			const paneId = metadata?.id;
+			const ref = await attributeSurfaceSession(pty, connection);
+			if (ref) {
+				// Agent session: open the composer scoped to the attributed agent.
+				await vscode.commands.executeCommand('pocketshell.promptComposer.open', {
+					target: {
+						kind: 'agent',
+						hostId: target.hostId,
+						agentType: ref.agentType,
+						sessionId: ref.id,
+						label: `${ref.agentType}: ${ref.id}`,
+						panelKey: `${target.hostId}:${ref.agentType}:${ref.id}`,
+					},
+				});
+				return;
+			}
+			// No agent detected: open the composer targeting the raw pane so the
+			// user can still send-keys into the session's tmux pane.
+			await vscode.commands.executeCommand('pocketshell.promptComposer.open', {
+				target: {
+					kind: 'pane',
+					hostId: target.hostId,
+					paneId,
+					label: `${entry.hostLabel}: ${entry.sessionName}${paneId ? ` ${paneId}` : ''}`,
+				},
+			});
+		}),
+	);
+
+	// -------------------------------------------------------------------------
+	// Conversation-default for agent sessions (#106, app §4 line 75): when a
+	// session terminal connects, asynchronously probe for an agent; if one is
+	// detected AND the user has not previously chosen Terminal for this session,
+	// open the Conversation tab as a sibling. Per-session remembered choice wins;
+	// never yanks a user mid-session off the terminal (the terminal stays
+	// focused; the conversation opens beside it, not over it).
+	// -------------------------------------------------------------------------
+	const conversationDefaultController = new SessionConversationDefaultController(ctx, registry, service);
+	disposables.push(conversationDefaultController);
 
 	// When the extension deactivates, the registry disposal closes all tabs.
 	ctx.subscriptions.push(registry);

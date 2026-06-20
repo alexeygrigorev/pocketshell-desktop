@@ -15,8 +15,8 @@ export const PROMPT_COMPOSER_FEATURE: FeatureRegistration = {
 			'view/item/context': [
 				{
 					command: 'pocketshell.promptComposer.open',
-					when: 'view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)',
-					group: '1_pane',
+					when: 'view == pocketshell.sessions && viewItem == pocketshellSession',
+					group: '0_conversation@2',
 				},
 			],
 			'terminal/context': [

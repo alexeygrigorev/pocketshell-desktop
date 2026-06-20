@@ -91,7 +91,17 @@ export class CanonicalSessionTreeProvider implements vscode.TreeDataProvider<Can
   }
 }
 
-/** A node in the canonical session tree: a host group or a session leaf. */
+/**
+ * A node in the canonical session tree: a host group or a session leaf.
+ *
+ * The session leaf carries the (hostId, sessionName, hostLabel) identity both
+ * nested under `entry` (consumed by the surface focus/close commands) AND as
+ * top-level passthrough fields. The top-level fields let the shared resolvers
+ * in {@link resolveHostId} (host-picking.ts) and the tmux-ui/conversation/
+ * prompt-composer commands resolve the session directly from the tree node
+ * when it is passed as the command `element` (e.g. via a right-click menu) —
+ * without those commands needing to know the canonical-tree node shape.
+ */
 export type CanonicalSessionNode =
   | {
       kind: 'host';
@@ -102,6 +112,12 @@ export type CanonicalSessionNode =
   | {
       kind: 'session';
       entry: SessionTerminalEntry<vscode.Terminal>;
+      /** Stable SSH host id this session belongs to (mirrors entry.hostId). */
+      hostId: number;
+      /** tmux session name backing this terminal (mirrors entry.sessionName). */
+      sessionName: string;
+      /** Display label for the host (mirrors entry.hostLabel). */
+      hostLabel: string;
       /** Working directory if known from the pty's live snapshot, else undefined. */
       cwd?: string;
     };
@@ -110,7 +126,14 @@ function toSessionNode(
   entry: SessionTerminalEntry<vscode.Terminal>,
   registry: SessionTerminalRegistry,
 ): CanonicalSessionNode {
-  return { kind: 'session', entry, cwd: cwdForEntry(registry, entry) };
+  return {
+    kind: 'session',
+    entry,
+    hostId: entry.hostId,
+    sessionName: entry.sessionName,
+    hostLabel: entry.hostLabel,
+    cwd: cwdForEntry(registry, entry),
+  };
 }
 
 /**

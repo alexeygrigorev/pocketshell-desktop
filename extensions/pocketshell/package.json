@@ -715,6 +715,24 @@
 				"category": "PocketShell",
 				"icon": "$(trash)"
 			},
+			{
+				"command": "pocketshell.session.openConversation",
+				"title": "Sessions: Open Conversation Tab",
+				"category": "PocketShell",
+				"icon": "$(comment-discussion)"
+			},
+			{
+				"command": "pocketshell.session.openPromptComposer",
+				"title": "Sessions: Open Prompt Composer",
+				"category": "PocketShell",
+				"icon": "$(comment-add)"
+			},
+			{
+				"command": "pocketshell.conversation.openForSession",
+				"title": "Conversation: Open for Session",
+				"category": "PocketShell",
+				"icon": "$(comment-discussion)"
+			},
 			{ "command": "pocketshell.settingsView.open", "title": "PocketShell: Open Settings View", "category": "PocketShell", "icon": "$(gear)" },
 			{ "command": "pocketshell.settingsView.refresh", "title": "Settings View: Refresh", "category": "PocketShell", "icon": "$(refresh)" },
 			{ "command": "pocketshell.update.check", "title": "Update: Check for Extension Update", "category": "PocketShell", "icon": "$(refresh)" },
@@ -785,92 +803,32 @@
 					"group": "2_usage"
 				},
 				{
-					"command": "pocketshell.tmux-ui.selectPane",
-					"when": "view == pocketshell.tmuxSessions && viewItem == tmuxUiPane",
-					"group": "inline"
+					"command": "pocketshell.session.openConversation",
+					"when": "view == pocketshell.sessions && viewItem == pocketshellSession",
+					"group": "0_conversation@1"
 				},
 				{
-					"command": "pocketshell.tmux-ui.newWindow",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiRoot || viewItem == tmuxUiSession || viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "0_create"
-				},
-				{
-					"command": "pocketshell.tmux-ui.splitTreePane",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "0_create"
-				},
-				{
-					"command": "pocketshell.tmux-ui.captureTreePane",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "1_pane"
-				},
-				{
-					"command": "pocketshell.tmux-ui.detectPortsTreePane",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "1_pane"
-				},
-				{
-					"command": "pocketshell.tmux-ui.sendTextToPane",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "1_pane"
-				},
-				{
-					"command": "pocketshell.promptComposer.open",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "1_pane"
+					"command": "pocketshell.session.openPromptComposer",
+					"when": "view == pocketshell.sessions && viewItem == pocketshellSession",
+					"group": "0_conversation@2"
 				},
 				{
 					"command": "pocketshell.snippets.insertTerminal",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "1_pane"
+					"when": "view == pocketshell.sessions && viewItem == pocketshellSession",
+					"group": "1_pane@1"
 				},
 				{
 					"command": "pocketshell.snippets.openComposer",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "1_pane"
+					"when": "view == pocketshell.sessions && viewItem == pocketshellSession",
+					"group": "1_pane@2"
 				},
 				{
-					"command": "pocketshell.tmux-ui.sendKeysToPane",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "1_pane"
-				},
-				{
-					"command": "pocketshell.tmux-ui.resizeTreePane",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "1_pane"
-				},
-				{
-					"command": "pocketshell.tmux-ui.renameTreeItem",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiSession || viewItem == tmuxUiWindow)",
-					"group": "1_manage"
-				},
-				{
-					"command": "pocketshell.tmux-ui.killTreeItem",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiSession || viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "1_manage"
-				},
-				{
-					"command": "pocketshell.tmux-ui.detachTreeSession",
-					"when": "view == pocketshell.tmuxSessions",
-					"group": "2_session"
-				},
-				{
-					"command": "pocketshell.conversation.openActivePane",
-					"when": "view == pocketshell.tmuxSessions",
-					"group": "2_session"
-				},
-				{
-					"command": "pocketshell.tmux-ui.browseFiles",
-					"when": "view == pocketshell.tmuxSessions && (viewItem == tmuxUiSession || viewItem == tmuxUiWindow || viewItem == tmuxUiPane)",
-					"group": "2_session"
+					"command": "pocketshell.tmux-ui.detectPortsActivePane",
+					"when": "view == pocketshell.sessions && viewItem == pocketshellSession",
+					"group": "1_pane@3"
 				}
 			],
 			"view/title": [
-				{
-					"command": "pocketshell.tmux-ui.refreshTree",
-					"when": "view == pocketshell.tmuxSessions",
-					"group": "navigation"
-				},
 				{
 					"command": "pocketshell.surface.openSession",
 					"when": "view == pocketshell.sessions",
