@@ -237,6 +237,12 @@
 				"icon": "$(symbol-variable)"
 			},
 			{
+				"command": "pocketshell.env.openPanel",
+				"title": "Env: Open Panel",
+				"category": "PocketShell",
+				"icon": "$(symbol-variable)"
+			},
+			{
 				"command": "pocketshell.env.set",
 				"title": "Env: Set",
 				"category": "PocketShell"
@@ -263,14 +269,19 @@
 			},
 			{
 				"command": "pocketshell.usage.show",
-				"title": "Usage: Show",
+				"title": "Usage: Show Host",
 				"category": "PocketShell"
 			},
 			{
-				"command": "pocketshell.usage.panel",
-				"title": "Usage: Show Panel",
+				"command": "pocketshell.usage.openPanel",
+				"title": "Usage: Open Panel",
 				"category": "PocketShell",
 				"icon": "$(graph)"
+			},
+			{
+				"command": "pocketshell.usage.panel",
+				"title": "Usage: Show",
+				"category": "PocketShell"
 			},
 			{
 				"command": "pocketshell.usage.refresh",
@@ -281,6 +292,11 @@
 			{
 				"command": "pocketshell.usage.provider",
 				"title": "Usage: By Provider",
+				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.usage.output",
+				"title": "Usage: Show as Text",
 				"category": "PocketShell"
 			},
 			{
@@ -793,7 +809,7 @@
 					"group": "1_manage"
 				},
 				{
-					"command": "pocketshell.usage.show",
+					"command": "pocketshell.usage.openPanel",
 					"when": "view == pocketshell.hosts",
 					"group": "2_usage"
 				},
@@ -801,6 +817,11 @@
 					"command": "pocketshell.usage.refresh",
 					"when": "view == pocketshell.hosts",
 					"group": "2_usage"
+				},
+				{
+					"command": "pocketshell.env.openPanel",
+					"when": "view == pocketshell.hosts",
+					"group": "3_env"
 				},
 				{
 					"command": "pocketshell.session.openConversation",
@@ -857,7 +878,7 @@
 					"group": "pocketshell_snippets"
 				},
 				{
-					"command": "pocketshell.usage.panel",
+					"command": "pocketshell.usage.openPanel",
 					"group": "pocketshell_usage"
 				},
 				{
