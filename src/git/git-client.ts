@@ -11,10 +11,11 @@ import type {
   GitStatus,
   GitCommit,
   GitBranch,
+  GitWorktree,
   GitPullResult,
   GitBlameLine,
 } from './types';
-import { parseStatus, parseLog, parseBranches, parseBlame } from './status-parser';
+import { parseStatus, parseLog, parseBranches, parseWorktree, parseBlame } from './status-parser';
 
 // ---------------------------------------------------------------------------
 // Format constants for git commands
@@ -128,6 +129,32 @@ export class GitClient {
       throwGitCommandError('git branch', result.stderr);
     }
     return parseBranches(result.stdout);
+  }
+
+  /** List worktrees (`git worktree list --porcelain`). */
+  async worktree(cwd: string): Promise<GitWorktree[]> {
+    const result = await this.exec('git worktree list --porcelain', cwd);
+    if (result.exitCode !== 0) {
+      throwGitCommandError('git worktree', result.stderr);
+    }
+    return parseWorktree(result.stdout);
+  }
+
+  /**
+   * Get the fetch URL of a remote (default `origin`). Returns the trimmed URL
+   * or undefined if the remote is not configured. Used by the git-history panel
+   * to detect a GitHub remote for the "Open on GitHub" action.
+   */
+  async remoteUrl(cwd: string, remote: string = 'origin'): Promise<string | undefined> {
+    const result = await this.exec(
+      `git remote get-url ${quote(remote)}`,
+      cwd,
+    );
+    if (result.exitCode !== 0) {
+      return undefined;
+    }
+    const url = result.stdout.trim();
+    return url || undefined;
   }
 
   /** Get the current branch name. */

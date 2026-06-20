@@ -4,14 +4,39 @@ import type { ExecResult, SshConnection } from '../../../src/ssh/connection/ssh-
 
 const vscodeMock = vi.hoisted(() => {
   const commandHandlers = new Map<string, (...args: unknown[]) => unknown>();
+  const panels: Array<{
+    title: string;
+    webview: { html: string; cspSource: string; onDidReceiveMessage: ReturnType<typeof vi.fn> };
+    onDidDispose: ReturnType<typeof vi.fn>;
+    reveal: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+  }> = [];
   return {
     commandHandlers,
+    createdPanels: panels,
     createOutputChannel: vi.fn(() => ({
       appendLine: vi.fn(),
       clear: vi.fn(),
       show: vi.fn(),
       dispose: vi.fn(),
     })),
+    createWebviewPanel: vi.fn((_viewType: string, title: string) => {
+      const panel = {
+        title,
+        webview: {
+          html: '',
+          cspSource: 'https://localhost',
+          onDidReceiveMessage: vi.fn(),
+        },
+        onDidDispose: vi.fn(),
+        reveal: vi.fn(),
+        dispose: vi.fn(),
+      };
+      panels.push(panel);
+      return panel;
+    }),
+    openExternal: vi.fn(async () => true),
+    Uri: { parse: (url: string) => ({ toString: () => url }) },
     executeCommand: vi.fn(),
     registerCommand: vi.fn((command: string, handler: (...args: unknown[]) => unknown) => {
       commandHandlers.set(command, handler);
@@ -30,12 +55,18 @@ vi.mock('vscode', () => ({
     executeCommand: vscodeMock.executeCommand,
     registerCommand: vscodeMock.registerCommand,
   },
+  env: {
+    openExternal: vscodeMock.openExternal,
+  },
+  ViewColumn: { Active: 1 },
+  Uri: vscodeMock.Uri,
   l10n: {
     t: (message: string, ...args: string[]) =>
       args.reduce((text, arg, index) => text.replace(`{${index}}`, arg), message),
   },
   window: {
     createOutputChannel: vscodeMock.createOutputChannel,
+    createWebviewPanel: vscodeMock.createWebviewPanel,
     showErrorMessage: vscodeMock.showErrorMessage,
     showInformationMessage: vscodeMock.showInformationMessage,
     showInputBox: vscodeMock.showInputBox,
@@ -48,6 +79,9 @@ describe('git commands', () => {
   beforeEach(() => {
     vscodeMock.commandHandlers.clear();
     vscodeMock.createOutputChannel.mockClear();
+    vscodeMock.createWebviewPanel.mockClear();
+    vscodeMock.createdPanels.length = 0;
+    vscodeMock.openExternal.mockClear();
     vscodeMock.executeCommand.mockClear();
     vscodeMock.registerCommand.mockClear();
     vscodeMock.showErrorMessage.mockClear();
@@ -162,7 +196,7 @@ describe('git commands', () => {
     });
   });
 
-  it('renders commit history with changed-file summaries', async () => {
+  it('renders the commit timeline in the Git History webview panel', async () => {
     const commands: string[] = [];
     const conn = mockConnection(commands, new Map([
       ['git log', {
@@ -184,19 +218,20 @@ describe('git commands', () => {
       path: '/home/alice/git/api',
     });
 
-    const output = vscodeMock.createOutputChannel.mock.results[0].value;
-    const lines = output.appendLine.mock.calls.map((call: string[]) => call[0]);
-    expect(commands[0]).toContain("cd '/home/alice/git/api' && git log");
-    expect(lines).toContain('sh1  2026-01-01  Alice  Ship history');
-    expect(lines).toContain('  +5 -2  src/git.ts');
-    expect(lines).toContain('  binary  assets/logo.png');
-    expect(output.show).toHaveBeenCalledWith(true);
+    // The history command now opens a webview panel (app-parity §6), not the
+    // OutputChannel. The Commit timeline + Overview status are rendered as HTML.
+    expect(vscodeMock.createWebviewPanel).toHaveBeenCalledTimes(1);
+    const panel = vscodeMock.createdPanels[0];
+    expect(panel.webview.html).toContain('Git History');
+    expect(panel.webview.html).toContain('sh1');
+    expect(panel.webview.html).toContain('Ship history');
+    expect(panel.reveal).toHaveBeenCalled();
   });
 
-  it('shows a clear message for non-repo history requests', async () => {
+  it('renders the missing-repo empty state for non-repo history requests', async () => {
     const commands: string[] = [];
     const conn = mockConnection(commands, new Map([
-      ['git log', {
+      ['git status', {
         stdout: '',
         stderr: 'fatal: not a git repository (or any of the parent directories): .git',
         exitCode: 128,
@@ -210,9 +245,12 @@ describe('git commands', () => {
       path: '/tmp/not-repo',
     });
 
-    expect(vscodeMock.showInformationMessage).toHaveBeenCalledWith(
-      'No Git history: /tmp/not-repo is not a Git repository.',
-    );
+    // A non-repo path no longer raises an error dialog; the panel surfaces a
+    // "Not a Git repository." empty state (the parallel fetches swallow the
+    // per-call errors and mark the repo missing).
+    expect(vscodeMock.createWebviewPanel).toHaveBeenCalledTimes(1);
+    const panel = vscodeMock.createdPanels[0];
+    expect(panel.webview.html).toContain('Not a Git repository.');
     expect(vscodeMock.showErrorMessage).not.toHaveBeenCalled();
   });
 });
@@ -238,6 +276,7 @@ function mockConnection(
 function mockService(conn: SshConnection) {
   return {
     getConnection: vi.fn(() => conn),
+    getHost: vi.fn(async () => ({ name: 'host7', hostname: 'host7' })),
     getWatchedFolders: vi.fn(async () => [
       {
         id: 12,

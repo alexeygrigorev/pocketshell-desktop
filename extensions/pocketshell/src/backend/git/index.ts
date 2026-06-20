@@ -7,7 +7,7 @@
 
 export { GitClient, GitNotRepositoryError, isGitNotRepositoryError } from './git-client';
 export { PocketShellRepos } from './pocketshell-repos';
-export { parseStatus, parseLog, parseBranches, parseBlame } from './status-parser';
+export { parseStatus, parseLog, parseBranches, parseWorktree, parseBlame } from './status-parser';
 export type {
   GitExecResult,
   GitStatus,
@@ -15,6 +15,7 @@ export type {
   GitCommit,
   GitCommitFileChange,
   GitBranch,
+  GitWorktree,
   GitPullResult,
   GitBlameLine,
   GitRepoInfo,

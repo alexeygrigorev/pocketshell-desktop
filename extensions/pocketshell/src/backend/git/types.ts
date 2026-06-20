@@ -78,6 +78,30 @@ export interface GitBranch {
 }
 
 // ---------------------------------------------------------------------------
+// Git worktrees
+// ---------------------------------------------------------------------------
+
+/** A worktree entry from `git worktree list --porcelain`. */
+export interface GitWorktree {
+  /** Absolute path to the worktree on the remote host. */
+  path: string;
+  /** HEAD commit hash of the worktree. */
+  head?: string;
+  /** Branch checked out in the worktree (bare `refs/heads/<name>`). */
+  branch?: string;
+  /** True when the worktree is the main one (first listed, marked `main`). */
+  isMain: boolean;
+  /** True for a bare repository worktree. */
+  isBare: boolean;
+  /** True when the worktree is marked locked (`locked` porcelain field). */
+  isLocked: boolean;
+  /** True when the worktree is prunable (`prunable` porcelain field). */
+  isPrunable: boolean;
+  /** Optional reason given after `locked`/`prunable`. */
+  reason?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Git pull
 // ---------------------------------------------------------------------------
 

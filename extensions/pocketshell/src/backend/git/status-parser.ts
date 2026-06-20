@@ -11,6 +11,7 @@ import type {
   GitCommit,
   GitCommitFileChange,
   GitBranch,
+  GitWorktree,
   GitBlameLine,
 } from './types';
 
@@ -320,6 +321,99 @@ export function parseBranches(output: string): GitBranch[] {
   }
 
   return branches;
+}
+
+// ---------------------------------------------------------------------------
+// Worktree parser — git worktree list --porcelain
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse `git worktree list --porcelain` output into GitWorktree[].
+ *
+ * Porcelain format (records separated by blank lines):
+ *   worktree /path/to/main
+ *   HEAD <hash>
+ *   branch refs/heads/<name>
+ *
+ *   worktree /path/to/linked           (may be absent if bare)
+ *   HEAD <hash>
+ *   detached
+ *   locked <reason>
+ *
+ *   bare                                (bare repo entry — no worktree line)
+ *
+ * The first record is the main worktree (unless it is a bare repo, in which
+ * case the first record is the `bare` entry). Flags `locked`/`prunable` may be
+ * followed by an arbitrary reason string on the same line.
+ */
+export function parseWorktree(output: string): GitWorktree[] {
+  const worktrees: GitWorktree[] = [];
+  const trimmed = output.replace(/\s+$/, '');
+  if (!trimmed) {
+    return worktrees;
+  }
+  // Records are separated by one or more blank lines.
+  const records = trimmed.split(/\n\s*\n/);
+
+  for (let index = 0; index < records.length; index++) {
+    const record = records[index];
+    const lines = record.split('\n');
+    let path = '';
+    let head: string | undefined;
+    let branch: string | undefined;
+    let isBare = false;
+    let isLocked = false;
+    let isPrunable = false;
+    let reason: string | undefined;
+    let sawWorktreeLine = false;
+
+    for (const line of lines) {
+      if (line.startsWith('worktree ')) {
+        path = line.slice('worktree '.length);
+        sawWorktreeLine = true;
+      } else if (line.startsWith('HEAD ')) {
+        head = line.slice('HEAD '.length);
+      } else if (line.startsWith('branch ')) {
+        branch = line.slice('branch '.length);
+      } else if (line === 'bare') {
+        isBare = true;
+        // A bare entry has no `worktree` line; its path (if any) comes from a
+        // preceding `worktree` line — but per porcelain spec bare entries are
+        // their own record. Leave path empty if no worktree line was seen.
+      } else if (line === 'detached') {
+        branch = undefined; // detached HEAD — no branch ref
+      } else if (line === 'locked') {
+        isLocked = true;
+      } else if (line.startsWith('locked ')) {
+        isLocked = true;
+        reason = line.slice('locked '.length);
+      } else if (line === 'prunable') {
+        isPrunable = true;
+      } else if (line.startsWith('prunable ')) {
+        isPrunable = true;
+        reason = line.slice('prunable '.length);
+      }
+    }
+
+    // Skip malformed records without a path or a bare marker.
+    if (!sawWorktreeLine && !isBare) {
+      continue;
+    }
+
+    worktrees.push({
+      path,
+      head,
+      branch,
+      // First record is the main worktree (or the bare repo itself).
+      isMain: index === 0,
+      isBare,
+      isLocked,
+      isPrunable,
+      reason,
+    });
+  }
+
+  return worktrees;
 }
 
 // ---------------------------------------------------------------------------

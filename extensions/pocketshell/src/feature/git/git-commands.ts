@@ -4,16 +4,25 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { randomBytes } from 'crypto';
 import type { ConnectionService } from '../../connection-service';
 import { resolveHostId, getOrConnect, resolveTargetPath } from '../../host-picking';
 import { GitClient, PocketShellRepos, isGitNotRepositoryError } from '../../backend/git';
+import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
 import type {
 	GitStatus,
 	GitPullResult,
 	GitCommit,
+	GitBranch,
+	GitWorktree,
 	PocketShellRepoBrowserEntry,
 	PocketShellRepoEntry,
 } from '../../backend/git';
+import {
+	buildGitHistoryPanelModel,
+	renderGitHistoryPanelHtml,
+	type GitHistoryPanelTab,
+} from '../../backend/ui/git-history';
 import type { FeatureDeps } from '../manifest';
 
 type CloneRootPick = vscode.QuickPickItem & {
@@ -213,8 +222,13 @@ export function registerGit(
 	);
 
 	// -------------------------------------------------------------------------
-	// pocketshell.git.history — read: render recent commit history
+	// pocketshell.git.history — read: open the Git History webview panel
 	// -------------------------------------------------------------------------
+	// One rich panel per host — reusing reveals it instead of recreating. The
+	// panel renders the app-parity Overview (repo status / branches / worktrees)
+	// + Commits timeline (app §6). The Issues tab is a deferred follow-up.
+	const historyPanels = new Map<number, GitHistoryPanelEntry>();
+
 	disposables.push(
 		vscode.commands.registerCommand('pocketshell.git.history', async (element?: unknown) => {
 			const hostId = await resolveHostId(service, element, { connectedOnly: true });
@@ -234,22 +248,7 @@ export function registerGit(
 				return;
 			}
 
-			output.clear();
-			try {
-				const commits = await new GitClient(conn).log(repoPath, { maxCount: 25 });
-				renderHistory(output, repoPath, commits);
-				output.show(true);
-			} catch (err) {
-				if (isGitNotRepositoryError(err)) {
-					vscode.window.showInformationMessage(
-						vscode.l10n.t('No Git history: {0} is not a Git repository.', repoPath),
-					);
-					return;
-				}
-				vscode.window.showErrorMessage(
-					vscode.l10n.t('Git history failed: {0}', String(err)),
-				);
-			}
+			await openGitHistoryPanel(service, historyPanels, hostId, repoPath, conn);
 		}),
 	);
 
@@ -287,6 +286,16 @@ export function registerGit(
 			}
 		}),
 	);
+
+	// Clean up all open git-history panels on extension dispose.
+	disposables.push({
+		dispose: () => {
+			for (const entry of historyPanels.values()) {
+				entry.panel.dispose();
+			}
+			historyPanels.clear();
+		},
+	});
 
 	return disposables;
 }
@@ -493,36 +502,6 @@ function renderStatus(
 	output.appendLine('');
 }
 
-/** Render recent commit history to the shared OutputChannel. */
-function renderHistory(
-	output: vscode.OutputChannel,
-	repoPath: string,
-	commits: GitCommit[],
-): void {
-	output.appendLine(`# git history — ${repoPath}`);
-	if (commits.length === 0) {
-		output.appendLine('(no commits)');
-		output.appendLine('');
-		return;
-	}
-	for (const commit of commits) {
-		const date = commit.date ? commit.date.slice(0, 10) : 'unknown-date';
-		output.appendLine(`${commit.shortHash}  ${date}  ${commit.author}  ${commit.subject}`);
-		if (commit.files.length === 0) {
-			output.appendLine('  (no file summary)');
-			continue;
-		}
-		for (const file of commit.files) {
-			const path = file.oldPath ? `${file.oldPath} => ${file.path}` : file.path;
-			const summary = file.binary
-				? 'binary'
-				: `+${file.insertions ?? 0} -${file.deletions ?? 0}`;
-			output.appendLine(`  ${summary}  ${path}`);
-		}
-	}
-	output.appendLine('');
-}
-
 /** Render a GitPullResult summary to the shared OutputChannel. */
 function renderPull(
 	output: vscode.OutputChannel,
@@ -537,4 +516,178 @@ function renderPull(
 		output.appendLine(`  ${p}`);
 	}
 	output.appendLine('');
+}
+
+// ---------------------------------------------------------------------------
+// Git History webview panel (app feature-parity §6: Overview + Commits)
+// ---------------------------------------------------------------------------
+
+interface GitHistoryPanelEntry {
+	panel: vscode.WebviewPanel;
+	nonce: string;
+	hostId: number;
+	repoPath: string;
+	git: GitClient;
+	tab: GitHistoryPanelTab;
+}
+
+interface GitHistoryPanelMessage {
+	action?: 'refresh' | 'switchTab' | 'openGitHub';
+	tab?: GitHistoryPanelTab;
+	url?: string;
+}
+
+async function openGitHistoryPanel(
+	service: ConnectionService,
+	panels: Map<number, GitHistoryPanelEntry>,
+	hostId: number,
+	repoPath: string,
+	conn: SshConnection,
+): Promise<void> {
+	let entry = panels.get(hostId);
+	if (!entry) {
+		const host = await service.getHost(hostId);
+		const hostName = host?.name || host?.hostname || `Host ${hostId}`;
+		const panel = vscode.window.createWebviewPanel(
+			'pocketshell.git-history',
+			vscode.l10n.t('Git History: {0}', hostName),
+			vscode.ViewColumn.Active,
+			{
+				enableScripts: true,
+				retainContextWhenHidden: true,
+			},
+		);
+		entry = {
+			panel,
+			nonce: createNonce(),
+			hostId,
+			repoPath,
+			git: new GitClient(conn),
+			tab: 'overview',
+		};
+		panels.set(hostId, entry);
+
+		// Lesson #20: push webview subscriptions into a Disposable[] and
+		// dispose them in onDidDispose. NEVER pass the panel as Event's 3rd arg.
+		const webviewDisposables: vscode.Disposable[] = [];
+		webviewDisposables.push(
+			panel.webview.onDidReceiveMessage(async (message: GitHistoryPanelMessage) => {
+				await handleGitHistoryPanelMessage(message, service, entry!);
+			}),
+		);
+		panel.onDidDispose(() => {
+			for (const d of webviewDisposables) {
+				d.dispose();
+			}
+			panels.delete(hostId);
+		});
+	}
+	// Re-target the panel if the host's selected repo changed.
+	entry.repoPath = repoPath;
+	await renderGitHistoryPanel(service, entry);
+	entry.panel.reveal(vscode.ViewColumn.Active, true);
+}
+
+async function renderGitHistoryPanel(
+	service: ConnectionService,
+	entry: GitHistoryPanelEntry,
+	status?: { tone: 'info' | 'success' | 'warning' | 'error'; message: string },
+): Promise<void> {
+	let statusData: GitStatus | undefined;
+	let branches: GitBranch[] = [];
+	let worktrees: GitWorktree[] = [];
+	let commits: GitCommit[] = [];
+	let originUrl: string | undefined;
+	let missing = false;
+	try {
+		// `status` drives missing-repo detection: a GitNotRepositoryError from
+		// it marks the repo missing rather than failing the whole panel. The
+		// other sources are non-fatal and resolve to empty on error.
+		statusData = await entry.git.status(entry.repoPath);
+		[branches, worktrees, commits, originUrl] = await Promise.all([
+			entry.git.branches(entry.repoPath).catch(() => [] as GitBranch[]),
+			entry.git.worktree(entry.repoPath).catch(() => [] as GitWorktree[]),
+			entry.git.log(entry.repoPath, { maxCount: 25 }).catch(() => [] as GitCommit[]),
+			entry.git.remoteUrl(entry.repoPath).catch(() => undefined),
+		]);
+	} catch (err) {
+		if (isGitNotRepositoryError(err)) {
+			missing = true;
+		} else {
+			await setGitHistoryPanelError(entry, service, err);
+			return;
+		}
+	}
+
+	const host = await service.getHost(entry.hostId);
+	const hostName = host?.name || host?.hostname || `Host ${entry.hostId}`;
+	const model = buildGitHistoryPanelModel({
+		repoPath: `${hostName}:${entry.repoPath}`,
+		tab: entry.tab,
+		status: statusData,
+		branches,
+		worktrees,
+		commits,
+		originUrl,
+		statusBanner: status?.tone && status.message
+			? { tone: status.tone, message: status.message }
+			: undefined,
+		missing,
+	});
+
+	entry.panel.title = vscode.l10n.t('Git History: {0}', hostName);
+	entry.panel.webview.html = renderGitHistoryPanelHtml(model, {
+		cspSource: entry.panel.webview.cspSource,
+		nonce: entry.nonce,
+	});
+}
+
+async function setGitHistoryPanelError(
+	entry: GitHistoryPanelEntry,
+	service: ConnectionService,
+	err: unknown,
+): Promise<void> {
+	await renderGitHistoryPanel(service, entry, {
+		tone: 'error',
+		message: `Git history failed: ${err instanceof Error ? err.message : String(err)}`,
+	});
+}
+
+async function handleGitHistoryPanelMessage(
+	message: GitHistoryPanelMessage,
+	service: ConnectionService,
+	entry: GitHistoryPanelEntry,
+): Promise<void> {
+	const { action } = message;
+	if (!action) {
+		return;
+	}
+	try {
+		if (action === 'refresh') {
+			await renderGitHistoryPanel(service, entry);
+			return;
+		}
+		if (action === 'switchTab') {
+			if (message.tab) {
+				entry.tab = message.tab;
+			}
+			await renderGitHistoryPanel(service, entry);
+			return;
+		}
+		if (action === 'openGitHub') {
+			if (message.url) {
+				await vscode.env.openExternal(vscode.Uri.parse(message.url));
+			}
+			return;
+		}
+	} catch (err) {
+		await renderGitHistoryPanel(service, entry, {
+			tone: 'error',
+			message: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
+function createNonce(): string {
+	return randomBytes(16).toString('base64');
 }
