@@ -7,10 +7,10 @@ import {
 	ConversationAttributionService,
 	enrichActivePaneConversationContext,
 	enrichConversationSessions,
-	type AgentType,
 	type ConversationAttributionResult,
 } from '../../backend/agents';
 import { SessionReader } from '../../backend/agents/conversation';
+import type { AgentType } from '../../backend/agents/conversation/types';
 import { TmuxSessionPseudoterminal } from '../tmux-ui/tmux-session-terminal';
 
 /**

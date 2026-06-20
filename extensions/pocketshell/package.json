@@ -196,9 +196,16 @@
 				"icon": "$(repo-pull)"
 			},
 			{
+				"command": "pocketshell.jobs.openPanel",
+				"title": "Jobs: Open Panel",
+				"category": "PocketShell",
+				"icon": "$(clock)"
+			},
+			{
 				"command": "pocketshell.jobs.list",
 				"title": "Jobs: List",
-				"category": "PocketShell"
+				"category": "PocketShell",
+				"icon": "$(list-unordered)"
 			},
 			{
 				"command": "pocketshell.jobs.logs",
@@ -251,6 +258,12 @@
 				"command": "pocketshell.env.unset",
 				"title": "Env: Unset",
 				"category": "PocketShell"
+			},
+			{
+				"command": "pocketshell.logs.openPanel",
+				"title": "Logs: Open Panel",
+				"category": "PocketShell",
+				"icon": "$(output)"
 			},
 			{
 				"command": "pocketshell.logs.show",
@@ -822,6 +835,16 @@
 					"command": "pocketshell.env.openPanel",
 					"when": "view == pocketshell.hosts",
 					"group": "3_env"
+				},
+				{
+					"command": "pocketshell.jobs.openPanel",
+					"when": "view == pocketshell.hosts",
+					"group": "4_jobs"
+				},
+				{
+					"command": "pocketshell.logs.openPanel",
+					"when": "view == pocketshell.hosts",
+					"group": "5_logs"
 				},
 				{
 					"command": "pocketshell.session.openConversation",

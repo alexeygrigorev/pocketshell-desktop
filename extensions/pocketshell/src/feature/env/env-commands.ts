@@ -235,15 +235,13 @@ export function registerEnv(
 async function openEnvPanel(
 	service: ConnectionService,
 	panels: Map<string, EnvPanelEntry>,
-	disposables: vscode.Disposable[],
+	_disposables: vscode.Disposable[],
 	deps: FeatureDeps,
 	hostId: number,
 	scope: string,
 	env: EnvClient,
 ): Promise<void> {
 	const key = `${hostId}:${scope}`;
-	const host = await service.getHost(hostId);
-	const hostName = host?.name || host?.hostname || `Host ${hostId}`;
 
 	let entry = panels.get(key);
 	if (!entry) {

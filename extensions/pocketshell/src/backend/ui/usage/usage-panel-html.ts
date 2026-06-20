@@ -12,7 +12,6 @@
 
 import type {
 	UsagePanelState,
-	UsageHostRow,
 	UsageProviderAggregate,
 	UsageHostRowStatus,
 } from './usage-panel-state';
@@ -76,7 +75,6 @@ const BLOCKED_RATIO = 1.0;
 export function buildUsagePanelHtmlModel(state: UsagePanelState): UsagePanelHtmlModel {
 	const now = state.generatedAt;
 	const cards: UsageCardModel[] = state.providerAggregates.map((agg) => aggregateToCard(agg, now));
-	const liveHosts = state.rows.filter((row) => row.status === 'ready' || row.status === 'stale');
 	const silentHosts = state.rows
 		.filter((row) => row.providers.length === 0 && (row.status === 'ready' || row.status === 'stale' || row.status === 'disconnected' || row.status === 'error'))
 		.map((row) => ({

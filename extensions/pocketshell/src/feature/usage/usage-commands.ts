@@ -142,7 +142,7 @@ async function openPanel(
 	service: ConnectionService,
 	getEntry: () => UsagePanelEntry | undefined,
 	setEntry: (entry: UsagePanelEntry | undefined) => void,
-	disposables: vscode.Disposable[],
+	_disposables: vscode.Disposable[],
 	snapshots: Map<number, UsageHostSnapshot>,
 	refreshing: Set<number>,
 	focusHostId?: number,
