@@ -16,6 +16,14 @@ export interface FeatureDeps {
 	refreshTrees: () => void;
 	/** Read the current PocketShell app settings from the shared SettingsStore. */
 	getSettings?: () => Record<string, unknown>;
+	/**
+	 * The surface {@link SessionTerminalRegistry} (canonical-tree sessions), set
+	 * by `registerSurface` when the surface feature activates. Read by the
+	 * tmux-ui detect-ports commands (#108) so they can resolve canonical-tree
+	 * sessions — which live in the surface registry, not the tmux-ui registry.
+	 * Optional: absent when the surface feature is not registered (e.g. tests).
+	 */
+	surfaceSessionRegistry?: unknown;
 	/** Reserved for cross-feature deps filled in later batches (e.g. terminalManager). */
 	[key: string]: unknown;
 }

@@ -40,6 +40,7 @@ import {
 } from '../../backend/tmux-ui/restore-state';
 import { TmuxSessionPseudoterminal } from './tmux-session-terminal';
 import { TmuxSessionRegistry, type RegisteredTmuxSession } from './tmux-session-registry';
+import { resolveSurfacePty, type DetectPortsPtySource, type SurfaceRegistryLookup } from './detect-ports-resolver';
 import { getKillTargetFromTmuxTreeNode, type TmuxTreeNode, type TmuxTreePaneNode, type TmuxTreeSessionNode, type TmuxTreeWindowNode } from '../../backend/tmux-ui/tree-model';
 import type { TmuxPaneInfo, TmuxSessionInfo, TmuxWindowInfo } from '../../backend/tmux-ui/types';
 
@@ -86,6 +87,29 @@ export function registerTmuxUi(
 
 	const output = vscode.window.createOutputChannel('PocketShell tmux-ui');
 	disposables.push(output);
+	// Surface registry (#108): canonical-tree sessions (opened via
+	// surface.connect / surface.openSession) live in the SURFACE
+	// SessionTerminalRegistry, NOT the tmux-ui registry below. The detect-ports
+	// commands fall back to this when their tmux-ui `resolveEntry` returns
+	// undefined (i.e. the active terminal is a canonical-tree session). Without
+	// this fallback, the right-click "Detect Ports" menu is a silent no-op on
+	// canonical-tree sessions. Purely additive — the tmux-ui path still resolves
+	// first. Read from `deps` so there is ONE surface registry shared with
+	// `registerSurface` (constructed in extension.ts).
+	const surfaceRegistry = readSurfaceRegistryFromDeps(deps);
+	/**
+	 * #108 fallback resolver: given a canonical-tree node or the active terminal,
+	 * return the surface-registry `{hostId, pty}` so the detect-ports commands can
+	 * capture/forward against a canonical-tree session. Returns undefined when the
+	 * surface feature is inactive or no surface session matches (callers then
+	 * silently no-op, matching the pre-#108 behavior for non-session elements).
+	 */
+	const resolveSurfaceDetectSource = (element?: unknown): DetectPortsPtySource | undefined => {
+		if (!surfaceRegistry) {
+			return undefined;
+		}
+		return resolveSurfacePty(surfaceRegistry, element, vscode.window.activeTerminal);
+	};
 	const registry = new TmuxSessionRegistry();
 	// The sidebar now shows ONE canonical session tree (pocketshell.sessions,
 	// driven by the surface SessionTerminalRegistry — see surface-commands.ts).
@@ -328,27 +352,57 @@ export function registerTmuxUi(
 			}
 		}),
 		vscode.commands.registerCommand('pocketshell.tmux-ui.detectPortsActivePane', async (element?: unknown) => {
+			// tmux-ui standalone registry first (unchanged pre-#108 behavior).
 			const entry = await resolveEntry(registry, element);
-			if (!entry) {
+			if (entry) {
+				try {
+					const metadata = entry.pty.getActivePaneMetadata();
+					const captured = await entry.pty.captureActivePane();
+					return detectAndForwardPorts(entry, captured, metadata?.id ?? 'active pane');
+				} catch (err) {
+					void vscode.window.showErrorMessage(vscode.l10n.t('Failed to detect ports: {0}', String(err)));
+					return undefined;
+				}
+			}
+			// #108 FALLBACK: canonical-tree sessions live in the SURFACE registry,
+			// invisible to the tmux-ui registry above. Resolve the active terminal
+			// (or the passed canonical-tree node) against the surface registry.
+			const source = resolveSurfaceDetectSource(element);
+			if (!source) {
 				return undefined;
 			}
 			try {
-				const metadata = entry.pty.getActivePaneMetadata();
-				const captured = await entry.pty.captureActivePane();
-				return detectAndForwardPorts(entry, captured, metadata?.id ?? 'active pane');
+				const metadata = source.pty.getActivePaneMetadata();
+				const captured = await source.pty.captureActivePane();
+				return detectAndForwardPorts(source, captured, metadata?.id ?? 'active pane');
 			} catch (err) {
 				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to detect ports: {0}', String(err)));
 				return undefined;
 			}
 		}),
 		vscode.commands.registerCommand('pocketshell.tmux-ui.detectPortsTreePane', async (element?: unknown) => {
+			// tmux-ui standalone registry first (pane-level targeting via snapshot).
 			const target = await resolvePaneTarget(registry, element);
-			if (!target) {
+			if (target) {
+				try {
+					const captured = await target.entry.pty.capturePane(target.pane.id);
+					return detectAndForwardPorts(target.entry, captured, target.pane.id);
+				} catch (err) {
+					void vscode.window.showErrorMessage(vscode.l10n.t('Failed to detect ports: {0}', String(err)));
+					return undefined;
+				}
+			}
+			// #108 FALLBACK: canonical-tree session node → resolve via surface
+			// registry and capture that session's active pane (the canonical tree
+			// does not expose per-pane granularity, so the active pane is used).
+			const source = resolveSurfaceDetectSource(element);
+			if (!source) {
 				return undefined;
 			}
 			try {
-				const captured = await target.entry.pty.capturePane(target.pane.id);
-				return detectAndForwardPorts(target.entry, captured, target.pane.id);
+				const metadata = source.pty.getActivePaneMetadata();
+				const captured = await source.pty.captureActivePane();
+				return detectAndForwardPorts(source, captured, metadata?.id ?? 'active pane');
 			} catch (err) {
 				void vscode.window.showErrorMessage(vscode.l10n.t('Failed to detect ports: {0}', String(err)));
 				return undefined;
@@ -543,12 +597,12 @@ export function registerTmuxUi(
 }
 
 async function detectAndForwardPorts(
-	entry: RegisteredTmuxSession,
+	source: DetectPortsPtySource,
 	paneOutput: string,
 	paneLabel: string,
 ): Promise<unknown> {
 	const paneCandidates = detectPortsFromPaneOutput(paneOutput);
-	const listenerCandidates = await listRemoteListeningPortCandidates(entry);
+	const listenerCandidates = await listRemoteListeningPortCandidates(source);
 	const candidates = mergeDetectedPortCandidates([...paneCandidates, ...listenerCandidates]);
 	if (candidates.length === 0) {
 		void vscode.window.showInformationMessage(vscode.l10n.t('No localhost URLs or interesting listening ports found for {0}.', paneLabel));
@@ -582,7 +636,7 @@ async function detectAndForwardPorts(
 	}
 
 	return vscode.commands.executeCommand('pocketshell.portForwarding.open', {
-		hostId: entry.hostId,
+		hostId: source.hostId,
 		prefill: prefillFromDetectedPort(picked.candidate),
 		start: action.start,
 		openInBrowser: action.openInBrowser,
@@ -590,9 +644,9 @@ async function detectAndForwardPorts(
 	});
 }
 
-async function listRemoteListeningPortCandidates(entry: RegisteredTmuxSession): Promise<DetectedPortCandidate[]> {
+async function listRemoteListeningPortCandidates(source: DetectPortsPtySource): Promise<DetectedPortCandidate[]> {
 	try {
-		const result = await entry.pty.getConnection().exec(buildRemoteListeningPortsCommand(), 5_000);
+		const result = await source.pty.getConnection().exec(buildRemoteListeningPortsCommand(), 5_000);
 		return remoteListeningPortsToCandidates(parseRemoteListeningPorts(`${result.stdout}\n${result.stderr}`));
 	} catch {
 		return [];
@@ -1327,4 +1381,25 @@ function validatePaneSizeInput(value: string): string | undefined {
 	return parsePaneSizeInput(value)
 		? undefined
 		: vscode.l10n.t('Use columns x rows, for example 120x40.');
+}
+
+/**
+ * Read the surface {@link SessionTerminalRegistry} from `deps.surfaceSessionRegistry`
+ * (set in extension.ts and shared with `registerSurface`), narrowed to the
+ * structural {@link SurfaceRegistryLookup} the detect-ports fallback needs.
+ *
+ * Returns undefined when the surface feature is not active or the dep is absent
+ * (e.g. in tests that register only tmux-ui); in that case the detect-ports
+ * commands degrade to the pre-#108 tmux-ui-only behavior.
+ */
+function readSurfaceRegistryFromDeps(deps: FeatureDeps): SurfaceRegistryLookup | undefined {
+	const candidate = deps.surfaceSessionRegistry;
+	if (!candidate || typeof candidate !== 'object') {
+		return undefined;
+	}
+	const maybe = candidate as { list?: unknown; getPty?: unknown };
+	if (typeof maybe.list === 'function' && typeof maybe.getPty === 'function') {
+		return candidate as SurfaceRegistryLookup;
+	}
+	return undefined;
 }

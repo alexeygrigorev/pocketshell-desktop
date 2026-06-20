@@ -43,12 +43,17 @@ import { attributeSurfaceSession } from './surface-attribution';
 export function registerSurface(
 	service: ConnectionService,
 	ctx: vscode.ExtensionContext,
-	_deps: FeatureDeps,
+	deps: FeatureDeps,
 ): vscode.Disposable[] {
 	const disposables: vscode.Disposable[] = [];
 
 	const registry = new SessionTerminalRegistry();
 	disposables.push(registry);
+	// Publish the surface registry into the shared deps so cross-feature callers
+	// (the tmux-ui detect-ports commands, #108) can resolve canonical-tree
+	// sessions. `registerSurface` runs before `registerTmuxUi` (see registry.ts),
+	// so the value is present when the tmux-ui feature reads it.
+	deps.surfaceSessionRegistry = registry;
 
 	// -- Sessions tree view (left panel) -------------------------------------
 	const treeProvider = new CanonicalSessionTreeProvider(registry);
