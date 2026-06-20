@@ -13,6 +13,9 @@ import type {
   GitBranch,
   GitWorktree,
   GitBlameLine,
+  GitHubIssue,
+  GitHubIssueState,
+  GhStatus,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -490,4 +493,145 @@ export function parseBlame(output: string): GitBlameLine[] {
   }
 
   return lines;
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issues parser — `gh issue list --json number,title,state,labels,updatedAt`
+// (app §6 Issues tab — mirrors GitHubIssueParser.kt byte-for-byte in semantics)
+// ---------------------------------------------------------------------------
+
+/** Fallback hint when the gh-status probe can't run at all (app DEFAULT_GH_HINT). */
+export const DEFAULT_GH_HINT =
+  'install gh (https://cli.github.com) and run `gh auth login`';
+
+/** Hint when `pocketshell` (the status helper) itself isn't installed (app POCKETSHELL_MISSING_HINT). */
+export const POCKETSHELL_MISSING_HINT =
+  'install pocketshell + gh on the server, then run `gh auth login`';
+
+/**
+ * Map gh's `state` string (`OPEN` / `CLOSED`, case-insensitive) to the enum.
+ * Anything else → `unknown` (forward-compatible — keeps the row rather than dropping it).
+ */
+function issueStateFromRaw(raw: string | undefined): GitHubIssueState {
+  const upper = raw?.trim().toUpperCase();
+  if (upper === 'OPEN') {
+    return 'open';
+  }
+  if (upper === 'CLOSED') {
+    return 'closed';
+  }
+  return 'unknown';
+}
+
+/**
+ * Parse `gh issue list --json number,title,state,labels,updatedAt` stdout into
+ * `GitHubIssue[]`. Pure — mirrors the app's `GitHubIssueParser.parse`.
+ *
+ * `gh issue list --json` emits a top-level JSON array of issue objects:
+ *
+ *   [{ "number": 649, "title": "...", "state": "OPEN",
+ *      "labels": [{ "name": "enhancement", "color": "a2eeef" }],
+ *      "updatedAt": "2026-06-09T10:11:12Z" }]
+ *
+ * Robustness: malformed/empty/non-array output yields an empty list (never
+ * throws); an individual entry missing a usable `number` (<=0) is skipped so
+ * one bad row never drops the whole listing.
+ */
+export function parseGitHubIssues(raw: string): GitHubIssue[] {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  const out: GitHubIssue[] = [];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const obj = entry as Record<string, unknown>;
+    const number = typeof obj.number === 'number'
+      ? obj.number
+      : Number.parseInt(String(obj.number ?? ''), 10);
+    // gh issue numbers are always >= 1; 0/NaN signals an unusable row we skip.
+    if (!Number.isFinite(number) || number <= 0) {
+      continue;
+    }
+    const title = typeof obj.title === 'string' ? obj.title.trim() : '';
+    const state = issueStateFromRaw(typeof obj.state === 'string' ? obj.state : undefined);
+    const labels = parseIssueLabels(obj.labels);
+    const updatedAtRaw = typeof obj.updatedAt === 'string' ? obj.updatedAt.trim() : '';
+    const updatedAt = updatedAtRaw || undefined;
+    out.push({ number, title, state, labels, updatedAt });
+  }
+  return out;
+}
+
+/**
+ * Pull the `name` string out of each `{ "name": ..., "color": ... }` label
+ * object. Blank / missing names are dropped. Accepts a non-array (the `labels`
+ * field absent) as an empty list. Mirrors the app's `parseLabels`.
+ */
+function parseIssueLabels(labels: unknown): string[] {
+  if (!Array.isArray(labels)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const label of labels) {
+    if (!label || typeof label !== 'object') {
+      continue;
+    }
+    const name = (label as Record<string, unknown>).name;
+    if (typeof name === 'string' && name.trim()) {
+      out.push(name.trim());
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// gh status parser — `pocketshell github status --json`
+// (mirrors GhConfigStatus.parseGhStatus — `{installed, authenticated, account, hint}`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the `pocketshell github status --json` envelope into a `GhStatus`.
+ * Pure — mirrors the app's `parseGhStatus`. Malformed / empty output is treated
+ * as not-configured with `DEFAULT_GH_HINT` so the panel degrades to the
+ * configure-gh prompt rather than erroring.
+ */
+export function parseGhStatus(raw: string): GhStatus {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { installed: false, authenticated: false, hint: DEFAULT_GH_HINT };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return { installed: false, authenticated: false, hint: DEFAULT_GH_HINT };
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return { installed: false, authenticated: false, hint: DEFAULT_GH_HINT };
+  }
+  const obj = parsed as Record<string, unknown>;
+  const installed = obj.installed === true;
+  const authenticated = obj.authenticated === true;
+  if (installed && authenticated) {
+    const account = typeof obj.account === 'string' ? obj.account.trim() : '';
+    return { installed: true, authenticated: true, account: account || undefined };
+  }
+  const hint = typeof obj.hint === 'string' ? obj.hint.trim() : '';
+  return {
+    installed,
+    authenticated,
+    hint: hint || DEFAULT_GH_HINT,
+  };
 }

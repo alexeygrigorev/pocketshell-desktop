@@ -173,3 +173,46 @@ export interface PocketShellRepoBrowserEntry {
   updatedAt?: string;
   remote?: PocketShellRepoRemoteInfo;
 }
+
+// ---------------------------------------------------------------------------
+// GitHub issues (app §6 Issues tab — `gh issue list` / `pocketshell github status`)
+// ---------------------------------------------------------------------------
+
+/** Open / closed state of a GitHub issue. `unknown` is forward-compatible. */
+export type GitHubIssueState = 'open' | 'closed' | 'unknown';
+
+/**
+ * One GitHub issue row from `gh issue list --json number,title,state,labels,updatedAt`.
+ * A read-only projection mirroring the app's `GitHubIssue` data class: enough to
+ * render the row (number, title, state, labels, updatedAt) without pulling the
+ * body or comments.
+ */
+export interface GitHubIssue {
+  /** Issue number, e.g. `649`. Always >= 1 from gh. */
+  number: number;
+  /** Issue title (first line of the row). */
+  title: string;
+  /** Open vs closed — drives the status badge. */
+  state: GitHubIssueState;
+  /** Label names attached to the issue (may be empty). */
+  labels: string[];
+  /** Raw `updatedAt` ISO-8601 timestamp from gh, or undefined when absent. */
+  updatedAt?: string;
+}
+
+/**
+ * gh install/auth status envelope from `pocketshell github status --json`.
+ * Mirrors the app's `GhConfigStatus` sealed interface: `configured === true`
+ * means gh is installed AND authenticated; otherwise `hint` carries the
+ * actionable "configure gh" message.
+ */
+export interface GhStatus {
+  /** True when `gh` is on PATH on the remote host. */
+  installed: boolean;
+  /** True when `gh auth status` exits 0 (a valid token is present). */
+  authenticated: boolean;
+  /** Logged-in GitHub username when authenticated, else undefined. */
+  account?: string;
+  /** Actionable hint when NOT configured, else undefined. */
+  hint?: string;
+}

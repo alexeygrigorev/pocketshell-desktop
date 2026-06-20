@@ -14,8 +14,20 @@ import type {
   GitWorktree,
   GitPullResult,
   GitBlameLine,
+  GitHubIssue,
+  GhStatus,
 } from './types';
-import { parseStatus, parseLog, parseBranches, parseWorktree, parseBlame } from './status-parser';
+import {
+  parseStatus,
+  parseLog,
+  parseBranches,
+  parseWorktree,
+  parseBlame,
+  parseGitHubIssues,
+  parseGhStatus,
+  DEFAULT_GH_HINT,
+  POCKETSHELL_MISSING_HINT,
+} from './status-parser';
 
 // ---------------------------------------------------------------------------
 // Format constants for git commands
@@ -26,6 +38,12 @@ import { parseStatus, parseLog, parseBranches, parseWorktree, parseBlame } from 
  * Fields: hash, shortHash, author, authorEmail, date (ISO), subject, body
  */
 const LOG_FORMAT = 'ENDCOMMIT%x00%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00';
+
+/** Default issue listing cap — keeps a giant project's list manageable (app DEFAULT_ISSUE_LIMIT). */
+const DEFAULT_ISSUE_LIMIT = 50;
+
+/** Hard ceiling on the issue listing limit passed to `gh issue list` (app MAX_ISSUE_LIMIT). */
+const MAX_ISSUE_LIMIT = 200;
 
 // ---------------------------------------------------------------------------
 // GitClient
@@ -223,6 +241,60 @@ export class GitClient {
       throwGitCommandError('git blame', result.stderr);
     }
     return parseBlame(result.stdout);
+  }
+
+  // -------------------------------------------------------------------------
+  // GitHub issues (app §6 Issues tab — `gh issue list` / `pocketshell github status`)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Probe whether the GitHub CLI (`gh`) is installed AND authenticated on the
+   * remote, via the `pocketshell github status --json` helper subcommand (app
+   * §6 / #645). Mirrors the app's `GitHistoryGateway.ghStatus`.
+   *
+   * The helper ALWAYS exits 0 (gh-missing / not-authed are normal reportable
+   * states, not errors) and emits a `{installed, authenticated, account, hint}`
+   * JSON envelope. When `pocketshell` itself is missing (exit 127) we still
+   * return a not-configured status with the pocketshell-missing hint, since the
+   * issue list can't be fetched either way. Any other failure degrades to the
+   * default gh hint so the panel shows the configure-gh prompt, never a crash.
+   */
+  async ghStatus(): Promise<GhStatus> {
+    let result: ExecResult;
+    try {
+      result = await this.connection.exec('pocketshell github status --json');
+    } catch {
+      return { installed: false, authenticated: false, hint: DEFAULT_GH_HINT };
+    }
+    if (result.exitCode === 127) {
+      return { installed: false, authenticated: false, hint: POCKETSHELL_MISSING_HINT };
+    }
+    return parseGhStatus(result.stdout);
+  }
+
+  /**
+   * List the repo's GitHub issues via `gh issue list --json …` over SSH (app
+   * §6 / #649). Mirrors the app's `GitHistoryGateway.listIssues` faithfully:
+   * `cd` into the repo so gh resolves the GitHub repo from the directory's
+   * origin remote, request `number,title,state,labels,updatedAt`, `--state all`,
+   * capped at [limit] (default 50). The caller MUST have already gated on
+   * `ghStatus()` — this assumes gh is usable.
+   *
+   * Throws on non-zero exit (e.g. not a GitHub repo, no network) so the panel
+   * can surface a neutral "issues unavailable" state. A clean empty listing
+   * (`[]`) succeeds with an empty array so the panel shows its empty state.
+   */
+  async listIssues(
+    cwd: string,
+    options: { limit?: number } = {},
+  ): Promise<GitHubIssue[]> {
+    const safeLimit = Math.max(1, Math.min(Math.trunc(options.limit ?? DEFAULT_ISSUE_LIMIT), MAX_ISSUE_LIMIT));
+    const cmd = `gh issue list --json number,title,state,labels,updatedAt --state all --limit ${safeLimit}`;
+    const result = await this.exec(cmd, cwd);
+    if (result.exitCode !== 0) {
+      throwGitCommandError('gh issue list', result.stderr);
+    }
+    return parseGitHubIssues(result.stdout);
   }
 }
 

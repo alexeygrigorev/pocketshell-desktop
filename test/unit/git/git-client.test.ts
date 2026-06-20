@@ -632,4 +632,159 @@ describe('GitClient', () => {
       );
     });
   });
+
+  // -------------------------------------------------------------------------
+  // GitHub issues (app §6 / #649)
+  // -------------------------------------------------------------------------
+
+  describe('ghStatus', () => {
+    it('parses a configured gh status envelope', async () => {
+      const conn = createMockConnection(new Map([
+        ['pocketshell github status', {
+          stdout: JSON.stringify({
+            installed: true,
+            authenticated: true,
+            account: 'alexeygrigorev',
+            hint: null,
+          }),
+          stderr: '',
+          exitCode: 0,
+        }],
+      ]));
+      const status = await new GitClient(conn).ghStatus();
+      expect(status).toEqual({
+        installed: true,
+        authenticated: true,
+        account: 'alexeygrigorev',
+      });
+    });
+
+    it('returns the pocketshell-missing hint when exit code is 127', async () => {
+      const conn = createMockConnection(new Map([
+        ['pocketshell github status', {
+          stdout: '',
+          stderr: 'pocketshell: command not found',
+          exitCode: 127,
+        }],
+      ]));
+      const status = await new GitClient(conn).ghStatus();
+      expect(status.installed).toBe(false);
+      expect(status.authenticated).toBe(false);
+      expect(status.hint).toMatch(/install pocketshell \+ gh on the server/);
+    });
+
+    it('degrades to the default gh hint on a transport error', async () => {
+      const conn: SshConnection = {
+        connected: true,
+        exec: vi.fn(async (): Promise<ExecResult> => {
+          throw new Error('connection dropped');
+        }),
+        shell: vi.fn(),
+        sftp: vi.fn(),
+        disconnect: vi.fn(),
+      } as unknown as SshConnection;
+      const status = await new GitClient(conn).ghStatus();
+      expect(status.installed).toBe(false);
+      expect(status.authenticated).toBe(false);
+      expect(status.hint).toMatch(/install gh/);
+    });
+  });
+
+  describe('listIssues', () => {
+    it('runs gh issue list inside the repo dir and parses the JSON', async () => {
+      const calls: string[] = [];
+      const conn: SshConnection = {
+        connected: true,
+        exec: vi.fn(async (command: string): Promise<ExecResult> => {
+          calls.push(command);
+          if (command.includes('gh issue list')) {
+            return {
+              stdout: JSON.stringify([
+                {
+                  number: 649,
+                  title: 'view issues',
+                  state: 'OPEN',
+                  labels: [{ name: 'enhancement' }],
+                  updatedAt: '2026-06-09T10:11:12Z',
+                },
+              ]),
+              stderr: '',
+              exitCode: 0,
+            };
+          }
+          return { stdout: '', stderr: '', exitCode: 0 };
+        }),
+        shell: vi.fn(),
+        sftp: vi.fn(),
+        disconnect: vi.fn(),
+      } as unknown as SshConnection;
+
+      const issues = await new GitClient(conn).listIssues('/home/u/repo');
+      // The command runs inside the repo dir (cd), with the app's fields + --state all.
+      const ghCmd = calls.find((c) => c.includes('gh issue list'));
+      expect(ghCmd).toBeDefined();
+      expect(ghCmd).toContain("cd '/home/u/repo'");
+      expect(ghCmd).toContain('gh issue list');
+      expect(ghCmd).toContain('--json number,title,state,labels,updatedAt');
+      expect(ghCmd).toContain('--state all');
+      expect(ghCmd).toContain('--limit 50');
+      // The parsed result.
+      expect(issues).toEqual([{
+        number: 649,
+        title: 'view issues',
+        state: 'open',
+        labels: ['enhancement'],
+        updatedAt: '2026-06-09T10:11:12Z',
+      }]);
+    });
+
+    it('honors a custom limit (clamped to the 1..200 ceiling)', async () => {
+      const calls: string[] = [];
+      const conn: SshConnection = {
+        connected: true,
+        exec: vi.fn(async (command: string): Promise<ExecResult> => {
+          calls.push(command);
+          return { stdout: '[]', stderr: '', exitCode: 0 };
+        }),
+        shell: vi.fn(),
+        sftp: vi.fn(),
+        disconnect: vi.fn(),
+      } as unknown as SshConnection;
+
+      await new GitClient(conn).listIssues('/r', { limit: 1000 });
+      expect(calls.some((c) => c.includes('--limit 200'))).toBe(true);
+    });
+
+    it('clamps a sub-1 limit up to 1', async () => {
+      const calls: string[] = [];
+      const conn: SshConnection = {
+        connected: true,
+        exec: vi.fn(async (command: string): Promise<ExecResult> => {
+          calls.push(command);
+          return { stdout: '[]', stderr: '', exitCode: 0 };
+        }),
+        shell: vi.fn(),
+        sftp: vi.fn(),
+        disconnect: vi.fn(),
+      } as unknown as SshConnection;
+
+      await new GitClient(conn).listIssues('/r', { limit: 0 });
+      expect(calls.some((c) => c.includes('--limit 1'))).toBe(true);
+    });
+
+    it('returns an empty list on a clean [] payload (empty state)', async () => {
+      const conn = createMockConnection(new Map([
+        ['gh issue list', { stdout: '[]', stderr: '', exitCode: 0 }],
+      ]));
+      const issues = await new GitClient(conn).listIssues('/r');
+      expect(issues).toEqual([]);
+    });
+
+    it('throws on non-zero exit (e.g. not a GitHub repo)', async () => {
+      const conn = createMockConnection(new Map([
+        ['gh issue list', { stdout: '', stderr: 'could not find remote', exitCode: 1 }],
+      ]));
+      await expect(new GitClient(conn).listIssues('/r')).rejects.toThrow('gh issue list failed');
+    });
+  });
 });

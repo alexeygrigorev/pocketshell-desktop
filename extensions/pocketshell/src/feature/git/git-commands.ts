@@ -15,13 +15,18 @@ import type {
 	GitCommit,
 	GitBranch,
 	GitWorktree,
+	GitHubIssue,
+	GhStatus,
 	PocketShellRepoBrowserEntry,
 	PocketShellRepoEntry,
 } from '../../backend/git';
 import {
 	buildGitHistoryPanelModel,
 	renderGitHistoryPanelHtml,
+	detectGitHubOrigin,
+	isSafeGitHubIssueUrl,
 	type GitHistoryPanelTab,
+	type GhGateState,
 } from '../../backend/ui/git-history';
 import type { FeatureDeps } from '../manifest';
 
@@ -532,7 +537,7 @@ interface GitHistoryPanelEntry {
 }
 
 interface GitHistoryPanelMessage {
-	action?: 'refresh' | 'switchTab' | 'openGitHub';
+	action?: 'refresh' | 'switchTab' | 'openGitHub' | 'openIssue';
 	tab?: GitHistoryPanelTab;
 	url?: string;
 }
@@ -619,6 +624,13 @@ async function renderGitHistoryPanel(
 		}
 	}
 
+	// Issues tab (app §6 / #649): best-effort, gated on GitHub origin + gh being
+	// configured. Matches the app's `fetchIssues`: a ghStatus/hint failure must
+	// NOT hide the history/overview that already loaded — the tab degrades to a
+	// hint / unavailable / hidden state. Only fetched for GitHub origins; the
+	// model hides the tab entirely for non-GitHub / missing repos.
+	const issues = await fetchIssuesGate(entry.git, entry.repoPath, originUrl, missing);
+
 	const host = await service.getHost(entry.hostId);
 	const hostName = host?.name || host?.hostname || `Host ${entry.hostId}`;
 	const model = buildGitHistoryPanelModel({
@@ -628,6 +640,8 @@ async function renderGitHistoryPanel(
 		branches,
 		worktrees,
 		commits,
+		issues: issues.issues,
+		issuesGate: issues.gate,
 		originUrl,
 		statusBanner: status?.tone && status.message
 			? { tone: status.tone, message: status.message }
@@ -640,6 +654,50 @@ async function renderGitHistoryPanel(
 		cspSource: entry.panel.webview.cspSource,
 		nonce: entry.nonce,
 	});
+}
+
+/**
+ * Fetch the GitHub Issues-tab gate + rows for the panel (app §6 / #649).
+ * Mirrors the app's `GitHistoryViewModel.fetchIssues`:
+ *  - non-GitHub origin OR repo missing → `{ gate: 'hidden', issues: [] }` (tab omitted).
+ *  - gh NOT configured (installed+authed) → `{ gate: 'hint', issues: [] }`.
+ *  - gh configured + listing succeeded → `{ gate: 'ready', issues: [...] }`
+ *    (empty is a real "no issues" state).
+ *  - gh configured + listing failed → `{ gate: 'unavailable', issues: [] }`.
+ *
+ * Every failure is swallowed (best-effort) so the Issues tab never crashes the
+ * panel — the history/overview that already loaded stays visible.
+ */
+async function fetchIssuesGate(
+	git: GitClient,
+	repoPath: string,
+	originUrl: string | undefined,
+	missing: boolean,
+): Promise<{ gate: GhGateState; issues: GitHubIssue[] }> {
+	const hidden = { gate: { kind: 'hidden' as const }, issues: [] as GitHubIssue[] };
+	// Only GitHub origins get an Issues tab; `detectGitHubOrigin` is the strict
+	// owner/repo gate (rejects non-github.com hosts, crafted userinfo, etc.).
+	if (missing || !detectGitHubOrigin(originUrl)) {
+		return hidden;
+	}
+	let ghStatus: GhStatus;
+	try {
+		ghStatus = await git.ghStatus();
+	} catch {
+		// Transport drop / unexpected error — degrade to the hint state.
+		return { gate: { kind: 'hint', hint: 'install gh (https://cli.github.com) and run `gh auth login`' }, issues: [] };
+	}
+	if (!ghStatus.installed || !ghStatus.authenticated) {
+		return { gate: { kind: 'hint', hint: ghStatus.hint ?? 'install gh and run `gh auth login`' }, issues: [] };
+	}
+	try {
+		const issues = await git.listIssues(repoPath, { limit: 50 });
+		return { gate: { kind: 'ready' }, issues };
+	} catch {
+		// gh configured but the listing failed (not a GitHub repo, no network,
+		// rate-limited) → neutral unavailable state, NOT a misleading hint.
+		return { gate: { kind: 'unavailable' }, issues: [] };
+	}
 }
 
 async function setGitHistoryPanelError(
@@ -676,6 +734,19 @@ async function handleGitHistoryPanelMessage(
 		}
 		if (action === 'openGitHub') {
 			if (message.url) {
+				await vscode.env.openExternal(vscode.Uri.parse(message.url));
+			}
+			return;
+		}
+		if (action === 'openIssue') {
+			// Security: the issue URL handed to `openExternal` must be a
+			// canonical `https://github.com/...` URL. The webview builds these
+			// from the trusted `detectGitHubOrigin` owner/repo gate + the issue
+			// number (github-sourced), but we re-validate here defensively — a
+			// crafted message (host/query/fragment/userinfo) MUST NOT reach
+			// `openExternal` as a non-github URL. `isSafeGitHubIssueUrl` rejects
+			// everything that isn't a clean https://github.com/<owner>/<repo>/issues/<n>.
+			if (message.url && isSafeGitHubIssueUrl(message.url)) {
 				await vscode.env.openExternal(vscode.Uri.parse(message.url));
 			}
 			return;

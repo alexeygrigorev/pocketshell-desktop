@@ -6,9 +6,9 @@
 /**
  * HTML renderer for the Git History webview panel. Pure function.
  *
- * Relies on `acquireVsCodeApi()` for actions: switchTab, refresh, openGitHub.
- * The Issues tab is DEFERRED — the tab nav leaves room for a third tab to be
- * added without restructuring.
+ * Relies on `acquireVsCodeApi()` for actions: switchTab, refresh, openGitHub,
+ * openIssue. The Issues tab is shown only for GitHub origins (when
+ * `model.issuesGate !== 'hidden'`).
  */
 
 import type { GitHistoryPanelModel, GitHistoryPanelHtmlOptions } from './git-history-panel-state';
@@ -66,6 +66,18 @@ body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-edit
 .commit .author { color: var(--vscode-descriptionForeground); }
 .commit .date { color: var(--vscode-descriptionForeground); font-size: 0.86em; }
 .commit .subject { overflow-wrap: anywhere; }
+.issue .num { font-weight: 600; color: var(--vscode-textLink-foreground); }
+.issue .state { font-size: 0.78em; font-weight: 600; }
+.issue .state.open { color: var(--vscode-testing-iconPassed); }
+.issue .state.closed { color: var(--vscode-descriptionForeground); }
+.issue .subject { overflow-wrap: anywhere; }
+.issue .labels { display: flex; flex-wrap: wrap; gap: 4px; }
+.issue .label { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 0.76em; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.hint-card { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 10px 12px; background: var(--vscode-editorWidget-background); }
+.hint-card .hint-title { font-weight: 600; margin-bottom: 4px; }
+.hint-card .hint-body { color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family); font-size: 0.9em; overflow-wrap: anywhere; }
+.row-button { border: 1px solid var(--vscode-button-border, transparent); color: var(--vscode-button-foreground); background: var(--vscode-button-background); padding: 3px 7px; border-radius: 4px; cursor: pointer; white-space: nowrap; font: inherit; font-size: 0.9em; }
+.row-button:hover { background: var(--vscode-button-hoverBackground); }
 button { border: 1px solid var(--vscode-button-border, transparent); color: var(--vscode-button-foreground); background: var(--vscode-button-background); padding: 5px 9px; border-radius: 4px; cursor: pointer; white-space: nowrap; font: inherit; }
 button:hover { background: var(--vscode-button-hoverBackground); }
 button.secondary { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
@@ -86,6 +98,7 @@ button:disabled { opacity: 0.55; cursor: default; }
   <nav class="tabs" role="tablist">
     <button type="button" class="tab" role="tab" data-tab="overview" data-active="${String(model.tab === 'overview')}">Overview</button>
     <button type="button" class="tab" role="tab" data-tab="commits" data-active="${String(model.tab === 'commits')}">Commits</button>
+    ${model.issuesGate.kind !== 'hidden' ? `<button type="button" class="tab" role="tab" data-tab="issues" data-active="${String(model.tab === 'issues')}">Issues</button>` : ''}
   </nav>
   <main class="content">
     ${model.statusBanner ? `<div class="status" role="status" data-tone="${escapeHtml(model.statusBanner.tone)}">${escapeHtml(model.statusBanner.message)}</div>` : ''}
@@ -118,6 +131,13 @@ document.addEventListener('click', (event) => {
     }
     return;
   }
+  if (action === 'openIssue') {
+    const url = button.dataset.url;
+    if (url) {
+      vscode.postMessage({ action: 'openIssue', url });
+    }
+    return;
+  }
 });
 window.dispatchEvent(new Event('git-history:ready'));
 </script>
@@ -128,6 +148,9 @@ window.dispatchEvent(new Event('git-history:ready'));
 function renderActiveTab(model: GitHistoryPanelModel): string {
   if (model.tab === 'commits') {
     return renderCommitsTab(model);
+  }
+  if (model.tab === 'issues') {
+    return renderIssuesTab(model);
   }
   return renderOverviewTab(model);
 }
@@ -199,6 +222,64 @@ function renderCommitsTab(model: GitHistoryPanelModel): string {
   <span class="date">${escapeHtml(String(c.fileCount))} file(s)</span>
 </div>`);
   return `<section class="section"><h2>Recent commits (${escapeHtml(String(model.commits.length))})</h2><div class="list">${rows.join('')}</div></section>`;
+}
+
+/**
+ * Issues tab (app §6 / #649). Mirrors the app's `IssuesPanel` states:
+ *  - `hint`        → a "Configure gh to see issues" card with the hint body.
+ *  - `unavailable` → a neutral "Issues unavailable" message.
+ *  - `ready`       → the issue list (or an empty-state when zero rows).
+ *  - `hidden`      → not reached (the tab is omitted from the nav for non-GitHub
+ *                    origins; a stray request renders nothing).
+ */
+function renderIssuesTab(model: GitHistoryPanelModel): string {
+  const gate = model.issuesGate;
+  if (gate.kind === 'hint') {
+    return `<section class="section"><h2>GitHub issues</h2>
+<div class="hint-card">
+  <div class="hint-title">Configure gh to see issues</div>
+  <div class="hint-body">${escapeHtml(gate.hint)}</div>
+</div></section>`;
+  }
+  if (gate.kind === 'unavailable') {
+    return `<section class="section"><h2>GitHub issues</h2>
+<div class="hint-card">
+  <div class="hint-title">Issues unavailable</div>
+  <div class="hint-body">Couldn't list GitHub issues for this repository.</div>
+</div></section>`;
+  }
+  if (gate.kind !== 'ready') {
+    // `hidden` — the tab shouldn't be reachable, but degrade gracefully.
+    return `<div class="empty">Issues tab is not available for this repository.</div>`;
+  }
+  const issues = model.issues ?? [];
+  if (issues.length === 0) {
+    return `<section class="section"><h2>GitHub issues</h2>
+<div class="empty">${escapeHtml(model.emptyText || 'This repository has no GitHub issues.')}</div></section>`;
+  }
+  const rows = issues.map((issue) => {
+    const labels = issue.labels.length > 0
+      ? `<span class="labels">${issue.labels.map((l) => `<span class="label">${escapeHtml(l)}</span>`).join('')}</span>`
+      : '';
+    const updated = issue.updatedAt ? `<span class="date">updated ${escapeHtml(formatDate(issue.updatedAt))}</span>` : '';
+    const openBtn = issue.url
+      ? `<button type="button" class="row-button" data-action="openIssue" data-url="${escapeHtml(issue.url)}">Open</button>`
+      : '';
+    const stateBadge = issue.state === 'open'
+      ? `<span class="state open">● open</span>`
+      : issue.state === 'closed'
+        ? `<span class="state closed">● closed</span>`
+        : '';
+    return `<div class="row-item issue">
+  <span class="subject"><span class="num">#${escapeHtml(String(issue.number))}</span> ${escapeHtml(issue.title || '(no title)')}</span>
+  <span class="meta">${stateBadge}</span>
+  <span class="meta"><span class="num">#${escapeHtml(String(issue.number))}</span>${issue.labels.length > 0 ? ` · ${escapeHtml(issue.labels.join(', '))}` : ''}</span>
+  ${updated}
+  ${labels}
+  ${openBtn}
+</div>`;
+  });
+  return `<section class="section"><h2>GitHub issues (${escapeHtml(String(issues.length))})</h2><div class="list">${rows.join('')}</div></section>`;
 }
 
 function formatDate(iso: string): string {
