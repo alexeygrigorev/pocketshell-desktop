@@ -59,7 +59,14 @@ function syncPaletteFromRegistry(): void {
 }
 
 function syncPaletteFromSnippets(ctx: vscode.ExtensionContext): void {
-	for (const snippet of parseSnippetLibrary(ctx.workspaceState.get(SNIPPET_LIBRARY_STATE_KEY, []))) {
+	// Read from globalState (the post-#105 home of the snippet library). Fall
+	// back to legacy workspaceState so the palette stays populated during the
+	// one-time migration window (see SnippetLibraryStore.migrateFromWorkspaceState).
+	const fromGlobal = ctx.globalState.get(SNIPPET_LIBRARY_STATE_KEY, undefined);
+	const raw = fromGlobal !== undefined
+		? fromGlobal
+		: ctx.workspaceState.get(SNIPPET_LIBRARY_STATE_KEY, []);
+	for (const snippet of parseSnippetLibrary(raw)) {
 		const descriptor = snippetToPaletteCommand(snippet);
 		palette.register({
 			id: descriptor.id,

@@ -9,6 +9,7 @@ import { registerSnippets } from './snippets-commands';
 export const SNIPPETS_FEATURE: FeatureRegistration = {
 	manifest: {
 		commands: [
+			{ command: 'pocketshell.snippets.openPanel', title: 'Snippets: Open Library Panel', category: 'PocketShell', icon: '$(library)' },
 			{ command: 'pocketshell.snippets.create', title: 'Snippets: Create Snippet or Template', category: 'PocketShell', icon: '$(add)' },
 			{ command: 'pocketshell.snippets.edit', title: 'Snippets: Edit', category: 'PocketShell', icon: '$(edit)' },
 			{ command: 'pocketshell.snippets.delete', title: 'Snippets: Delete', category: 'PocketShell', icon: '$(trash)' },
@@ -17,8 +18,17 @@ export const SNIPPETS_FEATURE: FeatureRegistration = {
 			{ command: 'pocketshell.snippets.insertTerminal', title: 'Snippets: Insert into Terminal', category: 'PocketShell', icon: '$(terminal)' },
 			{ command: 'pocketshell.snippets.openComposer', title: 'Snippets: Open in Composer', category: 'PocketShell', icon: '$(comment-add)' },
 			{ command: 'pocketshell.snippets.run', title: 'Snippets: Run Snippet or Template', category: 'PocketShell', icon: '$(play)' },
+			{ command: 'pocketshell.snippets.macros.create', title: 'Snippets: Create Macro', category: 'PocketShell', icon: '$(add)' },
+			{ command: 'pocketshell.snippets.macros.edit', title: 'Snippets: Edit Macro', category: 'PocketShell', icon: '$(edit)' },
+			{ command: 'pocketshell.snippets.macros.delete', title: 'Snippets: Delete Macro', category: 'PocketShell', icon: '$(trash)' },
+			{ command: 'pocketshell.snippets.macros.run', title: 'Snippets: Run Macro', category: 'PocketShell', icon: '$(run-all)' },
 		],
 		menus: {
+			'commandPalette': [
+				{ command: 'pocketshell.snippets.openPanel' },
+				{ command: 'pocketshell.snippets.macros.create' },
+				{ command: 'pocketshell.snippets.macros.run' },
+			],
 			'terminal/context': [
 				{ command: 'pocketshell.snippets.insertTerminal', group: 'pocketshell_snippets' },
 				{ command: 'pocketshell.snippets.openComposer', group: 'pocketshell_snippets' },

@@ -419,6 +419,12 @@
 				"icon": "$(comment-add)"
 			},
 			{
+				"command": "pocketshell.snippets.openPanel",
+				"title": "Snippets: Open Library Panel",
+				"category": "PocketShell",
+				"icon": "$(library)"
+			},
+			{
 				"command": "pocketshell.snippets.create",
 				"title": "Snippets: Create Snippet or Template",
 				"category": "PocketShell",
@@ -465,6 +471,30 @@
 				"title": "Snippets: Run Snippet or Template",
 				"category": "PocketShell",
 				"icon": "$(play)"
+			},
+			{
+				"command": "pocketshell.snippets.macros.create",
+				"title": "Snippets: Create Macro",
+				"category": "PocketShell",
+				"icon": "$(add)"
+			},
+			{
+				"command": "pocketshell.snippets.macros.edit",
+				"title": "Snippets: Edit Macro",
+				"category": "PocketShell",
+				"icon": "$(edit)"
+			},
+			{
+				"command": "pocketshell.snippets.macros.delete",
+				"title": "Snippets: Delete Macro",
+				"category": "PocketShell",
+				"icon": "$(trash)"
+			},
+			{
+				"command": "pocketshell.snippets.macros.run",
+				"title": "Snippets: Run Macro",
+				"category": "PocketShell",
+				"icon": "$(run-all)"
 			},
 			{
 				"command": "pocketshell.files.browse",
