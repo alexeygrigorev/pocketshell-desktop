@@ -485,6 +485,7 @@ ${cspMeta}<meta name="viewport" content="width=device-width, initial-scale=1">
 :root { color-scheme: light dark; }
 body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
 .composer { box-sizing: border-box; min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+.composer[data-drop-active="true"] { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -4px; }
 .header { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 10px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
 .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .target-kind { color: var(--vscode-descriptionForeground); text-transform: uppercase; font-size: 0.85em; }
@@ -604,6 +605,49 @@ composerInput?.addEventListener('keydown', (event) => {
     event.preventDefault();
     submit('send');
   }
+});
+function readDroppedFiles(dataTransfer) {
+  if (!dataTransfer || typeof dataTransfer.items === 'undefined') {
+    return [];
+  }
+  const files = [];
+  for (let i = 0; i < dataTransfer.items.length; i += 1) {
+    const item = dataTransfer.items[i];
+    if (item && item.kind === 'file') {
+      const file = item.getAsFile();
+      if (file) {
+        files.push({ path: String(file.path || file.name || ''), name: String(file.name || '') });
+      }
+    }
+  }
+  return files;
+}
+document.addEventListener('dragover', (event) => {
+  if (!event.dataTransfer) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+  const composer = document.querySelector('.composer');
+  if (composer) composer.setAttribute('data-drop-active', 'true');
+});
+document.addEventListener('dragleave', (event) => {
+  if (event.relatedTarget && event.relatedTarget !== document) return;
+  const composer = document.querySelector('.composer');
+  if (composer) composer.removeAttribute('data-drop-active');
+});
+document.addEventListener('drop', (event) => {
+  if (!event.dataTransfer) return;
+  event.preventDefault();
+  const composer = document.querySelector('.composer');
+  if (composer) composer.removeAttribute('data-drop-active');
+  const droppedFiles = readDroppedFiles(event.dataTransfer);
+  const droppedText = (typeof event.dataTransfer.getData === 'function' ? event.dataTransfer.getData('text/plain') : '') || '';
+  if (droppedFiles.length === 0 && !droppedText) return;
+  persistDraft();
+  vscode.postMessage({
+    action: 'drop',
+    text: droppedText,
+    files: droppedFiles.map((file) => file.path || file.name).filter((value) => Boolean(value)),
+  });
 });
 window.addEventListener('message', (event) => {
   const message = event.data || {};

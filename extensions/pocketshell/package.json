@@ -419,6 +419,24 @@
 				"icon": "$(comment-add)"
 			},
 			{
+				"command": "pocketshell.promptComposer.openWithClipboard",
+				"title": "Prompt Composer: Open With Clipboard",
+				"category": "PocketShell",
+				"icon": "$(copy)"
+			},
+			{
+				"command": "pocketshell.promptComposer.openWithFiles",
+				"title": "Prompt Composer: Open With Files",
+				"category": "PocketShell",
+				"icon": "$(file-add)"
+			},
+			{
+				"command": "pocketshell.promptComposer.pasteSelectionToTerminal",
+				"title": "Prompt Composer: Paste Selection to Terminal",
+				"category": "PocketShell",
+				"icon": "$(clippy)"
+			},
+			{
 				"command": "pocketshell.snippets.openPanel",
 				"title": "Snippets: Open Library Panel",
 				"category": "PocketShell",
@@ -800,6 +818,18 @@
 			{ "command": "pocketshell.__test.settings.update", "title": "__test: Settings Update", "category": "PocketShell", "enablement": "false" }
 		],
 		"menus": {
+			"explorer/context": [
+				{
+					"command": "pocketshell.promptComposer.openWithFiles",
+					"group": "pocketshell_promptComposer@1"
+				}
+			],
+			"editor/title/context": [
+				{
+					"command": "pocketshell.promptComposer.openWithFiles",
+					"group": "pocketshell_promptComposer@1"
+				}
+			],
 			"view/item/context": [
 				{
 					"command": "pocketshell.hostDetail.open",
@@ -916,6 +946,10 @@
 				},
 				{
 					"command": "pocketshell.promptComposer.open",
+					"group": "pocketshell_promptComposer"
+				},
+				{
+					"command": "pocketshell.promptComposer.pasteSelectionToTerminal",
 					"group": "pocketshell_promptComposer"
 				},
 				{

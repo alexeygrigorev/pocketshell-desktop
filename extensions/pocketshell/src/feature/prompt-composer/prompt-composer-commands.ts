@@ -10,6 +10,11 @@ import * as https from 'https';
 import type { ConnectionService } from '../../connection-service';
 import { getOrConnect, resolveHostId } from '../../host-picking';
 import type { FeatureDeps } from '../manifest';
+import {
+	parseDropFileUris,
+	resolveFileUriList,
+	resolvePasteSelectionText,
+} from './share-receptors';
 import { AgentMessenger } from '../../backend/agents/reply';
 import type { ConversationAttributionResult } from '../../backend/agents';
 import type { QuoteReplyPayload } from '../../backend/agents/conversation';
@@ -61,6 +66,26 @@ interface PromptComposerPanelEntry {
 interface ResolvedPromptComposerTarget {
 	target: PromptComposerTarget;
 	insertTarget?: PromptComposerPaneTarget;
+}
+
+/** Inbound webview messages for the prompt composer. */
+type ComposerWebviewMessage = {
+	action?: string;
+	text?: string;
+	attachmentId?: string;
+	/** Drag-and-drop payload: dropped text and/or file URI strings. */
+	files?: unknown;
+};
+
+/** Subset carrying the drag-and-drop payload. */
+type ComposerDropMessage = {
+	text?: string;
+	files?: unknown;
+};
+
+/** Result of resolving content for a paste-into-terminal receptor. */
+interface PasteSelectionResult {
+	text: string;
 }
 
 export function registerPromptComposer(
@@ -138,7 +163,95 @@ export function registerPromptComposer(
 		},
 	});
 
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.promptComposer.openWithClipboard', async (element?: unknown) => {
+			const clipboard = await vscode.env.clipboard.readText();
+			return vscode.commands.executeCommand('pocketshell.promptComposer.open', {
+				...objectArg(element),
+				prefillText: clipboard,
+			});
+		}),
+	);
+
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.promptComposer.openWithFiles', async (arg?: unknown) => {
+			const descriptors = resolveFileUriList(arg);
+			if (descriptors.length === 0) {
+				void vscode.window.showWarningMessage(vscode.l10n.t('No files were provided for the prompt composer.'));
+				return undefined;
+			}
+			const element = descriptors[0].uri;
+			const resolved = await resolveDefaultComposerTarget(element);
+			if (!resolved) {
+				void vscode.window.showWarningMessage(vscode.l10n.t('No agent session or tmux pane is available for the prompt composer.'));
+				return undefined;
+			}
+			const target = await fillTargetHostId(service, resolved.target, element);
+			if (!target) {
+				return undefined;
+			}
+			const draftKey = buildPromptComposerDraftKey(target);
+			const existing = panels.get(draftKey);
+			if (existing) {
+				existing.panel.reveal(vscode.ViewColumn.Active);
+				await addDescriptorsAsAttachments(service, existing, descriptors);
+				return existing;
+			}
+			const entry = await vscode.commands.executeCommand<PromptComposerPanelEntry | undefined>(
+				'pocketshell.promptComposer.open',
+				{ ...objectArg(element), target },
+			);
+			if (entry) {
+				await addDescriptorsAsAttachments(service, entry, descriptors);
+			}
+			return entry;
+		}),
+	);
+
+	disposables.push(
+		vscode.commands.registerCommand('pocketshell.promptComposer.pasteSelectionToTerminal', async (arg?: unknown) => {
+			const result = await resolvePasteSelection(arg);
+			if (!result) {
+				return undefined;
+			}
+			const text = result.text;
+			if (!text) {
+				void vscode.window.showWarningMessage(vscode.l10n.t('No text was found to paste into the terminal.'));
+				return undefined;
+			}
+			// When `arg` is a context-menu tree element, forward it so the pane
+			// target resolves to that element. When `arg` is an explicit text
+			// string, resolve the active terminal instead.
+			const element = typeof arg === 'string' ? undefined : arg;
+			const inserted = await vscode.commands.executeCommand<boolean>(
+				'pocketshell.tmux-ui.sendTextToPane',
+				element,
+				{ text, submit: false },
+			);
+			if (inserted !== true) {
+				void vscode.window.showWarningMessage(vscode.l10n.t('Selection was not pasted into a tmux pane.'));
+			}
+			return inserted;
+		}),
+	);
+
 	return disposables;
+}
+
+/**
+ * Resolve the text to paste into the active terminal. Prefers an explicit
+ * command argument, then the active editor selection, then the clipboard.
+ * Matches the app's `pasteIntoSession` semantics (issue #193): no trailing
+ * Enter — the terminal receptor forwards the text via `sendTextToPane` with
+ * `submit:false`.
+ */
+async function resolvePasteSelection(arg?: unknown): Promise<PasteSelectionResult | undefined> {
+	const editor = vscode.window.activeTextEditor;
+	const selection = editor?.selection;
+	const selectedText = editor && selection && !selection.isEmpty ? editor.document.getText(selection) : undefined;
+	const clipboard = await vscode.env.clipboard.readText();
+	const text = resolvePasteSelectionText(arg, selectedText, clipboard);
+	return text === undefined ? undefined : { text };
 }
 
 function wirePanelMessages(
@@ -147,7 +260,7 @@ function wirePanelMessages(
 	deps: FeatureDeps,
 	entry: PromptComposerPanelEntry,
 ): void {
-	entry.panel.webview.onDidReceiveMessage(async (message: { action?: string; text?: string; attachmentId?: string }) => {
+	entry.panel.webview.onDidReceiveMessage(async (message: ComposerWebviewMessage) => {
 		if (message.action === 'draft-change') {
 			await ctx.workspaceState.update(entry.draftKey, message.text ?? '');
 			return;
@@ -171,8 +284,44 @@ function wirePanelMessages(
 		}
 		if (message.action === 'insert') {
 			await insertPrompt(service, entry, message.text ?? '');
+			return;
+		}
+		if (message.action === 'drop') {
+			await handleDrop(service, entry, message);
+			return;
 		}
 	});
+}
+
+/**
+ * Drag-and-drop receptor (app §5 parity, the Android `ACTION_SEND` analog).
+ * The webview posts the OS drop event: dropped plain text becomes prompt
+ * text via `insert-text`, and dropped file URIs are staged as attachments
+ * through the existing SFTP upload pipeline. Files are attached before the
+ * text is inserted so a single render reflects both.
+ */
+async function handleDrop(
+	service: ConnectionService,
+	entry: PromptComposerPanelEntry,
+	message: ComposerDropMessage,
+): Promise<void> {
+	const droppedPaths = parseDropFileUris(message.files);
+	const descriptors = droppedPaths
+		.map((raw) => {
+			try {
+				return resolveFileUriList({ path: raw })[0];
+			} catch {
+				return undefined;
+			}
+		})
+		.filter((descriptor): descriptor is NonNullable<typeof descriptor> => Boolean(descriptor));
+	if (descriptors.length > 0) {
+		await addDescriptorsAsAttachments(service, entry, descriptors);
+	}
+	const text = typeof message.text === 'string' ? message.text.trim() : '';
+	if (text) {
+		void entry.panel.webview.postMessage({ action: 'insert-text', text });
+	}
 }
 
 async function sendPrompt(
@@ -302,20 +451,38 @@ async function attachFiles(service: ConnectionService, entry: PromptComposerPane
 	if (!uris?.length) {
 		return;
 	}
+	const descriptors = resolveFileUriList(uris);
+	await addDescriptorsAsAttachments(service, entry, descriptors);
+}
 
-	const files = await Promise.all(uris.map(async (uri): Promise<PromptComposerAttachmentInput> => {
+/**
+ * Stage a set of file descriptors as composer attachments and upload them
+ * through the existing SFTP pipeline. Shared by the file-picker
+ * `attach-files` button, the `pocketshell.promptComposer.openWithFiles`
+ * receptor, and the webview drag-and-drop `drop` receptor (app §5 parity).
+ */
+async function addDescriptorsAsAttachments(
+	service: ConnectionService,
+	entry: PromptComposerPanelEntry,
+	descriptors: readonly { uri: vscode.Uri; fsPath: string; displayName: string }[],
+): Promise<void> {
+	if (descriptors.length === 0) {
+		return;
+	}
+	const statResults = await Promise.all(descriptors.map(async (descriptor) => {
 		let size: number | undefined;
 		try {
-			size = (await vscode.workspace.fs.stat(uri)).size;
+			size = (await vscode.workspace.fs.stat(descriptor.uri)).size;
 		} catch {
 			size = undefined;
 		}
-		return {
-			id: createAttachmentId(),
-			localPath: uri.fsPath,
-			displayName: uri.path.split('/').filter(Boolean).pop() ?? uri.fsPath,
-			size,
-		};
+		return { descriptor, size };
+	}));
+	const files: PromptComposerAttachmentInput[] = statResults.map(({ descriptor, size }) => ({
+		id: createAttachmentId(),
+		localPath: descriptor.fsPath,
+		displayName: descriptor.displayName,
+		size,
 	}));
 	entry.model = addPromptComposerAttachments(entry.model, files);
 	renderPanel(entry);
@@ -577,6 +744,11 @@ function buildPromptTextOrFail(entry: PromptComposerPanelEntry, text: string): s
 		entry.model = markPromptComposerFailed(entry.model, errorMessage(err), text);
 		return undefined;
 	}
+}
+
+/** Coerce a command element into a plain object arg (or empty object). */
+function objectArg(element: unknown): Record<string, unknown> {
+	return element && typeof element === 'object' ? element as Record<string, unknown> : {};
 }
 
 async function resolveDefaultComposerTarget(element: unknown): Promise<ResolvedPromptComposerTarget | undefined> {
