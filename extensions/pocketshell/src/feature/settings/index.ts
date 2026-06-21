@@ -39,7 +39,7 @@ export function registerPocketshellSettings(
 
 	disposables.push(
 		vscode.commands.registerCommand('pocketshell.settingsView.open', () => {
-			current = SettingsViewPanel.open(store);
+			current = SettingsViewPanel.open(store, context);
 			return current;
 		}),
 	);

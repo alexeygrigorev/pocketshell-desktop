@@ -42,6 +42,14 @@ export { isRetryable, transportError } from './assistant-llm-client';
 
 export { OpenAiLlmClient, buildOpenAiRequest, nodeHttpsTransport, parseOpenAiResponse } from './openai-llm-client';
 
+export {
+	ANTHROPIC_VERSION,
+	AnthropicLlmClient,
+	anthropicMessagesUrl,
+	buildAnthropicRequest,
+	parseAnthropicResponse,
+} from './anthropic-llm-client';
+
 export { DEFAULT_FORBIDDEN_PATTERNS, MAX_COMMAND_LENGTH, rejectCommand } from './command-safety';
 
 export type { FolderCandidate, FolderResolution } from './folder-resolver';

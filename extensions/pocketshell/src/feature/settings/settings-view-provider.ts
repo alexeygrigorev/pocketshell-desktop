@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import type { ConfigStore } from '../../backend/pocketshell-settings';
 import { readSettings, writeSetting, resetSetting } from '../../backend/pocketshell-settings';
 import type { SettingEntry } from '../../backend/pocketshell-settings';
+import { loadAssistantSettings } from '../assistant/assistant-config-store';
 
 /**
  * On-demand PocketShell Settings panel.
@@ -18,6 +19,13 @@ import type { SettingEntry } from '../../backend/pocketshell-settings';
  * webview is stateless beyond the current snapshot: every edit posts a
  * message, the extension validates + persists, and the new snapshot is pushed
  * back.
+ *
+ * Dispatch 3 adds a read-only Assistant card at the TOP of the panel showing
+ * the configured provider + model + key-set status, with a "Configure"
+ * affordance that runs `pocketshell.assistant.configure`. The provider/model
+ * live in vscode config and the API key in SecretStorage (NOT the
+ * PocketShell-internal settings map), so this card is rendered out-of-band
+ * from the category entries.
  *
  * This used to back a sidebar `WebviewView` (id `pocketshell.settings`). Per
  * #99 the sidebar now hosts ONLY the session tree, so Settings lives in an
@@ -32,12 +40,14 @@ export class SettingsViewPanel {
 
 	private readonly panel: vscode.WebviewPanel;
 	private readonly store: ConfigStore;
+	private readonly context: vscode.ExtensionContext;
 	/** Disposables tied to THIS panel's lifetime (cleared on dispose). */
 	private readonly panelDisposables: vscode.Disposable[] = [];
 
-	private constructor(panel: vscode.WebviewPanel, store: ConfigStore) {
+	private constructor(panel: vscode.WebviewPanel, store: ConfigStore, context: vscode.ExtensionContext) {
 		this.panel = panel;
 		this.store = store;
+		this.context = context;
 
 		panel.webview.options = {
 			enableScripts: true,
@@ -56,7 +66,7 @@ export class SettingsViewPanel {
 	}
 
 	/** Open (or focus) the Settings editor-area panel on demand. */
-	static open(store: ConfigStore): SettingsViewPanel {
+	static open(store: ConfigStore, context: vscode.ExtensionContext): SettingsViewPanel {
 		if (SettingsViewPanel.current) {
 			SettingsViewPanel.current.panel.reveal(vscode.ViewColumn.Active);
 			return SettingsViewPanel.current;
@@ -70,7 +80,7 @@ export class SettingsViewPanel {
 				retainContextWhenHidden: true,
 			},
 		);
-		const instance = new SettingsViewPanel(panel, store);
+		const instance = new SettingsViewPanel(panel, store, context);
 		SettingsViewPanel.current = instance;
 		return instance;
 	}
@@ -116,6 +126,12 @@ export class SettingsViewPanel {
 			await this.pushSnapshot();
 		} else if (msg.kind === 'ready') {
 			await this.pushSnapshot();
+		} else if (msg.kind === 'configure-assistant') {
+			// Dispatch 3: the Assistant card's "Configure" affordance routes to
+			// the provider/key configure command, then refresh so the key-set
+			// status updates.
+			await vscode.commands.executeCommand('pocketshell.assistant.configure');
+			await this.pushSnapshot();
 		}
 	}
 
@@ -126,7 +142,23 @@ export class SettingsViewPanel {
 			title: c.title,
 			entries: c.entries.map((e) => this.entryToWire(e)),
 		}));
-		await this.panel.webview.postMessage({ kind: 'snapshot', categories: payload });
+		const assistant = await this.readAssistantStatus();
+		await this.panel.webview.postMessage({ kind: 'snapshot', categories: payload, assistant });
+	}
+
+	/**
+	 * Read the assistant provider/model + key-set status for the card. The API
+	 * key itself is never read into the webview — only a boolean "is a key
+	 * stored for the active provider" (checked via SecretStorage).
+	 */
+	private async readAssistantStatus(): Promise<{ provider: string; model: string; keyStored: boolean }> {
+		const settings = loadAssistantSettings();
+		const model = modelForProvider(settings);
+		// SecretStorage key resolution mirrors assistant-config-store. The key
+		// value is NOT passed through — only its presence.
+		const secretKey = secretKeyForAssistant(settings.provider);
+		const stored = await this.context.secrets.get(secretKey);
+		return { provider: settings.provider, model, keyStored: Boolean(stored && stored.length > 0) };
 	}
 
 	private entryToWire(entry: SettingEntry) {
@@ -180,6 +212,14 @@ export class SettingsViewPanel {
 		.explicit { opacity: 0.6; font-style: italic; }
 		.controls { display: flex; gap: 6px; }
 		.linkbtn { background: none; border: none; color: var(--vscode-textLink-foreground); cursor: pointer; font-size: 11px; padding: 0; }
+		.assistant-card { border: 1px solid var(--vscode-editorWidget-border); border-radius: 4px; padding: 10px 12px; margin: 6px 0 14px; }
+		.assistant-card .row { margin: 4px 0; }
+		.assistant-card .title { font-weight: 600; margin-bottom: 6px; }
+		.assistant-card .keyset { font-size: 11px; opacity: 0.85; }
+		.assistant-card .keyset.ok { color: var(--vscode-testing-iconPassed); }
+		.assistant-card .keyset.missing { color: var(--vscode-testing-iconFailed); }
+		.configurebtn { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 4px 10px; border-radius: 2px; cursor: pointer; font-size: 11px; }
+		.configurebtn:hover { background: var(--vscode-button-hoverBackground); }
 	</style>
 </head>
 <body>
@@ -276,10 +316,52 @@ export class SettingsViewPanel {
 			});
 		}
 
+		function renderAssistant(assistant) {
+			if (!assistant) return;
+			const card = document.createElement('div');
+			card.className = 'assistant-card';
+			const title = document.createElement('div');
+			title.className = 'title';
+			title.textContent = 'Action Assistant';
+			card.appendChild(title);
+
+			const providerRow = document.createElement('div');
+			providerRow.className = 'row';
+			providerRow.innerHTML = '<span class="label">Provider:</span>&nbsp;' + escapeHtml(assistant.provider)
+				+ ' &nbsp; <span class="label">Model:</span>&nbsp;' + escapeHtml(assistant.model);
+			card.appendChild(providerRow);
+
+			const keyRow = document.createElement('div');
+			keyRow.className = 'row';
+			const keyStatus = document.createElement('span');
+			keyStatus.className = 'keyset ' + (assistant.keyStored ? 'ok' : 'missing');
+			keyStatus.textContent = assistant.keyStored ? 'API key: set' : 'API key: not set';
+			keyRow.appendChild(keyStatus);
+			card.appendChild(keyRow);
+
+			const btnRow = document.createElement('div');
+			btnRow.className = 'row';
+			const btn = document.createElement('button');
+			btn.className = 'configurebtn';
+			btn.textContent = 'Configure...';
+			btn.addEventListener('click', () => {
+				vscode.postMessage({ kind: 'configure-assistant' });
+			});
+			btnRow.appendChild(btn);
+			card.appendChild(btnRow);
+
+			root.insertBefore(card, root.firstChild);
+		}
+
+		function escapeHtml(s) {
+			return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+		}
+
 		window.addEventListener('message', (e) => {
 			const msg = e.data;
 			if (msg && msg.kind === 'snapshot') {
 				render(msg.categories);
+				renderAssistant(msg.assistant);
 			}
 		});
 		vscode.postMessage({ kind: 'ready' });
@@ -302,4 +384,36 @@ function getNonce(): string {
 type SettingsViewMessage =
 	| { kind: 'ready' }
 	| { kind: 'update'; key: string; value: unknown }
-	| { kind: 'reset'; key: string };
+	| { kind: 'reset'; key: string }
+	| { kind: 'configure-assistant' };
+
+/**
+ * Resolve the model id for the active assistant provider (display only). Mirrors
+ * the assistant-config-store's per-provider model field.
+ */
+function modelForProvider(settings: {
+	provider: string;
+	openAiModel: string;
+	anthropicModel: string;
+	zaiModel: string;
+}): string {
+	switch (settings.provider) {
+		case 'openai': return settings.openAiModel;
+		case 'anthropic': return settings.anthropicModel;
+		case 'zai': return settings.zaiModel;
+		default: return settings.openAiModel;
+	}
+}
+
+/**
+ * Resolve the SecretStorage key for an assistant provider. Must match
+ * `secretKeyFor` in assistant-config-store.ts exactly.
+ */
+function secretKeyForAssistant(provider: string): string {
+	switch (provider) {
+		case 'openai': return 'pocketshell.assistant.openaiApiKey';
+		case 'anthropic': return 'pocketshell.assistant.anthropicApiKey';
+		case 'zai': return 'pocketshell.assistant.zaiApiKey';
+		default: return 'pocketshell.assistant.openaiApiKey';
+	}
+}
