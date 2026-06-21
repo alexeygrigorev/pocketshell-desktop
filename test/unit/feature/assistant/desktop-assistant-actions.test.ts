@@ -72,8 +72,22 @@ vi.mock('vscode', () => {
 
 // Mock the session-launcher module so startSession can be tested without faking
 // the tmux -CC protocol. Hoisted before the SUT import (vi.mock is hoisted).
+// `launchTmuxSessionForAssistant` mirrors the real function: it receives the
+// surfaceRegistry and registers a fake pty under (host.id, sessionName), so the
+// round-trip test (start → resolver → send/run) exercises the REAL action seam.
 vi.mock('../../../../extensions/pocketshell/src/feature/sessions/session-launcher', () => ({
 	launchTmuxSession: vi.fn(async () => ({ ok: true, result: { sessionName: 's', terminal: {} } })),
+	launchTmuxSessionForAssistant: vi.fn(async (
+		_conn: unknown,
+		host: { id: number; name: string; hostname: string },
+		_startDirectory: string,
+		_kind: string,
+		surfaceRegistry: { register: (hostId: number, hostLabel: string, sessionName: string, terminal: unknown, pty: unknown) => void },
+	) => {
+		const sessionName = 'mocked-session';
+		surfaceRegistry.register(host.id, host.name, sessionName, { show: () => {} }, currentAssistantPty);
+		return { ok: true, result: { sessionName, terminal: {} } };
+	}),
 	resolveLaunchConnection: vi.fn(async () => null),
 }));
 
@@ -117,12 +131,25 @@ function makeFakePty(): FakePty {
 	};
 }
 
-/** A fake surface registry with a controllable list + pty lookup. */
-function makeSurfaceRegistry(entries: Array<{ hostId: number; hostLabel: string; sessionName: string; terminal: unknown; pty?: FakePty }>) {
+/**
+ * A fake surface registry. Mutable: `register()` adds an entry so subsequent
+ * `list()`/`getPty()` calls see it (mirrors the real SessionTerminalRegistry).
+ * This lets the round-trip test assert start → registered → resolvable → driven.
+ */
+interface FakeRegistryEntry { hostId: number; hostLabel: string; sessionName: string; terminal: unknown; pty?: FakePty }
+function makeSurfaceRegistry(entries: FakeRegistryEntry[] = []) {
 	const ptyMap = new Map<string, FakePty>();
+	const entryList: FakeRegistryEntry[] = [...entries];
 	for (const e of entries) if (e.pty) ptyMap.set(`${e.hostId}:${e.sessionName}`, e.pty);
 	return {
-		list: () => entries.map(({ pty, ...rest }) => rest),
+		register: (hostId: number, hostLabel: string, sessionName: string, terminal: unknown, pty?: FakePty) => {
+			// Replace any pre-existing entry for the same (hostId, sessionName).
+			const idx = entryList.findIndex((e) => e.hostId === hostId && e.sessionName === sessionName);
+			if (idx >= 0) entryList.splice(idx, 1);
+			entryList.push({ hostId, hostLabel, sessionName, terminal, pty });
+			if (pty) ptyMap.set(`${hostId}:${sessionName}`, pty);
+		},
+		list: () => entryList.map(({ pty, ...rest }) => rest),
 		getPty: (hostId: number, sessionName?: string) =>
 			sessionName !== undefined ? ptyMap.get(`${hostId}:${sessionName}`) : undefined,
 	};
@@ -146,6 +173,15 @@ function makeFakeService(conn: FakeConn, host: Host): Pick<ConnectionService, 'g
 }
 
 const HOST: Host = { id: 7, name: 'prod', hostname: 'prod.example.com' } as unknown as Host;
+
+/**
+ * Module-level pty the mocked `launchTmuxSessionForAssistant` registers into
+ * the surfaceRegistry. Tests set this BEFORE calling startSession so the
+ * round-trip (start → resolver → send/run) can assert the SAME pty is reached.
+ * Declared with `let` at module scope so the hoisted mock closure reads the
+ * current value at call time (not the capture-time value).
+ */
+let currentAssistantPty: FakePty | undefined;
 
 // ---- tests ------------------------------------------------------------------
 
@@ -377,27 +413,31 @@ describe('DesktopAssistantActions — cloneRepo', () => {
 });
 
 describe('DesktopAssistantActions — startSession (launcher wiring)', () => {
-	// startSession delegates to launchTmuxSession. The session-launcher module
-	// is mocked at the top of the file so we can assert the action passes the
-	// right (host, cwd, kind) and surfaces the launcher's ok/error result,
-	// without faking the full tmux -CC protocol.
+	// startSession delegates to launchTmuxSessionForAssistant (the assistant-
+	// specific launch path that registers a drivable pty). The session-launcher
+	// module is mocked at the top of the file; the mock's
+	// launchTmuxSessionForAssistant registers a fake pty into the surfaceRegistry
+	// so we can assert the round-trip wiring without faking the tmux -CC protocol.
 	beforeEach(() => {
-		vi.mocked(launcherMock.launchTmuxSession).mockReset();
+		vi.mocked(launcherMock.launchTmuxSessionForAssistant).mockReset();
 		vi.mocked(launcherMock.resolveLaunchConnection).mockReset();
+		currentAssistantPty = undefined;
 	});
 
-	it('maps the agent name, resolves the host, and calls launchTmuxSession', async () => {
+	it('maps the agent name, resolves the host, and calls launchTmuxSessionForAssistant with the surfaceRegistry', async () => {
 		const conn = makeFakeConn();
+		const surface = makeSurfaceRegistry();
 		vi.mocked(launcherMock.resolveLaunchConnection).mockResolvedValue({
 			conn,
 			host: { id: 7, name: 'prod', hostname: 'prod.example.com' },
 		});
-		vi.mocked(launcherMock.launchTmuxSession).mockResolvedValue({
+		vi.mocked(launcherMock.launchTmuxSessionForAssistant).mockResolvedValue({
 			ok: true,
 			result: { sessionName: 'myapp-codex', terminal: {} },
 		});
 		const actions = new DesktopAssistantActions({
 			connectionService: makeFakeService(conn, HOST) as ConnectionService,
+			surfaceRegistry: surface as unknown as Parameters<typeof DesktopAssistantActions>[0]['surfaceRegistry'],
 		});
 		const result = await actions.startSession('prod', '/home/user/myapp', 'codex');
 		expect(result.ok).toBe(true);
@@ -406,27 +446,30 @@ describe('DesktopAssistantActions — startSession (launcher wiring)', () => {
 		// resolveLaunchConnection was called with the resolved host id.
 		expect(launcherMock.resolveLaunchConnection).toHaveBeenCalledTimes(1);
 		expect(launcherMock.resolveLaunchConnection).toHaveBeenCalledWith(expect.anything(), 7);
-		// launchTmuxSession was called with the resolved conn + host + cwd + kind.
-		expect(launcherMock.launchTmuxSession).toHaveBeenCalledTimes(1);
-		const [passedConn, passedHost, cwd, kind] = vi.mocked(launcherMock.launchTmuxSession).mock.calls[0];
+		// launchTmuxSessionForAssistant was called with (conn, host, cwd, kind, surfaceRegistry).
+		expect(launcherMock.launchTmuxSessionForAssistant).toHaveBeenCalledTimes(1);
+		const [passedConn, passedHost, cwd, kind, passedRegistry] = vi.mocked(launcherMock.launchTmuxSessionForAssistant).mock.calls[0];
 		expect(passedConn).toBe(conn);
 		expect(passedHost.name).toBe('prod');
 		expect(cwd).toBe('/home/user/myapp');
 		expect(kind).toBe('codex');
+		expect(passedRegistry).toBe(surface);
 	});
 
 	it('surfaces a launcher failure as an error', async () => {
 		const conn = makeFakeConn();
+		const surface = makeSurfaceRegistry();
 		vi.mocked(launcherMock.resolveLaunchConnection).mockResolvedValue({
 			conn,
 			host: { id: 7, name: 'prod', hostname: 'prod.example.com' },
 		});
-		vi.mocked(launcherMock.launchTmuxSession).mockResolvedValue({
+		vi.mocked(launcherMock.launchTmuxSessionForAssistant).mockResolvedValue({
 			ok: false,
 			message: 'tmux send-keys failed: oops',
 		});
 		const actions = new DesktopAssistantActions({
 			connectionService: makeFakeService(conn, HOST) as ConnectionService,
+			surfaceRegistry: surface as unknown as Parameters<typeof DesktopAssistantActions>[0]['surfaceRegistry'],
 		});
 		const result = await actions.startSession('prod', '/home/user/app', 'shell');
 		expect(result.ok).toBe(false);
@@ -435,22 +478,131 @@ describe('DesktopAssistantActions — startSession (launcher wiring)', () => {
 
 	it('rejects an unknown agent name (no launcher call)', async () => {
 		const conn = makeFakeConn();
+		const surface = makeSurfaceRegistry();
 		const actions = new DesktopAssistantActions({
 			connectionService: makeFakeService(conn, HOST) as ConnectionService,
+			surfaceRegistry: surface as unknown as Parameters<typeof DesktopAssistantActions>[0]['surfaceRegistry'],
 		});
 		const result = await actions.startSession('prod', '/home/user/app', 'gemini');
 		expect(result.ok).toBe(false);
 		expect(result.message).toContain('Unknown agent');
-		expect(launcherMock.launchTmuxSession).not.toHaveBeenCalled();
+		expect(launcherMock.launchTmuxSessionForAssistant).not.toHaveBeenCalled();
 	});
 
 	it('returns an error for an unknown host', async () => {
+		const surface = makeSurfaceRegistry();
 		const actions = new DesktopAssistantActions({
 			connectionService: makeFakeService(makeFakeConn(), HOST) as ConnectionService,
+			surfaceRegistry: surface as unknown as Parameters<typeof DesktopAssistantActions>[0]['surfaceRegistry'],
 		});
 		const result = await actions.startSession('nope', '/home/user/app', 'shell');
 		expect(result.ok).toBe(false);
 		expect(result.message).toContain('Unknown host');
+	});
+
+	it('returns an error when no surfaceRegistry is wired (undrivable session)', async () => {
+		const conn = makeFakeConn();
+		const actions = new DesktopAssistantActions({
+			connectionService: makeFakeService(conn, HOST) as ConnectionService,
+		});
+		const result = await actions.startSession('prod', '/home/user/app', 'shell');
+		expect(result.ok).toBe(false);
+		expect(result.message).toContain('session terminal surface is unavailable');
+		expect(launcherMock.launchTmuxSessionForAssistant).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * D2.5 round-trip: the assistant's primary multi-step flow — start a session,
+ * then drive it. Proves the session started by `start_session` is resolvable by
+ * the assistant's OWN resolver + send/run tools (the pre-D2.5 gap: those tools
+ * only saw sessions opened via the normal UI). Mirrors the app's
+ * SessionActionBridge (which drives the sessions it starts).
+ *
+ * The mocked `launchTmuxSessionForAssistant` registers a fake pty into the
+ * surfaceRegistry — exactly what the REAL function does — so this exercises the
+ * real DesktopAssistantActions.startSession → findSessionPty → sendPromptToSession
+ * → runCommand seam end-to-end.
+ */
+describe('DesktopAssistantActions — start_session → send/run round-trip (D2.5)', () => {
+	beforeEach(() => {
+		vi.mocked(launcherMock.launchTmuxSessionForAssistant).mockReset();
+		vi.mocked(launcherMock.resolveLaunchConnection).mockReset();
+		currentAssistantPty = undefined;
+	});
+
+	it('a session started by start_session is drivable by send_prompt_to_session + run_command', async () => {
+		const conn = makeFakeConn();
+		const surface = makeSurfaceRegistry();
+		// The pty the launcher will register for the just-started session.
+		const startedPty = makeFakePty();
+		currentAssistantPty = startedPty;
+		// resolveLaunchConnection returns the resolved conn + host; the mock
+		// launchTmuxSessionForAssistant (top of file) registers startedPty under
+		// (host.id, 'mocked-session') into `surface`.
+		vi.mocked(launcherMock.resolveLaunchConnection).mockResolvedValue({
+			conn,
+			host: { id: 7, name: 'prod', hostname: 'prod.example.com' },
+		});
+
+		const actions = new DesktopAssistantActions({
+			connectionService: makeFakeService(conn, HOST) as ConnectionService,
+			surfaceRegistry: surface as unknown as Parameters<typeof DesktopAssistantActions>[0]['surfaceRegistry'],
+		});
+
+		// 1. start_session — must register the session so the resolver + send/run see it.
+		const start = await actions.startSession('prod', '/home/user/myapp', 'codex');
+		expect(start.ok).toBe(true);
+		// The session is now registered in the (mutable) fake surface registry.
+		expect(surface.list()).toHaveLength(1);
+		expect(surface.list()[0].sessionName).toBe('mocked-session');
+		expect(surface.getPty(7, 'mocked-session')).toBe(startedPty);
+
+		// 2. send_prompt_to_session — the named session the assistant JUST started
+		//    is resolvable + its pty receives the prompt (submit=true).
+		const send = await actions.sendPromptToSession('mocked-session', 'refactor this module');
+		expect(send.ok).toBe(true);
+		expect(startedPty.sendTextToActivePane).toHaveBeenCalledWith('refactor this module', true);
+
+		// 3. run_command — targets the ACTIVE session. The just-started session is
+		//    the only registered one, so it is the active session; its pty receives
+		//    the command (submit=true).
+		const run = await actions.runCommand('npm test');
+		expect(run.ok).toBe(true);
+		expect(startedPty.sendTextToActivePane).toHaveBeenCalledWith('npm test', true);
+
+		// 4. get_context — the active session resolves to the just-started one.
+		const ctx = await actions.getContext();
+		expect(ctx).toContain('session: mocked-session');
+		expect(ctx).toContain('connected: true');
+	});
+
+	it('NO-REGRESSION: a UI-opened session (pre-registered, not via start_session) is still drivable', async () => {
+		// This guards the hard constraint: the UI-opened-session path
+		// (surface.connect/openSession registers a TmuxSessionPseudoterminal) must
+		// still be drivable by the assistant. We simulate that by pre-registering
+		// a session in the fake surface registry (as surface.openSession would).
+		const uiPty = makeFakePty();
+		const surface = makeSurfaceRegistry([
+			{ hostId: 7, hostLabel: 'prod', sessionName: 'ui-session', terminal: {}, pty: uiPty },
+		]);
+		const actions = new DesktopAssistantActions({
+			connectionService: makeFakeService(makeFakeConn(), HOST) as ConnectionService,
+			surfaceRegistry: surface as unknown as Parameters<typeof DesktopAssistantActions>[0]['surfaceRegistry'],
+		});
+
+		// The UI-opened session is drivable by name.
+		const send = await actions.sendPromptToSession('ui-session', 'hello from ui');
+		expect(send.ok).toBe(true);
+		expect(uiPty.sendTextToActivePane).toHaveBeenCalledWith('hello from ui', true);
+
+		// And it's the active session (first registered), so run_command reaches it.
+		const run = await actions.runCommand('echo ui');
+		expect(run.ok).toBe(true);
+		expect(uiPty.sendTextToActivePane).toHaveBeenCalledWith('echo ui', true);
+
+		// start_session was never involved.
+		expect(launcherMock.launchTmuxSessionForAssistant).not.toHaveBeenCalled();
 	});
 });
 

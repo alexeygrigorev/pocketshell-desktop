@@ -16,6 +16,8 @@ import {
 	quoteShellArg,
 	type SessionKind,
 } from '../../backend/sessions/create-session';
+import { TmuxSessionPseudoterminal } from '../tmux-ui/tmux-session-terminal';
+import type { SessionTerminalRegistry } from '../surface/session-terminal-registry';
 
 /**
  * Shared tmux-session launcher — the tail of `createSession` (sessions-commands.ts)
@@ -91,6 +93,73 @@ export async function launchTmuxSession(
 		// surface the failure so the caller doesn't think it launched.
 		return { ok: false, message: `Failed to open the session terminal: ${String(err)}` };
 	}
+	terminal.show();
+	return { ok: true, result: { sessionName, terminal } };
+}
+
+/**
+ * Launch a tmux session the action assistant can IMMEDIATELY drive (D2.5 parity
+ * fix). Differs from {@link launchTmuxSession} (used by `createSession`) in ONE
+ * way only: after the SAME tmux setup + agent-command send, it attaches via a
+ * {@link TmuxSessionPseudoterminal} (the surface's drivable tmux -CC pty) and
+ * registers it in the {@link SessionTerminalRegistry} — so the assistant's own
+ * tools (`send_prompt_to_session` / `run_command` / `get_context`, which resolve
+ * ptys from the registries) can reach it. This matches the app's
+ * `SessionActionBridge`, which drives the sessions it starts.
+ *
+ * Why a SEPARATE entry point (not a flag on `launchTmuxSession`): `launchTmuxSession`
+ * is shared with `createSession` (sessions-commands.ts), which the D2 reviewer
+ * preserved byte-identical. `createSession` attaches via `SshPseudoterminal`
+ * (a raw interactive shell) — changing its pty type would change the terminal's
+ * rendering + attach semantics and regress that command. Isolating the assistant
+ * path keeps `createSession` byte-identical AND gives the assistant a registered,
+ * drivable session (the surface `surface.openSession` reference path).
+ *
+ * The tmux setup (session create + agent-command send) is byte-identical to
+ * `launchTmuxSession`: same `buildSessionName`/`buildWindowName`/`buildAgentStartCommand`,
+ * same `createOrAttachTmuxSession`. Only the attach + register tail differs.
+ *
+ * `surfaceRegistry` is required: it's where the assistant's resolver + send/run
+ * tools look. Lifecycle (lesson #20): `register()` wires a `onDidCloseTerminal`
+ * disposer owned by the registry, so terminal close cleans up the entry — no
+ * caller-side disposal needed.
+ */
+export async function launchTmuxSessionForAssistant(
+	conn: SshConnection,
+	host: LaunchHost,
+	startDirectory: string,
+	kind: SessionKind,
+	surfaceRegistry: SessionTerminalRegistry,
+): Promise<{ ok: true; result: LaunchResult } | { ok: false; message: string }> {
+	const sessionName = buildSessionName(startDirectory, kind);
+	const windowName = buildWindowName(startDirectory, kind);
+	const agentCommand = kind === 'shell' ? undefined : buildAgentStartCommand(kind, startDirectory);
+
+	const tmuxReady = await createOrAttachTmuxSession(conn, sessionName, startDirectory, windowName, agentCommand);
+	if (!tmuxReady.ok) {
+		return { ok: false, message: tmuxReady.message };
+	}
+
+	const hostLabel = host.name || host.hostname;
+	// Attach via the surface's drivable tmux -CC pty (NOT SshPseudoterminal) so
+	// sendTextToActivePane / getActivePaneMetadata work. startDir is the cwd the
+	// tmux -CC `new-session -A` opens at (create-or-attach — the session was
+	// already created above by createOrAttachTmuxSession, so this attaches).
+	const pty = new TmuxSessionPseudoterminal(conn, sessionName, startDirectory || undefined);
+	let terminal: vscode.Terminal;
+	try {
+		terminal = vscode.window.createTerminal({
+			name: `${hostLabel}: ${sessionName}`,
+			pty,
+			iconPath: new vscode.ThemeIcon(kind === 'shell' ? 'terminal-tmux' : 'hubot'),
+			location: vscode.TerminalLocation.Editor,
+		});
+	} catch (err) {
+		return { ok: false, message: `Failed to open the session terminal: ${String(err)}` };
+	}
+	// Register so the assistant's resolver + send_prompt_to_session / run_command
+	// can find this session by (hostId, sessionName). Mirrors surface.openSession.
+	surfaceRegistry.register(host.id, hostLabel, sessionName, terminal, pty);
 	terminal.show();
 	return { ok: true, result: { sessionName, terminal } };
 }

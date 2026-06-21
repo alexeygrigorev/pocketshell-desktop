@@ -28,7 +28,7 @@ import {
 	mapAgentNameToSessionKind,
 } from '../../backend/assistant/mutating-helpers';
 import type { SessionKind } from '../../backend/sessions/create-session';
-import { launchTmuxSession, resolveLaunchConnection } from '../sessions/session-launcher';
+import { launchTmuxSessionForAssistant, resolveLaunchConnection } from '../sessions/session-launcher';
 import type { TmuxSessionPseudoterminal } from '../tmux-ui/tmux-session-terminal';
 import { ActiveSessionResolver, type ActiveSession } from './active-session-resolver';
 
@@ -260,6 +260,13 @@ export class DesktopAssistantActions implements AssistantActions {
 		if (!cwd || cwd.trim().length === 0) {
 			return ActionResult.error('A working directory (cwd) is required to start a session.');
 		}
+		// The assistant drives the session it starts via the surface registry
+		// (send_prompt_to_session / run_command resolve ptys from it). Without a
+		// registry the round-trip can't work, so fail fast with a clear message
+		// instead of launching an undrivable session.
+		if (!this.deps.surfaceRegistry) {
+			return ActionResult.error('The session terminal surface is unavailable on this installation.');
+		}
 		const hostId = await this.resolveHostId(host);
 		if (hostId === undefined) {
 			return ActionResult.error(`Unknown host: ${host}`);
@@ -272,7 +279,16 @@ export class DesktopAssistantActions implements AssistantActions {
 		// Cast the validated agent name to the launcher's SessionKind (structurally
 		// identical: the non-shell members are the AgentType string values).
 		const kind = mapped as SessionKind;
-		const launched = await launchTmuxSession(resolved.conn, resolved.host, cwd, kind);
+		// Launch through the ASSISTANT-SPECIFIC path: same tmux setup + agent-command
+		// send as createSession, but attaches via a registered TmuxSessionPseudoterminal
+		// so the assistant's own tools can drive it (D2.5 parity fix).
+		const launched = await launchTmuxSessionForAssistant(
+			resolved.conn,
+			resolved.host,
+			cwd,
+			kind,
+			this.deps.surfaceRegistry,
+		);
 		if (!launched.ok) {
 			return ActionResult.error(launched.message);
 		}
