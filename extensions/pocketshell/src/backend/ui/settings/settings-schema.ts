@@ -20,7 +20,8 @@ export type SettingCategory =
   | 'usage'
   | 'helper'
   | 'diagnostics'
-  | 'utility';
+  | 'utility'
+  | 'assistant';
 
 export interface ValidationRule {
   /** Human-readable error message when the rule fails. */
@@ -456,6 +457,74 @@ const utilitySettings: SettingDefinition[] = [
 // Public helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Assistant (action-assistant) settings. Display-safe, non-secret fields only.
+ * The API key is stored separately in `vscode.SecretStorage` (NOT here) —
+ * deliberately NOT repeating the dictation key's plaintext-settings weakness.
+ * The defaults mirror `src/assistant/llm-types.ts` (kept in sync by hand — the
+ * settings view is feature-layer, the pure module is mirrored).
+ */
+const assistantSettings: SettingDefinition[] = [
+  {
+    key: 'assistantProvider',
+    label: 'Assistant provider',
+    description: 'LLM provider the in-app action assistant talks to. Dispatch 1 ships OpenAI only.',
+    type: 'enum',
+    category: 'assistant',
+    defaultValue: 'openai',
+    enumValues: ['openai', 'anthropic', 'zai'],
+    validation: [],
+  },
+  {
+    key: 'assistantOpenAiBaseUrl',
+    label: 'OpenAI base URL',
+    description: 'Base URL for the OpenAI Chat Completions API (or an OpenAI-compatible gateway).',
+    type: 'string',
+    category: 'assistant',
+    defaultValue: 'https://api.openai.com/v1',
+    validation: [
+      { message: 'OpenAI base URL cannot be empty', minLength: 1 },
+      { message: 'OpenAI base URL must be at most 1024 characters', maxLength: 1024 },
+    ],
+  },
+  {
+    key: 'assistantOpenAiModel',
+    label: 'OpenAI model',
+    description: 'OpenAI Chat Completions model id (e.g. gpt-4o).',
+    type: 'string',
+    category: 'assistant',
+    defaultValue: 'gpt-4o',
+    validation: [
+      { message: 'OpenAI model cannot be empty', minLength: 1 },
+      { message: 'OpenAI model must be at most 128 characters', maxLength: 128 },
+    ],
+  },
+  {
+    key: 'assistantAnthropicBaseUrl',
+    label: 'Anthropic base URL',
+    description: 'Base URL for the Anthropic Messages API. Used when provider is anthropic or zai (Dispatch 3).',
+    type: 'string',
+    category: 'assistant',
+    defaultValue: 'https://api.anthropic.com/v1',
+    validation: [
+      { message: 'Anthropic base URL cannot be empty', minLength: 1 },
+      { message: 'Anthropic base URL must be at most 1024 characters', maxLength: 1024 },
+    ],
+  },
+  {
+    key: 'assistantAnthropicModel',
+    label: 'Anthropic model',
+    description: 'Anthropic Messages model id (e.g. claude-3-5-sonnet-latest). Used in Dispatch 3.',
+    type: 'string',
+    category: 'assistant',
+    defaultValue: 'claude-3-5-sonnet-latest',
+    validation: [
+      { message: 'Anthropic model cannot be empty', minLength: 1 },
+      { message: 'Anthropic model must be at most 128 characters', maxLength: 128 },
+    ],
+  },
+];
+
 /** All setting definitions in schema order, grouped by category. */
 export const ALL_SETTINGS: SettingDefinition[] = [
   ...connectionSettings,
@@ -466,6 +535,7 @@ export const ALL_SETTINGS: SettingDefinition[] = [
   ...helperSettings,
   ...diagnosticsSettings,
   ...utilitySettings,
+  ...assistantSettings,
 ];
 
 /** Map from setting key to its definition for O(1) lookups. */

@@ -16,6 +16,7 @@
 		"ui",
 		"workspace"
 	],
+	"enableSecretStorage": true,
 	"activationEvents": [
 		"*"
 	],
@@ -815,7 +816,9 @@
 			{ "command": "pocketshell.update.check", "title": "Update: Check for Extension Update", "category": "PocketShell", "icon": "$(refresh)" },
 			{ "command": "pocketshell.update.apply", "title": "Update: Apply Latest Extension Update", "category": "PocketShell", "icon": "$(cloud-download)" },
 			{ "command": "pocketshell.__test.settings.get", "title": "__test: Settings Get", "category": "PocketShell", "enablement": "false" },
-			{ "command": "pocketshell.__test.settings.update", "title": "__test: Settings Update", "category": "PocketShell", "enablement": "false" }
+			{ "command": "pocketshell.__test.settings.update", "title": "__test: Settings Update", "category": "PocketShell", "enablement": "false" },
+			{ "command": "pocketshell.assistant.ask", "title": "Assistant: Ask", "category": "PocketShell", "icon": "$(sparkle)" },
+			{ "command": "pocketshell.assistant.configure", "title": "Assistant: Configure", "category": "PocketShell", "icon": "$(gear)" }
 		],
 		"menus": {
 			"explorer/context": [
@@ -1006,7 +1009,12 @@
 				"pocketshell.tmux.sessionPrefix": { "type": "string", "default": "psh-", "description": "Prefix applied to PocketShell-created tmux session names.", "scope": "machine" },
 				"pocketshell.cli.minVersion": { "type": "string", "default": "0.1.0", "description": "Lowest PocketShell CLI version treated as compatible. Hosts running older versions are flagged for upgrade.", "scope": "machine" },
 				"pocketshell.connection.connectTimeoutMs": { "type": "number", "default": 15000, "minimum": 1000, "maximum": 300000, "description": "Milliseconds to wait for an SSH connection before failing.", "scope": "machine" },
-				"pocketshell.diagnostics.capture": { "type": "boolean", "default": true, "description": "Record local diagnostic events for the PocketShell report.", "scope": "window" }
+				"pocketshell.diagnostics.capture": { "type": "boolean", "default": true, "description": "Record local diagnostic events for the PocketShell report.", "scope": "window" },
+				"pocketshell.assistant.provider": { "type": "string", "enum": ["openai", "anthropic", "zai"], "default": "openai", "description": "LLM provider the in-app action assistant talks to. Dispatch 1 ships OpenAI only.", "scope": "machine" },
+				"pocketshell.assistant.openAiBaseUrl": { "type": "string", "default": "https://api.openai.com/v1", "description": "Base URL for the OpenAI Chat Completions API (or an OpenAI-compatible gateway). The API key is stored separately in SecretStorage.", "scope": "machine" },
+				"pocketshell.assistant.openAiModel": { "type": "string", "default": "gpt-4o", "description": "OpenAI Chat Completions model id.", "scope": "machine" },
+				"pocketshell.assistant.anthropicBaseUrl": { "type": "string", "default": "https://api.anthropic.com/v1", "description": "Base URL for the Anthropic Messages API. Used when provider is anthropic or zai (Dispatch 3).", "scope": "machine" },
+				"pocketshell.assistant.anthropicModel": { "type": "string", "default": "claude-3-5-sonnet-latest", "description": "Anthropic Messages model id. Used in Dispatch 3.", "scope": "machine" }
 			}
 		},
 		"viewsWelcome": [

@@ -26,6 +26,7 @@ import { TMUX_UI_FEATURE } from './tmux-ui';
 import { SESSIONS_FEATURE } from './sessions';
 import { PORT_FORWARDING_FEATURE } from './port-forwarding';
 import { SURFACE_FEATURE } from './surface';
+import { ASSISTANT_FEATURE } from './assistant';
 
 // Each wired feature appends itself here (one import + one array element per batch).
 export const FEATURES: FeatureRegistration[] = [
@@ -51,4 +52,5 @@ export const FEATURES: FeatureRegistration[] = [
 	CONVERSATION_FEATURE,
 	FILES_FEATURE,
 	PALETTE_FEATURE,
+	ASSISTANT_FEATURE,
 ];

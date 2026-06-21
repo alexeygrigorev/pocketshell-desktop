@@ -52,6 +52,7 @@ const CATEGORY_TITLES: Record<SettingCategory, string> = {
   helper: 'Helper',
   diagnostics: 'Diagnostics',
   utility: 'Utility',
+  assistant: 'Assistant',
 };
 
 // ---------------------------------------------------------------------------
