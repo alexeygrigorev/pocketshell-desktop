@@ -27,8 +27,8 @@ jobs:
             runner: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
 
@@ -39,7 +39,7 @@ jobs:
       # ── Cache compiled VS Code base ───────────────────────
       - name: Cache VS Code base
         id: cache-base
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: vendor/vscode
           key: vscode-${{ env.VSCODE_REF }}-${{ matrix.platform }}-base-v3
@@ -134,8 +134,8 @@ jobs:
       GIT_CONFIG_VALUE_0: 'false'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
 
@@ -146,7 +146,7 @@ jobs:
       # ── Restore compiled VS Code base (must be present) ───
       - name: Cache VS Code base
         id: cache-base
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: vendor/vscode
           key: vscode-${{ env.VSCODE_REF }}-${{ matrix.platform }}-base-v3
@@ -361,7 +361,7 @@ jobs:
         # files, so DELTA_ZIP/DELTA_MANIFEST are unset. Without this guard the
         # upload step's `if-no-files-found: error` would fail the build.
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: pocketshell-extension-${{ matrix.platform }}
           path: |
@@ -453,7 +453,7 @@ jobs:
           echo "Created $ZIP_NAME"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: pocketshell-*
@@ -467,12 +467,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: release-assets/
 
