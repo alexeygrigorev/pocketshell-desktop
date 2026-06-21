@@ -57,6 +57,60 @@ function quoteTmuxArg(input: string): string {
   return `"${input.replace(/[\\"$]/g, (ch) => `\\${ch}`)}"`;
 }
 
+// ---------------------------------------------------------------------------
+// Bracketed paste (app parity: PocketShell Android BracketedPaste.kt)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bracketed-paste start/end markers, as terminal escape sequences.
+ * `[200~` / `[201~` (DECSET 2004 paste framing).
+ */
+const BRACKETED_PASTE_START = '[200~';
+const BRACKETED_PASTE_END = '[201~';
+const HEX_DIGITS = '0123456789abcdef';
+
+/**
+ * Returns true if `text` contains a line feed (`\n`).
+ *
+ * Mirrors `BracketedPaste.containsLineBreak` from the Android app: multiline
+ * input is routed through the bracketed-paste path so the receiving program
+ * treats the whole block as ONE paste instead of executing line-by-line.
+ * Lone `\r` (carriage return) does NOT count as a paragraph break here, just
+ * like the app.
+ */
+export function containsLineBreak(text: string): boolean {
+  return text.indexOf('\n') !== -1;
+}
+
+/**
+ * Build the hex payload for a bracketed-paste block, matching the Android app's
+ * `BracketedPaste.hexPayload` byte-for-byte.
+ *
+ * The payload is the UTF-8 bytes of `[200~` + normalised content +
+ * `[201~`, rendered as space-separated lowercase hex pairs. Line endings
+ * are normalised: `\r\n` → `\n`, lone `\r` is passed through. Empty input yields
+ * an empty string (no markers).
+ *
+ * tmux's command parser terminates commands at a literal newline byte, so a
+ * paste body containing `\n` cannot ride inside `send-keys -l "<arg>"`. Sending
+ * the framed bytes via `send-keys -H <hex>` (one hex pair per byte) is the
+ * standard way to inject an exact byte stream including 0x0A.
+ */
+export function buildBracketedPasteHex(text: string): string {
+  if (text.length === 0) return '';
+  const normalised = text.replace(/\r\n/g, '\n');
+  const framed = BRACKETED_PASTE_START + normalised + BRACKETED_PASTE_END;
+  const bytes = Buffer.from(framed, 'utf-8');
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) {
+    if (i > 0) hex += ' ';
+    const v = bytes[i];
+    hex += HEX_DIGITS[(v >>> 4) & 0xf];
+    hex += HEX_DIGITS[v & 0xf];
+  }
+  return hex;
+}
+
 function buildSendInputCommand(paneId: string, data: string): string {
   const target = quoteTmuxArg(paneId);
   const commands: string[] = [];
@@ -254,6 +308,23 @@ export class TmuxClient extends EventEmitter {
    */
   async sendInput(paneId: string, data: string): Promise<CommandResponse> {
     return this.enqueueCommand(buildSendInputCommand(paneId, data));
+  }
+
+  /**
+   * Send multiline `text` to a pane as a bracketed-paste block (app parity:
+   * `ShareViewModel.pasteIntoSession` / `BracketedPaste.hexPayload`).
+   *
+   * The framed bytes (`\e[200~` + normalised content + `\e[201~`) are injected
+   * via `send-keys -H <hex>`, which is the only `send-keys` flavour that can
+   * carry a literal 0x0A byte. Empty / whitespace-only text is a no-op so we
+   * never send bare paste markers.
+   */
+  async sendBracketedPaste(paneId: string, text: string): Promise<CommandResponse> {
+    const hex = buildBracketedPasteHex(text);
+    if (hex.length === 0) {
+      return { number: 0, output: [], isError: false };
+    }
+    return this.enqueueCommand(`send-keys -H -t ${quoteTmuxArg(paneId)} ${hex}`);
   }
 
   /**

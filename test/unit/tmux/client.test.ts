@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TmuxClient, type SshChannel } from '../../../src/tmux/client';
+import { TmuxClient, containsLineBreak, buildBracketedPasteHex, type SshChannel } from '../../../src/tmux/client';
 import type { StreamReader } from '../../../src/tmux/stream';
 
 // ---------------------------------------------------------------------------
@@ -563,5 +563,129 @@ describe('TmuxClient', () => {
     await paneResize;
 
     await client.close();
+  });
+
+  // -------------------------------------------------------------------------
+  // Bracketed paste (app parity: PocketShell Android BracketedPaste.kt)
+  // -------------------------------------------------------------------------
+
+  it('wraps multiline paste as one send-keys -H bracketed-paste block with no per-line Enter', async () => {
+    await client.connect(channel);
+
+    const command = client.sendBracketedPaste('%1', 'line1\nline2');
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    // Single command, framed by the bracketed-paste hex markers, NO Enter.
+    expect(written).toBe(
+      'send-keys -H -t "%1" 1b 5b 32 30 30 7e 6c 69 6e 65 31 0a 6c 69 6e 65 32 1b 5b 32 30 31 7e\n',
+    );
+    // The body LF byte (0a) must appear exactly once — i.e. NO per-line Enter
+    // was emitted (an Enter would have split the payload into two commands).
+    const payload = written.slice('send-keys -H -t "%1" '.length, -1);
+    expect(payload.split(' ').filter((b) => b === '0a')).toHaveLength(1);
+    // Start marker (1b 5b 32 30 30 7e) opens the payload; end marker closes it.
+    expect(payload.startsWith('1b 5b 32 30 30 7e')).toBe(true);
+    expect(payload.endsWith('1b 5b 32 30 31 7e')).toBe(true);
+    // No trailing Enter command (the multiline footgun the fix removes).
+    expect(written).not.toContain('Enter');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('single-line sendInput is byte-unchanged (no bracketed-paste markers)', async () => {
+    await client.connect(channel);
+
+    const command = client.sendInput('%1', 'ls -la\r');
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    // Exact legacy shape for a single-line input ending in CR: literal + Enter.
+    expect(written).toBe('send-keys -t "%1" -l "ls -la" ; send-keys -t "%1" Enter\n');
+    expect(written).not.toContain('-H');
+    expect(written).not.toContain('1b 5b 32 30 30 7e');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('sendBracketedPaste is a no-op for empty text (no bare markers, no tmux command)', async () => {
+    await client.connect(channel);
+
+    // Empty input short-circuits before enqueuing — nothing is written beyond
+    // the spawn command, and no tmux response is awaited.
+    const emptyRes = await client.sendBracketedPaste('%1', '');
+    expect(emptyRes.isError).toBe(false);
+    expect(channel.written).toHaveLength(1);
+
+    await client.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pure bracketed-paste helpers (app parity: BracketedPaste.kt)
+// ---------------------------------------------------------------------------
+
+describe('containsLineBreak', () => {
+  it('returns true when a line feed is present', () => {
+    expect(containsLineBreak('a\nb')).toBe(true);
+    expect(containsLineBreak('\n')).toBe(true);
+    expect(containsLineBreak('a\r\nb')).toBe(true);
+  });
+
+  it('returns false for single-line text and lone CR (matching the app)', () => {
+    expect(containsLineBreak('single line')).toBe(false);
+    expect(containsLineBreak('')).toBe(false);
+    // Lone CR is NOT a paragraph break in the app's containsLineBreak.
+    expect(containsLineBreak('a\rb')).toBe(false);
+  });
+});
+
+describe('buildBracketedPasteHex', () => {
+  it('frames multiline content between the start/end markers with normalised LF', () => {
+    // line1\nline2 -> 1b5b323030 7e (start) + body + 1b5b323031 7e (end)
+    expect(buildBracketedPasteHex('line1\nline2')).toBe(
+      '1b 5b 32 30 30 7e 6c 69 6e 65 31 0a 6c 69 6e 65 32 1b 5b 32 30 31 7e',
+    );
+  });
+
+  it('normalises CRLF to LF inside the paste body (app parity)', () => {
+    // "a\r\nb" -> start + 61 0a 62 + end (the \r\n collapses to a single 0a).
+    expect(buildBracketedPasteHex('a\r\nb')).toBe(
+      '1b 5b 32 30 30 7e 61 0a 62 1b 5b 32 30 31 7e',
+    );
+  });
+
+  it('passes a lone CR through unchanged (not a paragraph break)', () => {
+    // "a\rb" -> start + 61 0d 62 + end (\r stays as 0d, no normalisation).
+    expect(buildBracketedPasteHex('a\rb')).toBe(
+      '1b 5b 32 30 30 7e 61 0d 62 1b 5b 32 30 31 7e',
+    );
+  });
+
+  it('encodes multibyte UTF-8 correctly inside the frame', () => {
+    // "é\n" -> start + c3 a9 0a + end.
+    expect(buildBracketedPasteHex('é\n')).toBe(
+      '1b 5b 32 30 30 7e c3 a9 0a 1b 5b 32 30 31 7e',
+    );
+  });
+
+  it('returns an empty string for empty input (no bare markers)', () => {
+    expect(buildBracketedPasteHex('')).toBe('');
+  });
+
+  it('never emits a trailing Enter / 0d 0a sequence — only the framed body', () => {
+    const hex = buildBracketedPasteHex('first\nsecond\nthird');
+    // Only the LF separators (two of them) inside the body; no CRLF, no Enter.
+    expect(hex.split(' ').filter((b) => b === '0a')).toHaveLength(2);
+    expect(hex).not.toContain('0d 0a');
+    expect(hex.endsWith('1b 5b 32 30 31 7e')).toBe(true);
   });
 });
