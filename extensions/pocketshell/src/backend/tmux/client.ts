@@ -57,6 +57,98 @@ function quoteTmuxArg(input: string): string {
   return `"${input.replace(/[\\"$]/g, (ch) => `\\${ch}`)}"`;
 }
 
+// ---------------------------------------------------------------------------
+// Bracketed paste (app parity: PocketShell Android BracketedPaste.kt)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bracketed-paste start/end markers, as terminal escape sequences.
+ * `[200~` / `[201~` (DECSET 2004 paste framing).
+ */
+const BRACKETED_PASTE_START = '[200~';
+const BRACKETED_PASTE_END = '[201~';
+const HEX_DIGITS = '0123456789abcdef';
+
+/**
+ * Returns true if `text` contains a line feed (`\n`).
+ *
+ * Mirrors `BracketedPaste.containsLineBreak` from the Android app: multiline
+ * input is routed through the bracketed-paste path so the receiving program
+ * treats the whole block as ONE paste instead of executing line-by-line.
+ * Lone `\r` (carriage return) does NOT count as a paragraph break here, just
+ * like the app.
+ */
+export function containsLineBreak(text: string): boolean {
+  return text.indexOf('\n') !== -1;
+}
+
+/**
+ * Maximum body size, in source bytes, carried by a single `send-keys -H`
+ * command. Mirrors `BracketedPaste.BODY_CHUNK_BYTES` from the Android app.
+ *
+ * tmux's control-mode command input buffer caps near ~16,344 bytes (tmux issue
+ * #254); hex is ~3 chars/byte, so a single `send-keys -H <hex>` command can
+ * only safely carry ~5 KB of raw text. Chunking the body at 1024 source bytes
+ * keeps every command well under that ceiling, matching the app's transport.
+ */
+const BRACKETED_PASTE_BODY_CHUNK_BYTES = 1024;
+
+/**
+ * Hex-encode a byte range as space-separated lowercase pairs (e.g. `1b 5b 32`).
+ * Matches `BracketedPaste.hex(bytes, offset, length)` from the Android app: no
+ * leading or trailing separator, lowercase digits.
+ */
+function hexEncodeBytes(bytes: Buffer, offset: number, length: number): string {
+  if (length <= 0) return '';
+  let hex = '';
+  for (let i = offset; i < offset + length; i++) {
+    if (hex.length > 0) hex += ' ';
+    const v = bytes[i];
+    hex += HEX_DIGITS[(v >>> 4) & 0xf];
+    hex += HEX_DIGITS[v & 0xf];
+  }
+  return hex;
+}
+
+/**
+ * Build the single-frame hex payload for a bracketed-paste block, matching the
+ * Android app's `BracketedPaste.hexPayload` byte-for-byte. Equivalent to joining
+ * `buildBracketedPasteHexChunks(text)` with spaces. Empty input yields ''.
+ */
+export function buildBracketedPasteHex(text: string): string {
+  const chunks = buildBracketedPasteHexChunks(text);
+  return chunks.join(' ');
+}
+
+/**
+ * Build the chunked hex payloads for a bracketed-paste block, matching the
+ * Android app's `BracketedPaste.hexChunks` exactly (the transport the app uses
+ * in `TmuxSessionViewModel.sendBracketedPaste`).
+ *
+ * Returns one hex string per `send-keys -H` command: the paste-start marker,
+ * the body sliced into <= BRACKETED_PASTE_BODY_CHUNK_BYTES source-byte chunks
+ * (after `\r\n` to `\n` normalisation), then the paste-end marker. Even a tiny
+ * paste yields three entries (start, body, end); empty input yields [] (no
+ * commands at all, so we never send bare markers). The concatenation of every
+ * chunk's hex bytes equals `buildBracketedPasteHex(text)` -- i.e. the bytes
+ * reaching the pane are identical to the single-frame form.
+ */
+export function buildBracketedPasteHexChunks(text: string): string[] {
+  if (text.length === 0) return [];
+  const normalised = text.replace(/\r\n/g, '\n');
+  const startBytes = Buffer.from(BRACKETED_PASTE_START, 'utf-8');
+  const endBytes = Buffer.from(BRACKETED_PASTE_END, 'utf-8');
+  const bodyBytes = Buffer.from(normalised, 'utf-8');
+  const chunkSize = BRACKETED_PASTE_BODY_CHUNK_BYTES;
+  const chunks: string[] = [hexEncodeBytes(startBytes, 0, startBytes.length)];
+  for (let offset = 0; offset < bodyBytes.length; offset += chunkSize) {
+    const length = Math.min(chunkSize, bodyBytes.length - offset);
+    chunks.push(hexEncodeBytes(bodyBytes, offset, length));
+  }
+  chunks.push(hexEncodeBytes(endBytes, 0, endBytes.length));
+  return chunks;
+}
+
 function buildSendInputCommand(paneId: string, data: string): string {
   const target = quoteTmuxArg(paneId);
   const commands: string[] = [];
@@ -254,6 +346,41 @@ export class TmuxClient extends EventEmitter {
    */
   async sendInput(paneId: string, data: string): Promise<CommandResponse> {
     return this.enqueueCommand(buildSendInputCommand(paneId, data));
+  }
+
+  /**
+   * Send multiline `text` to a pane as a bracketed-paste block (app parity:
+   * `ShareViewModel.pasteIntoSession` / `BracketedPaste.hexChunks`).
+   *
+   * The framed bytes (`\e[200~` + normalised content + `\e[201~`) are injected
+   * via `send-keys -H <hex>`, which is the only `send-keys` flavour that can
+   * carry a literal 0x0A byte. Empty / whitespace-only text is a no-op so we
+   * never send bare paste markers.
+   *
+   * The body is chunked at `BRACKETED_PASTE_BODY_CHUNK_BYTES` (1024) source
+   * bytes and the start marker, each body chunk, and end marker are emitted as
+   * SEPARATE `send-keys -H -t <pane> <hex>` commands -- exactly the app's
+   * transport (`TmuxSessionViewModel.sendBracketedPaste`). A single >5 KB paste
+   * would otherwise exceed tmux's control-mode command buffer (tmux issue #254,
+   * "command too long"). If any chunk is rejected (`isError`), the error
+   * response is returned immediately and no further chunks are sent, so the
+   * caller's `throwIfError` surfaces the failure and the composer keeps the
+   * unsent draft (app parity: `throwIfTmuxError`).
+   */
+  async sendBracketedPaste(paneId: string, text: string): Promise<CommandResponse> {
+    const chunks = buildBracketedPasteHexChunks(text);
+    if (chunks.length === 0) {
+      return { number: 0, output: [], isError: false };
+    }
+    const target = quoteTmuxArg(paneId);
+    let response: CommandResponse = { number: 0, output: [], isError: false };
+    for (const hex of chunks) {
+      response = await this.enqueueCommand(`send-keys -H -t ${target} ${hex}`);
+      if (response.isError) {
+        return response;
+      }
+    }
+    return response;
   }
 
   /**

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TmuxClient, type SshChannel } from '../../../src/tmux/client';
+import { TmuxClient, containsLineBreak, buildBracketedPasteHex, buildBracketedPasteHexChunks, type SshChannel } from '../../../src/tmux/client';
 import type { StreamReader } from '../../../src/tmux/stream';
 
 // ---------------------------------------------------------------------------
@@ -563,5 +563,250 @@ describe('TmuxClient', () => {
     await paneResize;
 
     await client.close();
+  });
+
+  // -------------------------------------------------------------------------
+  // Bracketed paste (app parity: PocketShell Android BracketedPaste.kt)
+  // -------------------------------------------------------------------------
+
+  it('wraps multiline paste as separate chunked send-keys -H bracketed-paste commands with no per-line Enter', async () => {
+    await client.connect(channel);
+
+    const command = client.sendBracketedPaste('%1', 'line1\nline2');
+    // The client serializes commands, so it sends chunk N+1 only after chunk N's
+    // response arrives. Interleave: wait for each write, then push its response.
+    // Body is tiny (< 1024 bytes) -> 3 chunks: start marker, body, end marker.
+    const writes: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      await channel.waitForWrites(1 + i + 1);
+      writes.push(channel.written[1 + i].toString('utf-8'));
+      channel.stdoutReader.pushLine(`%begin 1700000000 ${i + 1} 0`);
+      channel.stdoutReader.pushLine(`%end 1700000000 ${i + 1} 0`);
+    }
+
+    // Three separate commands, one per chunk (paste-start, body, paste-end).
+    expect(writes).toHaveLength(3);
+    expect(writes[0]).toBe('send-keys -H -t "%1" 1b 5b 32 30 30 7e\n');
+    expect(writes[1]).toBe('send-keys -H -t "%1" 6c 69 6e 65 31 0a 6c 69 6e 65 32\n');
+    expect(writes[2]).toBe('send-keys -H -t "%1" 1b 5b 32 30 31 7e\n');
+
+    // Concatenating every chunk's hex bytes must equal the single-frame hex for
+    // the same input (bytes reaching the pane are unchanged) -- app parity.
+    const joinedHex = writes.map((w) => w.slice('send-keys -H -t "%1" '.length, -1)).join(' ');
+    expect(joinedHex).toBe(buildBracketedPasteHex('line1\nline2'));
+
+    // The body LF byte (0a) must appear exactly once across all chunks -- no
+    // per-line Enter was emitted (the multiline footgun the fix removes).
+    const lfCount = writes
+      .map((w) => w.slice('send-keys -H -t "%1" '.length, -1).split(' '))
+      .flat()
+      .filter((b) => b === '0a').length;
+    expect(lfCount).toBe(1);
+    // No trailing Enter command.
+    expect(writes.join('')).not.toContain('Enter');
+
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('chunked multiline paste >5 KB splits the body into <=1024-byte send-keys -H commands (app parity)', async () => {
+    await client.connect(channel);
+
+    // >5 KB of raw text so the body exceeds a single 1024-byte chunk (this is
+    // the case where the desktop's old single-command transport failed with
+    // tmux "command too long" but the app succeeded -- tmux issue #254).
+    const line = 'line-of-text\n'; // 13 source bytes
+    const repeats = 600; // 7800 bytes, 600 LF -> body well over one chunk
+    const bigText = line.repeat(repeats);
+    const bodyBytes = Buffer.from(bigText.replace(/\r\n/g, '\n'), 'utf-8');
+    expect(bodyBytes.length).toBeGreaterThan(1024);
+
+    const expectedChunks = buildBracketedPasteHexChunks(bigText);
+    // start + ceil(body/1024) body chunks + end >= 4 commands.
+    const expectedBodyChunks = Math.ceil(bodyBytes.length / 1024);
+    expect(expectedChunks.length).toBe(2 + expectedBodyChunks);
+    expect(expectedBodyChunks).toBeGreaterThanOrEqual(2);
+
+    const command = client.sendBracketedPaste('%1', bigText);
+
+    // Commands are serialized: send chunk i, await its response, send chunk i+1.
+    const writes: string[] = [];
+    for (let i = 0; i < expectedChunks.length; i++) {
+      await channel.waitForWrites(1 + i + 1);
+      writes.push(channel.written[1 + i].toString('utf-8'));
+      channel.stdoutReader.pushLine(`%begin 1700000000 ${i + 1} 0`);
+      channel.stdoutReader.pushLine(`%end 1700000000 ${i + 1} 0`);
+    }
+    expect(writes).toHaveLength(expectedChunks.length);
+
+    // Every chunk command has the same shape and targets the quoted pane.
+    for (const w of writes) {
+      expect(w.startsWith('send-keys -H -t "%1" ')).toBe(true);
+      expect(w.endsWith('\n')).toBe(true);
+    }
+
+    // First command carries ONLY the paste-start marker; last ONLY paste-end.
+    expect(writes[0]).toBe('send-keys -H -t "%1" 1b 5b 32 30 30 7e\n');
+    expect(writes[writes.length - 1]).toBe('send-keys -H -t "%1" 1b 5b 32 30 31 7e\n');
+
+    // Every BODY chunk must be <= 1024 source bytes. Locks the parity fix.
+    const bodyWrites = writes.slice(1, -1);
+    expect(bodyWrites.length).toBe(expectedBodyChunks);
+    for (const w of bodyWrites) {
+      const hex = w.slice('send-keys -H -t "%1" '.length, -1);
+      // Each hex token is one byte; body chunk carries <= 1024 bytes.
+      const byteCount = hex === '' ? 0 : hex.split(' ').length;
+      expect(byteCount).toBeGreaterThan(0);
+      expect(byteCount).toBeLessThanOrEqual(1024);
+    }
+
+    // Concatenated hex of all chunks == single-frame hex (bytes unchanged).
+    const joinedHex = writes.map((w) => w.slice('send-keys -H -t "%1" '.length, -1)).join(' ');
+    expect(joinedHex).toBe(buildBracketedPasteHex(bigText));
+
+    // All chunk responses were pushed in the interleaved loop above.
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('single-line sendInput is byte-unchanged (no bracketed-paste markers)', async () => {
+    await client.connect(channel);
+
+    const command = client.sendInput('%1', 'ls -la\r');
+    await channel.waitForWrites(2);
+
+    const written = channel.written[1].toString('utf-8');
+    // Exact legacy shape for a single-line input ending in CR: literal + Enter.
+    expect(written).toBe('send-keys -t "%1" -l "ls -la" ; send-keys -t "%1" Enter\n');
+    expect(written).not.toContain('-H');
+    expect(written).not.toContain('1b 5b 32 30 30 7e');
+
+    channel.stdoutReader.pushLine('%begin 1700000000 1 0');
+    channel.stdoutReader.pushLine('%end 1700000000 1 0');
+    await expect(command).resolves.toMatchObject({ isError: false });
+
+    await client.close();
+  });
+
+  it('sendBracketedPaste is a no-op for empty text (no bare markers, no tmux command)', async () => {
+    await client.connect(channel);
+
+    // Empty input short-circuits before enqueuing — nothing is written beyond
+    // the spawn command, and no tmux response is awaited.
+    const emptyRes = await client.sendBracketedPaste('%1', '');
+    expect(emptyRes.isError).toBe(false);
+    expect(channel.written).toHaveLength(1);
+
+    await client.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pure bracketed-paste helpers (app parity: BracketedPaste.kt)
+// ---------------------------------------------------------------------------
+
+describe('containsLineBreak', () => {
+  it('returns true when a line feed is present', () => {
+    expect(containsLineBreak('a\nb')).toBe(true);
+    expect(containsLineBreak('\n')).toBe(true);
+    expect(containsLineBreak('a\r\nb')).toBe(true);
+  });
+
+  it('returns false for single-line text and lone CR (matching the app)', () => {
+    expect(containsLineBreak('single line')).toBe(false);
+    expect(containsLineBreak('')).toBe(false);
+    // Lone CR is NOT a paragraph break in the app's containsLineBreak.
+    expect(containsLineBreak('a\rb')).toBe(false);
+  });
+});
+
+describe('buildBracketedPasteHex', () => {
+  it('frames multiline content between the start/end markers with normalised LF', () => {
+    // line1\nline2 -> 1b5b323030 7e (start) + body + 1b5b323031 7e (end)
+    expect(buildBracketedPasteHex('line1\nline2')).toBe(
+      '1b 5b 32 30 30 7e 6c 69 6e 65 31 0a 6c 69 6e 65 32 1b 5b 32 30 31 7e',
+    );
+  });
+
+  it('normalises CRLF to LF inside the paste body (app parity)', () => {
+    // "a\r\nb" -> start + 61 0a 62 + end (the \r\n collapses to a single 0a).
+    expect(buildBracketedPasteHex('a\r\nb')).toBe(
+      '1b 5b 32 30 30 7e 61 0a 62 1b 5b 32 30 31 7e',
+    );
+  });
+
+  it('passes a lone CR through unchanged (not a paragraph break)', () => {
+    // "a\rb" -> start + 61 0d 62 + end (\r stays as 0d, no normalisation).
+    expect(buildBracketedPasteHex('a\rb')).toBe(
+      '1b 5b 32 30 30 7e 61 0d 62 1b 5b 32 30 31 7e',
+    );
+  });
+
+  it('encodes multibyte UTF-8 correctly inside the frame', () => {
+    // "é\n" -> start + c3 a9 0a + end.
+    expect(buildBracketedPasteHex('é\n')).toBe(
+      '1b 5b 32 30 30 7e c3 a9 0a 1b 5b 32 30 31 7e',
+    );
+  });
+
+  it('returns an empty string for empty input (no bare markers)', () => {
+    expect(buildBracketedPasteHex('')).toBe('');
+  });
+
+  it('never emits a trailing Enter / 0d 0a sequence — only the framed body', () => {
+    const hex = buildBracketedPasteHex('first\nsecond\nthird');
+    // Only the LF separators (two of them) inside the body; no CRLF, no Enter.
+    expect(hex.split(' ').filter((b) => b === '0a')).toHaveLength(2);
+    expect(hex).not.toContain('0d 0a');
+    expect(hex.endsWith('1b 5b 32 30 31 7e')).toBe(true);
+  });
+});
+
+describe('buildBracketedPasteHexChunks (app parity: BracketedPaste.hexChunks, BODY_CHUNK_BYTES=1024)', () => {
+  it('returns [] for empty input (no bare markers, no commands)', () => {
+    expect(buildBracketedPasteHexChunks('')).toEqual([]);
+  });
+
+  it('emits paste-start, single body chunk, paste-end as 3 separate entries for a small paste', () => {
+    const chunks = buildBracketedPasteHexChunks('line1\nline2');
+    expect(chunks).toEqual([
+      '1b 5b 32 30 30 7e',
+      '6c 69 6e 65 31 0a 6c 69 6e 65 32',
+      '1b 5b 32 30 31 7e',
+    ]);
+  });
+
+  it('slices the body at <= 1024 source bytes per chunk for large input', () => {
+    const line = 'x'.repeat(100) + '\n'; // 101 source bytes
+    const bigText = line.repeat(50); // 5050 bytes -> 5 body chunks (1024+1024+1024+1024+954)
+    const bodyBytes = Buffer.from(bigText.replace(/\r\n/g, '\n'), 'utf-8');
+    const chunks = buildBracketedPasteHexChunks(bigText);
+    // start + ceil(5050/1024)=5 body chunks + end
+    expect(chunks.length).toBe(2 + Math.ceil(bodyBytes.length / 1024));
+    const bodyChunks = chunks.slice(1, -1);
+    for (const hex of bodyChunks) {
+      const byteCount = hex.split(' ').length;
+      expect(byteCount).toBeLessThanOrEqual(1024);
+    }
+  });
+
+  it('joining all chunk hexes with spaces equals the single-frame hex (bytes unchanged)', () => {
+    const text = 'first\nsecond\nthird\n'.repeat(400);
+    expect(buildBracketedPasteHexChunks(text).join(' ')).toBe(buildBracketedPasteHex(text));
+  });
+
+  it('normalises CRLF before slicing (chunk boundaries fall on normalised bytes)', () => {
+    // CRLF -> LF shrinks the body; chunking must operate on the normalised form.
+    const text = 'a\r\n'.repeat(700); // 700*\r\n -> 700*\n after normalisation
+    const bodyBytes = Buffer.from(text.replace(/\r\n/g, '\n'), 'utf-8');
+    const chunks = buildBracketedPasteHexChunks(text);
+    const bodyByteTotal = chunks
+      .slice(1, -1)
+      .reduce((n, hex) => n + (hex === '' ? 0 : hex.split(' ').length), 0);
+    expect(bodyByteTotal).toBe(bodyBytes.length);
+    // Joined == single-frame form (also CRLF-normalised).
+    expect(chunks.join(' ')).toBe(buildBracketedPasteHex(text));
   });
 });

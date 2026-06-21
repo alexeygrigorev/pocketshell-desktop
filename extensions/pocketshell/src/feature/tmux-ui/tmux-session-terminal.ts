@@ -1,5 +1,19 @@
 import * as vscode from 'vscode';
-import { TmuxClient } from '../../backend/tmux/client';
+import { TmuxClient, containsLineBreak } from '../../backend/tmux/client';
+
+/**
+ * Decide whether `sendTextToPane` should send `text` as a bracketed paste.
+ *
+ * App parity (`ShareViewModel.pasteIntoSession`): only multiline PASTE text
+ * (`submit:false` + contains `\n`) takes the bracketed-paste route.
+ * `submit:true` (run_command / reply / composer submit — explicit "execute
+ * this" semantics) and single-line `submit:false` both stay on the legacy
+ * `sendInput` path and are byte-unchanged. Pure so it can be unit-tested
+ * without a vscode / SSH harness.
+ */
+export function shouldPasteAsBracketed(submit: boolean, text: string): boolean {
+  return !submit && containsLineBreak(text);
+}
 import { SshShellBridge } from '../../backend/tmux/ssh-shell-bridge';
 import { ActivePaneTerminalController, activePaneMetadata, paneMetadata } from '../../backend/tmux-ui/active-pane-terminal';
 import type { ControlEvent } from '../../backend/tmux';
@@ -115,7 +129,10 @@ export class TmuxSessionPseudoterminal implements vscode.Pseudoterminal {
   }
 
   async sendTextToPane(paneId: string, text: string, submit = false): Promise<void> {
-    const response = await this.requireClient().sendInput(paneId, submit ? `${text}\r` : text);
+    const client = this.requireClient();
+    const response = shouldPasteAsBracketed(submit, text)
+      ? await client.sendBracketedPaste(paneId, text)
+      : await client.sendInput(paneId, submit ? `${text}\r` : text);
     this.throwIfError(response, 'send text to pane');
   }
 
