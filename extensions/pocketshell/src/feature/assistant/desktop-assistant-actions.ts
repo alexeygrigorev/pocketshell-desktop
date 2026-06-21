@@ -18,6 +18,18 @@ import type {
 import { ActionResult } from '../../backend/assistant/assistant-actions';
 import { resolveFolder } from '../../backend/assistant/folder-resolver';
 import type { FolderResolution } from '../../backend/assistant/folder-resolver';
+import {
+	buildCloneTarget,
+	buildCreatedPath,
+	buildCreateFileHeredoc,
+	buildMkdirCommand,
+	hasPathTraversal,
+	isSafeFolderName,
+	mapAgentNameToSessionKind,
+} from '../../backend/assistant/mutating-helpers';
+import type { SessionKind } from '../../backend/sessions/create-session';
+import { launchTmuxSession, resolveLaunchConnection } from '../sessions/session-launcher';
+import type { TmuxSessionPseudoterminal } from '../tmux-ui/tmux-session-terminal';
 import { ActiveSessionResolver, type ActiveSession } from './active-session-resolver';
 
 /**
@@ -29,15 +41,15 @@ import { ActiveSessionResolver, type ActiveSession } from './active-session-reso
  * vscode / SSH / tmux. Lives in the feature layer (NOT mirrored): it depends
  * on vscode + the live registries + the connection service.
  *
- * Dispatch 1: the 11 inspect / navigation methods are IMPLEMENTED (glue onto
- * the desktop surfaces). The 6 mutating methods are STUBBED — they return a
- * clear "available in a follow-up" ActionResult; the loop degrades gracefully.
- * The confirm gate is BUILT (in assistant-commands.ts) but won't trigger in D1
- * because the mutating actions short-circuit to the stub before the gate.
- * Dispatch 2 fills in the 6 mutating implementations behind the gate.
+ * Dispatch 1: the 11 inspect / navigation methods + the loop/gate/catalog.
+ * Dispatch 2: the 6 mutating methods are IMPLEMENTED behind the confirm gate
+ * (start_session, send_prompt_to_session, create_project, run_command,
+ * create_file, clone_repo). The gate is now LIVE — an approved mutating call
+ * flows model → CommandSafety (run_command) → confirm gate → real execution.
  */
 
-const MUTATING_NOT_AVAILABLE = 'Mutating actions are enabled in a follow-up update.';
+/** Default clone root when the deps don't supply one (matches the app's ~/git). */
+const DEFAULT_CLONE_ROOT = '~/git';
 
 /** Max bytes read by read_file (matches the app's `head -c 8192`). */
 const READ_FILE_BYTE_LIMIT = 8192;
@@ -238,30 +250,177 @@ export class DesktopAssistantActions implements AssistantActions {
 		}
 	}
 
-	// ---- Act — mutating (confirm-gated; STUBBED in Dispatch 1) ----------
+	// ---- Act — mutating (confirm-gated; Dispatch 2) ---------------------
 
-	async startSession(_host: string, _cwd: string, _agent: string): Promise<ActionResult> {
-		return ActionResult.error(MUTATING_NOT_AVAILABLE);
+	async startSession(host: string, cwd: string, agent: string): Promise<ActionResult> {
+		const mapped = mapAgentNameToSessionKind(agent);
+		if (mapped === null) {
+			return ActionResult.error(`Unknown agent: ${agent}. Allowed: claude, codex, opencode, shell.`);
+		}
+		if (!cwd || cwd.trim().length === 0) {
+			return ActionResult.error('A working directory (cwd) is required to start a session.');
+		}
+		const hostId = await this.resolveHostId(host);
+		if (hostId === undefined) {
+			return ActionResult.error(`Unknown host: ${host}`);
+		}
+		// Resolve host → connection (connecting if necessary), mirroring createSession.
+		const resolved = await resolveLaunchConnection(this.deps.connectionService, hostId);
+		if (!resolved) {
+			return ActionResult.error(`Could not connect to ${host}.`);
+		}
+		// Cast the validated agent name to the launcher's SessionKind (structurally
+		// identical: the non-shell members are the AgentType string values).
+		const kind = mapped as SessionKind;
+		const launched = await launchTmuxSession(resolved.conn, resolved.host, cwd, kind);
+		if (!launched.ok) {
+			return ActionResult.error(launched.message);
+		}
+		return ActionResult.ok(`Started ${agent} session "${launched.result.sessionName}" in ${cwd} on ${host}.`);
 	}
 
-	async sendPromptToSession(_sessionName: string, _prompt: string): Promise<ActionResult> {
-		return ActionResult.error(MUTATING_NOT_AVAILABLE);
+	async sendPromptToSession(sessionName: string, prompt: string): Promise<ActionResult> {
+		if (!sessionName || sessionName.trim().length === 0) {
+			return ActionResult.error('Missing target session.');
+		}
+		if (!prompt || prompt.trim().length === 0) {
+			return ActionResult.error('Missing prompt.');
+		}
+		// Find the named session's pane in either registry (like openSession),
+		// then send the prompt to its active pane INTERACTIVELY (matching the
+		// app's sendPromptToSession: visible in the live pane, submit:true).
+		const target = this.findSessionPty(sessionName);
+		if (!target) {
+			return ActionResult.error(
+				`No open session named ${sessionName}. Use start_session to launch it first.`,
+			);
+		}
+		try {
+			// submit=true appends Enter so the prompt runs (interactive, visible).
+			await target.pty.sendTextToActivePane(prompt, true);
+			return ActionResult.ok(`Sent prompt to session ${sessionName}.`);
+		} catch (err) {
+			return ActionResult.error(
+				`Failed to send prompt to session ${sessionName}: ${errorMessage(err)}`,
+			);
+		}
 	}
 
-	async createProject(_host: string, _parentPath: string, _folderName: string): Promise<ActionResult> {
-		return ActionResult.error(MUTATING_NOT_AVAILABLE);
+	async createProject(host: string, parentPath: string, folderName: string): Promise<ActionResult> {
+		// Validate model-controlled inputs BEFORE any shell construction.
+		if (hasPathTraversal(parentPath)) {
+			return ActionResult.error(`Refusing to create a project: parent path "${parentPath}" contains a ".." segment.`);
+		}
+		if (!isSafeFolderName(folderName)) {
+			return ActionResult.error(
+				`Invalid folder name "${folderName}". Use a single path component (no slashes, no "..").`,
+			);
+		}
+		const conn = await this.resolveHostConnection(host);
+		if (isActionResult(conn)) return conn;
+		const command = buildMkdirCommand(parentPath, folderName);
+		try {
+			const result = await conn.exec(command, 10_000);
+			if (result.exitCode !== 0) {
+				return ActionResult.error(
+					`Failed to create project: ${(result.stderr || '').trim() || 'exit ' + result.exitCode}`,
+				);
+			}
+			return ActionResult.ok(`Created project ${buildCreatedPath(parentPath, folderName)}.`);
+		} catch (err) {
+			return ActionResult.error(`Failed to create project: ${errorMessage(err)}`);
+		}
 	}
 
-	async runCommand(_command: string): Promise<ActionResult> {
-		return ActionResult.error(MUTATING_NOT_AVAILABLE);
+	async runCommand(command: string): Promise<ActionResult> {
+		// Safety already validated by the loop (CommandSafety) before this call,
+		// AND the user confirmed the exact command at the gate. Send it to the
+		// ACTIVE session's pane INTERACTIVELY (matching the app's
+		// SessionActionBridge.sendCommand: visible in the live pane, submit:true).
+		const session = await this.resolver.resolveActive();
+		if (!session || !session.pty) {
+			return ActionResult.error('No active terminal to run the command in. Use start_session first.');
+		}
+		try {
+			await session.pty.sendTextToActivePane(command, true);
+			return ActionResult.ok(`Ran: ${command}`);
+		} catch (err) {
+			return ActionResult.error(
+				`Failed to send command to the active terminal: ${errorMessage(err)}`,
+			);
+		}
 	}
 
-	async createFile(_path: string, _content: string): Promise<ActionResult> {
-		return ActionResult.error(MUTATING_NOT_AVAILABLE);
+	async createFile(path: string, content: string): Promise<ActionResult> {
+		// Reject path traversal in the target path (model-controlled).
+		if (hasPathTraversal(path)) {
+			return ActionResult.error(`Refusing to create file: path "${path}" contains a ".." segment.`);
+		}
+		const conn = await this.requireActiveConnection();
+		if (typeof conn !== 'object') return ActionResult.error(conn);
+		// Prefer SFTP write so file CONTENT is never shell-interpreted (content
+		// may contain quotes / $ / backticks / newlines — a heredoc risks
+		// delimiter collision + expansion). Fall back to a collision-guarded
+		// quoted-delimiter heredoc if SFTP is unreachable per-session.
+		const sftpWritten = await this.tryWriteFileViaSftp(conn, path, content);
+		if (sftpWritten === true) {
+			return ActionResult.ok(`Created ${path}.`);
+		}
+		if (typeof sftpWritten === 'string') {
+			// SFTP reported a structured error — surface it (no heredoc fallback).
+			return ActionResult.error(`Failed to create ${path}: ${sftpWritten}`);
+		}
+		// SFTP unavailable — fall back to the collision-guarded heredoc.
+		const heredoc = buildCreateFileHeredoc(path, content);
+		if (!heredoc.ok) {
+			return ActionResult.error(`Failed to create ${path}: ${heredoc.error}`);
+		}
+		try {
+			const result = await conn.exec(heredoc.command, 10_000);
+			if (result.exitCode !== 0) {
+				return ActionResult.error(
+					`Failed to create ${path}: ${(result.stderr || '').trim() || 'exit ' + result.exitCode}`,
+				);
+			}
+			return ActionResult.ok(`Created ${path}.`);
+		} catch (err) {
+			return ActionResult.error(`Failed to create ${path}: ${errorMessage(err)}`);
+		}
 	}
 
-	async cloneRepo(_fullName: string, _folder: string | null): Promise<ActionResult> {
-		return ActionResult.error(MUTATING_NOT_AVAILABLE);
+	async cloneRepo(fullName: string, folder: string | null): Promise<ActionResult> {
+		if (!fullName || fullName.trim().length === 0) {
+			return ActionResult.error('Missing repository full name (owner/repo).');
+		}
+		if (hasPathTraversal(fullName)) {
+			return ActionResult.error(`Refusing to clone: "${fullName}" contains a ".." segment.`);
+		}
+		const conn = await this.requireActiveConnection();
+		if (typeof conn !== 'object') return ActionResult.error(conn);
+		// Resolve the clone root: deps.getDefaultCloneRoot if available, else the
+		// app-default ~/git. The target path is built from model-controlled
+		// input, so it is shell-quoted in the command below.
+		const defaultRoot = await this.resolveDefaultCloneRoot(conn);
+		const target = buildCloneTarget(fullName, folder, defaultRoot);
+		// Prefer the server-side pocketshell repos CLI (no client credentials).
+		try {
+			const { PocketShellRepos } = await import('../../backend/git/pocketshell-repos');
+			const repos = new PocketShellRepos(conn);
+			const clonedPath = await repos.clone(fullName, target);
+			return ActionResult.ok(`Cloned ${fullName} to ${clonedPath}.`);
+		} catch (err) {
+			// If the server-side CLI is unavailable (exit 127) or GitHub is not
+			// authenticated, surface a clear error rather than silently falling
+			// back to a client-side clone (which would need credentials).
+			const message = errorMessage(err);
+			if (isPocketshellReposUnavailable(message)) {
+				return ActionResult.error(
+					`pocketshell repos is not installed on the host. ` +
+						`Install it, or clone manually via the terminal.`,
+				);
+			}
+			return ActionResult.error(`Failed to clone ${fullName}: ${message}`);
+		}
 	}
 
 	// ---- helpers --------------------------------------------------------
@@ -379,6 +538,109 @@ export class DesktopAssistantActions implements AssistantActions {
 			return `Failed to list repos: ${errorMessage(err)}`;
 		}
 	}
+
+	/**
+	 * Resolve a host name/id to a live SSH connection (requireActiveConnection
+	 * variant that reports the host name in the error). Returns the connection
+	 * or an error string. Used by create_project / clone (host-targeted tools).
+	 */
+	private async resolveHostConnection(host: string): Promise<SshConnection | ActionResult> {
+		const hostId = await this.resolveHostId(host);
+		if (hostId === undefined) {
+			return ActionResult.error(`Unknown host: ${host}`);
+		}
+		const conn = this.deps.connectionService.getConnection(hostId);
+		if (!conn || !conn.connected) {
+			return ActionResult.error(`Host ${host} is not connected.`);
+		}
+		return conn;
+	}
+
+	/**
+	 * Find the pty for a named session in either registry (surface then tmux-ui),
+	 * mirroring how openSession resolves a session. Returns null when no open
+	 * session matches (the action tells the model to start_session first).
+	 */
+	private findSessionPty(sessionName: string): { pty: TmuxSessionPseudoterminal } | null {
+		if (this.deps.surfaceRegistry) {
+			for (const entry of this.deps.surfaceRegistry.list()) {
+				if (entry.sessionName === sessionName) {
+					const pty = this.deps.surfaceRegistry.getPty(entry.hostId, entry.sessionName);
+					if (pty) return { pty };
+				}
+			}
+		}
+		if (this.deps.tmuxRegistry) {
+			for (const entry of this.deps.tmuxRegistry.entries()) {
+				if (entry.sessionName === sessionName) {
+					return { pty: entry.pty };
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Try writing a file via SFTP (the clean path — content is never shell-
+	 * interpreted). Returns true on success, a string error message on a
+	 * structured SFTP failure, or false when SFTP is unavailable (so the caller
+	 * falls back to the heredoc). Always tears down the SFTP session.
+	 */
+	private async tryWriteFileViaSftp(
+		conn: SshConnection,
+		path: string,
+		content: string,
+	): Promise<boolean | string> {
+		const { SftpClient } = await import('../../backend/files/sftp-client');
+		const sftp = new SftpClient(conn);
+		try {
+			await sftp.connect();
+		} catch {
+			// SFTP subsystem unavailable (e.g. not enabled on the remote). Signal
+			// the caller to fall back to the heredoc.
+			return false;
+		}
+		try {
+			await sftp.writeFile(path, content);
+			return true;
+		} catch (err) {
+			return errorMessage(err);
+		} finally {
+			sftp.disconnect();
+		}
+	}
+
+	/**
+	 * Resolve the default clone root for the active connection's host. Uses
+	 * deps.getDefaultCloneRoot when wired; otherwise the app-default ~/git.
+	 */
+	private async resolveDefaultCloneRoot(conn: SshConnection): Promise<string> {
+		if (this.deps.getDefaultCloneRoot) {
+			const hostId = await this.connectionHostId(conn);
+			if (hostId !== undefined) {
+				const root = await this.deps.getDefaultCloneRoot(hostId);
+				if (root) return root;
+			}
+		}
+		return DEFAULT_CLONE_ROOT;
+	}
+
+	/** Best-effort reverse-lookup of a connection's host id (for clone-root). */
+	private async connectionHostId(_conn: SshConnection): Promise<number | undefined> {
+		const host = await this.resolver.firstConnectedHost();
+		return host?.id;
+	}
+}
+
+/**
+ * Whether an error message indicates the server-side `pocketshell repos` CLI is
+ * not installed / not on PATH (PocketShellRepos.clone formats this case as a
+ * clean "not installed or not on PATH" error). Used to give the model a clear,
+ * actionable error instead of the raw stderr.
+ */
+function isPocketshellReposUnavailable(message: string): boolean {
+	const lower = message.toLowerCase();
+	return lower.includes('not installed') || lower.includes('not on path');
 }
 
 // ---- pure helpers (kept module-local; not exported as part of the surface) ----
@@ -404,6 +666,11 @@ function pathTail(p: string): string {
 
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
+}
+
+/** Type guard: whether a resolveHostConnection result is an ActionResult (error). */
+function isActionResult(value: SshConnection | ActionResult): value is ActionResult {
+	return typeof value === 'object' && value !== null && 'ok' in value && 'message' in value;
 }
 
 /** Re-export for type-only consumers in the feature layer. */

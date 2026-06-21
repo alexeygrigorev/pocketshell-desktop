@@ -1,24 +1,18 @@
 import * as vscode from 'vscode';
 import type { ConnectionService } from '../../connection-service';
-import { getOrConnect, resolveHostId } from '../../host-picking';
-import { SshPseudoterminal } from '../../ssh-terminal';
+import { resolveHostId } from '../../host-picking';
 import { AgentDetector } from '../../backend/agents/agent-detector';
 import { AgentType, AGENT_METADATA } from '../../backend/agents/types';
 import type { DetectedAgent } from '../../backend/agents/types';
-import { TmuxClient } from '../../backend/tmux/client';
-import { SshShellBridge } from '../../backend/tmux/ssh-shell-bridge';
-import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
 import {
-	buildAgentStartCommand,
 	buildDirectorySuggestions,
 	buildRemoteDirectorySuggestionCommand,
-	buildSessionName,
-	buildWindowName,
-	quoteShellArg,
 	type DirectorySuggestion,
 	type SessionKind,
 } from '../../backend/sessions/create-session';
+import type { SshConnection } from '../../backend/ssh/connection/ssh-client';
 import type { FeatureDeps } from '../manifest';
+import { launchTmuxSession, resolveLaunchConnection } from './session-launcher';
 
 interface SessionCommandTarget {
 	hostId?: number;
@@ -56,16 +50,11 @@ async function createSession(service: ConnectionService, element: unknown): Prom
 		return;
 	}
 
-	const host = await service.getHost(hostId);
-	if (!host) {
-		void vscode.window.showErrorMessage(vscode.l10n.t('Host not found.'));
+	const resolved = await resolveLaunchConnection(service, hostId);
+	if (!resolved) {
 		return;
 	}
-
-	const conn = await getOrConnect(service, hostId);
-	if (!conn) {
-		return;
-	}
+	const { conn, host } = resolved;
 
 	const watchedFolders = await service.getWatchedFolders(hostId);
 	const [kind, remoteOutput] = await Promise.all([
@@ -84,23 +73,12 @@ async function createSession(service: ConnectionService, element: unknown): Prom
 		return;
 	}
 
-	const sessionName = buildSessionName(startDirectory, kind);
-	const windowName = buildWindowName(startDirectory, kind);
-	const agentCommand = kind === 'shell' ? undefined : buildAgentStartCommand(kind, startDirectory);
-	const tmuxReady = await createOrAttachTmuxSession(conn, sessionName, startDirectory, windowName, agentCommand);
-	if (!tmuxReady) {
+	// Delegate the tmux setup + terminal creation to the shared launcher so the
+	// assistant's start_session tool launches through the exact same path.
+	const launched = await launchTmuxSession(conn, host, startDirectory, kind);
+	if (!launched.ok) {
 		return;
 	}
-
-	const terminal = vscode.window.createTerminal({
-		name: `${host.name || host.hostname}: ${sessionName}`,
-		pty: new SshPseudoterminal(conn, host.name || host.hostname, undefined, {
-			cwd: startDirectory,
-			initialCommand: `tmux attach-session -t ${quoteShellArg(sessionName)}`,
-		}),
-		iconPath: new vscode.ThemeIcon(kind === 'shell' ? 'terminal-tmux' : 'hubot'),
-	});
-	terminal.show();
 
 	await vscode.commands.executeCommand('pocketshell.hostDetail.open', hostId);
 }
@@ -180,62 +158,6 @@ async function loadRemoteDirectoryOutput(conn: SshConnection, seedPath?: string)
 		return result.exitCode === 0 ? result.stdout : '';
 	} catch {
 		return '';
-	}
-}
-
-async function createOrAttachTmuxSession(
-	conn: SshConnection,
-	sessionName: string,
-	startDirectory: string,
-	windowName: string,
-	agentCommand?: string,
-): Promise<boolean> {
-	const sessionAlreadyExists = await hasTmuxSession(conn, sessionName);
-	const shell = await conn.shell();
-	const client = new TmuxClient({
-		sessionName,
-		startDir: startDirectory || undefined,
-		initialCommand: agentCommand && !sessionAlreadyExists ? agentCommand : undefined,
-		commandTimeoutMs: 10_000,
-	});
-	try {
-		await client.connect(new SshShellBridge(shell));
-		if (agentCommand && sessionAlreadyExists) {
-			const window = await client.newWindowWithPaneId(sessionName, windowName, startDirectory || undefined);
-			if (window.isError) {
-				void vscode.window.showErrorMessage(vscode.l10n.t('tmux new-window failed: {0}', window.output.join('\n')));
-				return false;
-			}
-			const paneId = window.output.find((line) => line.startsWith('%'));
-			if (!paneId) {
-				void vscode.window.showErrorMessage(vscode.l10n.t('tmux did not report the new pane id.'));
-				return false;
-			}
-			const sent = await client.sendKeysLiteral(paneId, agentCommand);
-			if (sent.isError) {
-				void vscode.window.showErrorMessage(vscode.l10n.t('tmux send-keys failed: {0}', sent.output.join('\n')));
-				return false;
-			}
-		}
-		return true;
-	} catch (err) {
-		void vscode.window.showErrorMessage(vscode.l10n.t('Failed to create tmux session: {0}', String(err)));
-		return false;
-	} finally {
-		try {
-			await client.detach();
-		} catch {
-			await client.close();
-		}
-	}
-}
-
-async function hasTmuxSession(conn: SshConnection, sessionName: string): Promise<boolean> {
-	try {
-		const result = await conn.exec(`tmux has-session -t ${quoteShellArg(sessionName)}`, 3_000);
-		return result.exitCode === 0;
-	} catch {
-		return false;
 	}
 }
 

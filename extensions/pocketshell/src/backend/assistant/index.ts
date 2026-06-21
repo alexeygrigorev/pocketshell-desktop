@@ -47,6 +47,22 @@ export { DEFAULT_FORBIDDEN_PATTERNS, MAX_COMMAND_LENGTH, rejectCommand } from '.
 export type { FolderCandidate, FolderResolution } from './folder-resolver';
 export { resolveFolder } from './folder-resolver';
 
+export type { AssistantAgentName } from './mutating-helpers';
+export {
+	buildCloneTarget,
+	buildCloneUrl,
+	buildCreatedPath,
+	buildCreateFileHeredoc,
+	buildMkdirCommand,
+	CREATE_FILE_HEREDOC_DELIMITER,
+	hasPathTraversal,
+	isSafeFolderName,
+	joinPath,
+	mapAgentNameToSessionKind,
+	repoNameFromFullName,
+	shellQuote,
+} from './mutating-helpers';
+
 export type { FolderResolutionResult } from './assistant-actions';
 export type { AssistantActions } from './assistant-actions';
 export { ActionResult } from './assistant-actions';
