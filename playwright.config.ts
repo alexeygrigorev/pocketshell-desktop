@@ -1,5 +1,15 @@
 import { defineConfig } from '@playwright/test';
 
+// Run the app off-screen by default so a test run does not flash windows onto
+// the desktop or steal keyboard focus. The specs spread `...process.env` into
+// `_electron.launch`, so setting it here reaches the app. Electron has no true
+// headless mode; see the comment in src/main/index.ts for why the window is
+// shown-but-offscreen rather than simply never shown (an unshown window never
+// composites, and `page.screenshot()` then hangs).
+//
+// Set POCKETSHELL_HEADLESS=0 to watch a run happen on screen while debugging.
+process.env['POCKETSHELL_HEADLESS'] ??= '1';
+
 // E2E tests launch the packaged Electron app against a fixed Docker
 // compose port (see docs/TESTING.md). They require the `helper` compose
 // service to be up on 127.0.0.1:2225.

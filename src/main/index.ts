@@ -47,7 +47,25 @@ function createWindow(): void {
     },
   });
 
-  mainWindow.on('ready-to-show', () => mainWindow?.show());
+  // Electron has no true headless mode. "Headless" here means the window is
+  // shown OFF-SCREEN and without focus, rather than not shown at all.
+  //
+  // Never calling show() does hide it, but an unshown window never composites
+  // a frame, so `page.screenshot()` hangs until it times out — which would
+  // break every screenshot-capture harness. Showing it inactive at a
+  // far-offscreen origin keeps compositing alive while keeping it off the
+  // desktop and out of the focus order, so a test run stops stealing the
+  // user's keyboard and flashing windows.
+  const headless = process.env['POCKETSHELL_HEADLESS'] === '1';
+  mainWindow.on('ready-to-show', () => {
+    if (!mainWindow) return;
+    if (headless) {
+      mainWindow.setPosition(-32000, -32000);
+      mainWindow.showInactive();
+    } else {
+      mainWindow.show();
+    }
+  });
 
   // Open external links in the system browser, never in-app.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
