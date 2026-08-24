@@ -164,7 +164,7 @@ export class SshService {
           hostVerifier: (key: Buffer) => {
             if (!opts.knownHosts) return true; // caller opted out of verification
             const { type, b64 } = decodePublicKeyBlob(key);
-            const verdict = opts.knownHosts.verify(opts.host, type, b64);
+            const verdict = opts.knownHosts.verify(opts.host, type, b64, opts.port ?? 22);
             if (verdict.trusted) return true;
             if (verdict.mismatch) {
               fail('Host key mismatch — connection refused (known_hosts).');
@@ -176,7 +176,7 @@ export class SshService {
               return false;
             }
             if (opts.tofuDecision === 'accept-always') {
-              opts.knownHosts.add(opts.host, type, b64);
+              opts.knownHosts.add(opts.host, type, b64, opts.port ?? 22);
             }
             return true; // accept-once proceeds without saving
           },

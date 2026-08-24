@@ -39,6 +39,19 @@ export interface VerificationResult {
   entry?: HostKeyEntry;
 }
 
+/**
+ * The token OpenSSH uses to key a host in known_hosts: the bare hostname on
+ * the default port, `[host]:port` on any other.
+ *
+ * Without this, a host reached on two ports shares one pin — connecting to
+ * `127.0.0.1:22` and `127.0.0.1:3205` would compare each other's keys and
+ * report a mismatch, which is both wrong and a real block: it made every
+ * connect to the test fixture fail after its image was rebuilt on a new base.
+ */
+export function knownHostsToken(host: string, port = 22): string {
+  return port === 22 ? host : `[${host}]:${port}`;
+}
+
 export class KnownHosts {
   private entries: HostKeyEntry[] = [];
   private path: string;
@@ -74,10 +87,12 @@ export class KnownHosts {
    * @param host       the hostname being connected to
    * @param keyType    e.g. 'ssh-ed25519'
    * @param keyB64     base64 of the public key blob
+   * @param port       remote port; non-22 ports key as `[host]:port`
    */
-  verify(host: string, keyType: string, keyB64: string): VerificationResult {
+  verify(host: string, keyType: string, keyB64: string, port = 22): VerificationResult {
+    const token = knownHostsToken(host, port);
     for (const entry of this.entries) {
-      if (!hostMatches(host, entry.patterns)) continue;
+      if (!hostMatches(token, entry.patterns)) continue;
       if (entry.keyType !== keyType) continue;
       if (entry.keyB64 === keyB64) {
         return { trusted: true, mismatch: false, unknown: false, entry };
@@ -88,12 +103,13 @@ export class KnownHosts {
   }
 
   /** TOFU: append a new host key so future connects match. */
-  add(host: string, keyType: string, keyB64: string): void {
-    const entry: HostKeyEntry = { patterns: [host], keyType, keyB64 };
+  add(host: string, keyType: string, keyB64: string, port = 22): void {
+    const token = knownHostsToken(host, port);
+    const entry: HostKeyEntry = { patterns: [token], keyType, keyB64 };
     this.entries.push(entry);
     if (this.path) {
       try {
-        writeFileSync(this.path, `${host} ${keyType} ${keyB64}\n`, { flag: 'a' });
+        writeFileSync(this.path, `${token} ${keyType} ${keyB64}\n`, { flag: 'a' });
       } catch {
         // best-effort; in-memory entry still lets the current session proceed
       }

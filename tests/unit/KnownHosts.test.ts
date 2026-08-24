@@ -83,6 +83,37 @@ good.com ${ED25519} ${KEY_A}
     expect(kh.verify('new.com', ED25519, KEY_B).mismatch).toBe(true);
   });
 
+  it('keys a non-default port as [host]:port, so two ports do not share a pin', () => {
+    // Regression: verify() ignored the port entirely, so 127.0.0.1:22 and
+    // 127.0.0.1:3205 compared each other's keys. That reported a spurious
+    // mismatch and blocked every connect to the test fixture after its image
+    // was rebuilt on a new base.
+    const kh = KnownHosts.fromText(`[127.0.0.1]:3205 ${ED25519} ${KEY_A}
+`);
+    // The pinned port matches.
+    expect(kh.verify('127.0.0.1', ED25519, KEY_A, 3205).trusted).toBe(true);
+    // The same host on port 22 is a DIFFERENT host and is simply unknown -
+    // crucially not a mismatch, which would hard-block the connection.
+    const other = kh.verify('127.0.0.1', ED25519, KEY_B, 22);
+    expect(other.unknown).toBe(true);
+    expect(other.mismatch).toBe(false);
+  });
+
+  it('does not bracket the default port', () => {
+    const kh = KnownHosts.fromText(`example.com ${ED25519} ${KEY_A}
+`);
+    expect(kh.verify('example.com', ED25519, KEY_A, 22).trusted).toBe(true);
+    // Same key offered on a non-default port is a different entry.
+    expect(kh.verify('example.com', ED25519, KEY_A, 2222).unknown).toBe(true);
+  });
+
+  it('adds a non-default port in bracketed form', () => {
+    const kh = KnownHosts.fromText('');
+    kh.add('10.0.0.5', ED25519, KEY_A, 2222);
+    expect(kh.verify('10.0.0.5', ED25519, KEY_A, 2222).trusted).toBe(true);
+    expect(kh.verify('10.0.0.5', ED25519, KEY_A, 22).unknown).toBe(true);
+  });
+
   it('handles a hashed host entry (|1|salt|hash)', () => {
     // Generate a valid hashed entry for 'dev.example.com'.
     const salt = randomBytes(20);
