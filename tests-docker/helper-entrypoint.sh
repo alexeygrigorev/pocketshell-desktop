@@ -16,5 +16,13 @@ su testuser -c '
   fi
 '
 
+# Start the deterministic traffic responder (inherited from the :ssh layer).
+# This image replaces that layer's CMD, so without this line the helper — the
+# image the E2E screenshots come from — would keep showing "0 B" for every
+# forward. See tests-docker/traffic-server.py.
+TRAFFIC_PORT="${PS_TRAFFIC_PORT:-8021}"
+su testuser -c "setsid /usr/local/bin/ps-traffic-server $TRAFFIC_PORT \
+  </dev/null >/tmp/traffic-server.log 2>&1 &"
+
 # Run sshd in the foreground so the container stays up and logs to stderr.
 exec /usr/sbin/sshd -D -e

@@ -41,6 +41,17 @@ COPY test_key /root/test_key
 RUN chmod 600 /home/testuser/.ssh/authorized_keys /root/test_key \
     && chown -R testuser:testuser /home/testuser/.ssh
 
-EXPOSE 22
+# A listener that actually MOVES BYTES. Every other port the fixture opens is
+# idle, which is why the port panel's In/Out columns had never been observed
+# as anything but "0 B" — a bug in the byte counters or the rate maths would
+# have been invisible. See tests-docker/traffic-server.py for the protocol.
+COPY traffic-server.py /usr/local/bin/ps-traffic-server
+COPY ssh-entrypoint.sh /usr/local/bin/pocketshell-ssh-entrypoint
+RUN chmod +x /usr/local/bin/ps-traffic-server /usr/local/bin/pocketshell-ssh-entrypoint
 
-CMD ["/usr/sbin/sshd", "-D", "-e"]
+EXPOSE 22
+# 8021: the traffic responder. In [1024, 10000], so the auto-forward policy
+# picks it up on its own — the panel gets one row with real throughput.
+EXPOSE 8021
+
+CMD ["/usr/local/bin/pocketshell-ssh-entrypoint"]

@@ -53,6 +53,17 @@ Examples:
   container via exec, auto-forward, `curl http://localhost:<local>` → 200;
   `-R` round-trip; `-D` SOCKS round-trip. The `flaky-helper` image proves
   reconnect.
+  **Throughput**: every image from `:ssh` up also runs
+  `tests-docker/traffic-server.py` on **8021** (started by the entrypoint,
+  as `testuser` so `ss -tlnp` can attribute it). It answers
+  `<up> <down> [chunk] [gap_ms]\n` by draining exactly `up` bytes and
+  writing exactly `down`, optionally paced. Without it every listener in
+  the fixture was idle, so the panel's In/Out columns could only read
+  "0 B" and a bug in the byte counters or the rate maths was invisible.
+  The suite asserts exact totals (65 557 out / 262 144 in) and a paced
+  1 MiB download whose sampled `rateIn` must land near 512 KiB/s.
+  **Rebuild the images after changing it** —
+  `scripts/build-docker.sh`; the tests use the prebuilt tags.
 - `HelperIntegration`: against the `helper` image, `pocketshell sessions
   list`, `usage --json`, `agent-log --json` parse cleanly; `sessions
   create` then `sessions list` shows it.
