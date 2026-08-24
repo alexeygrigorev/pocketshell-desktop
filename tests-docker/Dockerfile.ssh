@@ -4,7 +4,19 @@
 # Alpine + openssh, non-root `testuser` (password-locked, pubkey-only), sshd
 # on port 22 in the foreground. The committed ed25519 test_key.pub is the
 # authorized_keys file. See docs/TESTING.md.
-FROM alpine:latest
+# PINNED so the tmux version is deterministic. `alpine:latest` floats: 3.20
+# ships tmux 3.4, 3.21 ships 3.5a, 3.24 ships 3.6b. 3.20 is chosen because
+# tmux 3.4 is what the real dev host runs, so the fixture exercises the same
+# version users do.
+#
+# Note this does NOT fix `pocketshell sessions list` on the fixture. That
+# fails because tmuxctl 0.3.4 asks tmux for a tab-delimited `list-sessions`
+# format and tmux rewrites those tabs to underscores — on 3.4 and 3.6b alike,
+# so it is not a version regression:
+# https://github.com/alexeygrigorev/tmuxctl/issues/6
+# Until that is fixed upstream the fixture only reaches the raw-tmux fallback
+# path, never the helper path. Bump deliberately, and check `tmux -V`.
+FROM alpine:3.20
 
 # Alpine split `sftp-server` into its own `openssh-sftp-server` package in
 # recent releases; the older Android project image didn't need it. We install
