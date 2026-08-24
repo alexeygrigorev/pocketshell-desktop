@@ -28,7 +28,6 @@ export type AppIconName =
   | 'close'
   | 'download'
   | 'dot'
-  | 'droplet'
   | 'edit-2'
   | 'file'
   | 'folder'
@@ -93,10 +92,6 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   // asking for is "bring this repo down onto the host", and the branch mark
   // reads as VCS topology rather than as an action.
   download: { paths: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3'] },
-  // Feather's `droplet` — the colour swatch trigger. A drop of ink reads as
-  // "pick the colour" without a literal colour in the mark, which the token
-  // contract forbids anyway: the swatch itself carries the current colour.
-  droplet: { paths: ['M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z'] },
   // Feather's `edit-2` — the pen. The draw tool. Not `edit-3` (pen + underline,
   // which reads as "edit this field") and not `pen-tool` (bezier authoring).
   'edit-2': { paths: ['M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z'] },

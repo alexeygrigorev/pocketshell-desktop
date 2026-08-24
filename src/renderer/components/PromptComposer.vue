@@ -41,6 +41,9 @@ import { useShellsStore } from '../stores/shells';
 import ComposerAttachmentTiles from './ComposerAttachmentTiles.vue';
 import SlashCommandDropdown from './SlashCommandDropdown.vue';
 import AppIcon from './AppIcon.vue';
+import OverlayPanel from './OverlayPanel.vue';
+import DoodleCanvas from './DoodleCanvas.vue';
+import RemoteImagePicker from './RemoteImagePicker.vue';
 import { COMPOSER_STRINGS, slashQueryFor, insertCommandText } from '../../shared/composerText';
 import {
   composerTiming,
@@ -285,6 +288,158 @@ async function onDrop(e: DragEvent): Promise<void> {
   const files = Array.from(e.dataTransfer?.files ?? []);
   if (files.length === 0) return;
   await stageFiles(files);
+}
+
+// ---------------------------------------------------------------------------
+// Doodle / annotate
+//
+// Four sources, one canvas. Whatever the origin, the image reaches
+// DoodleCanvas as a `data:` URL and leaves it as PNG bytes, which drop
+// straight into the `{kind:'bytes'}` staging path the clipboard already uses.
+// No new upload code, no new remote-path logic — an annotated screenshot is
+// an attachment like any other by the time it leaves this component.
+// ---------------------------------------------------------------------------
+
+type DoodleStep = 'closed' | 'source' | 'remote' | 'draw';
+
+const doodleStep = ref<DoodleStep>('closed');
+const doodleBackdrop = ref<string | null>(null);
+const doodleName = ref<string | null>(null);
+const doodleError = ref<string | null>(null);
+
+const doodleTitle = computed(() =>
+  doodleStep.value === 'remote'
+    ? 'Choose an image on the host'
+    : doodleStep.value === 'draw'
+      ? doodleBackdrop.value
+        ? 'Annotate'
+        : 'Doodle'
+      : 'Draw or annotate',
+);
+
+/**
+ * Bytes to a `data:` URL.
+ *
+ * FileReader rather than btoa over a binary string: btoa needs the bytes
+ * widened to a JS string first, which for a multi-megabyte screenshot means
+ * building a string of a million-plus code units before any encoding starts.
+ * The CSP is also the reason this is a data URL and not an object URL — see
+ * index.html; blob: is granted for tile thumbnails, but data: keeps every
+ * backdrop source on one path.
+ */
+function bytesToDataUrl(bytes: Uint8Array, mimeType: string): Promise<string> {
+  return new Promise((done, fail) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // readAsDataURL always yields a string, but `result` is typed for every
+      // read mode; narrow rather than coercing, so an ArrayBuffer could never
+      // stringify to "[object ArrayBuffer]" and reach an <img> as a broken src.
+      if (typeof reader.result === 'string') done(reader.result);
+      else fail(new Error('Could not read the image.'));
+    };
+    reader.onerror = () => fail(new Error('Could not read the image.'));
+    reader.readAsDataURL(new Blob([bytes], { type: mimeType }));
+  });
+}
+
+/** Guess a mime type from an extension; the decoder sniffs the real one anyway. */
+function mimeForName(name: string): string {
+  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'gif' || ext === 'webp' || ext === 'avif' || ext === 'png') return `image/${ext}`;
+  return 'application/octet-stream';
+}
+
+function openDoodle(): void {
+  doodleBackdrop.value = null;
+  doodleName.value = null;
+  doodleError.value = null;
+  doodleStep.value = 'source';
+}
+
+function closeDoodle(): void {
+  doodleStep.value = 'closed';
+  doodleBackdrop.value = null;
+  doodleName.value = null;
+  doodleError.value = null;
+}
+
+function startBlank(): void {
+  doodleBackdrop.value = null;
+  doodleName.value = null;
+  doodleStep.value = 'draw';
+}
+
+/**
+ * Pull an image straight off the system clipboard.
+ *
+ * Separate from `onPaste`: that path fires when the user pastes INTO the
+ * textarea and stages the image as-is, which is still the right default. This
+ * is the deliberate "take what I just copied and let me draw on it" route, so
+ * it reads the clipboard on demand rather than waiting for a keystroke.
+ */
+async function startFromClipboard(): Promise<void> {
+  doodleError.value = null;
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const type = item.types.find((t) => t.startsWith('image/'));
+      if (!type) continue;
+      const blob = await item.getType(type);
+      doodleBackdrop.value = await bytesToDataUrl(
+        new Uint8Array(await blob.arrayBuffer()),
+        type,
+      );
+      doodleName.value = `clipboard.${type.slice('image/'.length)}`;
+      doodleStep.value = 'draw';
+      return;
+    }
+    doodleError.value = 'No image on the clipboard.';
+  } catch {
+    doodleError.value = 'Could not read the clipboard.';
+  }
+}
+
+async function startFromLocalFile(): Promise<void> {
+  doodleError.value = null;
+  const paths = await api.attachments.pickFiles({ title: 'Pick an image', multiple: false });
+  const path = paths[0];
+  if (path === undefined) return; // cancelled
+  try {
+    const bytes = await api.attachments.readLocal(path);
+    const name = path.split(/[\\/]/).pop() ?? 'image';
+    doodleBackdrop.value = await bytesToDataUrl(bytes, mimeForName(name));
+    doodleName.value = name;
+    doodleStep.value = 'draw';
+  } catch (e) {
+    doodleError.value = e instanceof Error ? e.message : 'Could not open that file.';
+  }
+}
+
+async function onRemotePick(picked: { path: string; name: string }): Promise<void> {
+  doodleError.value = null;
+  try {
+    const bytes = await api.sftp.readBinary(props.connectionId, picked.path);
+    doodleBackdrop.value = await bytesToDataUrl(bytes, mimeForName(picked.name));
+    doodleName.value = picked.name;
+    doodleStep.value = 'draw';
+  } catch (e) {
+    doodleError.value = e instanceof Error ? e.message : 'Could not open that file.';
+    doodleStep.value = 'source';
+  }
+}
+
+/** The finished drawing joins the staged tiles as ordinary PNG bytes. */
+async function onDoodleCommit(result: {
+  data: Uint8Array;
+  dataUrl: string;
+  name: string;
+}): Promise<void> {
+  closeDoodle();
+  await stageSources(
+    [{ kind: 'bytes', data: result.data, name: result.name, mimeType: 'image/png' }],
+    [result.dataUrl],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -677,6 +832,16 @@ defineExpose({ focusDraft, openComposer });
           <button
             class="tool"
             type="button"
+            title="Draw or annotate an image"
+            aria-label="Draw or annotate an image"
+            :disabled="state.uploadingCount > 0"
+            @click="openDoodle"
+          >
+            <AppIcon name="edit-2" />
+          </button>
+          <button
+            class="tool"
+            type="button"
             :title="
               (agentKind ?? null) === null
                 ? 'Slash commands need a detected agent'
@@ -702,6 +867,55 @@ defineExpose({ focusDraft, openComposer });
         </button>
       </div>
     </template>
+
+    <!-- The drawing surface is modal because it takes a pointer drag as its
+         primary input: with the composer still live behind it, a stroke that
+         left the canvas would land in the draft. -->
+    <OverlayPanel
+      v-if="doodleStep !== 'closed'"
+      :title="doodleTitle"
+      size="md"
+      @close="closeDoodle"
+    >
+      <div v-if="doodleStep === 'source'" class="doodle-sources">
+        <p v-if="doodleError" class="doodle-error">{{ doodleError }}</p>
+        <button class="source" type="button" @click="startBlank">
+          <AppIcon name="edit-2" />
+          <span class="source-label">Blank sheet</span>
+          <span class="source-hint">Sketch something from nothing</span>
+        </button>
+        <button class="source" type="button" @click="startFromClipboard">
+          <AppIcon name="image" />
+          <span class="source-label">From the clipboard</span>
+          <span class="source-hint">Annotate the screenshot you just copied</span>
+        </button>
+        <button class="source" type="button" @click="startFromLocalFile">
+          <AppIcon name="folder" />
+          <span class="source-label">From this computer…</span>
+          <span class="source-hint">Pick an image file to draw on</span>
+        </button>
+        <button class="source" type="button" @click="doodleStep = 'remote'">
+          <AppIcon name="symlink" />
+          <span class="source-label">From the host…</span>
+          <span class="source-hint">Browse images already on the server</span>
+        </button>
+      </div>
+
+      <RemoteImagePicker
+        v-else-if="doodleStep === 'remote'"
+        :connection-id="props.connectionId"
+        @pick="onRemotePick"
+        @close="doodleStep = 'source'"
+      />
+
+      <DoodleCanvas
+        v-else
+        :backdrop="doodleBackdrop"
+        :backdrop-name="doodleName"
+        @commit="onDoodleCommit"
+        @close="closeDoodle"
+      />
+    </OverlayPanel>
   </div>
 </template>
 
@@ -1044,5 +1258,58 @@ defineExpose({ focusDraft, openComposer });
 .send:disabled {
   opacity: var(--disabled-opacity);
   cursor: default;
+}
+
+/* ---- Doodle source chooser --------------------------------------------- */
+.doodle-sources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+/* A row per source rather than a row of icon buttons: three of the four need a
+   sentence to distinguish them ("from this computer" vs "from the host" is the
+   whole distinction), and a tooltip is the wrong place for the only thing that
+   tells them apart. */
+.source {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'icon label' 'icon hint';
+  align-items: center;
+  gap: 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.source:hover {
+  background: var(--state-hover);
+  border-color: var(--border-strong);
+}
+.source:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.source > :first-child {
+  grid-area: icon;
+  color: var(--fg-secondary);
+}
+.source-label {
+  grid-area: label;
+  font-size: var(--fs-300);
+  font-weight: var(--fw-medium);
+}
+.source-hint {
+  grid-area: hint;
+  font-size: var(--fs-100);
+  color: var(--fg-secondary);
+}
+.doodle-error {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-200);
+  color: var(--error);
 }
 </style>

@@ -210,4 +210,80 @@ test.describe('prompt composer panel', () => {
       .toContain('bp_line_one');
     expect(await terminalText(page)).toContain('bp_line_two');
   });
+  test('draws a blank doodle and stages it as an image attachment', async () => {
+    await openSession(page, 'main');
+    await clearDraft(page);
+
+    // The tools pill: paperclip, doodle, slash. The doodle button is the one
+    // that opens a modal rather than a native dialog, which is why this flow
+    // can be driven end to end here at all.
+    await page.locator('.composer .pill .tool').nth(1).click();
+    await expect(page.locator('.overlay-panel')).toBeVisible();
+    await expect(page.locator('.doodle-sources')).toBeVisible();
+
+    await page.locator('.source', { hasText: 'Blank sheet' }).click();
+    const sheet = page.locator('.doodle .sheet');
+    await expect(sheet).toBeVisible();
+
+    // Undo and Clear start disabled: an empty sheet has nothing to undo, and
+    // an enabled control that does nothing is a lie about the state.
+    const undo = page.locator('.doodle .toolbar .tool-btn[title="Undo"]');
+    await expect(undo).toBeDisabled();
+
+    // Drag a stroke across the canvas with the pen.
+    const box = await sheet.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width * 0.25, box!.y + box!.height * 0.35);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + box!.width * 0.5, box!.y + box!.height * 0.6, { steps: 12 });
+    await page.mouse.move(box!.x + box!.width * 0.75, box!.y + box!.height * 0.4, { steps: 12 });
+    await page.mouse.up();
+
+    // The stroke landed, so undo now has something to undo.
+    await expect(undo).toBeEnabled();
+
+    await page.locator('.doodle .btn.primary').click();
+
+    // The overlay closes and the drawing arrives as an ordinary staged tile —
+    // uploaded over the SAME path a pasted screenshot takes, with a data-URL
+    // thumbnail rather than the generic file glyph.
+    await expect(page.locator('.overlay-panel')).toHaveCount(0);
+    const tile = page.locator('.composer .tile').first();
+    await expect(tile).toBeVisible({ timeout: 20_000 });
+    await expect(tile.locator('.name')).toContainText('doodle-');
+    const thumb = tile.locator('img.thumb');
+    await expect(thumb).toBeVisible();
+    expect(await thumb.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
+
+    // The draft is untouched: attaching never mutates the text (COMPOSER.md
+    // §5.1) — the remote path is folded in at send time only.
+    await expect(page.locator('.composer .draft')).toHaveValue('');
+
+    // Leave nothing staged for the next run.
+    await tile.locator('.remove').click();
+    await expect(page.locator('.composer .tile')).toHaveCount(0);
+  });
+
+  test('offers all four image sources and can back out of the host browser', async () => {
+    await page.locator('.composer .pill .tool').nth(1).click();
+    const sources = page.locator('.doodle-sources .source');
+    await expect(sources).toHaveCount(4);
+    await expect(sources.nth(0)).toContainText('Blank sheet');
+    await expect(sources.nth(1)).toContainText('From the clipboard');
+    await expect(sources.nth(2)).toContainText('From this computer');
+    await expect(sources.nth(3)).toContainText('From the host');
+
+    // The host browser lists the remote filesystem over the live SFTP session.
+    await sources.nth(3).click();
+    await expect(page.locator('.picker')).toBeVisible();
+    await expect(page.locator('.picker .crumbs')).toBeVisible();
+
+    // Cancel returns to the chooser rather than closing the whole overlay —
+    // picking the wrong source should cost one click, not the whole flow.
+    await page.locator('.picker .btn').click();
+    await expect(page.locator('.doodle-sources')).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.overlay-panel')).toHaveCount(0);
+  });
 });
