@@ -247,9 +247,25 @@ const api = {
     stat: (connectionId: string, path: string): Promise<FileStat> =>
       ipcRenderer.invoke(ipc.sftp.stat, connectionId, path),
 
-    /** Read a file as UTF-8 text. */
+    /** Read a file as UTF-8 text. Use `readBinary` for anything that is not text. */
     readFile: (connectionId: string, path: string): Promise<string> =>
       ipcRenderer.invoke(ipc.sftp.readFile, connectionId, path),
+
+    /**
+     * Read a remote file as raw bytes — what `readFile` cannot do, since
+     * UTF-8 decoding turns every non-ASCII byte of a PNG into U+FFFD.
+     * For images to annotate or preview, not for bulk transfer: capped at
+     * 32 MiB, and a file over it rejects rather than truncating.
+     *
+     * Rejects on a missing path, a non-regular file, or an oversized one.
+     *
+     * The bytes arrive as a plain `Uint8Array` (never a Node `Buffer` —
+     * the prototype does not survive the structured clone, so the main
+     * process copies into a Uint8Array before sending; `shell.onData`
+     * already ships bytes this way).
+     */
+    readBinary: (connectionId: string, path: string): Promise<Uint8Array> =>
+      ipcRenderer.invoke(ipc.sftp.readBinary, connectionId, path),
 
     /** Write UTF-8 text to a file (overwrites). */
     writeFile: (connectionId: string, path: string, content: string): Promise<boolean> =>
@@ -421,6 +437,22 @@ const api = {
     /** Open the native file picker; resolves [] if the user cancelled. */
     pickFiles: (payload?: { title?: string; multiple?: boolean }): Promise<string[]> =>
       ipcRenderer.invoke(ipc.attachments.pickFiles, payload),
+
+    /**
+     * Read the bytes of a local file, so it can be drawn on before being
+     * staged. Same 32 MiB cap as `sftp.readBinary`.
+     *
+     * `path` must be one `pickFiles` returned **in this session** —
+     * anything else rejects, deliberately, without saying whether it
+     * exists. That is the whole permission model: the main process will
+     * read a file for you only if the user chose it in a native dialog.
+     * A path from a previous run of the app is not readable either.
+     *
+     * Also rejects on a missing file, a non-regular file, or an
+     * oversized one. Bytes arrive as a plain `Uint8Array`.
+     */
+    readLocal: (path: string): Promise<Uint8Array> =>
+      ipcRenderer.invoke(ipc.attachments.readLocal, path),
   },
 
   agent: {

@@ -21,6 +21,7 @@ import type { AutoForwarderStatus, DiscoveredPort } from './portfwd/AutoForwarde
 import type { PortIntent } from './portfwd/PortfwdStore.js';
 import type { ForwardSpec } from '../shared/types.js';
 import { AttachmentStager } from './attachments/AttachmentStager.js';
+import { LocalFileReader, MAX_IMAGE_READ_BYTES } from './attachments/LocalFileReader.js';
 import type {
   CloneResult,
   CreateFolderRequest,
@@ -58,6 +59,11 @@ export function registerIpcHandlers(deps: {
   // Prompt attachments ride the SSH/SFTP services that are already here —
   // no second connection, no shelling out to scp.
   const attachments = new AttachmentStager({ ssh, sftp });
+
+  // The read-back side of the picker. Holds the allow-list of paths the
+  // native dialog has handed the renderer this session — see
+  // LocalFileReader for why `attachments:readLocal` needs one at all.
+  const localFiles = new LocalFileReader();
 
   // Subscribe to forward-state changes and broadcast them to the renderer.
   forwards.onStates((connectionId, states) => {
@@ -295,6 +301,21 @@ export function registerIpcHandlers(deps: {
       return sftp.readFile(connectionId, path);
     },
   );
+  // The binary sibling of `sftp:readFile`, which decodes UTF-8 and so
+  // cannot carry a PNG. Capped at the same ceiling as `attachments:readLocal`
+  // because the bytes land identically: one Buffer here, one structured
+  // clone in the renderer, one decoded bitmap on the canvas.
+  ipcMain.handle(
+    ipc.sftp.readBinary,
+    async (_evt, connectionId: string, path: string): Promise<Uint8Array> => {
+      const buffer = await sftp.readBinary(connectionId, path, MAX_IMAGE_READ_BYTES);
+      // Copy into a fresh, exactly-sized Uint8Array before it crosses the
+      // bridge — same reason as `shell:event:data`: a Buffer is a view
+      // into Node's shared allocation pool and loses its prototype in the
+      // structured clone regardless, so hand over the plain view.
+      return new Uint8Array(buffer);
+    },
+  );
   ipcMain.handle(
     ipc.sftp.writeFile,
     async (_evt, connectionId: string, path: string, content: string): Promise<boolean> => {
@@ -511,8 +532,10 @@ export function registerIpcHandlers(deps: {
   );
 
   // Native file picker. Lives on this side so the renderer never needs
-  // filesystem access — it gets back opaque paths it can only hand to
-  // `attachments:stage`.
+  // filesystem access — it gets back paths it can hand to
+  // `attachments:stage` or, since the doodle editor, read back through
+  // `attachments:readLocal`. Every returned path is recorded as the
+  // allow-list for that read.
   ipcMain.handle(
     ipc.attachments.pickFiles,
     async (_evt, payload?: { title?: string; multiple?: boolean }): Promise<string[]> => {
@@ -528,7 +551,25 @@ export function registerIpcHandlers(deps: {
       const result = parent
         ? await dialog.showOpenDialog(parent, options)
         : await dialog.showOpenDialog(options);
-      return result.canceled ? [] : result.filePaths;
+      const paths = result.canceled ? [] : result.filePaths;
+      localFiles.remember(paths);
+      return paths;
+    },
+  );
+
+  // Read a picked file's BYTES back into the renderer, so it can be drawn
+  // on before anything is uploaded. This is the one place the renderer
+  // gets a filesystem read, which is why it is not `readFile(path)`: the
+  // reader serves only paths the native dialog handed out in this
+  // session, and refuses everything else. See LocalFileReader.
+  //
+  // Rejects on refusal / missing file / not-a-file / oversize, matching
+  // `sftp:readFile` rather than `attachments:stage` — one file, so there
+  // is no partial-batch outcome to encode in a result object.
+  ipcMain.handle(
+    ipc.attachments.readLocal,
+    async (_evt, path: string): Promise<Uint8Array> => {
+      return new Uint8Array(await localFiles.read(path));
     },
   );
 

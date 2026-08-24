@@ -118,6 +118,53 @@ export class SftpService {
     });
   }
 
+  /**
+   * Read a file as raw bytes, refusing anything larger than `maxBytes`.
+   *
+   * {@link readFile} decodes UTF-8 and so cannot carry a PNG or a JPEG —
+   * every byte outside ASCII comes back as U+FFFD. This is the binary
+   * sibling for callers that need the actual file (the doodle editor
+   * annotating an image that lives on the host).
+   *
+   * `maxBytes` is a required argument rather than a constant here on
+   * purpose: an unbounded read into memory is the hazard, and making the
+   * ceiling impossible to forget puts the policy with the caller that
+   * knows what the bytes are for. The current caller passes
+   * `MAX_IMAGE_READ_BYTES`.
+   *
+   * Rejects (like every other method here) rather than returning a
+   * result object: on a missing path, on a non-regular file, and on an
+   * oversized one.
+   */
+  async readBinary(connectionId: string, path: string, maxBytes: number): Promise<Buffer> {
+    const sftp = await this.sftp(connectionId);
+    // Stat first so an oversized file is refused BEFORE it is dragged
+    // across the wire, rather than after. `stat` follows symlinks, so a
+    // link to a regular file reads fine.
+    const info = toFileStat(await stat(sftp, path));
+    if (info.type !== 'file') throw new Error(`Not a regular file: ${path}`);
+    assertReadable(info.size, maxBytes, path);
+    return new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let received = 0;
+      const stream = sftp.createReadStream(path);
+      stream.on('data', (chunk: Buffer) => {
+        // The stat above is a snapshot; a remote file can grow between
+        // it and the read (an appended log is the obvious case). Keep a
+        // running total so the ceiling holds either way.
+        received += chunk.length;
+        if (received > maxBytes) {
+          stream.destroy();
+          reject(new Error(oversizeMessage(received, maxBytes, path)));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      stream.on('error', reject);
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+  }
+
   /** Write a UTF-8 string to a file (overwrites). */
   async writeFile(connectionId: string, path: string, content: string): Promise<void> {
     const sftp = await this.sftp(connectionId);
@@ -284,6 +331,16 @@ function toFileStat(s: StatsLike): FileStat {
 
 function modeToRwx(m: number): string {
   return (m & 4 ? 'r' : '-') + (m & 2 ? 'w' : '-') + (m & 1 ? 'x' : '-');
+}
+
+function assertReadable(size: number, maxBytes: number, path: string): void {
+  if (size > maxBytes) throw new Error(oversizeMessage(size, maxBytes, path));
+}
+
+/** Same phrasing as AttachmentStager's size refusal, for one voice in the UI. */
+function oversizeMessage(size: number, maxBytes: number, path: string): string {
+  const mb = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
+  return `${path} is ${mb(size)} MB; the limit is ${mb(maxBytes)} MB`;
 }
 
 function localSize(path: string): Promise<number> {

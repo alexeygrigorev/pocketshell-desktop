@@ -52,7 +52,8 @@ export const ipc = {
   sftp: {
     list: 'sftp:list',
     stat: 'sftp:stat',
-    readFile: 'sftp:readFile',
+    readFile: 'sftp:readFile', // UTF-8 text; mangles anything binary
+    readBinary: 'sftp:readBinary', // raw bytes, size-capped (images)
     writeFile: 'sftp:writeFile',
     mkdir: 'sftp:mkdir',
     rename: 'sftp:rename',
@@ -84,6 +85,7 @@ export const ipc = {
   attachments: {
     stage: 'attachments:stage', // upload pasted bytes / picked files, return ~/ display paths
     pickFiles: 'attachments:pickFiles', // native open dialog, returns local paths
+    readLocal: 'attachments:readLocal', // bytes of a path pickFiles handed out THIS session
   },
   agent: {
     log: 'agent:log', // agent-log --json for an engine+session
