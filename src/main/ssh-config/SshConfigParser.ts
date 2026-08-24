@@ -87,9 +87,7 @@ function resolveIncludeGlobs(spec: string, baseDir: string): string[] {
   const parts = spec.split(/\s+/).filter(Boolean);
   const files: string[] = [];
   for (const part of parts) {
-    const expanded = part.startsWith('~')
-      ? resolve(homedir(), part.slice(1))
-      : resolve(baseDir, part);
+    const expanded = part.startsWith('~') ? tildeExpand(part) : resolve(baseDir, part);
     // Simple glob: only support trailing * (the common ~/.ssh/conf.d/* case).
     if (expanded.includes('*')) {
       files.push(...globSimple(expanded));
@@ -250,5 +248,10 @@ function splitHostPort(part: string): { host: string; port: number } {
 }
 
 function tildeExpand(p: string): string {
-  return p.startsWith('~') ? resolve(homedir(), p.slice(1)) : resolve(p);
+  if (!p.startsWith('~')) return resolve(p);
+  // Strip the leading separator too. resolve() treats a segment that begins with
+  // a slash as absolute and discards homedir(), so `~/.ssh/k` would collapse to
+  // `/.ssh/k` (drive root `C:\.ssh\k` on Windows) instead of the user's home.
+  const rest = p.slice(1).replace(/^[/\\]+/, '');
+  return rest ? resolve(homedir(), rest) : homedir();
 }

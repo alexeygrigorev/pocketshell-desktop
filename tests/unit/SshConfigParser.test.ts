@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseSshConfigText } from '@main/ssh-config/SshConfigParser';
 import type { HostEntry } from '../../src/shared/types';
@@ -108,8 +110,21 @@ Host second
 
   it('expands ~ in IdentityFile', () => {
     const hosts = parseSshConfigText('Host h\n  IdentityFile ~/.ssh/id_ed25519\n');
-    // Exact path depends on the OS home dir, but it must be absolute and end with the key name.
-    expect(hosts[0]!.identityFile).toMatch(/[\\/]id_ed25519$/);
-    expect(hosts[0]!.identityFile).not.toContain('~');
+    // Must land under the real home dir. Asserting only "absolute and ends with
+    // the key name" is not enough: the old `resolve(homedir(), p.slice(1))` bug
+    // produced `/.ssh/id_ed25519` (`C:\.ssh\id_ed25519` on Windows), which passes
+    // that weaker check while pointing at a file that does not exist.
+    expect(hosts[0]!.identityFile).toBe(resolve(homedir(), '.ssh', 'id_ed25519'));
+  });
+
+  it('expands a bare ~ to the home dir', () => {
+    const hosts = parseSshConfigText('Host h\n  IdentityFile ~\n');
+    expect(hosts[0]!.identityFile).toBe(homedir());
+  });
+
+  it('leaves absolute IdentityFile paths alone', () => {
+    const abs = resolve(homedir(), 'keys', 'k');
+    const hosts = parseSshConfigText(`Host h\n  IdentityFile ${abs}\n`);
+    expect(hosts[0]!.identityFile).toBe(abs);
   });
 });
