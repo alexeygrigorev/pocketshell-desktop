@@ -695,6 +695,14 @@ var(--sp-1)` (the inline-flex is also required once chips contain icons,
 (`.status`, `.window-tag`), `ConversationView.vue` (`.resume-chip`,
 `.block-toggle`).
 
+**Update (docs/SESSIONLIST.md, implemented).** The metric is unchanged, but
+`SessionTree.vue`'s `.tag` no longer exists: the `attached` chip is
+**retired**. The flat session row says "attached" three ways at once — the
+green `--success` dot, a `--fw-semibold` label, and the row's position at the
+top of the list — so a fourth statement in chip form was competing with the
+information around it rather than adding any. `.agent-badge` stays, and stays
+on this metric; the port panel gained an `.origin` chip on it too.
+
 ---
 
 ## 8. Ranked impact — if only three things get done

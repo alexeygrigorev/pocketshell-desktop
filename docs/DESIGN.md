@@ -690,20 +690,28 @@ ports the phone's grouping (`groupSessionsByFolder`, folders sorted by recent
 activity with `Untracked` pinned last — the Android *no-watched-roots* path).
 The visual spec follows Android `FolderListScreen.kt`:
 
+> **Superseded by docs/SESSIONLIST.md (implemented).** The two-level tree
+> below is gone: on a real host the distribution is 1:1 (11 folders, 11
+> sessions), so every folder header cost a row to say nothing, and the session
+> name is *derived from the folder path*, so the two lines were the same fact
+> twice. The panel is now flat — one row per session. The `SESSIONS` header
+> row and the chip metric stand; the rest of this table is history.
+
 | Element | Spec |
 |---|---|
-| Panel | `--surface`, `border-right: 1px solid var(--border)`, min-width 240px |
+| Panel | `--surface`, `border-right: 1px solid var(--border)`, min-width **200px** (**revised**: 240 contradicted the 200px drag clamp). `container-type: inline-size` |
 | `SESSIONS` header | `--fs-100`/`--fw-semibold`/`--fg-muted`, `letter-spacing: .08em`, uppercase — keep as is, it is already right |
-| `.folder-header` | height `--row-h`, `--fs-400`/`--fw-semibold`/`--fg`, indent `--sp-2` (**revised**: 26px vs `--row-h` 28px were two near-identical magic values one gap apart) |
-| `.folder-count` | `· N sessions` in `--fs-100`/`--fg-secondary`, `tabular-nums` |
-| `.disclosure` | **revised (POLISH.md §2.6)**: `<AppIcon name="chevron-right" :size="14">`, `--fg-muted`, `rotate(90deg)` when open over `--dur-fast`. Rotating the `<svg>` box pivots on its own centre — the old 12px text caret sat on the text baseline, so it landed high of the row's optical centre and its open state fell slightly off its closed one |
-| `.session-row` | height `--row-h` (28px), padding `var(--row-pad-y) var(--row-pad-x)`, indent **28px** (**revised**: `--sp-4` put the child dot at x≈18 while the parent's sat at x≈30, so children *outdented* their own folder label; 2px rail + 28 aligns them) |
-| `.session-name` | `--font-mono`/`--fs-300`/`--fg` |
-| `.session-time` | `--fs-100`/`--fg-secondary`/`tabular-nums`, right-aligned |
+| `.session-row` | height `--row-h` (28px), padding `0 var(--row-pad-x) 0 var(--sp-2)`, **no child indent** — there is no parent row to align under |
 | `.dot` | 8px; `--fg-muted` detached, `--success` attached (replaces the hard-coded `#a6e3a1`) |
+| `.label` (primary) | folder basename, `--font-ui`/`--fs-300`, `flex: 1 1 auto; min-width: 0`. `--fw-semibold` when attached. Middle-truncates via a `.label-head` (shrink + ellipsis) / `.label-tail` (protected, last 8 chars) span pair, so `pocketshell-desktop` degrades to `poc…-desktop` rather than to `pocketshell` |
+| `.row-name` (secondary) | session name, `--font-mono`/`--fs-100`/`--fg-secondary`, end-ellipsis. Rendered **only** when the name is not derivable from the label, or the folder holds siblings |
+| `.agent-badge` | unchanged — `--agent` on `--agent-soft`, `--r-sm`, `--fs-100`, the shared chip metric (POLISH.md §7) |
+| `.row-time` | **relative** (`now`, `12m`, `3h`, `2d`, then `Aug 12`), `--fs-100`/`--fg-secondary`/`tabular-nums`, right-aligned. Absolute form moved to the row tooltip. Hidden under `@container (width < 230px)` |
+| Row tooltip | three lines: session name, full folder path, absolute time |
 | `.session-row:hover` | `background: var(--state-hover)` |
 | `.session-row.current` | `background: var(--state-selected)`, plus a 2px `--accent` left rail; **remove** the current cyan-tinted hover so hover and selection stop looking alike |
-| `.new-session input` | height `--control-h`, `background: var(--surface-2)`, `border: 1px solid var(--border-strong)`, `--r-md` |
+| Footer | a full-width `New session` button opening the folder-first picker. The bare name field it replaced is **deleted**: the name is derived from the folder, never typed |
+| Retired | `.folder-header`, `.folder-count`, `.disclosure`, the 28px child indent, the `attached` text tag (dot + weight + sort position say it), and the absolute `.session-time` |
 
 **Gap to flag:** Android sorts agent sessions above plain shells and puts an
 agent badge (`Claude` / `Codex` / `OpenCode`, purple `--agent` on
