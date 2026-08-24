@@ -4,6 +4,7 @@
 // manual -L/-R/-D, or remove one.
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useConnectionStore } from '../stores/connection';
+import AppIcon from '../components/AppIcon.vue';
 import { useForwardsStore } from '../stores/forwards';
 import type { ForwardSpec } from '../../shared/types';
 import type { ForwardState } from '../../main/portfwd/Forwarder';
@@ -58,8 +59,11 @@ function fmtBytes(n: number): string {
 <template>
   <div class="port-panel">
     <div class="panel-bar">
-      <button class="icon-btn" :disabled="forwards.loading" @click="forwards.scan(connId!)">
-        {{ forwards.loading ? '…' : '⟳ Scan' }}
+      <!-- Deliberately NOT a ghost button: it sits in a form bar beside the
+           bordered Auto-forward toggle and shares its chrome. -->
+      <button class="scan" :disabled="forwards.loading" @click="forwards.scan(connId!)">
+        <AppIcon name="refresh" :size="14" :class="{ spin: forwards.loading }" />
+        Scan
       </button>
       <button
         :class="['toggle', { on: forwards.autoOn }]"
@@ -78,7 +82,12 @@ function fmtBytes(n: number): string {
       </select>
       <label>local <input v-model.number="localPort" type="number" /></label>
       <template v-if="kind !== 'dynamic'">
-        <label>→ <input v-model="remoteHost" class="host" /></label>
+        <!-- Decorative: this is a DIRECTION (local -> remote), not navigation,
+             so an arrow is the right mark here. -->
+        <label>
+          <AppIcon name="arrow-right" :size="12" class="dir" />
+          <input v-model="remoteHost" class="host" />
+        </label>
         <label>: <input v-model.number="remotePort" type="number" /></label>
       </template>
       <button class="add-btn" @click="onAdd">Add</button>
@@ -96,7 +105,15 @@ function fmtBytes(n: number): string {
           <td :class="s.active ? 'ok' : 'warn'">{{ s.active ? 'forwarding' : 'idle' }}</td>
           <td class="mono">{{ fmtBytes(s.bytesIn) }}</td>
           <td class="mono">{{ fmtBytes(s.bytesOut) }}</td>
-          <td><button class="icon-btn" @click="forwards.remove(connId!, keyOf(s))">✕</button></td>
+          <td>
+            <button
+              class="icon-btn sm"
+              title="Remove forward"
+              @click="forwards.remove(connId!, keyOf(s))"
+            >
+              <AppIcon name="close" :size="12" />
+            </button>
+          </td>
         </tr>
         <tr v-if="!forwards.states.length">
           <td colspan="7" class="muted empty">no forwards — add one above or enable auto-forward</td>
@@ -120,6 +137,7 @@ function fmtBytes(n: number): string {
   gap: var(--sp-3);
   margin-bottom: var(--sp-4);
 }
+.scan,
 .toggle,
 .add-btn {
   height: var(--control-h);
@@ -139,6 +157,18 @@ function fmtBytes(n: number): string {
 }
 .toggle:hover {
   color: var(--fg);
+}
+.scan {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.scan:hover:not(:disabled) {
+  color: var(--fg);
+}
+.scan:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
 }
 .toggle.on {
   background: var(--accent-soft);
@@ -173,6 +203,10 @@ function fmtBytes(n: number): string {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+}
+/* Decorative direction mark, not an affordance. */
+.dir {
+  color: var(--fg-muted);
 }
 .add-form input[type='number'] {
   width: 5rem;
@@ -212,7 +246,12 @@ function fmtBytes(n: number): string {
 .fwd-table td {
   font-family: var(--font-mono);
 }
+/* One badge metric across the app (docs/POLISH.md §7). */
 .kind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  line-height: var(--lh-100);
   font-size: var(--fs-100);
   padding: 0 var(--sp-1);
   border-radius: var(--r-sm);

@@ -53,13 +53,20 @@ function onKeydown(e: KeyboardEvent): void {
       <template v-if="files.openPath">
         <div class="editor-bar">
           <span class="path">{{ files.openPath }}</span>
-          <span v-if="files.dirty" class="dirty">● unsaved</span>
+          <span v-if="files.dirty" class="dirty">
+            <span class="dirty-dot" />
+            unsaved
+          </span>
+          <!-- The handler is `metaKey || ctrlKey`; the label used to read
+               `Save (⌘S)` — a macOS glyph on a Windows-first app. The chord
+               belongs in the tooltip, in this app's Ctrl+... convention. -->
           <button
             class="save-btn"
             :disabled="!files.dirty || files.saving"
+            title="Ctrl+S"
             @click="onSave"
           >
-            {{ files.saving ? 'Saving…' : 'Save (⌘S)' }}
+            {{ files.saving ? 'Saving…' : 'Save' }}
           </button>
         </div>
         <textarea
@@ -109,9 +116,21 @@ function onKeydown(e: KeyboardEvent): void {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A status pip, not an icon: it should stop scaling with font metrics, so it
+   is a CSS circle rather than a bullet character. */
 .dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   color: var(--warning);
   font-size: var(--fs-100);
+}
+.dirty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
 }
 .save-btn {
   height: var(--control-h-sm);

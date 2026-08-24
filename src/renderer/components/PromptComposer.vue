@@ -40,7 +40,7 @@ import { useComposerStore, type ComposerSessionState } from '../stores/composer'
 import { useShellsStore } from '../stores/shells';
 import ComposerAttachmentTiles from './ComposerAttachmentTiles.vue';
 import SlashCommandDropdown from './SlashCommandDropdown.vue';
-import ComposerIcon from './ComposerIcon.vue';
+import AppIcon from './AppIcon.vue';
 import { COMPOSER_STRINGS, slashQueryFor, insertCommandText } from '../../shared/composerText';
 import {
   composerTiming,
@@ -548,12 +548,12 @@ defineExpose({ focusDraft, openComposer });
       title="Open the prompt panel (Ctrl+`)"
       @click="openComposer"
     >
-      <ComposerIcon class="chevron" name="chevron-up" />
+      <AppIcon class="chevron" name="chevron-up" />
       <span class="rail-title">Prompt</span>
       <span class="ghost">{{ COMPOSER_STRINGS.placeholder }}</span>
-      <ComposerIcon v-if="state.draft.length" class="draft-dot" name="dot" title="unsent draft" />
+      <AppIcon v-if="state.draft.length" class="draft-dot" name="dot" title="unsent draft" />
       <span v-if="attachments.length" class="rail-badge">
-        <ComposerIcon name="paperclip" />
+        <AppIcon name="paperclip" />
         {{ attachments.length }}
       </span>
       <span class="hint">Ctrl+`</span>
@@ -574,7 +574,7 @@ defineExpose({ focusDraft, openComposer });
       <div class="panel-header">
         <span class="panel-title">Prompt</span>
         <span class="panel-scope">{{ sessionName }}</span>
-        <ComposerIcon
+        <AppIcon
           v-if="state.draft.length || attachments.length"
           class="panel-dirty"
           name="dot"
@@ -588,7 +588,7 @@ defineExpose({ focusDraft, openComposer });
           :aria-label="mode === 'expanded' ? 'Restore panel' : 'Maximize panel'"
           @click="toggleExpanded"
         >
-          <ComposerIcon :name="mode === 'expanded' ? 'chevron-down' : 'chevron-up'" />
+          <AppIcon :name="mode === 'expanded' ? 'chevron-down' : 'chevron-up'" />
         </button>
         <button
           class="panel-action"
@@ -597,7 +597,7 @@ defineExpose({ focusDraft, openComposer });
           aria-label="Close panel"
           @click="closePanel"
         >
-          <ComposerIcon name="close" />
+          <AppIcon name="close" />
         </button>
       </div>
 
@@ -672,7 +672,7 @@ defineExpose({ focusDraft, openComposer });
             :disabled="state.uploadingCount > 0"
             @click="onAttachClick"
           >
-            <ComposerIcon name="paperclip" />
+            <AppIcon name="paperclip" />
           </button>
           <button
             class="tool"
@@ -780,7 +780,7 @@ defineExpose({ focusDraft, openComposer });
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
 }
-.rail-badge :deep(.icon) {
+.rail-badge :deep(.app-icon) {
   width: 13px;
   height: 13px;
 }

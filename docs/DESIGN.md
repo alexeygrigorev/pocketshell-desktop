@@ -35,6 +35,16 @@ with Playwright's `_electron.launch`, against the deterministic Docker fixture
 | `docs/screenshots/07-usage-overlay.png` | Usage overlay, 3 provider cards (codex/claude/copilot) with meters |
 | `docs/screenshots/08-session-list-default.png` | Back on the Terminal tab |
 
+Two later passes re-captured the same states from the same harness, so the
+three sets diff against each other directly:
+
+| Prefix | Pass |
+|---|---|
+| `01`…`08` | before the token/type/layout work of this document |
+| `after-01`…`after-08` | after it |
+| `composer-*` | the prompt-composer panel's own states |
+| **`polish-01`…`polish-16`** | after the POLISH.md pass (§5.8 icons, §5.1 ghost chrome, §5.9 motion) — plus the Files dirty state, four composer states, and the redesigned Usage overlay at 1 / 3 / 6+ providers including null-percentage rows |
+
 **Gap — not captured:** the Conversation tab is shown *empty*. The fixture's
 stub agents seed `~/.claude/projects/` but the tmux session `main` has no
 matching agent log, so `Load` returns nothing. The populated conversation
@@ -463,6 +473,16 @@ commit.
   --error-soft:    rgba(239, 68, 68, 0.12);
   --agent-soft:    rgba(167, 139, 250, 0.14);
 
+  /* ---- Motion --------------------------------------------------------- */
+  /* --dur-slow and --ease-out were added by POLISH.md §4.1: the overlay
+     entrance is the one thing slow enough to want a decelerating curve.
+     --ease stays the default for state changes (hover tints, rotation). */
+  --dur-fast:      150ms;
+  --dur-normal:    200ms;
+  --dur-slow:      280ms;                       /* overlay entrance only */
+  --ease:          cubic-bezier(0.2, 0, 0, 1);
+  --ease-out:      cubic-bezier(0, 0, 0.2, 1);  /* decelerate: things arriving */
+
   /* ---- Interaction states -------------------------------------------- */
   /* Neutral lift for hover: tinting every hover cyan (as the app does today
      with rgba(137,180,250,.08)) makes hover read as selection. */
@@ -547,16 +567,25 @@ body {
 }
 
 /* One focus treatment for the whole app. There is none today. */
-:where(button, a, input, select, [tabindex]):focus-visible {
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
-  border-radius: var(--r-md);
+}
+/* Rows live inside `overflow-y: auto` lists, which clip a +2px offset ring. */
+:where(.session-row, .entry, .folder-header):focus-visible {
+  outline-offset: -2px;
 }
 ```
 
 The focus rule is not cosmetic — the app is keyboard-driven around a terminal,
 and right now nothing shows focus except the browser default that the custom
 `background: transparent` buttons largely suppress.
+
+**Revised (POLISH.md §5).** This rule originally also set `border-radius:
+var(--r-md)`. That declaration is deleted: Chromium already draws the outline
+along the focused element's own corners, so it did not shape the *ring* — it
+mutated the *element*, visibly rounding the square editor textarea the moment
+it took focus. The inset-offset variant above is the second half of the fix.
 
 ### 5.1 Shared primitives (extract before restyling)
 
@@ -565,26 +594,71 @@ one set of global classes in `App.vue`'s unscoped `<style>`, then be deleted
 from the component `<style scoped>` blocks. Restyling 7 copies of `.icon-btn`
 by hand is how the current drift happened.
 
+**Revised (POLISH.md §3).** The single bordered `.icon-btn` is split in two,
+both *ghost*: invisible at rest, filled on hover, in the VS Code register. The
+old primitive sized itself from `padding + the glyph's advance width`, so two
+adjacent icon buttons were visibly different widths; icon-only buttons are now
+square by construction. Nine bordered rectangles at rest in a 40px topbar were
+the single biggest "unpolished" signal in the before-screenshots.
+
 ```css
+/* Ghost SQUARE icon button — toolbars, panel headers, row actions. */
 .icon-btn {
-  height: var(--control-h);
-  display: inline-flex; align-items: center; gap: var(--sp-1);
-  padding: 0 var(--sp-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  width: var(--control-h); height: var(--control-h);
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
   border-radius: var(--r-md);
   color: var(--fg-secondary);
-  font: var(--fw-medium) var(--fs-300)/1 var(--font-ui);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease),
               color var(--dur-fast) var(--ease);
 }
-.icon-btn:hover:not(:disabled) { background: var(--state-active); color: var(--fg); }
+.icon-btn:hover:not(:disabled) { background: var(--state-hover); color: var(--fg); }
+.icon-btn:active:not(:disabled) { background: var(--state-active); }
 .icon-btn:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.icon-btn.sm { width: var(--control-h-sm); height: var(--control-h-sm); }
+
+/* Ghost LABELED button — header text actions (Ports, Usage, disconnect). */
+.btn-ghost {
+  height: var(--control-h);
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-md);
+  color: var(--fg-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-300); font-weight: var(--fw-medium); line-height: 1;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--state-hover); color: var(--fg); }
+.btn-ghost:disabled { opacity: var(--disabled-opacity); cursor: default; }
+
+/* Loading: the icon spins in place rather than being swapped for a bare `…`,
+   which used to change the button's content width mid-action. */
+.spin { animation: icon-spin 900ms linear infinite; }
+@keyframes icon-spin { to { transform: rotate(360deg); } }
+
 .muted { color: var(--fg-secondary); }
 .error { color: var(--error); font-size: var(--fs-200); }
 .empty { color: var(--fg-muted); font-style: italic; padding: var(--sp-4); }
 ```
+
+A bordered look now survives **only** where chrome is earned: filled accent
+actions (`Load`, `Add`, `Save`), the stateful `Auto-forward` toggle, the `Scan`
+button that sits beside it in the same form bar, and form controls. Status
+chips keep their tinted borders — they are status, not controls.
+
+**Badge metric (POLISH.md §7).** Every `--r-sm` badge-like — `.chip`, `.tag`,
+`.agent-badge`, `.kind`, `.status`, `.window-tag`, `.resume-chip`,
+`.block-toggle` — uses `padding: 0 var(--sp-1)`, `line-height: var(--lh-100)`,
+and `display: inline-flex; align-items: center; gap: var(--sp-1)`. The
+inline-flex is also what centres an icon against the label once a chip
+contains one.
 
 ### 5.2 Host picker (`01-host-picker.png`)
 
@@ -620,10 +694,10 @@ The visual spec follows Android `FolderListScreen.kt`:
 |---|---|
 | Panel | `--surface`, `border-right: 1px solid var(--border)`, min-width 240px |
 | `SESSIONS` header | `--fs-100`/`--fw-semibold`/`--fg-muted`, `letter-spacing: .08em`, uppercase — keep as is, it is already right |
-| `.folder-header` | height 26px, `--fs-400`/`--fw-semibold`/`--fg`, indent `--sp-2` |
+| `.folder-header` | height `--row-h`, `--fs-400`/`--fw-semibold`/`--fg`, indent `--sp-2` (**revised**: 26px vs `--row-h` 28px were two near-identical magic values one gap apart) |
 | `.folder-count` | `· N sessions` in `--fs-100`/`--fg-secondary`, `tabular-nums` |
-| `.disclosure` | 12px caret, `--fg-muted`, rotate 90° on expand over `--dur-fast` |
-| `.session-row` | height `--row-h` (28px), padding `var(--row-pad-y) var(--row-pad-x)`, indent `--sp-4` |
+| `.disclosure` | **revised (POLISH.md §2.6)**: `<AppIcon name="chevron-right" :size="14">`, `--fg-muted`, `rotate(90deg)` when open over `--dur-fast`. Rotating the `<svg>` box pivots on its own centre — the old 12px text caret sat on the text baseline, so it landed high of the row's optical centre and its open state fell slightly off its closed one |
+| `.session-row` | height `--row-h` (28px), padding `var(--row-pad-y) var(--row-pad-x)`, indent **28px** (**revised**: `--sp-4` put the child dot at x≈18 while the parent's sat at x≈30, so children *outdented* their own folder label; 2px rail + 28 aligns them) |
 | `.session-name` | `--font-mono`/`--fs-300`/`--fg` |
 | `.session-time` | `--fs-100`/`--fg-secondary`/`tabular-nums`, right-aligned |
 | `.dot` | 8px; `--fg-muted` detached, `--success` attached (replaces the hard-coded `#a6e3a1`) |
@@ -664,25 +738,77 @@ Both are header buttons opening `OverlayPanel.vue`. Current backdrop is
 - `.overlay-backdrop` → `background: var(--scrim)`, `backdrop-filter: blur(2px)`
 - `.overlay-panel` → `background: var(--surface)`, `border: 1px solid
   var(--border)`, `border-radius: var(--r-xl)`, `box-shadow: 0 16px 48px
-  rgba(0,0,0,.5)`, `max-width: 960px`
+  rgba(0,0,0,.5)`
+- **Sizes to its content (revised).** The panel used a fixed
+  `height: min(720px, 88vh)`, so a panel holding 180px of content rendered as
+  a mostly-empty rectangle. It is now `max-height`, with the body scrolling
+  past the cap. Width is a `size` prop: `lg` = 960px (the wide port-forward
+  table), `md` = 720px (anything narrower — a panel wider than its content is
+  just a void with a border around it).
+- **Panel-scoped controls live in the header**, via a named `actions` slot
+  rendered beside the close button. A refresh control floating at the top-left
+  of the body read as orphaned debris under the title.
+- **Entrance (POLISH.md §4.3).** `<Transition name="overlay" appear>`: the
+  backdrop fades over `--dur-normal --ease-out` while the panel rises 8px and
+  scales from `0.985` over `--dur-slow --ease-out`; leaving is a plain
+  `--dur-fast` fade with no scale, because dismissal should feel faster than
+  arrival. Overlays used to pop in fully formed in one frame.
 - `.overlay-title` → `--fs-500`/`--fw-semibold`
 - **Remove the duplicated heading.** `07-usage-overlay.png` shows
   "Provider usage" twice — once as the overlay title, once as the view's own
   `h2`. `UsageView.vue`'s `h2` and `PortPanelView.vue`'s equivalent should be
   dropped when hosted in an overlay.
-- Usage `.card` → `--surface-2`, `--r-lg`, `--sp-4` padding; `.meter` track
-  `--surface-3` at 6px/`--r-sm`; `.meter-fill` `--success` >50%, `--warning`
-  >20%, `--error` otherwise (replaces the raw `#a6e3a1/#f9e2af/#f38ba8` in
-  `UsageView.vue:18-20`); `.meter-pct` `--font-mono`/`tabular-nums`.
-- Status chips → `.status.ok` `--success` on `--success-soft`, `.limited`
-  `--warning` on `--warning-soft`, `.blocked/.error` `--error` on
-  `--error-soft`, all `--r-sm`/`--fs-100`.
+- **Usage is a table, not cards (revised — supersedes the `.card` spec).**
+  The job of this screen is *comparison* — "who is nearly out?" — and three
+  side-by-side cards each laid out their own label/bar/percentage tracks, so
+  no meter aligned with any other meter and card heights moved with the data.
+  It is now one shared grid, `128px 72px minmax(160px, 1fr) 128px` with an
+  `--sp-4` column gap: **provider · window · remaining · resets**. Every meter
+  sits in one continuous column and every percentage right-aligns to one edge,
+  so the shortest bar is the answer at a glance; the form holds at 1 provider
+  and at 6+ without reflowing, and rows cannot end up different heights.
+  - Window labels use the helper's own `window` value (`5h`/`7d`/`weekly`/
+    `monthly`) when present, falling back to `short-term`/`long-term`.
+  - `.meter` 8px on a `--bg` well (was 6px on `--surface-3`, barely
+    distinguishable from the card behind it); `.meter-fill` `--success` >50%,
+    `--warning` >20%, `--error` otherwise (replaces the raw
+    `#a6e3a1/#f9e2af/#f38ba8`); `.pct` 40px, `--font-mono`, `tabular-nums`,
+    right-aligned.
+  - One hairline per provider group, as a full-width grid child — a per-cell
+    border is broken up by the column gaps and reads as stray underlines.
+  - `.reset` is `--fs-100`/`--fg-secondary` and shows a **relative** time
+    ("in 2h 14m"), with the absolute timestamp on `title`. A reset already in
+    the past falls back to the absolute date.
+- **Null percentages are not empty rows.** `percent_remaining` is `null` for
+  codex and grok on helper 0.4.44 — that means *the meter* is unknown, not
+  that the provider has nothing to say. When the percentage is missing the
+  remaining cell reads a quiet italic `not reported` and the **reset becomes
+  the row's primary content** (`--fs-200`/`--fw-medium`/`--fg`), because
+  "codex resets in 2h" is the useful half anyway. Only when the reset is
+  *also* null is the row genuinely quiet. Never coerce null to 0: a 0%-wide
+  bar reads as "quota exhausted".
+- Status chips → `.status.limited` `--warning` on `--warning-soft`,
+  `.blocked/.error` `--error` on `--error-soft`, all `--r-sm`/`--fs-100`.
+  **`ok` renders no chip** — a row of "ok" badges is noise, and the meter
+  already says so when it is fine. Likewise the `block_reason` footnote is
+  `--fg-secondary`, not amber: the meter colour carries the level and the
+  badge carries the category, and three amber signals for one fact was the
+  old card's loudest problem.
 - Ports `.fwd-table` → `th` in `--fs-100`/`--fw-semibold`/`--fg-muted`
   uppercase on `--surface-2`; `td` `--font-mono`/`--fs-200`; row separator
   `--border-soft`. `.kind.local/.remote/.dynamic` → `--accent` / `--warning` /
   `--agent` (replaces `#89b4fa` / `#f9e2af` / `#cba6f7`).
 - `.toggle.on` (Auto-forward) → `--accent-soft` fill, `--accent` text,
   `--accent-dim` border.
+
+### 5.5b Splitter (`02`, `03` · `HostWorkspaceView.vue`)
+
+Transparent at rest, `--accent-dim` on hover with a **250ms enter delay** —
+VS Code's sash. The splitter used to paint a 4px `--bg` band between the
+session panel and the pane, visibly darker than both surfaces and doubling the
+1px panel border beside it; the panel's own hairline is the seam. The delay
+applies on enter only (leaving transitions immediately), so sweeping the
+cursor across the app never flashes a cyan bar.
 
 ### 5.6 Conversation (`04` — empty state only)
 
@@ -704,13 +830,95 @@ existing selectors and the Android `docs/mockups/conversation.html`:
 
 - `.entry` height `--row-h`, hover `--state-hover`, `.entry.active`
   `--state-selected` (currently `rgba(137,180,250,.16)`)
-- `.ic` folder glyph → `--warning` (currently `#f9e2af`); file glyph
-  `--fg-muted`
+- **Entry icons — revised (POLISH.md §2.5).** `.ic` is gone; the row renders
+  `<AppIcon :name="icon(e)" :class="icon(e)" />` and the 16px SVG box *is* the
+  icon column (the old `1.1rem` width was sized for an emoji). Colours:
+  directory `--warning`, file `--fg-muted`, symlink `--fg-secondary`, the `..`
+  row `--fg-muted`. On **selected** only the file icon lifts to
+  `--fg-secondary` so it does not read disabled against the accent fill;
+  on **hover nothing changes** (icon-colour flicker under a sweeping cursor
+  reads as smear — the row's `--state-hover` fill is the feedback).
+  The original spec asked for exactly these tokens and could not have them:
+  `icon()` returned colour emoji, and colour-emoji rasterisation ignores CSS
+  `color` entirely. Real SVGs are what made the token system reach this column.
+- `.entry.active` carries the same 2px `--accent` left rail as `.session-row`
+  (**revised**): one list marking selection with a rail and the adjacent one
+  without it was exactly the sort of inconsistency that reads as unfinished
 - `.nm` `--font-mono`/`--fs-300`; `.sz` `--fs-100`/`--fg-secondary`/
   `tabular-nums`, right-aligned
-- `.breadcrumb` `--fs-200`, crumb links `--accent`, separators `--fg-muted`
+- `.breadcrumb` `--fs-200`, crumb links **`--fg-secondary` → `--fg` on hover**
+  (**revised**, POLISH.md §6.2), separators `--fg-muted`. The old all-`--accent`
+  crumb row was the loudest thing on the Files screen while being pure
+  navigation, and it contradicted §5.2's own rule that accent is reserved for
+  *selected*
 - `.editor` → `--font-mono`, `--fs-300`, `background: var(--term-bg)`,
   `color: var(--term-fg)`
+
+### 5.8 Iconography — no character ever does an icon's job
+
+**The rule: no character-as-icon anywhere in the app.** Not emoji, not
+box-drawing characters, not arrows, not an icon *font*. Every glyph standing
+in for a graphic affordance is a real inline SVG that inherits `currentColor`.
+
+Font glyphs cannot be stroke-tuned or token-tinted, they sit on the text
+baseline rather than a control's optical centre, they rotate around the wrong
+origin, and colour emoji ignore CSS `color` outright — which is why this
+document's own §5.7 asked for a `--warning` folder and could not have one for
+two revisions. An icon *font* repeats the same mistake in a tidier form, so
+`@vscode/codicons` was considered and rejected on exactly that ground (it also
+carries a visible-attribution requirement).
+
+**The mechanism** is one local component, `src/renderer/components/AppIcon.vue`
+— no package, no loader, nothing fetched, the strict `file://` renderer
+untouched. Its contract:
+
+| | |
+|---|---|
+| Geometry | Feather 4.29 path data (**MIT**), verbatim, in a registry inside the component |
+| Canvas | one `24 24` viewBox for every mark, so stroke weights are identical across the set |
+| Stroke | `2`, round caps and joins — the thin geometric unfilled register of VS Code's Codicons |
+| Colour | **always `currentColor`.** An icon never sets its own colour; the parent's `color:` token does |
+| Sizes | **16** (default: toolbars, tree glyphs), **14** (dense bars, the disclosure chevron), **12** (chips, table-row actions, block toggles). No others |
+| Alignment | flex-centring, never baseline. The component is `display: block; flex: none`, which kills the inline-SVG descender gap and stops a truncating label from squashing it |
+
+Two marks are painted rather than stroked (`dot`), or are Feather shapes with
+a `<rect>` re-expressed as a path (`panel-left`, VS Code's toggle-sidebar
+mark), so the template stays a single path loop.
+
+`ComposerIcon.vue` was an earlier local copy of this contract, written while
+this component was still being specified; it has been folded in and deleted.
+There is one icon component in the tree.
+
+**What stays text, deliberately:** `·` metadata separators, `…` inside a label
+(`Sending…`, `probing…`), `—`/`–` as punctuation and no-data placeholders,
+`~` and `/` in displayed paths, `↑`/`↓` inside keyboard-shortcut tooltip copy,
+and the composer's `/` button — a keycap for the literal character it inserts.
+That family is text, not iconography. A **bare** `…` swapped in as a button's
+whole content is *not* text: those became the spinning refresh icon.
+
+### 5.9 Motion
+
+`--dur-fast` for state changes, `--dur-normal`/`--dur-slow` with `--ease-out`
+for things arriving. What animates: hover tints, disclosure rotation, the
+overlay entrance (§5.5), the splitter highlight (§5.5b), meter-fill width, the
+loading `.spin`, and a 2px `translateX` nudge on the host-picker chevron.
+
+**What must NOT animate:**
+
+- **The terminal. Ever.** No transition or animation on `.terminal`, its
+  container, or anything xterm renders — resize, attach and tab-switch are
+  instant.
+- **List-row hover** (`.session-row`, `.entry`). VS Code renders list hover
+  instantly because a cursor sweeping a list with lagging tints reads as
+  smear, not smoothness. The absence of a `transition` here is deliberate —
+  do not "fix" it. (Same reason the file-tree icons do not change colour on
+  hover, §5.7.)
+- **Panel/splitter drag geometry** — width follows the pointer 1:1.
+- **Folder expand/collapse height.** The chevron rotation is the motion cue.
+
+One global `@media (prefers-reduced-motion: reduce)` guard in `App.vue` covers
+every animation and transition, so components carry no per-component
+reduced-motion blocks.
 
 ---
 
@@ -739,8 +947,25 @@ fake profile directory **must contain an `AppData\Roaming` subtree**, or
 Electron fails to resolve `app.getPath('appData')`, `requestSingleInstanceLock()`
 returns false and the app exits silently with code 3.
 
-**Definition of done:** `grep -rE "#[0-9a-fA-F]{6}" src/renderer --include=*.vue`
-returns hits only in `App.vue` and in `TerminalView.vue`'s Campbell theme.
+**Definition of done — two gates.** Both are executed, not remembered:
+`tests/unit/designGates.test.ts` runs them on every `npm run test:unit`, since
+a rule that lives only in a document decays one locally-reasonable exception
+at a time (which is exactly how the emoji arrived).
+
+1. **Colour tokens.**
+   `grep -rE "#[0-9a-fA-F]{6}" src/renderer --include=*.vue`
+   returns hits only in `App.vue` and in `TerminalView.vue`'s Campbell theme.
+
+2. **No character-as-icon** (§5.8).
+   ```
+   grep -rnP "[▸▾▼▶◀◁▷△▽←→↑↓☰⟳✕✖✗✓⌘●📁📄↪🔧📎]" src/renderer --include=*.vue
+   ```
+   returns zero matches **outside** (a) code comments, (b) the genuine-text
+   cases listed in §5.8 — `↑`/`↓` in the composer's shortcut tooltip is the
+   one arrow that legitimately survives, as copy — and (c) `TerminalView.vue`,
+   whose glyphs come from the remote program and from Consolas and are
+   off-limits on principle. The `·` `…` `—` `–` `~` family is exempt by
+   design: that is text.
 
 ---
 

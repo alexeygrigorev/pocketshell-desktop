@@ -4,6 +4,7 @@
 // the engine + session id, then loads via `pocketshell agent-log`.
 import { ref, computed, onMounted } from 'vue';
 import { useConnectionStore } from '../stores/connection';
+import AppIcon from '../components/AppIcon.vue';
 import { useAgentsStore } from '../stores/agents';
 import type { ConversationBlock } from '../../main/agents/conversation';
 
@@ -93,8 +94,14 @@ function isText(b: ConversationBlock): boolean {
           <div v-if="isText(block)" class="text">{{ block.text }}</div>
           <div v-else :class="['block', block.type]">
             <button class="block-toggle" @click="toggle(blockKey(i, j))">
-              🔧 {{ block.type === 'tool_call' ? block.text : 'result' }}
-              <span class="muted">{{ expanded.has(blockKey(i, j)) ? '▼' : '▶' }}</span>
+              <AppIcon name="tool" :size="12" />
+              {{ block.type === 'tool_call' ? block.text : 'result' }}
+              <AppIcon
+                name="chevron-right"
+                :size="12"
+                class="disclosure"
+                :class="{ open: expanded.has(blockKey(i, j)) }"
+              />
             </button>
             <pre v-if="expanded.has(blockKey(i, j))">{{ block.detail }}</pre>
           </div>
@@ -174,12 +181,18 @@ function isText(b: ConversationBlock): boolean {
 .label {
   font-size: var(--fs-100);
 }
+/* One badge metric across the app (docs/POLISH.md §7). */
 .resume-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--accent);
-  padding: 2px var(--sp-1);
+  padding: 0 var(--sp-1);
+  line-height: var(--lh-100);
+  min-height: var(--control-h-sm);
   font-size: var(--fs-100);
   cursor: pointer;
   font-family: var(--font-mono);
@@ -234,17 +247,31 @@ function isText(b: ConversationBlock): boolean {
   margin-top: var(--sp-1);
 }
 .block-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--fg-secondary);
-  padding: 2px var(--sp-1);
+  padding: 0 var(--sp-1);
+  line-height: var(--lh-100);
+  min-height: var(--control-h-sm);
   font-size: var(--fs-100);
   cursor: pointer;
   font-family: var(--font-mono);
 }
 .block-toggle:hover {
   color: var(--fg);
+}
+/* Same disclosure pattern as SessionTree: one chevron, 90 degrees when open,
+   rotated as an SVG box so it pivots on its own centre. */
+.disclosure {
+  color: var(--fg-muted);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.disclosure.open {
+  transform: rotate(90deg);
 }
 /* Deliberately the terminal's background, so code blocks and the terminal
    agree about what "a shell surface" looks like. */

@@ -5,6 +5,7 @@
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useConnectionStore } from '../stores/connection';
+import AppIcon from '../components/AppIcon.vue';
 import type { HostEntry } from '../../shared/types';
 
 const router = useRouter();
@@ -22,8 +23,9 @@ async function onConnect(host: HostEntry): Promise<void> {
   const ok = await connection.connect(host);
   connectingTo.value = null;
   if (ok) {
-    // Land on the host's default view: the session list.
-    router.push({ name: 'host-sessions', params: { name: host.name } });
+    // Land on the host's default view: the session list. `void`: vue-router
+    // rejects on aborted/redirected navigation, neither of which is an error.
+    void router.push({ name: 'host-sessions', params: { name: host.name } });
   } else {
     connectError.value = connection.error ?? 'Connection failed';
   }
@@ -54,7 +56,9 @@ async function onConnect(host: HostEntry): Promise<void> {
               {{ host.user || '(default user)' }}@{{ host.hostname }}:{{ host.port }}
             </span>
             <span v-if="connectingTo === host.name" class="muted">connecting…</span>
-            <span v-else class="muted chevron">→</span>
+            <!-- A list row that goes somewhere gets a chevron, not an arrow
+                 (VS Code / macOS convention). -->
+            <AppIcon v-else name="chevron-right" class="chevron" />
           </button>
         </li>
       </ul>
@@ -137,11 +141,8 @@ h1 {
     opacity: 0.3;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .status-dot.connecting {
-    animation: none;
-  }
-}
+/* No local prefers-reduced-motion block: App.vue carries one global guard
+   that covers this pulse along with every other animation. */
 .host-name {
   font-size: var(--fs-400);
   line-height: var(--lh-400);
@@ -153,8 +154,17 @@ h1 {
   font-size: var(--fs-200);
   flex: 1;
 }
+/* A 2px nudge on row hover — the smallest possible "this row goes somewhere"
+   cue. Colour and transform only; the row's own tint does the rest. */
 .chevron {
   color: var(--fg-muted);
+  transition:
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.host-row:hover:not(:disabled) .chevron {
+  color: var(--fg-secondary);
+  transform: translateX(2px);
 }
 .error {
   font-size: var(--fs-300);

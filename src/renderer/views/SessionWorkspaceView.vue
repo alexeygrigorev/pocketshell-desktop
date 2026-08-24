@@ -18,6 +18,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useConnectionStore } from '../stores/connection';
 import { useSessionsStore } from '../stores/sessions';
+import AppIcon from '../components/AppIcon.vue';
 import TerminalView from '../components/TerminalView.vue';
 import PromptComposer from '../components/PromptComposer.vue';
 import ConversationView from './ConversationView.vue';
@@ -62,11 +63,19 @@ onMounted(async () => {
 
 /** Deselect: back to the right pane's empty state, panel untouched. */
 function onCloseSession(): void {
-  router.push({ name: 'host-sessions', params: { name: route.params['name'] as string } });
+  // `void`: vue-router rejects on aborted/redirected navigation, neither of
+  // which is an error here.
+  void router.push({ name: 'host-sessions', params: { name: route.params['name'] as string } });
 }
 
-/** Template ref on the terminal, so the composer's Escape ladder can un-focus. */
-const terminalRef = ref<InstanceType<typeof TerminalView> | null>(null);
+/**
+ * Template ref on the terminal, so the composer's Escape ladder can un-focus.
+ * Typed by the one method we call rather than `InstanceType<typeof
+ * TerminalView>`: `*.vue` is declared as a `DefineComponent<…, any>` in
+ * env.d.ts, so that instance type collapses to `any` and takes the call site
+ * with it.
+ */
+const terminalRef = ref<{ focus: () => void } | null>(null);
 
 /** Escape rung 3: blur the draft and put the caret back in the pane. */
 function onFocusTerminal(): void {
@@ -80,7 +89,9 @@ function onFocusTerminal(): void {
     <header class="session-bar">
       <span class="session-name">{{ sessionName }}</span>
       <span v-if="sessionPath" class="session-path muted">{{ sessionPath }}</span>
-      <button class="icon-btn close" @click="onCloseSession" title="Close session view">✕</button>
+      <button class="icon-btn close" title="Close session view" @click="onCloseSession">
+        <AppIcon name="close" />
+      </button>
     </header>
 
     <nav class="tabs">

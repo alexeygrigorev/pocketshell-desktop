@@ -3,6 +3,7 @@
 // enter it; click a file to open it in the editor. Includes a breadcrumb,
 // refresh, and a "new folder/file" affordance wired to the store.
 import { computed } from 'vue';
+import AppIcon, { type AppIconName } from './AppIcon.vue';
 import { useConnectionStore } from '../stores/connection';
 import { useFilesStore } from '../stores/files';
 import type { DirEntry } from '../../main/sftp/SftpService';
@@ -45,8 +46,14 @@ function fmtSize(size: number): string {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function icon(entry: DirEntry): string {
-  return entry.type === 'dir' ? '📁' : entry.type === 'symlink' ? '↪' : '📄';
+/**
+ * The row's icon NAME (docs/POLISH.md §2.5). It doubles as the row icon's CSS
+ * class, which is how the three entry types get their three token colours —
+ * something the colour emoji this replaced could never do, because emoji
+ * rasterisation ignores `color` entirely.
+ */
+function icon(entry: DirEntry): AppIconName {
+  return entry.type === 'dir' ? 'folder' : entry.type === 'symlink' ? 'symlink' : 'file';
 }
 </script>
 
@@ -57,13 +64,19 @@ function icon(entry: DirEntry): string {
         <a @click="onCrumb(c.path)">{{ c.name }}</a>
         <span v-if="i < breadcrumbs.length - 1" class="sep">/</span>
       </span>
-      <button class="icon-btn" :disabled="files.loading" @click="files.refresh(connId!)" title="Refresh">
-        {{ files.loading ? '…' : '⟳' }}
+      <button
+        class="icon-btn sm"
+        :disabled="files.loading"
+        title="Refresh"
+        @click="files.refresh(connId!)"
+      >
+        <AppIcon name="refresh" :size="14" :class="{ spin: files.loading }" />
       </button>
     </div>
     <ul class="entries">
-      <li v-if="files.cwd !== '/'" class="entry" @click="files.cd(connId!, '..')">
-        <span class="ic">📁</span><span class="nm muted">..</span>
+      <li v-if="files.cwd !== '/'" class="entry up" @click="files.cd(connId!, '..')">
+        <AppIcon name="folder" />
+        <span class="nm muted">..</span>
       </li>
       <li
         v-for="e in files.entries"
@@ -72,7 +85,7 @@ function icon(entry: DirEntry): string {
         :class="{ active: files.openPath && files.openPath.endsWith('/' + e.name) }"
         @click="onEntry(e)"
       >
-        <span class="ic">{{ icon(e) }}</span>
+        <AppIcon :name="icon(e)" :class="icon(e)" />
         <span class="nm" :title="e.name">{{ e.name }}</span>
         <span v-if="e.type === 'file'" class="sz">{{ fmtSize(e.size) }}</span>
       </li>
@@ -101,20 +114,26 @@ function icon(entry: DirEntry): string {
   font-size: var(--fs-200);
   flex-wrap: wrap;
 }
+/* Navigation, not selection: accent is reserved for the selected row (see
+   HostPickerView and DESIGN.md §5.2). An all-cyan crumb row made pure
+   wayfinding the loudest thing on the Files screen. */
 .crumb a {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--fg-secondary);
+  transition: color var(--dur-fast) var(--ease);
 }
 .crumb a:hover {
+  color: var(--fg);
   text-decoration: underline;
 }
 .sep {
   color: var(--fg-muted);
   margin: 0 2px;
 }
+/* Layout only — the size comes from the shared `.icon-btn.sm` primitive; this
+   used to fork it with its own height. */
 .icon-btn {
   margin-left: auto;
-  height: var(--control-h-sm);
 }
 .entries {
   list-style: none;
@@ -128,7 +147,10 @@ function icon(entry: DirEntry): string {
   align-items: center;
   gap: var(--sp-2);
   min-height: var(--row-h);
-  padding: var(--row-pad-y) var(--row-pad-x);
+  /* 2px of the left inset is the selection rail's slot, same as
+     SessionTree's .session-row, so the two lists mark selection alike. */
+  padding: var(--row-pad-y) var(--row-pad-x) var(--row-pad-y) var(--sp-2);
+  border-left: 2px solid transparent;
   cursor: pointer;
   font-size: var(--fs-300);
   line-height: var(--lh-300);
@@ -138,16 +160,37 @@ function icon(entry: DirEntry): string {
 }
 .entry.active {
   background: var(--state-selected);
+  border-left-color: var(--accent);
 }
-/* DESIGN.md §5.7 asks for a --warning folder glyph and a --fg-muted file
-   glyph. `icon()` returns colour emoji (📁/📄), and `color` has no effect on
-   colour-emoji rasterisation — so this only reaches the monochrome symlink
-   glyph (↪). Tinting the other two needs the emoji replaced first. */
-.ic {
-  width: 1.1rem;
-  flex-shrink: 0;
-  text-align: center;
+/* Entry icons (docs/POLISH.md §2.5). The folder carries the most weight so
+   the dir/file hierarchy reads at a glance; files sit quietest (decorative —
+   the filename beside them carries the information); symlinks sit one step up
+   because "this is not a real file" is worth a glance.
+   Nothing changes on HOVER by design: icon colour flicker under a sweeping
+   cursor reads as smear, and the row's --state-hover fill is the feedback.
+   On SELECTED only the file icon lifts, so it does not read disabled against
+   the accent fill. The 16px icon box IS the column — the old `.ic` rem width
+   was sized for an emoji. */
+.entry .app-icon {
   color: var(--fg-muted);
+}
+.entry .app-icon.folder {
+  color: var(--warning);
+}
+.entry .app-icon.symlink {
+  color: var(--fg-secondary);
+}
+.entry.up .app-icon {
+  color: var(--fg-muted);
+}
+.entry.active .app-icon {
+  color: var(--fg-secondary);
+}
+.entry.active .app-icon.folder {
+  color: var(--warning);
+}
+.entry.active .app-icon.symlink {
+  color: var(--fg-secondary);
 }
 .nm {
   flex: 1;

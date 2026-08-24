@@ -8,7 +8,7 @@
 //
 // Each tile shows the file NAME only, never the full remote path
 // (PromptComposerViewModel.kt:2675).
-import ComposerIcon from './ComposerIcon.vue';
+import AppIcon from './AppIcon.vue';
 import type { StagedAttachment } from '../stores/composer';
 
 defineProps<{
@@ -24,7 +24,7 @@ const emit = defineEmits<{ (e: 'remove', remotePath: string): void }>();
   <ul class="tiles" aria-label="Staged attachments">
     <li v-for="a in attachments" :key="a.remotePath" class="tile" :title="a.remotePath">
       <img v-if="a.previewDataUrl" class="thumb" :src="a.previewDataUrl" alt="" />
-      <ComposerIcon v-else class="glyph" name="file" />
+      <AppIcon v-else class="glyph" name="file" />
       <span class="name">{{ a.displayName }}</span>
       <button
         class="remove"
@@ -34,7 +34,7 @@ const emit = defineEmits<{ (e: 'remove', remotePath: string): void }>();
         :aria-label="`Remove ${a.displayName}`"
         @click="emit('remove', a.remotePath)"
       >
-        <ComposerIcon name="close" />
+        <AppIcon name="close" />
       </button>
     </li>
   </ul>
@@ -94,7 +94,7 @@ const emit = defineEmits<{ (e: 'remove', remotePath: string): void }>();
   font-size: var(--fs-100);
   cursor: pointer;
 }
-.remove :deep(.icon) {
+.remove :deep(.app-icon) {
   width: 11px;
   height: 11px;
 }

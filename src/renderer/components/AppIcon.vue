@@ -1,0 +1,120 @@
+<script setup lang="ts">
+// AppIcon: the ONLY way an icon enters this UI. No character ever stands in
+// for a graphic affordance — see docs/POLISH.md §2 and docs/DESIGN.md §5.8.
+//
+// Contract (inherited verbatim from the composer's ComposerIcon, which this
+// component replaced — the two sets were specified to be pixel-identical so
+// the merge was a rename):
+//   - one 24x24 viewBox for every mark, so stroke weights stay identical;
+//   - stroke="currentColor", never a literal colour — an icon inherits the
+//     parent's token colour and its hover/disabled states for free;
+//   - stroke-width 2, round caps/joins: Feather 4.29 geometry (MIT), the thin
+//     geometric unfilled register of VS Code's Codicons.
+//
+// Displayed at 16px (default — toolbars, tree glyphs), 14px (dense bars, the
+// disclosure chevron) or 12px (chips, table-row actions, block toggles). No
+// other sizes; the composer's two sub-12px pips are CSS overrides on marks
+// that are status dots rather than affordances.
+export type AppIconName =
+  | 'arrow-left'
+  | 'arrow-right'
+  | 'check'
+  | 'chevron-down'
+  | 'chevron-right'
+  | 'chevron-up'
+  | 'close'
+  | 'dot'
+  | 'file'
+  | 'folder'
+  | 'panel-left'
+  | 'paperclip'
+  | 'plus'
+  | 'refresh'
+  | 'symlink'
+  | 'tool';
+
+/**
+ * Feather 4.29 path data (MIT), verbatim. One entry per icon.
+ *
+ * `filled` marks the exceptions to the outline register: a status dot has no
+ * outline to speak of, so it is painted rather than stroked.
+ */
+interface IconShape {
+  paths: string[];
+  filled?: boolean;
+}
+
+const GEOMETRY: Record<AppIconName, IconShape> = {
+  'arrow-left': { paths: ['M19 12H5', 'M12 19l-7-7 7-7'] },
+  'arrow-right': { paths: ['M5 12h14', 'M12 5l7 7-7 7'] },
+  check: { paths: ['M20 6L9 17l-5-5'] },
+  'chevron-down': { paths: ['M6 9l6 6 6-6'] },
+  'chevron-right': { paths: ['M9 18l6-6-6-6'] },
+  'chevron-up': { paths: ['M18 15l-6-6-6 6'] },
+  close: { paths: ['M18 6L6 18', 'M6 6l12 12'] },
+  // A circle expressed as two semicircular arcs, so the template stays one
+  // path loop. Painted, not stroked: this is a pip, not an outline.
+  dot: { paths: ['M12 7a5 5 0 1 0 0 10a5 5 0 1 0 0-10'], filled: true },
+  file: { paths: ['M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z', 'M13 2v7h7'] },
+  folder: { paths: ['M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z'] },
+  // Feather's `sidebar`, its <rect> expressed as a path so the template stays
+  // a single path loop. This is VS Code's "toggle sidebar" mark.
+  'panel-left': {
+    paths: ['M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z', 'M9 3v18'],
+  },
+  paperclip: {
+    paths: [
+      'M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48',
+    ],
+  },
+  plus: { paths: ['M12 5v14', 'M5 12h14'] },
+  // Feather's `rotate-cw` (one arc + one arrowhead), chosen over `refresh-cw`
+  // (two arcs) for calm at 14px — and it spins cleanly while loading.
+  refresh: { paths: ['M23 4v6h-6', 'M20.49 15a9 9 0 1 1-2.12-9.36L23 10'] },
+  symlink: { paths: ['M4 4v7a4 4 0 0 0 4 4h12', 'M15 10l5 5-5 5'] },
+  tool: {
+    paths: [
+      'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z',
+    ],
+  },
+};
+
+const props = withDefaults(
+  defineProps<{
+    name: AppIconName;
+    size?: 12 | 14 | 16;
+    /** Decorative by default — the surrounding button carries the label. */
+    title?: string;
+  }>(),
+  { size: 16, title: undefined },
+);
+</script>
+
+<template>
+  <svg
+    class="app-icon"
+    viewBox="0 0 24 24"
+    :width="props.size"
+    :height="props.size"
+    :fill="GEOMETRY[props.name].filled ? 'currentColor' : 'none'"
+    :stroke="GEOMETRY[props.name].filled ? 'none' : 'currentColor'"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    :aria-hidden="props.title ? undefined : 'true'"
+    :role="props.title ? 'img' : undefined"
+    focusable="false"
+  >
+    <title v-if="props.title">{{ props.title }}</title>
+    <path v-for="(d, i) in GEOMETRY[props.name].paths" :key="i" :d="d" />
+  </svg>
+</template>
+
+<style scoped>
+/* display:block kills the baseline gap inline SVGs get; flex:none stops
+   flex rows from squashing the icon when a label truncates. */
+.app-icon {
+  display: block;
+  flex: none;
+}
+</style>

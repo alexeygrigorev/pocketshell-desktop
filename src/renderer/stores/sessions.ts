@@ -25,7 +25,15 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
   }
 
-  async function create(connectionId: ConnectionId, name: string, cwd?: string): Promise<boolean> {
+  /**
+   * Create a session under an explicit name. `cwd` is required: a session with
+   * no start folder is not a project session, and the folder is what the
+   * session name and the folder grouping are both derived from.
+   *
+   * Prefer the folder-first flow (`projects.startSession`) — this remains for
+   * the legacy name-entry control in SessionTree.
+   */
+  async function create(connectionId: ConnectionId, name: string, cwd: string): Promise<boolean> {
     const ok = await api.helper.sessionsCreate(connectionId, name, cwd);
     if (ok) await refresh(connectionId);
     return ok;

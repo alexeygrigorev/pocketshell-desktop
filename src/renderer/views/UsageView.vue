@@ -1,15 +1,38 @@
 <script setup lang="ts">
 // UsageView: per-provider quota dashboard from `pocketshell usage --json`.
-// Shows short-term + long-term percent remaining and reset times.
+//
+// FORM: one shared table, not a row of cards. The job of this screen is
+// COMPARISON — "who is nearly out?" — and comparison wants shared columns.
+// Three side-by-side cards each laid out its own label/bar/percentage tracks,
+// so no meter lined up with any other meter and the eye had to re-scan for
+// every provider. Here every meter sits in one continuous column and every
+// percentage right-aligns to one edge, so the shortest bar is the answer at a
+// glance. It also holds at 1 provider and at 6+ without reflowing into a
+// ragged grid, and provider rows cannot end up different heights.
+//
+// DATA SHAPE (helper 0.4.44, see parsers.ts): `percent_remaining` is null for
+// codex and grok, `reset_at` can be null independently, and `window` carries a
+// human label (`5h`/`7d`/`weekly`/`monthly`) that beats the generic
+// short-term/long-term wording when present.
+//
+// A null percentage is NOT an empty row. It means the meter is unknown, not
+// that the provider has nothing to say: the reset time is still real and is
+// usually the more useful fact anyway ("codex resets in 2h"). So when the
+// percentage is missing the reset becomes the row's primary content. Only when
+// BOTH are missing is the row genuinely quiet. Never coerce null to 0 — a
+// 0%-wide bar reads as "quota exhausted" when the truth is "not reported".
 import { computed, onMounted } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useAgentsStore } from '../stores/agents';
+import AppIcon from '../components/AppIcon.vue';
+import type { UsageRow, UsageWindow } from '../../main/helper/parsers';
 
 const props = defineProps<{
   /**
-   * True when hosted inside OverlayPanel, which supplies the title itself.
-   * Without this the name renders twice — see docs/DESIGN.md §5.5 and
-   * docs/screenshots/07-usage-overlay.png.
+   * True when hosted inside OverlayPanel, which supplies the title itself —
+   * and, since the polish pass, the refresh control too (it belongs beside the
+   * close button, not floating at the top of the body). Without this the name
+   * renders twice; see docs/DESIGN.md §5.5.
    */
   embedded?: boolean;
 }>();
@@ -22,16 +45,36 @@ onMounted(async () => {
   if (connId.value) await agents.loadUsage(connId.value);
 });
 
+/** One rendered meter row: a provider's window, resolved for display. */
+interface WindowRow {
+  /** `5h` / `weekly` when the helper reports one, else the generic name. */
+  label: string;
+  /** null means "the provider did not report", never "zero left". */
+  pct: number | null;
+  reset: string | null;
+}
+
 /**
- * `percent_remaining` is nullable in the helper's 0.4.44 shape
- * (parsers.ts:266) and codex and grok both really do emit null. An unknown
- * window must NOT be drawn as an empty meter — a 0%-wide bar reads as "quota
- * exhausted" when the truth is "the provider did not report". So the meter is
- * omitted entirely and the row says so.
+ * `percent_remaining` is nullable in the helper's 0.4.44 shape and codex and
+ * grok both really do emit null.
  */
 function hasPct(p: number | null | undefined): p is number {
   return typeof p === 'number' && Number.isFinite(p);
 }
+
+function toWindow(w: UsageWindow, fallback: string): WindowRow {
+  return {
+    label: (w.window ?? '').trim() || fallback,
+    pct: hasPct(w.percent_remaining) ? w.percent_remaining : null,
+    reset: w.reset_at ?? null,
+  };
+}
+
+/** Always two rows per provider, so the row rhythm never depends on the data. */
+function windowsOf(row: UsageRow): WindowRow[] {
+  return [toWindow(row.short_term, 'short-term'), toWindow(row.long_term, 'long-term')];
+}
+
 function pctColor(p: number): string {
   if (p > 50) return 'var(--success)';
   if (p > 20) return 'var(--warning)';
@@ -49,107 +92,130 @@ function pctText(p: number): string {
  * 0.4.8 and is GONE on 0.4.44 (parsers.ts:277-283), so reading only that field
  * leaves a branch that can never render on a current host. Fall back to the
  * pass-through `details.limit_reached` the newer helper does emit.
+ *
+ * Rendered as a neutral footnote, not a third alarm: the meter colour carries
+ * the level and the status badge carries the category. Three amber signals for
+ * one fact was the old card's loudest problem.
  */
-function blockNote(row: { block_reason?: string | null; details?: Record<string, unknown> }): string | null {
+function blockNote(row: UsageRow): string | null {
   if (row.block_reason) return row.block_reason;
   const reason = row.details?.['limit_reached'];
   if (typeof reason === 'string' && reason.trim()) return reason;
   return null;
 }
-function fmtReset(iso: string | null): string {
-  if (!iso) return '—';
+
+/**
+ * "in 2h 14m" — the form that actually answers "how much have I got left".
+ * The absolute timestamp is never lost: it is the cell's `title`, and a reset
+ * already in the past falls back to it, because "due" would be a worse answer
+ * than the date when the data is stale.
+ */
+function fmtRel(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms)) return '';
+  if (ms <= 0) return fmtAbs(iso);
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return `in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return mins % 60 ? `in ${hours}h ${mins % 60}m` : `in ${hours}h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `in ${days}d ${hours % 24}h` : `in ${days}d`;
+}
+
+function fmtAbs(iso: string): string {
   const d = new Date(iso);
-  return Number.isFinite(d.getTime()) ? d.toLocaleString(undefined, { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }) : '—';
+  if (!Number.isFinite(d.getTime())) return '';
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+async function onRefresh(): Promise<void> {
+  if (connId.value) await agents.loadUsage(connId.value);
 }
 </script>
 
 <template>
   <div class="usage">
-    <div class="usage-bar">
-      <h2 v-if="!props.embedded">Provider usage</h2>
-      <button class="icon-btn" title="Refresh" @click="agents.loadUsage(connId!)">⟳</button>
+    <!-- Standalone only: embedded, OverlayPanel owns both the title and the
+         refresh control. -->
+    <div v-if="!props.embedded" class="usage-bar">
+      <h2>Provider usage</h2>
+      <button class="icon-btn" :disabled="agents.loading" title="Refresh" @click="onRefresh">
+        <AppIcon name="refresh" :class="{ spin: agents.loading }" />
+      </button>
     </div>
-    <div class="cards">
-      <div v-for="row in agents.usage" :key="row.provider" class="card">
-        <div class="card-header">
-          <span class="provider">{{ row.provider }}</span>
-          <span :class="['status', row.status]">{{ row.status }}</span>
-        </div>
-        <div class="meter-row">
-          <span class="meter-label">
-            short-term
-            <span v-if="row.short_term.window" class="window-tag">{{ row.short_term.window }}</span>
+
+    <div v-if="agents.usage.length" class="usage-table">
+      <span class="th">provider</span>
+      <span class="th">window</span>
+      <span class="th">remaining</span>
+      <span class="th end">resets</span>
+      <!-- One continuous rule. Per-cell borders were broken up by the column
+           gaps, which read as four stray underlines rather than a table head. -->
+      <div class="head-rule" />
+
+      <template v-for="(row, i) in agents.usage" :key="row.provider">
+        <div v-if="i > 0" class="divider" />
+
+        <template v-for="(w, j) in windowsOf(row)" :key="j">
+          <span class="cell provider-cell">
+            <template v-if="j === 0">
+              <span class="provider">{{ row.provider }}</span>
+              <!-- Badge only when the state is NOT ok: a row of "ok" chips is
+                   noise, and the meter already says so when it is fine. -->
+              <span v-if="row.status !== 'ok'" :class="['status', row.status]">
+                {{ row.status }}
+              </span>
+            </template>
           </span>
-          <template v-if="hasPct(row.short_term.percent_remaining)">
-            <div class="meter">
-              <div
-                class="meter-fill"
-                :style="{
-                  width: pctWidth(row.short_term.percent_remaining),
-                  background: pctColor(row.short_term.percent_remaining),
-                }"
-              />
-            </div>
-            <span class="meter-pct" :style="{ color: pctColor(row.short_term.percent_remaining) }">
-              {{ pctText(row.short_term.percent_remaining) }}
-            </span>
-          </template>
-          <span v-else class="meter-unknown muted">not reported</span>
-        </div>
-        <div v-if="row.short_term.reset_at" class="reset muted">
-          resets {{ fmtReset(row.short_term.reset_at) }}
-        </div>
-        <div class="meter-row">
-          <span class="meter-label">
-            long-term
-            <span v-if="row.long_term.window" class="window-tag">{{ row.long_term.window }}</span>
+
+          <span class="cell window">{{ w.label }}</span>
+
+          <span class="cell remaining">
+            <template v-if="w.pct !== null">
+              <span class="meter">
+                <span
+                  class="meter-fill"
+                  :style="{ width: pctWidth(w.pct), background: pctColor(w.pct) }"
+                />
+              </span>
+              <span class="pct" :style="{ color: pctColor(w.pct) }">{{ pctText(w.pct) }}</span>
+            </template>
+            <!-- The meter is unknown; the row is not. See the header comment. -->
+            <span v-else class="unreported">not reported</span>
           </span>
-          <template v-if="hasPct(row.long_term.percent_remaining)">
-            <div class="meter">
-              <div
-                class="meter-fill"
-                :style="{
-                  width: pctWidth(row.long_term.percent_remaining),
-                  background: pctColor(row.long_term.percent_remaining),
-                }"
-              />
-            </div>
-            <span class="meter-pct" :style="{ color: pctColor(row.long_term.percent_remaining) }">
-              {{ pctText(row.long_term.percent_remaining) }}
+
+          <span class="cell resets">
+            <span
+              v-if="w.reset"
+              class="reset"
+              :class="{ lead: w.pct === null }"
+              :title="fmtAbs(w.reset)"
+            >
+              {{ fmtRel(w.reset) }}
             </span>
-          </template>
-          <span v-else class="meter-unknown muted">not reported</span>
-        </div>
-        <div v-if="row.long_term.reset_at" class="reset muted">
-          resets {{ fmtReset(row.long_term.reset_at) }}
-        </div>
-        <p v-if="blockNote(row)" class="block-reason">{{ blockNote(row) }}</p>
-      </div>
-      <p v-if="!agents.usage.length" class="muted empty">no usage data — is `pocketshell usage` available on this host?</p>
+          </span>
+        </template>
+
+        <p v-if="blockNote(row)" class="note">{{ blockNote(row) }}</p>
+      </template>
     </div>
+
+    <p v-else class="muted empty">
+      no usage data — is `pocketshell usage` available on this host?
+    </p>
   </div>
 </template>
 
 <style scoped>
-.window-tag {
-  margin-left: var(--sp-1);
-  padding: 0 var(--sp-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  color: var(--fg-secondary);
-  font-size: var(--fs-100);
-  font-variant-numeric: tabular-nums;
-}
-/* No meter at all when the provider reported no percentage — see hasPct(). */
-.meter-unknown {
-  flex: 1;
-  font-size: var(--fs-200);
-  font-style: italic;
-}
 .usage {
   padding: var(--sp-4) var(--sp-5);
   overflow-y: auto;
-  height: 100%;
+  width: 100%;
 }
 .usage-bar {
   display: flex;
@@ -163,39 +229,79 @@ h2 {
   line-height: var(--lh-500);
   font-weight: var(--fw-semibold);
 }
-.cards {
+
+/* ---------------------------------------------------------------------------
+ * The shared grid. Every track is fixed except the meter, so meters, numbers
+ * and timestamps line up across EVERY provider — which is the whole point of
+ * choosing a table over cards. Widths are 4px multiples, per the spacing rule.
+ * ------------------------------------------------------------------------- */
+.usage-table {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--sp-4);
-}
-.card {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: var(--sp-4);
-}
-.card-header {
-  display: flex;
-  justify-content: space-between;
+  grid-template-columns: 128px 72px minmax(160px, 1fr) 128px;
+  column-gap: var(--sp-4);
   align-items: center;
-  margin-bottom: var(--sp-3);
+  width: 100%;
+}
+/* Column captions, matching the port table's th treatment. */
+.th {
+  font-size: var(--fs-100);
+  line-height: var(--lh-100);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  padding-bottom: var(--sp-2);
+}
+/* Captions sit over their column's own edge: left for the two text columns and
+   the meter (which starts left), right for the times (which end right). */
+.th.end {
+  text-align: right;
+}
+.head-rule {
+  grid-column: 1 / -1;
+  height: 1px;
+  background: var(--border);
+  margin-bottom: var(--sp-2);
+}
+.cell {
+  display: flex;
+  align-items: center;
+  min-height: var(--row-h);
+  min-width: 0;
+}
+/* One hairline per provider group. A full-width grid child, so it cannot fall
+   out of step with the cells the way a per-cell border would. */
+.divider {
+  grid-column: 1 / -1;
+  height: 1px;
+  background: var(--border-soft);
+  margin: var(--sp-2) 0;
+}
+
+/* ---- column 1: identity, the top of the hierarchy ---------------------- */
+.provider-cell {
+  gap: var(--sp-2);
 }
 .provider {
   font-size: var(--fs-400);
   line-height: var(--lh-400);
   font-weight: var(--fw-semibold);
   text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+/* One badge metric across the app (docs/POLISH.md §7). */
 .status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
   font-size: var(--fs-100);
   line-height: var(--lh-100);
   padding: 0 var(--sp-1);
   border-radius: var(--r-sm);
   border: 1px solid transparent;
-}
-.status.ok {
-  color: var(--success);
-  background: var(--success-soft);
 }
 .status.limited {
   color: var(--warning);
@@ -206,48 +312,78 @@ h2 {
   color: var(--error);
   background: var(--error-soft);
 }
-.meter-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin-bottom: var(--sp-1);
-}
-.meter-label {
-  flex: 0 0 auto;
-  min-width: 5rem;
-  display: flex;
-  align-items: center;
-  font-size: var(--fs-100);
+
+/* ---- column 2: which window ------------------------------------------- */
+.window {
+  font-size: var(--fs-200);
   color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
 }
+
+/* ---- column 3: the meters, this screen's primary content --------------- */
+.remaining {
+  gap: var(--sp-3);
+}
+/* 8px on a --bg well: the bars ARE the content here, and the old 6px bar on a
+   --surface-3 track was barely distinguishable from the card behind it. */
 .meter {
   flex: 1;
-  height: 6px;
-  background: var(--surface-3);
+  min-width: 0;
+  height: 8px;
+  background: var(--bg);
   border-radius: var(--r-sm);
   overflow: hidden;
 }
 .meter-fill {
+  display: block;
   height: 100%;
   border-radius: var(--r-sm);
   transition: width var(--dur-normal) var(--ease);
 }
-.meter-pct {
-  width: 3rem;
+/* Fixed width + tabular figures: the percentages form one clean right edge. */
+.pct {
+  flex: none;
+  width: 40px;
   text-align: right;
   font-size: var(--fs-200);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
+/* The METER is unknown, not the row — so this is quiet, not alarming, and the
+   resets cell beside it carries the weight instead. */
+.unreported {
+  font-size: var(--fs-100);
+  font-style: italic;
+  color: var(--fg-muted);
+}
+
+/* ---- column 4: reset times -------------------------------------------- */
+.resets {
+  justify-content: flex-end;
+}
+/* Secondary by default: it must not compete with the meter next to it. */
 .reset {
   font-size: var(--fs-100);
-  margin: 0 0 var(--sp-2) 5.5rem;
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.block-reason {
-  color: var(--warning);
+/* ...but PRIMARY when there is no meter, because then it is the only thing
+   this row actually knows, and it is the useful half anyway. */
+.reset.lead {
   font-size: var(--fs-200);
-  margin: var(--sp-2) 0 0;
+  font-weight: var(--fw-medium);
+  color: var(--fg);
+}
+
+/* ---- the footnote ------------------------------------------------------ */
+.note {
+  grid-column: 2 / -1;
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-100);
+  color: var(--fg-secondary);
 }
 .empty {
-  grid-column: 1 / -1;
+  padding: var(--sp-4) 0;
 }
 </style>

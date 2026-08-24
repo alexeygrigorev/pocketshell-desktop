@@ -14,7 +14,9 @@
 // an overlay, because neither is a property of a single session.
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { useAgentsStore } from '../stores/agents';
 import { useConnectionStore } from '../stores/connection';
+import AppIcon from '../components/AppIcon.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
 import PortPanelView from './PortPanelView.vue';
@@ -24,6 +26,7 @@ import type { SessionSummary } from '../../shared/types';
 const route = useRoute();
 const router = useRouter();
 const connection = useConnectionStore();
+const agents = useAgentsStore();
 
 /** Which host-level panel is open as an overlay, if any. */
 const panel = ref<'ports' | 'usage' | null>(null);
@@ -39,7 +42,10 @@ const activeSession = computed(() => (route.params['session'] as string | undefi
 
 function onSelectSession(session: SessionSummary): void {
   if (session.name === activeSession.value) return;
-  router.push({
+  // `void`: vue-router rejects the returned promise on an aborted or
+  // redirected navigation, and neither is an error here. Same convention as
+  // src/main/index.ts's `void mainWindow.loadURL(...)`.
+  void router.push({
     name: 'session',
     params: { name: route.params['name'] as string, session: session.name },
   });
@@ -63,24 +69,37 @@ onBeforeUnmount(onDragEnd);
 
 async function onDisconnect(): Promise<void> {
   await connection.disconnect();
-  router.push({ name: 'hosts' });
+  void router.push({ name: 'hosts' });
 }
 
 function onBack(): void {
-  router.push({ name: 'hosts' });
+  void router.push({ name: 'hosts' });
+}
+
+/**
+ * The usage panel's refresh lives in the OVERLAY header, beside the close
+ * control, rather than floating at the top of the panel body where it read as
+ * orphaned debris. The overlay owns the chrome, so the host owns this button.
+ */
+async function onRefreshUsage(): Promise<void> {
+  if (connection.connectionId) await agents.loadUsage(connection.connectionId);
 }
 </script>
 
 <template>
   <div class="workspace">
     <header class="topbar">
-      <button class="icon-btn" @click="onBack" title="Back to hosts">←</button>
+      <button class="icon-btn" title="Back to hosts" @click="onBack">
+        <AppIcon name="arrow-left" />
+      </button>
       <button
         class="icon-btn"
         :title="panelCollapsed ? 'Show session panel' : 'Hide session panel'"
         @click="panelCollapsed = !panelCollapsed"
       >
-        ☰
+        <!-- VS Code's "toggle sidebar" mark: truer to the action than a
+             hamburger, which promises a menu. -->
+        <AppIcon name="panel-left" />
       </button>
       <span class="host-label">
         {{ connection.activeHost?.name ?? 'host' }}
@@ -89,16 +108,21 @@ function onBack(): void {
       </span>
       <span v-if="connection.bootstrap" class="bootstrap">
         <span :class="['chip', connection.bootstrap.pocketshell.installed ? 'ok' : 'warn']">
-          pocketshell {{ connection.bootstrap.pocketshell.installed ? '✓' : '✗' }}
+          pocketshell
+          <AppIcon
+            :name="connection.bootstrap.pocketshell.installed ? 'check' : 'close'"
+            :size="12"
+          />
         </span>
         <span :class="['chip', connection.bootstrap.tmux.installed ? 'ok' : 'warn']">
-          tmux {{ connection.bootstrap.tmux.installed ? '✓' : '✗' }}
+          tmux
+          <AppIcon :name="connection.bootstrap.tmux.installed ? 'check' : 'close'" :size="12" />
         </span>
       </span>
       <div class="host-actions">
-        <button class="icon-btn" @click="panel = 'ports'" title="Port forwarding">Ports</button>
-        <button class="icon-btn" @click="panel = 'usage'" title="Provider usage">Usage</button>
-        <button class="icon-btn disconnect" @click="onDisconnect">disconnect</button>
+        <button class="btn-ghost" title="Port forwarding" @click="panel = 'ports'">Ports</button>
+        <button class="btn-ghost" title="Provider usage" @click="panel = 'usage'">Usage</button>
+        <button class="btn-ghost disconnect" @click="onDisconnect">disconnect</button>
       </div>
     </header>
 
@@ -130,8 +154,18 @@ function onBack(): void {
     <OverlayPanel v-if="panel === 'ports'" title="Port forwarding" @close="panel = null">
       <PortPanelView v-if="connection.connectionId" />
     </OverlayPanel>
-    <OverlayPanel v-if="panel === 'usage'" title="Provider usage" @close="panel = null">
-      <!-- `embedded`: the overlay header already renders the title. -->
+    <OverlayPanel v-if="panel === 'usage'" title="Provider usage" size="md" @close="panel = null">
+      <template #actions>
+        <button
+          class="icon-btn"
+          :disabled="agents.loading"
+          title="Refresh"
+          @click="onRefreshUsage"
+        >
+          <AppIcon name="refresh" :class="{ spin: agents.loading }" />
+        </button>
+      </template>
+      <!-- `embedded`: the overlay header renders the title AND the refresh. -->
       <UsageView v-if="connection.connectionId" embedded />
     </OverlayPanel>
   </div>
@@ -168,7 +202,12 @@ function onBack(): void {
   display: flex;
   gap: var(--sp-1);
 }
+/* One badge metric across the app (docs/POLISH.md §7); the inline-flex is
+   also what centres the state icon against the label. */
 .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   font-size: var(--fs-100);
   line-height: var(--lh-100);
   padding: 0 var(--sp-1);
@@ -189,10 +228,10 @@ function onBack(): void {
   gap: var(--sp-1);
   margin-left: auto;
 }
-/* Destructive: neutral at rest, error-tinted only on hover. */
-.icon-btn.disconnect:hover:not(:disabled) {
+/* Destructive: neutral at rest, error-tinted only on hover. No border-color
+   line — the button is a ghost now and has no border to tint. */
+.btn-ghost.disconnect:hover:not(:disabled) {
   background: var(--error-soft);
-  border-color: var(--error);
   color: var(--error);
 }
 .body {
@@ -205,15 +244,22 @@ function onBack(): void {
   min-width: 0;
   overflow: hidden;
 }
+/* Transparent at rest: the session panel's own 1px right border is the visual
+   seam, and the 4px --bg band this used to paint read as a dark gutter
+   doubling that hairline. VS Code's sash behaviour, including the hover-in
+   delay — the highlight appears only when the cursor LINGERS, so sweeping
+   across the app never flashes a cyan bar. The delay is enter-only; leaving
+   transitions immediately. */
 .splitter {
   flex: 0 0 auto;
   width: 4px;
   cursor: col-resize;
-  background: var(--bg);
+  background: transparent;
   transition: background var(--dur-fast) var(--ease);
 }
 .splitter:hover {
   background: var(--accent-dim);
+  transition-delay: 250ms;
 }
 /* No border-left here: SessionTree already draws the panel's right hairline
    and the splitter sits between them. */
