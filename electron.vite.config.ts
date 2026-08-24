@@ -7,16 +7,19 @@ import { resolve } from 'node:path';
 // so only the preload may bridge to Node via contextBridge.
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // ssh2, ssh2-sftp-client and keytar are native/CJS deps consumed only in
+    // the main process, and must stay external.
+    //
+    // electron-store MUST NOT. It is pure ESM (`"type": "module"` since v9),
+    // while electron-vite emits CJS for main, so leaving it external makes the
+    // bundle `require()` an ES module and Electron dies at startup with
+    // ERR_REQUIRE_ESM before a window ever opens. Excluding it from
+    // externalisation lets Vite transpile it into the CJS output.
+    plugins: [externalizeDepsPlugin({ exclude: ['electron-store'] })],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },
       },
-    },
-    resolve: {
-      // ssh2, ssh2-sftp-client, keytar, electron-store are native/CJS deps
-      // consumed only in the main process; externalizeDepsPlugin keeps them
-      // out of the bundle.
     },
   },
   preload: {
