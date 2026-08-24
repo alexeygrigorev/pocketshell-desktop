@@ -15,9 +15,13 @@ import {
   parseUsageNdjson,
   parseResumableTable,
   parseAgentLogJson,
+  parseSessionEnrichment,
+  mergeSessionEnrichment,
+  SESSION_ENRICHMENT_COMMAND,
   type UsageRow,
   type ResumableSession,
   type AgentLogEnvelope,
+  type SessionEnrichment,
 } from './parsers.js';
 import { pathAwareCommand } from './bootstrap.js';
 
@@ -34,15 +38,19 @@ export class PocketshellClient {
    * tmux server is running (the canonical "empty" state, not an error).
    */
   async listSessions(connectionId: string, sortBy: 'activity' | 'created' = 'activity'): Promise<SessionSummary[]> {
-    // Primary: the helper.
-    const helper = await this.ssh.exec(
-      connectionId,
-      pathAwareCommand(`pocketshell sessions list --by ${sortBy}`),
-    );
+    // Primary + companion in ONE round-trip. `pocketshell sessions list` gives
+    // names and creation times; the tmux probe gives the cwd, attached flag,
+    // and recorded agent kind that the three-column table simply does not
+    // carry. They are independent execs on the same connection, so issuing
+    // them together costs one RTT rather than two.
+    const [helper, enrichment] = await Promise.all([
+      this.ssh.exec(connectionId, pathAwareCommand(`pocketshell sessions list --by ${sortBy}`)),
+      this.sessionEnrichment(connectionId),
+    ]);
     if (helper.exitCode === 0) {
       const parsed = parseSessionsList(helper.stdout);
       if (parsed.length > 0 || /IDX\s+SESSION/.test(helper.stdout)) {
-        return parsed;
+        return mergeSessionEnrichment(parsed, enrichment);
       }
     }
     // Fallback: raw tmux with the same `::` shape the Android gateway uses.
@@ -53,10 +61,25 @@ export class PocketshellClient {
       ),
     );
     if (tmux.exitCode === 0) {
-      return parseTmuxListSessionsFallback(tmux.stdout);
+      // Still merged: the fallback's `session_path` is the *session's* cwd,
+      // and the probe's active-pane cwd is the better answer when both exist.
+      return mergeSessionEnrichment(parseTmuxListSessionsFallback(tmux.stdout), enrichment);
     }
     // "no server running" / "not found" -> empty (not an error).
     return [];
+  }
+
+  /**
+   * Run the companion tmux probe for cwd / attached / agent kind.
+   *
+   * Degrades to an empty map on ANY failure — no tmux, no server running, a
+   * tmux too old to expand `#{@ps_agent_kind}`. Sessions must still list when
+   * this probe comes back empty; only the folder-grouping metadata is lost.
+   */
+  private async sessionEnrichment(connectionId: string): Promise<Map<string, SessionEnrichment>> {
+    const res = await this.ssh.exec(connectionId, pathAwareCommand(SESSION_ENRICHMENT_COMMAND));
+    if (res.exitCode !== 0) return new Map();
+    return parseSessionEnrichment(res.stdout);
   }
 
   /** Create a new detached tmux session via `pocketshell sessions create`. */
@@ -105,13 +128,22 @@ export class PocketshellClient {
     return parseAgentLogJson(res.stdout);
   }
 
-  /** Agent config-dir profiles (`pocketshell profiles list --json`). */
+  /**
+   * Agent config-dir profiles (`pocketshell profiles list --json`).
+   *
+   * 0.4.44 emits a `{"profiles": [...]}` ENVELOPE, not the bare array the
+   * v0.4.8 contract documented — so the old `Array.isArray` guard silently
+   * returned `[]` for every profile on a current host. Both shapes are
+   * accepted so the call keeps working on either helper version.
+   */
   async listProfiles(connectionId: string): Promise<unknown[]> {
     const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell profiles list --json'));
     if (res.exitCode !== 0) return [];
     try {
-      const parsed = JSON.parse(res.stdout.trim());
-      return Array.isArray(parsed) ? parsed : [];
+      const parsed: unknown = JSON.parse(res.stdout.trim());
+      if (Array.isArray(parsed)) return parsed;
+      const envelope = (parsed as { profiles?: unknown } | null)?.profiles;
+      return Array.isArray(envelope) ? envelope : [];
     } catch {
       return [];
     }

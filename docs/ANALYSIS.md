@@ -59,25 +59,39 @@ simpler attach model. See [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ---
 
-## 3. The server-side `pocketshell` helper (v0.4.8)
+## 3. The server-side `pocketshell` helper (v0.4.44)
 
 This is the **integration hub** the desktop app targets. It is a Python
 CLI (`tools/pocketshell/`, published to PyPI) installed on each dev box.
 The app probes `command -v pocketshell` on connect and gates helper-backed
-features on its presence. Version analysed: **0.4.8**.
+features on its presence. Version analysed: **0.4.44** — re-verified against
+a live host (`pocketshell --version` → `0.4.44`, tmux 3.4) by running each
+command below and reading the installed package source.
+
+> **The `tests-docker` helper image pins nothing.** `Dockerfile.helper` runs
+> a bare `uv tool install pocketshell`, so the version baked into the image is
+> whatever was latest when the layer was first built — today that layer holds
+> **0.4.8**, four minor-patch generations behind what the app actually meets.
+> Every integration and E2E run has therefore been exercising a helper nobody
+> runs. Worse, the same unpinned install means a cache-busting rebuild would
+> silently jump versions mid-suite. That image also cannot serve
+> `sessions list` at all: its bundled `tmuxctl` fails with
+> `Error: not enough values to unpack (expected 3, got 1)`, so the integration
+> tests only ever reach the raw-tmux fallback. Pinning both tools to an
+> explicit version is a prerequisite for trusting those tiers.
 
 ### Subcommand surface (what the desktop app will call)
 
 | Command | Purpose | Output shape |
 |---|---|---|
-| `sessions list --by activity\|created` | Live tmux sessions (delegates to `tmuxctl list`) | Fixed-width table: `IDX SESSION CREATED` (+ footer hints). Anchor: trailing `YYYY-MM-DD HH:MM:SS`. |
-| `sessions resumable [--all] [--engine E] [-n N]` | Resumable AI-CLI conversations (claude/codex/opencode) discovered from disk | Table: `IDX ENGINE PROJECT WHEN LABEL` (live ones tagged `(running)`). Newest-first. |
+| `sessions list --by activity\|created` | Live tmux sessions (delegates to `tmuxctl list`) | Fixed-width table: `IDX SESSION CREATED` (+ footer hints, which now name `tmuxctl` not `pocketshell sessions`). Anchor: trailing `YYYY-MM-DD HH:MM:SS`. **Three columns only** — no cwd, no attached flag, no agent kind. |
+| `sessions resumable [--all] [--engine E] [-n N]` | Resumable AI-CLI conversations (claude/codex/opencode) discovered from disk | Table `f"{idx:<4}{engine:<10}{project:<20}{when:<8}{label}"` (live ones tagged `(running)`). Newest-first. **No `--json`.** Padding never truncates, so a >20-char project shifts WHEN/LABEL right, and `just now` (exactly 8) abuts LABEL with no separator. |
 | `sessions resume <selector> [--mem 24G]` | Resume a conversation in a memory-capped tmux session via `tmuxctl create-or-attach --mem`, cd'ing to its cwd first | exit code; refuses live sessions (exit 3) |
 | `sessions create <name> [--cwd D] [--mem M]` | Create a capped **detached** tmux session (`tmuxctl create-detached`) | exit code; idempotent |
 | `agent <codex\|claude\|opencode> --dir D [--skip-permissions] [--profile P]` | Launch a coding agent in a folder with first-run prompts suppressed, provider keys stripped (subscription billing) | `os.execvpe` — replaces the process |
 | `agent-log --engine E --session S [--cwd D] [--tail N] [--json]` | Read per-engine JSONL conversation log | raw JSONL lines, or `--json` envelope `{count, engine, lines, path, session}`; exit 66 = not found |
-| `usage [--json] [--no-daemon] [--no-cache]` | Provider quota (delegates to `quse`, 30s daemon cache) | NDJSON rows: `{provider, status, short_term:{percent_remaining, reset_at}, long_term:{...}, block_reason, error, details}` |
-| `profiles list [--engine E] [--json]` | Agent config-dir profiles (claude `CLAUDE_CONFIG_DIR`, codex `CODEX_HOME`) | YAML default / `--json` array: `{name, engine, config_dir, default}` |
+| `usage [--json] [--no-daemon] [--no-cache] [--capture] [--cached] [--reset-events]` | Provider quota (delegates to `quse`, 30s daemon cache) | NDJSON rows, keys sorted: `{provider, status, short_term:{percent_remaining, reset_at, window}, long_term:{...}, error, details}`. **`block_reason` is gone**; `percent_remaining`/`reset_at`/`window` are **nullable** for a provider with no such window (codex, grok). |
+| `profiles list [--engine E] [--json]` | Agent config-dir profiles (claude `CLAUDE_CONFIG_DIR`, codex `CODEX_HOME`) | YAML default / `--json` **envelope** `{"profiles": [{name, engine, config_dir, default}]}` — not a bare array |
 | `env list/get/set/unset/copy/export --dir D` | Read/write a folder's `.env` + `.envrc` (secrets via stdin, never argv) | `list --json`: `[{file, has_value, key}]`; `get --json`: `{KEY:val}` |
 | `jobs list/add/edit/remove/trigger [--session S]` | Recurring tmux-send jobs (delegates to `tmuxctl jobs`) | text table / plain status lines |
 | `jobs daemon start/status/stop` | Lifecycle of the scheduler | `status` → `running`/`not running` (exit 0/3) |
@@ -87,6 +101,54 @@ features on its presence. Version analysed: **0.4.8**.
 | `logs ingest/tail/path` | Canonical agent-trace + crash sink (redacted JSONL) | records with `kind/schema/ts/result` |
 | `qr-share [alias]` | Build QR import payload (mobile-only; **not used by desktop**) | QR blocks / PNGs |
 | `daemon start/stop/status` | Unix-socket JSON-RPC cache daemon | `status` → `running (pid, socket)` (exit 0/3) |
+
+### Drift from the v0.4.8 contract this document used to describe
+
+| Command | v0.4.8 contract said | v0.4.44 reality | Consequence |
+|---|---|---|---|
+| `sessions resumable` | (nothing about `--json`) | `Error: No such option '--json'` — the flags are `--all`, `--engine`, `-n` only | The table is the only wire format; it must be parsed exactly |
+| `sessions resumable` | "fixed-width table", widths implied stable | `<`-padding never truncates: PROJECT overflows past 20 chars, and `just now` fills WHEN's 8 with zero separator | Naive column slicing and "split on a 2+ space gap" both corrupt rows |
+| `usage --json` | row carries `block_reason` | Field absent — `normalize_usage_stdout` is a thin pass-through of quse's record and quse dropped it | Any `block_reason` UI is dead |
+| `usage --json` | `percent_remaining` a number | `null` for a provider with no window in that band (codex/grok short-term) | Formatting it unguarded throws |
+| `usage --json` | `{percent_remaining, reset_at}` | plus a `window` label (`5h`/`7d`/`weekly`/`monthly`) | New field available to label meters |
+| `profiles list --json` | bare JSON array | `{"profiles": [...]}` envelope | An `Array.isArray` guard silently yields zero profiles |
+| `sessions list` footer | `Join a session: pocketshell sessions <id>` | `Join a session: tmuxctl <id>` | Cosmetic; the timestamp anchor is unaffected |
+| `agent-log --json` | `{count, engine, lines, path, session}` | unchanged | — |
+| `sessions list` table | unchanged | unchanged | — |
+
+### Session metadata the helper does *not* provide: the tmux companion probe
+
+`sessions list` delegates to `tmuxctl list` and prints `IDX SESSION CREATED`,
+full stop. The desktop's folder-grouped session list needs three things that
+table cannot answer — the session's cwd (the grouping key), whether it is
+attached (the folder header's status dot), and what agent is running in it —
+so the app pairs the helper call with **one** tmux probe, the way the phone's
+`FolderListGateway` does:
+
+```
+tmux -u list-panes -a -F '#{session_name}::#{window_active}::#{pane_active}::
+  #{pane_current_path}::#{session_path}::#{session_attached}::#{@ps_agent_kind}'
+```
+
+tmux resolves *session*-scoped formats (including session user options) inside
+a *pane*-scoped `list-panes` context, so this single command replaces the
+phone's `list-sessions` + `list-panes` pair. Verified on tmux 3.4 and 3.6b.
+
+- **cwd** is the active pane's `pane_current_path`, falling back to
+  `session_path`. Pane-primary matters: a session created with `-c ~/git`
+  reports the literal unexpanded `~/git` as its `session_path`, which would
+  become a bogus folder group of its own.
+- **`@ps_agent_kind`** is the authoritative agent classification (epic #821).
+  The `pocketshell agent` wrapper writes it with `tmux set-option
+  @ps_agent_kind <kind>` in the process that becomes the agent, so it cannot
+  drift from what actually launched, and it survives reconnect/restart because
+  tmux session options live as long as the session. Recorded values are
+  `claude` / `codex` / `opencode` / `grok` / `shell`. An absent option means a
+  session we did not launch; an *unrecognised* one (real hosts carry values
+  like `test-engine`) is treated the same way — unknown, never guessed.
+  Siblings `@ps_agent_profile`, `@ps_agent_state`, and
+  `@ps_agent_state_updated_at` exist on the same sessions and are available to
+  the same probe if the desktop later wants profile chips or idle badges.
 
 ### Discovery details that matter for the desktop port
 

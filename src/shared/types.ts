@@ -84,6 +84,32 @@ export interface ToolState {
   version: string | null;
 }
 
+/**
+ * How a tmux session is classified — the desktop mirror of the phone's
+ * `SessionAgentKind` (shared/ui-kit/.../model/SessionAgentKind.kt).
+ *
+ * Epic #821: the durable answer lives **host-side** as the per-session tmux
+ * user option `@ps_agent_kind`, written by the `pocketshell agent` wrapper at
+ * launch (`record_agent_kind` in the helper's `agents.py`). Reading that
+ * option back is therefore the *authoritative* classification — no process
+ * sniffing, no output parsing, and it survives reconnect / app restart
+ * because tmux session options live for the life of the session.
+ *
+ * `probing` / `exited` are the phone's transient detector states. The desktop
+ * runs no detector, so nothing in the main process emits them today; they are
+ * listed so the renderer's badge switch is exhaustive against the same enum
+ * the phone renders.
+ */
+export type SessionAgentKind =
+  | 'claude'
+  | 'codex'
+  | 'opencode'
+  | 'grok'
+  | 'shell'
+  | 'probing'
+  | 'exited'
+  | 'unknown';
+
 /** A tmux session row from `pocketshell sessions list`. */
 export interface SessionSummary {
   name: string;
@@ -94,6 +120,15 @@ export interface SessionSummary {
   attached: boolean;
   /** Working directory if reported, else null. */
   path: string | null;
+  /**
+   * Recorded agent kind from the host-side `@ps_agent_kind` tmux user option,
+   * or null when the option is absent/unrecognised — a session we did not
+   * launch (the phone surfaces those as "Unknown" plus a kind picker).
+   *
+   * Optional so a host that yields no companion data at all (tmux missing,
+   * probe failed) still produces valid rows.
+   */
+  agentKind?: SessionAgentKind | null;
 }
 
 /**

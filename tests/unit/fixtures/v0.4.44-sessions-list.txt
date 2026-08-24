@@ -1,0 +1,21 @@
+IDX  SESSION               CREATED
+1    git-red-stamp         2026-08-23 12:21:05 
+2    git-ai-dev-tools-zoomcamp 2026-08-23 11:08:38 
+3    git-game-tester       2026-08-23 10:47:25 
+4    git-pocketshell       2026-08-22 20:20:56 
+5    git-dataops           2026-08-22 20:06:03 
+6    git-fitness-tracker   2026-08-22 13:11:47 
+7    git-telegram-writing-assistant 2026-08-22 10:35:17 
+8    home-alexey-go        2026-08-22 09:25:40 
+9    git-pocketshell-quse  2026-08-22 09:06:10 
+10   git-ai-shipping-labs-workshops-raw 2026-08-22 08:23:58 
+11   home-alexey           2026-08-21 23:35:39 
+12   git-ai-book-generator 2026-08-21 22:00:29 
+13   git-pocketshell-2     2026-08-20 06:22:30 
+14   git-dtc-website-luna  2026-08-18 10:40:07 
+15   git-ai-shipping-labs-web 2026-07-21 18:10:34 
+
+Join a session: tmuxctl <id> or tmuxctl <session>
+Create a new one: tmuxctl :<session>
+Use current folder: tmuxctl - or tmuxctl -name
+Help: tmuxctl --help

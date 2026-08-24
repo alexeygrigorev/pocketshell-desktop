@@ -1,0 +1,15 @@
+git-ai-book-generator::1::1::/home/alexey/git/ai-book-generator::/home/alexey/git/ai-book-generator::0::claude
+git-ai-dev-tools-zoomcamp::1::1::/home/alexey/git/ai-dev-tools-zoomcamp::/home/alexey/git/ai-dev-tools-zoomcamp::0::codex
+git-ai-shipping-labs-web::1::1::/home/alexey/git/ai-shipping-labs::/home/alexey/git/ai-shipping-labs::0::
+git-ai-shipping-labs-workshops-raw::1::1::/home/alexey/git/ai-shipping-labs-workshops-raw::/home/alexey/git/ai-shipping-labs-workshops-raw::0::
+git-dataops::1::1::/home/alexey/git/dataops::/home/alexey/git/dataops::0::codex
+git-dtc-website-luna::1::1::/home/alexey/git/dtc-website::/home/alexey/git/dtc-website::0::
+git-fitness-tracker::1::1::/home/alexey/git/fitness-tracker::/home/alexey/git/fitness-tracker::0::codex
+git-game-tester::1::1::/home/alexey/git/game-tester::/home/alexey/git/game-tester::1::codex
+git-pocketshell::1::1::/home/alexey/git/pocketshell::/home/alexey/git/pocketshell::0::codex
+git-pocketshell-2::1::1::/home/alexey/git/pocketshell::/home/alexey/git/pocketshell::0::test-engine
+git-pocketshell-quse::1::1::/home/alexey/git/pocketshell::/home/alexey/git/pocketshell::0::opencode
+git-red-stamp::1::1::/home/alexey/git::~/git::0::codex
+git-telegram-writing-assistant::1::1::/home/alexey/git/telegram-writing-assistant::/home/alexey/git/telegram-writing-assistant::0::
+home-alexey::1::1::/home/alexey::/home/alexey::0::
+home-alexey-go::1::1::/home/alexey::/home/alexey::1::
