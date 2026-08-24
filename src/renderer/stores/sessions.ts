@@ -25,24 +25,21 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
   }
 
-  /**
-   * Create a session under an explicit name. `cwd` is required: a session with
-   * no start folder is not a project session, and the folder is what the
-   * session name and the folder grouping are both derived from.
-   *
-   * Prefer the folder-first flow (`projects.startSession`) — this remains for
-   * the legacy name-entry control in SessionTree.
-   */
-  async function create(connectionId: ConnectionId, name: string, cwd: string): Promise<boolean> {
-    const ok = await api.helper.sessionsCreate(connectionId, name, cwd);
-    if (ok) await refresh(connectionId);
-    return ok;
-  }
+  // There is deliberately NO `create(name, cwd)` here any more.
+  //
+  // It existed only for SessionTree's bare "new session name" field, which had
+  // the model backwards: a session belongs to a project FOLDER and its name is
+  // derived from that folder, so a typed name produced sessions the Android
+  // client and `tmuxctl` could not group with anything. The field and this
+  // action went together; creation now runs through
+  // `useProjectsStore().start()` -> `projects:startSession`, which derives the
+  // name host-side. `helper.sessionsCreate` survives on the preload as the
+  // escape hatch for a caller that already knows the exact tmux name it wants.
 
   function clear(): void {
     sessions.value = [];
     error.value = null;
   }
 
-  return { sessions, loading, error, refresh, create, clear };
+  return { sessions, loading, error, refresh, clear };
 });

@@ -1,5 +1,4 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
-import { spawn } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
@@ -47,6 +46,7 @@ async function launchApp(): Promise<ElectronApplication> {
   // `require('electron')` resolves to the real binary (electron.exe on
   // Windows); electron/cli.js is not launchable and fails with
   // "Process failed to launch!".
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const electronPath = require('electron') as unknown as string;
   const mainPath = resolve(__dirname, '..', '..', 'out', 'main', 'index.js');
   return electron.launch({

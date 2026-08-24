@@ -16,21 +16,30 @@
 // other sizes; the composer's two sub-12px pips are CSS overrides on marks
 // that are status dots rather than affordances.
 export type AppIconName =
+  | 'alert-triangle'
   | 'arrow-left'
   | 'arrow-right'
+  | 'arrow-up'
   | 'check'
   | 'chevron-down'
   | 'chevron-right'
   | 'chevron-up'
   | 'close'
+  | 'download'
   | 'dot'
   | 'file'
   | 'folder'
+  | 'folder-plus'
+  | 'git-branch'
+  | 'home'
   | 'panel-left'
   | 'paperclip'
   | 'plus'
   | 'refresh'
+  | 'search'
   | 'symlink'
+  | 'toggle-left'
+  | 'toggle-right'
   | 'tool';
 
 /**
@@ -45,8 +54,21 @@ interface IconShape {
 }
 
 const GEOMETRY: Record<AppIconName, IconShape> = {
+  // Feather's `alert-triangle`. The banner mark for a scan that is failing —
+  // a warning about a background process, not an error the user caused.
+  'alert-triangle': {
+    paths: [
+      'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z',
+      'M12 9v4',
+      'M12 17h.01',
+    ],
+  },
   'arrow-left': { paths: ['M19 12H5', 'M12 19l-7-7 7-7'] },
   'arrow-right': { paths: ['M5 12h14', 'M12 5l7 7-7 7'] },
+  // "Up one folder" in the project browser. An arrow, not a chevron: the
+  // chevron is this app's disclosure/navigate-into mark and is already spoken
+  // for by the folder rows underneath it.
+  'arrow-up': { paths: ['M12 19V5', 'M5 12l7-7 7 7'] },
   check: { paths: ['M20 6L9 17l-5-5'] },
   'chevron-down': { paths: ['M6 9l6 6 6-6'] },
   'chevron-right': { paths: ['M9 18l6-6-6-6'] },
@@ -55,8 +77,32 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   // A circle expressed as two semicircular arcs, so the template stays one
   // path loop. Painted, not stroked: this is a pip, not an outline.
   dot: { paths: ['M12 7a5 5 0 1 0 0 10a5 5 0 1 0 0-10'], filled: true },
+  // Feather's `download` — the clone route. Not `git-branch`: what the user is
+  // asking for is "bring this repo down onto the host", and the branch mark
+  // reads as VCS topology rather than as an action.
+  download: { paths: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3'] },
   file: { paths: ['M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z', 'M13 2v7h7'] },
   folder: { paths: ['M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z'] },
+  // Feather's `folder-plus` — the "new empty folder" route.
+  'folder-plus': {
+    paths: [
+      'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
+      'M12 11v6',
+      'M9 14h6',
+    ],
+  },
+  // Feather's `git-branch`, its two <circle>s expressed as arc pairs so the
+  // template stays one path loop. Marks a row that IS a git repo.
+  'git-branch': {
+    paths: [
+      'M6 3v12',
+      'M18 3a3 3 0 1 0 0 6a3 3 0 1 0 0-6',
+      'M6 15a3 3 0 1 0 0 6a3 3 0 1 0 0-6',
+      'M18 9a9 9 0 0 1-9 9',
+    ],
+  },
+  // Feather's `home` — "back to $HOME" in the project browser's breadcrumb.
+  home: { paths: ['M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M9 22V12h6v10'] },
   // Feather's `sidebar`, its <rect> expressed as a path so the template stays
   // a single path loop. This is VS Code's "toggle sidebar" mark.
   'panel-left': {
@@ -71,7 +117,18 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   // Feather's `rotate-cw` (one arc + one arrowhead), chosen over `refresh-cw`
   // (two arcs) for calm at 14px — and it spins cleanly while loading.
   refresh: { paths: ['M23 4v6h-6', 'M20.49 15a9 9 0 1 1-2.12-9.36L23 10'] },
+  // Feather's `search`, its <circle> as an arc pair. Filter fields only.
+  search: { paths: ['M11 3a8 8 0 1 0 0 16a8 8 0 1 0 0-16', 'M21 21l-4.35-4.35'] },
   symlink: { paths: ['M4 4v7a4 4 0 0 0 4 4h12', 'M15 10l5 5-5 5'] },
+  // Feather's `toggle-left` / `toggle-right`: the port panel's per-row on/off.
+  // A real two-state mark, so "forwarded" and "silenced" differ in SHAPE and
+  // not only in colour (the knob moves), which a checkbox tick cannot do.
+  'toggle-left': {
+    paths: ['M8 5h8a7 7 0 0 1 0 14H8a7 7 0 0 1 0-14z', 'M8 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6'],
+  },
+  'toggle-right': {
+    paths: ['M8 5h8a7 7 0 0 1 0 14H8a7 7 0 0 1 0-14z', 'M16 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6'],
+  },
   tool: {
     paths: [
       'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z',

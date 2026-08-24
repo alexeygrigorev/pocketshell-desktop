@@ -13,8 +13,32 @@
  * The desktop has no such table, so we implement the phone's *no-watched-roots*
  * fallback path — `groupSessionsIntoFolders` — where folder groups are the
  * top level. The sort rules below are the same functions that path uses.
+ *
+ * ## Grouping semantics are shared; PRESENTATION is not (docs/SESSIONLIST.md)
+ *
+ * The desktop panel no longer RENDERS these folder sections. On a real host
+ * the distribution is 1:1 — 11 folders holding exactly 11 sessions — so every
+ * folder header cost a row to say nothing, and because the session name is
+ * derived from the folder path (`~/git/dataops` -> `git-dataops`,
+ * src/main/projects/sessionName.ts) the two lines were the same fact twice,
+ * both truncated to `git-…`. The phone escapes this because its top level is
+ * watched ROOTS, which have real fan-out; the desktop ported only the
+ * degenerate fallback.
+ *
+ * So the panel renders {@link flattenSessions} — one row per session, folder
+ * basename as the label — while `groupSessionsByFolder` stays exported and
+ * authoritative: it is the phone-parity anchor, `canonicalisePath` /
+ * `defaultLabelForPath` are the shared label rules, and the folder-first
+ * creation flow still speaks folders.
  */
 import type { SessionAgentKind, SessionSummary } from '../shared/types';
+// Value import across the main/renderer line, deliberately and narrowly:
+// `sanitisePart` is pure string logic with no Node dependency, and the
+// redundancy test below must use the EXACT regex the host derives names with
+// or it will suppress the wrong rows. docs/SESSIONLIST.md §8 asks for it to be
+// lifted into `src/shared/` and re-exported; that file belongs to another
+// owner, so this import stands in until it moves. Nothing else crosses.
+import { sanitisePart } from '../main/projects/sessionName';
 
 /** Sentinel path for sessions whose working directory is unknown. */
 export const UNTRACKED_PATH = '::untracked::';
@@ -151,4 +175,159 @@ export function groupSessionsByFolder(sessions: SessionSummary[]): SessionFolder
   const tracked = folders.filter((f) => f.path !== UNTRACKED_PATH).sort(compareFolders);
   const untracked = folders.filter((f) => f.path === UNTRACKED_PATH);
   return [...tracked, ...untracked];
+}
+
+/* ---------------------------------------------------------------------------
+ * Flat projection — what the panel actually renders (docs/SESSIONLIST.md)
+ * ------------------------------------------------------------------------- */
+
+/** Characters of a label kept on the right of a middle truncation. */
+const TAIL_CHARS = 8;
+/** Labels at or under this length are never split — they cannot overflow. */
+const SPLIT_THRESHOLD = 12;
+
+/** One rendered session row. */
+export interface SessionRow {
+  session: SessionSummary;
+  /**
+   * Primary label: the folder basename, or the session name itself when the
+   * session has no known working directory.
+   */
+  label: string;
+  /**
+   * `label` split for middle truncation. `labelHead` is the shrinkable span
+   * and `labelTail` the protected one; `labelTail` is empty for short labels,
+   * which render as a single span.
+   */
+  labelHead: string;
+  labelTail: string;
+  /**
+   * Whether to render the session name as a secondary field. False when the
+   * name is derivable from the folder — the overwhelmingly common case, and
+   * the whole reason the two-level tree read as duplicated.
+   */
+  showName: boolean;
+  /** Canonical folder path, or {@link UNTRACKED_PATH}. */
+  folderPath: string;
+  /** How many sessions share this row's folder. */
+  siblings: number;
+  /** True when the working directory is unknown. */
+  untracked: boolean;
+}
+
+/**
+ * Is `name` derivable from `label`?
+ *
+ * The host joins a folder's home-relative components with `-`, so every
+ * derived name ENDS with the sanitised basename: `git-dataops`/`dataops`,
+ * `home-alexey`/`alexey`, `var-log`/`log`. A custom name that happens to end
+ * the same way is suppressed too — harmless, the tooltip still carries it.
+ */
+export function isDerivedName(name: string, label: string): boolean {
+  const base = sanitisePart(label);
+  if (!base) return false;
+  return name === base || name.endsWith(`-${base}`);
+}
+
+/** Split a label so the distinguishing tail survives an overflow. */
+function splitLabel(label: string): { labelHead: string; labelTail: string } {
+  if (label.length <= SPLIT_THRESHOLD) return { labelHead: label, labelTail: '' };
+  return {
+    labelHead: label.slice(0, label.length - TAIL_CHARS),
+    labelTail: label.slice(label.length - TAIL_CHARS),
+  };
+}
+
+/** The last `count` segments of a path, e.g. `('/a/b/c', 2)` -> `b/c`. */
+function tailSegments(path: string, count: number): string {
+  const parts = path.split('/').filter((p) => p.length > 0);
+  return parts.slice(-count).join('/');
+}
+
+/**
+ * Global row order (docs/SESSIONLIST.md §6): attached first, then most-recent
+ * activity, then name.
+ *
+ * The phone's agents-first key is deliberately NOT applied here. It is a
+ * *within-folder* tiebreak so a folder's shells cannot bury its agent; as a
+ * GLOBAL key over one-session folders it pins every agent above every shell
+ * regardless of recency, which hides precisely the recently-used shell the
+ * user is hunting for. Agent-ness stays visible as the row badge.
+ */
+function compareRows(a: SessionSummary, b: SessionSummary): number {
+  const byAttached = Number(b.attached) - Number(a.attached);
+  if (byAttached !== 0) return byAttached;
+  const byActivity = sessionActivity(b) - sessionActivity(a);
+  if (byActivity !== 0) return byActivity;
+  return a.name.localeCompare(b.name);
+}
+
+/**
+ * Two different folders can share a basename (`~/git/foo` and `~/work/foo`).
+ * Grow every colliding label by parent segments — the same depth for the whole
+ * colliding set, so they stay comparable — until they are distinct.
+ */
+function disambiguateLabels(rows: SessionRow[]): void {
+  const pathsByLabel = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (row.untracked) continue;
+    const seen = pathsByLabel.get(row.label);
+    if (seen) seen.add(row.folderPath);
+    else pathsByLabel.set(row.label, new Set([row.folderPath]));
+  }
+
+  for (const [label, paths] of pathsByLabel) {
+    if (paths.size < 2) continue;
+    const deepest = Math.max(...[...paths].map((p) => p.split('/').filter(Boolean).length));
+    let depth = 2;
+    while (depth < deepest) {
+      const expanded = new Set([...paths].map((p) => tailSegments(p, depth)));
+      if (expanded.size === paths.size) break;
+      depth += 1;
+    }
+    for (const row of rows) {
+      if (row.untracked || row.label !== label) continue;
+      const grown = tailSegments(row.folderPath, depth);
+      row.label = grown || row.label;
+      Object.assign(row, splitLabel(row.label));
+    }
+  }
+}
+
+/**
+ * Flatten sessions into one row each — the panel's rendering model.
+ *
+ * Built on the same `canonicalisePath` / `defaultLabelForPath` /
+ * `sessionActivity` rules as {@link groupSessionsByFolder}, so both
+ * projections agree about what a folder is called.
+ */
+export function flattenSessions(sessions: SessionSummary[]): SessionRow[] {
+  const counts = new Map<string, number>();
+  for (const session of sessions) {
+    const path = canonicalisePath(session.path);
+    counts.set(path, (counts.get(path) ?? 0) + 1);
+  }
+
+  const rows: SessionRow[] = [...sessions].sort(compareRows).map((session) => {
+    const folderPath = canonicalisePath(session.path);
+    const untracked = folderPath === UNTRACKED_PATH;
+    // An untracked session has no folder to name it after, so its own name is
+    // the only label there is — and there is nothing left to show beside it.
+    const label = untracked ? session.name : defaultLabelForPath(folderPath);
+    const siblings = counts.get(folderPath) ?? 1;
+    return {
+      session,
+      label,
+      ...splitLabel(label),
+      // Siblings share a label, so only the session name separates them —
+      // show it even when it is derivable.
+      showName: !untracked && (siblings > 1 || !isDerivedName(session.name, label)),
+      folderPath,
+      siblings,
+      untracked,
+    };
+  });
+
+  disambiguateLabels(rows);
+  return rows;
 }

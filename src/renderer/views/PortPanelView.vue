@@ -1,17 +1,58 @@
 <script setup lang="ts">
-// PortPanelView: the port-forward table. Shows the remote port scan, the live
-// forwards (auto + manual), and lets the user toggle auto-forward, add a
-// manual -L/-R/-D, or remove one.
+// PortPanelView: the port-forward table.
+//
+// One table, two kinds of row, merged on the remote port:
+//
+//   - a live forward   (`ForwardState`)   — auto, manual, or ssh-config
+//   - a discovered port (`DiscoveredPort`) — something listening on the host
+//     that we are NOT forwarding, INCLUDING ports above `maxAutoPort` that the
+//     auto policy will never pick up on its own. Those are the whole reason
+//     `discovered()` exists: without it a port on 19840 was invisible and
+//     therefore unreachable.
+//
+// Per row the panel can now do everything the engine can: rename the port,
+// pin it to a chosen local port (or drop the pin), force it on or off, put it
+// back on the automatic policy, and remove it. `Process` and `Folder` come
+// from the scan's PID attribution, which is best-effort on a shared box — a
+// dash there is normal, not a bug.
+//
+// Two things NOT to re-litigate in here:
+//   - Removal uses `ForwardState.key`. The engine now issues that string and
+//     it is the format this panel used to build by hand; rebuilding it locally
+//     is what made auto-created forwards unremovable.
+//   - In/Out were swapped in the ENGINE and are fixed there. `bytesIn` is
+//     genuinely download. Do not "correct" them again here.
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import AppIcon from '../components/AppIcon.vue';
 import { useForwardsStore } from '../stores/forwards';
 import type { ForwardSpec } from '../../shared/types';
+import type { DiscoveredPort } from '../../main/portfwd/AutoForwarder';
 import type { ForwardState } from '../../main/portfwd/Forwarder';
 
 const connection = useConnectionStore();
 const forwards = useForwardsStore();
 const connId = computed(() => connection.connectionId);
+
+/**
+ * The host's `~/.ssh/config` LocalForward lines. PocketShell is the SSH
+ * client, so nothing else opens these — the engine does, and tags them
+ * `origin: 'ssh-config'` so this panel can mark them and refuse to remove
+ * them (the config, not the user, owns those rows).
+ */
+const configForwards = computed<ForwardSpec[]>(() =>
+  // Rebuilt field by field, NOT passed through. Reading them off the Pinia
+  // store hands back reactive Proxies, and `ipcRenderer.invoke` structured-
+  // clones its arguments — a Proxy fails that with "An object could not be
+  // cloned", which silently killed the whole Auto-forward toggle.
+  (connection.activeHost?.localForwards ?? []).map((f) => ({
+    kind: f.kind,
+    listenHost: f.listenHost,
+    listenPort: f.listenPort,
+    destHost: f.destHost,
+    destPort: f.destPort,
+  })),
+);
 
 // Manual-add form
 const kind = ref<ForwardSpec['kind']>('local');
@@ -19,11 +60,48 @@ const localPort = ref<number>(8080);
 const remotePort = ref<number>(8080);
 const remoteHost = ref('127.0.0.1');
 
-onMounted(async () => {
-  if (connId.value) {
-    forwards.subscribe(connId.value);
-    await forwards.scan(connId.value);
+/** One table row: a forward, a discovered port, or both for the same port. */
+interface PortRow {
+  id: string;
+  /**
+   * The port on the HOST. Null for `-R` and `-D` forwards, which have no
+   * remote listener the scanner can attribute — every per-port control
+   * (name, remap, intent, toggle) is keyed on this, so those rows get none.
+   */
+  remotePort: number | null;
+  fwd: ForwardState | null;
+  disco: DiscoveredPort | null;
+}
+
+const rows = computed<PortRow[]>(() => {
+  const byPort = new Map<number, PortRow>();
+  /** `-R`/`-D` rows: no remote port to merge on, so they sit at the end. */
+  const unkeyed: PortRow[] = [];
+
+  for (const fwd of forwards.states) {
+    if (fwd.kind !== 'local') {
+      unkeyed.push({ id: fwd.key, remotePort: null, fwd, disco: null });
+      continue;
+    }
+    byPort.set(fwd.destPort, { id: fwd.key, remotePort: fwd.destPort, fwd, disco: null });
   }
+  for (const disco of forwards.discovered) {
+    const existing = byPort.get(disco.port);
+    if (existing) existing.disco = disco;
+    else byPort.set(disco.port, { id: `port:${disco.port}`, remotePort: disco.port, fwd: null, disco });
+  }
+
+  const keyed = [...byPort.values()].sort((a, b) => (a.remotePort ?? 0) - (b.remotePort ?? 0));
+  return [...keyed, ...unkeyed];
+});
+
+/** True when the last scan failed — drives the banner, not a dialog. */
+const scanFailed = computed(() => forwards.status !== null && !forwards.status.lastScanOk);
+
+onMounted(async () => {
+  if (!connId.value) return;
+  forwards.subscribe(connId.value);
+  await forwards.init(connId.value, configForwards.value);
 });
 
 onBeforeUnmount(() => {
@@ -45,14 +123,145 @@ async function onAdd(): Promise<void> {
   await forwards.addManual(connId.value, spec);
 }
 
-function keyOf(s: ForwardState): string {
-  return `${s.kind}:${s.listenPort}->${s.destHost}:${s.destPort}`;
+/** Friendly name for a row, from whichever source carries it. */
+function nameOf(row: PortRow): string {
+  return row.fwd?.name ?? row.disco?.name ?? '';
+}
+
+/** The local port in use (or pinned) for a row, blank when there is none. */
+function localOf(row: PortRow): string {
+  const port = row.fwd?.listenPort ?? row.disco?.localPort ?? null;
+  return port === null ? '' : String(port);
+}
+
+function processOf(row: PortRow): string {
+  return row.fwd?.process ?? row.disco?.process ?? '';
+}
+
+function cwdOf(row: PortRow): string {
+  return row.fwd?.cwd ?? row.disco?.cwd ?? '';
+}
+
+/**
+ * The last two segments of a working directory, which is the part that
+ * identifies the project; the full path is on the cell's tooltip.
+ *
+ * Done here rather than with `direction: rtl` + `text-overflow`, which is the
+ * usual CSS trick for keeping a path's tail: it reorders the bidi run, so
+ * `/home/x/y` rendered as `home/x/y/` with the leading slash moved to the end.
+ */
+function cwdLabel(row: PortRow): string {
+  const full = cwdOf(row);
+  if (!full) return '';
+  const parts = full.split('/').filter(Boolean);
+  return parts.length <= 2 ? full : `…/${parts.slice(-2).join('/')}`;
+}
+
+/** True when the row's local port was pinned/reassigned away from a mirror. */
+function isRemapped(row: PortRow): boolean {
+  if (row.fwd) return row.fwd.remapped;
+  const disco = row.disco;
+  return disco?.localPort != null && disco.localPort !== disco.port;
+}
+
+function isForwarded(row: PortRow): boolean {
+  return row.fwd !== null || row.disco?.forwarded === true;
+}
+
+/** Origin chip text. `auto` is the unremarkable case and gets no chip. */
+function originLabel(row: PortRow): string | null {
+  switch (row.fwd?.origin) {
+    case 'ssh-config':
+      return 'Auto (SSH Config)';
+    case 'manual':
+      return 'manual';
+    default:
+      return null;
+  }
+}
+
+interface StatusCell {
+  text: string;
+  tone: 'ok' | 'warn' | 'bad' | 'muted';
+  title: string;
+}
+
+function statusOf(row: PortRow): StatusCell {
+  const lastError = row.disco?.lastError ?? null;
+  if (lastError) return { text: 'failed', tone: 'bad', title: lastError };
+  if (row.fwd) {
+    return row.fwd.active
+      ? { text: 'forwarding', tone: 'ok', title: 'tunnel open' }
+      : { text: 'idle', tone: 'warn', title: 'tunnel open, no traffic yet' };
+  }
+  if (row.disco?.intent === 'force-off') {
+    return { text: 'silenced', tone: 'muted', title: 'you turned this port off; it stays off' };
+  }
+  if (!forwards.annotated) {
+    return { text: 'not forwarded', tone: 'muted', title: 'auto-forward is off — turn it on or toggle this port' };
+  }
+  return row.disco?.eligible === true
+    ? { text: 'pending', tone: 'warn', title: 'in policy — the next scan should open it' }
+    : {
+        text: 'not forwarded',
+        tone: 'muted',
+        title: 'outside the auto range; use the toggle to force it on',
+      };
+}
+
+async function onRename(row: PortRow, event: Event): Promise<void> {
+  if (!connId.value || row.remotePort === null) return;
+  const value = (event.target as HTMLInputElement).value;
+  // Blank deletes the name; the engine takes null for that.
+  await forwards.rename(connId.value, row.remotePort, value.trim() ? value : null);
+}
+
+async function onLocalPort(row: PortRow, event: Event): Promise<void> {
+  if (!connId.value || row.remotePort === null) return;
+  const raw = (event.target as HTMLInputElement).value.trim();
+  const port = Number.parseInt(raw, 10);
+  // An emptied field means "stop pinning", not "bind port 0".
+  if (raw === '' || Number.isNaN(port) || port <= 0 || port > 65_535) {
+    await forwards.clearRemap(connId.value, row.remotePort);
+    return;
+  }
+  await forwards.remap(connId.value, row.remotePort, port);
+}
+
+async function onToggle(row: PortRow): Promise<void> {
+  if (!connId.value || row.remotePort === null) return;
+  await forwards.togglePort(connId.value, row.remotePort);
+}
+
+async function onClearIntent(row: PortRow): Promise<void> {
+  if (!connId.value || row.remotePort === null) return;
+  await forwards.setIntent(connId.value, row.remotePort, null);
+}
+
+async function onClearRemap(row: PortRow): Promise<void> {
+  if (!connId.value || row.remotePort === null) return;
+  await forwards.clearRemap(connId.value, row.remotePort);
 }
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Rate line under a byte count. Sub-1 KB/s is noise; show nothing. */
+function fmtRate(bytesPerSec: number): string {
+  if (bytesPerSec < 1024) return '';
+  return `${fmtBytes(bytesPerSec)}/s`;
+}
+
+function fmtScanTime(epochMs: number | null): string {
+  if (!epochMs) return 'never';
+  return new Date(epochMs).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 </script>
 
@@ -67,12 +276,29 @@ function fmtBytes(n: number): string {
       </button>
       <button
         :class="['toggle', { on: forwards.autoOn }]"
-        @click="forwards.toggleAuto(connId!)"
+        @click="forwards.toggleAuto(connId!, configForwards)"
       >
         Auto-forward: {{ forwards.autoOn ? 'ON' : 'OFF' }}
       </button>
-      <span class="muted hint">auto mirrors remote ports 1024–10000 to localhost</span>
+      <span class="muted hint">
+        auto mirrors remote ports 1024–10000; anything outside that range is still
+        listed below and can be forced on per row
+      </span>
+      <span v-if="forwards.status" class="muted scan-time">
+        last scan {{ fmtScanTime(forwards.status.lastScanAt) }}
+      </span>
     </div>
+
+    <!-- A failing scan is a banner, not a modal: the tunnels that are already
+         up keep working, and the user needs to know the table has gone stale
+         rather than be interrupted. -->
+    <p v-if="scanFailed" class="scan-banner">
+      <AppIcon name="alert-triangle" :size="14" />
+      <span>
+        The remote port scan is failing, so this list may be stale.
+        <span class="scan-reason">{{ forwards.status?.lastError ?? 'no reason reported' }}</span>
+      </span>
+    </p>
 
     <section class="add-form">
       <select v-model="kind">
@@ -93,33 +319,138 @@ function fmtBytes(n: number): string {
       <button class="add-btn" @click="onAdd">Add</button>
     </section>
 
-    <table class="fwd-table">
-      <thead>
-        <tr><th>Kind</th><th>Local</th><th>Remote</th><th>Status</th><th>In</th><th>Out</th><th></th></tr>
-      </thead>
-      <tbody>
-        <tr v-for="s in forwards.states" :key="keyOf(s)">
-          <td><span :class="['kind', s.kind]">{{ s.kind }}</span></td>
-          <td>{{ s.listenHost }}:{{ s.listenPort }}</td>
-          <td>{{ s.kind === 'dynamic' ? 'SOCKS' : `${s.destHost}:${s.destPort}` }}</td>
-          <td :class="s.active ? 'ok' : 'warn'">{{ s.active ? 'forwarding' : 'idle' }}</td>
-          <td class="mono">{{ fmtBytes(s.bytesIn) }}</td>
-          <td class="mono">{{ fmtBytes(s.bytesOut) }}</td>
-          <td>
-            <button
-              class="icon-btn sm"
-              title="Remove forward"
-              @click="forwards.remove(connId!, keyOf(s))"
-            >
-              <AppIcon name="close" :size="12" />
-            </button>
-          </td>
-        </tr>
-        <tr v-if="!forwards.states.length">
-          <td colspan="7" class="muted empty">no forwards — add one above or enable auto-forward</td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table class="fwd-table">
+        <thead>
+          <tr>
+            <th class="c-port">Port</th>
+            <th class="c-name">Name</th>
+            <th class="c-local">Local</th>
+            <th class="c-proc">Process</th>
+            <th class="c-folder">Folder</th>
+            <th class="c-status">Status</th>
+            <th class="c-bytes">In</th>
+            <th class="c-bytes">Out</th>
+            <th class="c-actions" />
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="row in rows"
+            :key="row.id"
+            :class="{ busy: forwards.pending !== null && forwards.pending === row.remotePort }"
+          >
+            <td class="c-port">
+              <span class="port-num">{{ row.remotePort ?? '—' }}</span>
+              <span v-if="row.fwd" :class="['kind', row.fwd.kind]">{{ row.fwd.kind }}</span>
+              <span v-if="originLabel(row)" class="origin">{{ originLabel(row) }}</span>
+              <span v-if="row.disco?.intent === 'force-on'" class="origin forced">forced on</span>
+            </td>
+
+            <!-- Uncontrolled on purpose: bound to :value and committed on
+                 change, so a push-driven state refresh mid-typing cannot yank
+                 the caret out of the field. -->
+            <td class="c-name">
+              <input
+                class="cell-input"
+                :value="nameOf(row)"
+                :disabled="row.remotePort === null"
+                placeholder="name"
+                :title="row.remotePort === null ? 'only remote ports can be named' : 'Rename this port'"
+                @change="onRename(row, $event)"
+                @keyup.enter="($event.target as HTMLInputElement).blur()"
+              />
+            </td>
+
+            <td class="c-local">
+              <div class="local-cell">
+                <input
+                  class="cell-input num"
+                  type="number"
+                  :value="localOf(row)"
+                  :disabled="row.remotePort === null"
+                  placeholder="auto"
+                  title="Pin this port to a local port; clear the field to unpin"
+                  @change="onLocalPort(row, $event)"
+                  @keyup.enter="($event.target as HTMLInputElement).blur()"
+                />
+                <button
+                  v-if="isRemapped(row) && row.remotePort !== null"
+                  class="icon-btn sm"
+                  title="Clear the pinned local port"
+                  @click="onClearRemap(row)"
+                >
+                  <AppIcon name="close" :size="12" />
+                </button>
+              </div>
+            </td>
+
+            <td class="c-proc" :title="processOf(row)">{{ processOf(row) || '—' }}</td>
+            <td class="c-folder" :title="cwdOf(row)">{{ cwdLabel(row) || '—' }}</td>
+
+            <td class="c-status">
+              <span :class="['status', statusOf(row).tone]" :title="statusOf(row).title">
+                {{ statusOf(row).text }}
+              </span>
+            </td>
+
+            <td class="c-bytes">
+              <span class="bytes">{{ row.fwd ? fmtBytes(row.fwd.bytesIn) : '—' }}</span>
+              <span v-if="row.fwd && fmtRate(row.fwd.rateIn)" class="rate">
+                {{ fmtRate(row.fwd.rateIn) }}
+              </span>
+            </td>
+            <td class="c-bytes">
+              <span class="bytes">{{ row.fwd ? fmtBytes(row.fwd.bytesOut) : '—' }}</span>
+              <span v-if="row.fwd && fmtRate(row.fwd.rateOut)" class="rate">
+                {{ fmtRate(row.fwd.rateOut) }}
+              </span>
+            </td>
+
+            <td class="c-actions">
+              <div class="actions">
+                <!-- A real two-state mark: the knob moves, so on/off differ in
+                     shape and not only in colour. -->
+                <button
+                  class="icon-btn sm"
+                  :class="{ on: isForwarded(row) }"
+                  :disabled="row.remotePort === null"
+                  :title="isForwarded(row) ? 'Turn this port off' : 'Force this port on'"
+                  @click="onToggle(row)"
+                >
+                  <AppIcon :name="isForwarded(row) ? 'toggle-right' : 'toggle-left'" :size="16" />
+                </button>
+                <button
+                  v-if="row.disco?.intent"
+                  class="btn-auto"
+                  title="Forget this override and follow the automatic policy again"
+                  @click="onClearIntent(row)"
+                >
+                  auto
+                </button>
+                <button
+                  class="icon-btn sm"
+                  :disabled="!row.fwd || row.fwd.origin === 'ssh-config'"
+                  :title="
+                    row.fwd?.origin === 'ssh-config'
+                      ? 'Defined by ~/.ssh/config — remove it there'
+                      : 'Remove forward'
+                  "
+                  @click="row.fwd && forwards.remove(connId!, row.fwd.key)"
+                >
+                  <AppIcon name="close" :size="12" />
+                </button>
+              </div>
+            </td>
+          </tr>
+          <tr v-if="!rows.length">
+            <td colspan="9" class="muted empty">
+              nothing listening and nothing forwarded — add one above or enable auto-forward
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <p v-if="forwards.error" class="error">{{ forwards.error }}</p>
   </div>
@@ -135,7 +466,8 @@ function fmtBytes(n: number): string {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  margin-bottom: var(--sp-4);
+  margin-bottom: var(--sp-3);
+  flex-wrap: wrap;
 }
 .scan,
 .toggle,
@@ -177,6 +509,32 @@ function fmtBytes(n: number): string {
 }
 .hint {
   font-size: var(--fs-200);
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.scan-time {
+  font-size: var(--fs-100);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Warning, not error: the tunnels already open keep carrying traffic. */
+.scan-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--fs-200);
+}
+.scan-reason {
+  display: block;
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-100);
+  margin-top: var(--sp-1);
 }
 .add-form {
   display: flex;
@@ -224,8 +582,14 @@ function fmtBytes(n: number): string {
   background: var(--accent-dim);
   color: var(--fg);
 }
+/* Nine columns do not fit an overlay at every window width. The TABLE scrolls
+   sideways inside this box; the panel itself never does. */
+.table-wrap {
+  overflow-x: auto;
+}
 .fwd-table {
   width: 100%;
+  min-width: 860px;
   border-collapse: collapse;
   font-size: var(--fs-200);
 }
@@ -234,6 +598,7 @@ function fmtBytes(n: number): string {
   text-align: left;
   padding: var(--sp-1) var(--sp-2);
   border-bottom: 1px solid var(--border-soft);
+  vertical-align: middle;
 }
 .fwd-table th {
   background: var(--surface-2);
@@ -246,13 +611,119 @@ function fmtBytes(n: number): string {
 .fwd-table td {
   font-family: var(--font-mono);
 }
+.fwd-table tbody tr:hover {
+  background: var(--state-hover);
+}
+/* A row with a mutation in flight dims rather than disappearing, so the table
+   does not reflow underneath the cursor that just clicked it. */
+.fwd-table tbody tr.busy {
+  opacity: var(--disabled-opacity);
+}
+.c-port {
+  white-space: nowrap;
+}
+.port-num {
+  font-variant-numeric: tabular-nums;
+  margin-right: var(--sp-1);
+}
+.c-name {
+  width: 9rem;
+}
+.c-local {
+  width: 7rem;
+}
+.c-proc {
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The leaf-first shortening happens in `cwdLabel()`, not here — see the note
+   on that function for why `direction: rtl` is the wrong tool. */
+.c-folder {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+}
+.c-status {
+  white-space: nowrap;
+}
+.c-bytes {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.c-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+/* Row-level inputs are quieter than form inputs: transparent until hovered or
+   focused, so nine columns of boxes do not read as a form. */
+.cell-input {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 0 var(--sp-1);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-200);
+}
+.cell-input::placeholder {
+  color: var(--fg-muted);
+}
+.cell-input:hover:not(:disabled),
+.cell-input:focus {
+  background: var(--surface-2);
+  /* WCAG 1.4.11: once it looks like a control it needs a >=3:1 boundary. */
+  border-color: var(--border-strong);
+}
+.cell-input:disabled {
+  opacity: var(--disabled-opacity);
+}
+.cell-input.num {
+  font-variant-numeric: tabular-nums;
+}
+.local-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  justify-content: flex-end;
+}
+.icon-btn.on {
+  color: var(--success);
+}
+.btn-auto {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-1);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  color: var(--fg-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-100);
+  cursor: pointer;
+}
+.btn-auto:hover {
+  color: var(--fg);
+}
 /* One badge metric across the app (docs/POLISH.md §7). */
-.kind {
+.kind,
+.origin {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
   line-height: var(--lh-100);
   font-size: var(--fs-100);
+  font-family: var(--font-ui);
   padding: 0 var(--sp-1);
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
@@ -266,14 +737,37 @@ function fmtBytes(n: number): string {
 .kind.dynamic {
   color: var(--agent);
 }
-.ok {
+.origin {
+  color: var(--fg-secondary);
+  margin-left: var(--sp-1);
+}
+.origin.forced {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: transparent;
+}
+.status {
+  font-family: var(--font-ui);
+}
+.status.ok {
   color: var(--success);
 }
-.warn {
+.status.warn {
   color: var(--warning);
 }
-.mono {
+.status.bad {
+  color: var(--error);
+}
+.status.muted {
+  color: var(--fg-muted);
+}
+.bytes {
   color: var(--fg-secondary);
+}
+.rate {
+  display: block;
+  color: var(--fg-muted);
+  font-size: var(--fs-100);
 }
 .empty {
   padding: var(--sp-4) var(--sp-2);

@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
 /**
@@ -42,6 +42,55 @@ export function ensureHelperUp(deadlineMs = 60_000): void {
     execSync('sleep 1', { stdio: 'ignore' });
   }
   if (!isHelperUp()) throw new Error('helper container did not become reachable');
+}
+
+/**
+ * Seed the project folders the folder-first session tests browse and clone
+ * from: `~/git/demo-repo` (a plain `git init`, so `full_name` is null and the
+ * merge must fall back to `name`) and `~/git/Hello-World` (a GitHub origin, so
+ * it merges as `octocat/Hello-World`).
+ *
+ * Idempotent and run per spec, deliberately: the helper IMAGE ships no `~/git`
+ * at all, and `ensureHelperUp` recreates the container whenever the image
+ * changes — so anything a previous run created is not something a later run
+ * may assume.
+ */
+export function seedProjectFolders(): void {
+  execInFixture([
+    'set -e',
+    'mkdir -p "$HOME/git/demo-repo" "$HOME/git/Hello-World"',
+    'cd "$HOME/git/demo-repo" && git init -q .',
+    'cd "$HOME/git/Hello-World" && git init -q .',
+    'cd "$HOME/git/Hello-World" && (git remote add origin ' +
+      'https://github.com/octocat/Hello-World.git || true)',
+  ]);
+}
+
+/**
+ * Run a `sh -lc` script inside the helper container as `testuser`.
+ *
+ * `execFileSync` with an argv array, NOT `execSync` with a command string: on
+ * Windows `execSync` goes through cmd.exe, where single quotes are ordinary
+ * characters, so a quoted shell script arrives at `sh -lc` in pieces.
+ */
+export function execInFixture(lines: string[]): void {
+  execFileSync(
+    'docker',
+    [
+      'compose',
+      '-f',
+      COMPOSE_FILE,
+      'exec',
+      '-T',
+      '-u',
+      'testuser',
+      'helper',
+      'sh',
+      '-lc',
+      lines.join('\n'),
+    ],
+    { stdio: 'ignore', timeout: 30_000 },
+  );
 }
 
 /** Stop the helper compose service. */

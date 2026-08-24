@@ -52,6 +52,7 @@ async function launchApp(): Promise<ElectronApplication> {
   // `require('electron')` resolves to the real binary (electron.exe on Windows).
   // Pointing at electron/cli.js instead makes launch fail with "Process failed
   // to launch!", which is why core-flow.spec.ts cannot start the app today.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const electronPath = require('electron') as unknown as string;
   const mainPath = resolve(__dirname, '..', '..', 'out', 'main', 'index.js');
   return electron.launch({
@@ -102,12 +103,18 @@ test.describe('session-scoped navigation + terminal wiring', () => {
     stopHelper();
   });
 
-  test('the host shows a folder-grouped session panel and no host-level tabs', async () => {
-    // Both fixture sessions are created in $HOME, so they share one folder group.
+  test('the host shows a flat session panel and no host-level tabs', async () => {
+    // One row per session, no folder headers: the panel was flattened because
+    // the real distribution is 1:1 folder:session (docs/SESSIONLIST.md).
     await expect(page.locator('.session-panel')).toBeVisible();
-    await expect(page.locator('.folder-header')).toHaveCount(1);
-    await expect(page.locator('.folder-count')).toContainText('2 sessions');
+    await expect(page.locator('.folder-header')).toHaveCount(0);
     await expect(page.locator('.session-row')).toHaveCount(2);
+    // Both fixture sessions live in $HOME, so they share the label `testuser`
+    // and each must show its own session name to be distinguishable at all.
+    await expect(page.locator('.session-row .label').first()).toHaveText('testuser');
+    await expect(page.locator('.session-row .row-name')).toHaveCount(2);
+    // The `attached` tag is retired — the dot, the weight and the sort say it.
+    await expect(page.locator('.session-row .tag')).toHaveCount(0);
     // Files/Conversation are NOT host-level tabs any more.
     await expect(page.locator('.workspace > .body > nav.tabs')).toHaveCount(0);
     // Nothing selected yet -> the right pane shows the empty state.

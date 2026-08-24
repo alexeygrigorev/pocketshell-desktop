@@ -33,9 +33,24 @@ const panel = ref<'ports' | 'usage' | null>(null);
 
 /** Session-panel geometry. Collapsed hides it entirely; width is drag-resized. */
 const panelCollapsed = ref(false);
-const panelWidth = ref(280);
 const MIN_PANEL_WIDTH = 200;
 const MAX_PANEL_WIDTH = 560;
+const DEFAULT_PANEL_WIDTH = 280;
+const PANEL_WIDTH_KEY = 'pocketshell.sessionPanelWidth';
+
+/**
+ * Restore the dragged width. It used to reset to 280 on every mount, so the
+ * resize was a per-visit chore rather than a setting. Clamped on read as well
+ * as on write: the stored value predates any change to the clamp, and a
+ * hand-edited or corrupt entry must not be able to strand the panel offscreen.
+ */
+function loadPanelWidth(): number {
+  const stored = Number.parseInt(window.localStorage.getItem(PANEL_WIDTH_KEY) ?? '', 10);
+  if (Number.isNaN(stored)) return DEFAULT_PANEL_WIDTH;
+  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, stored));
+}
+
+const panelWidth = ref(loadPanelWidth());
 
 /** Session named by the route, so the panel can highlight the current row. */
 const activeSession = computed(() => (route.params['session'] as string | undefined) ?? null);
@@ -63,6 +78,10 @@ function onDragMove(e: MouseEvent): void {
 function onDragEnd(): void {
   document.removeEventListener('mousemove', onDragMove);
   document.removeEventListener('mouseup', onDragEnd);
+  // Written once per drag, not per mousemove: this is a preference, and a
+  // localStorage write on every pointer sample is a synchronous disk touch
+  // inside the drag loop.
+  window.localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth.value));
 }
 
 onBeforeUnmount(onDragEnd);

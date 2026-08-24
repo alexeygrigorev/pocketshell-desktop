@@ -51,6 +51,7 @@ async function launchApp(): Promise<ElectronApplication> {
       env: NodeJS.ProcessEnv;
     }): Promise<ElectronApplication>;
   };
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const electronPath = require('electron') as unknown as string;
   const mainPath = resolve(__dirname, '..', '..', 'out', 'main', 'index.js');
   return electron.launch({
