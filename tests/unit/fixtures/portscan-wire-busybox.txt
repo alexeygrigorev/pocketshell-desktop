@@ -1,0 +1,10 @@
+<<<PS_SS_TLN>>>
+<<<PS_SS_TLNP>>>
+<<<PS_NETSTAT_TLNP>>>
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+tcp        0      0 :::8081                 :::*                    LISTEN      7/nc
+<<<PS_NETSTAT_TLN>>>
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       
+tcp        0      0 :::8081                 :::*                    LISTEN      

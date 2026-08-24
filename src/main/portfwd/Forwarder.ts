@@ -11,46 +11,124 @@ import type { ForwardSpec } from '../../shared/types.js';
  *                    ssh2 `forwardOut` to (destHost:destPort) from the server.
  *   - remote ('-R'): ask the server to listen on (destHost:destPort) via
  *                    `forwardIn`; incoming connections arrive as 'tcp'
- *                    channels we pipe to a local server (or, when no local
- *                    destination is configured, dropped after logging).
+ *                    channels dispatched by {@link RemoteChannelDispatcher}.
  *   - dynamic ('-D'): run a local SOCKS5 server; per SOCKS request, open a
  *                    `forwardOut` to the requested host:port.
  *
  * The Android app implements local-only; remote + dynamic are net-new here.
  */
 
-export interface ForwardState {
+/** Where a forward came from. Drives what the UI may do with the row. */
+export type ForwardOrigin = 'auto' | 'manual' | 'ssh-config';
+
+/** Presentation metadata the AutoForwarder attaches to a live forward. */
+export interface ForwardMeta {
+  /** User-chosen friendly name for the remote port, or null. */
+  name: string | null;
+  /** Remote process name, from the port scan. */
+  process: string | null;
+  /** Remote process working directory, from the port scan. */
+  cwd: string | null;
+  /** True when listenPort !== destPort (mirroring was not possible/wanted). */
+  remapped: boolean;
+}
+
+export interface ForwardState extends ForwardMeta {
+  /** Stable identity of this forward. Always {@link forwardKey}(spec). */
+  key: string;
   kind: ForwardSpec['kind'];
   listenHost: string;
   listenPort: number;
   destHost: string;
   destPort: number;
+  origin: ForwardOrigin;
   active: boolean;
+  /** Bytes received FROM the remote side (download). */
   bytesIn: number;
+  /** Bytes sent TO the remote side (upload). */
   bytesOut: number;
+  /** Download rate, bytes/sec, since the previous snapshot. */
+  rateIn: number;
+  /** Upload rate, bytes/sec, since the previous snapshot. */
+  rateOut: number;
 }
 
 export type ForwardEventListener = (state: ForwardState) => void;
 
+/**
+ * The one true identity of a forward.
+ *
+ * This string was previously rebuilt in three places in two different formats
+ * (`local:8080->8080` in the auto path vs `local:8080->127.0.0.1:8080` in the
+ * removal path and the renderer), so auto-created forwards could never be
+ * removed from the UI. Everything now goes through here; the format is the
+ * one `PortPanelView.vue` already builds, so no renderer change is needed.
+ */
+export function forwardKey(spec: ForwardSpec): string {
+  return `${spec.kind}:${spec.listenPort}->${spec.destHost}:${spec.destPort}`;
+}
+
+/**
+ * Minimum gap between rate samples. Below it, `snapshot()` reuses the last
+ * computed rate instead of dividing by a near-zero interval (which would
+ * produce absurd spikes whenever the UI polls twice in quick succession).
+ */
+const RATE_SAMPLE_MIN_MS = 500;
+
+/** Default idle reaper window, ported from `SSH_FORWARD_IDLE_TIMEOUT` (1h). */
+export const DEFAULT_IDLE_TIMEOUT_MS = 3_600_000;
+
+export interface ForwarderOptions {
+  origin?: ForwardOrigin;
+  /**
+   * Tear down a proxied connection that has been silent in **both**
+   * directions for this long, so an abandoned keep-alive socket cannot leak
+   * an SSH channel forever (`forwarder.py:201-203`, `:246-247`).
+   * 0 disables the reaper, matching the Python's semantics.
+   */
+  idleTimeoutMs?: number;
+}
+
 export class Forwarder {
   readonly spec: ForwardSpec;
+  readonly key: string;
+  readonly origin: ForwardOrigin;
   private server: Server | null = null;
   private listeners = new Set<ForwardEventListener>();
   private bytesIn = 0;
   private bytesOut = 0;
   private remoteAccepted = false;
+  private readonly idleTimeoutMs: number;
+  private meta: ForwardMeta = { name: null, process: null, cwd: null, remapped: false };
+  private unregisterRemote: (() => void) | null = null;
+  // Rate sampling state (see RATE_SAMPLE_MIN_MS).
+  private lastSampleAt = Date.now();
+  private lastBytesIn = 0;
+  private lastBytesOut = 0;
+  private rateIn = 0;
+  private rateOut = 0;
 
   constructor(
     private readonly registry: ConnectionRegistry,
     private readonly connectionId: string,
     spec: ForwardSpec,
+    options: ForwarderOptions = {},
   ) {
     this.spec = spec;
+    this.key = forwardKey(spec);
+    this.origin = options.origin ?? 'manual';
+    this.idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+    this.meta.remapped = spec.kind === 'local' && spec.listenPort !== spec.destPort;
   }
 
   onStateChange(listener: ForwardEventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Attach presentation metadata (friendly name, remote process, cwd). */
+  setMeta(patch: Partial<ForwardMeta>): void {
+    this.meta = { ...this.meta, ...patch };
   }
 
   private emit(): void {
@@ -59,16 +137,39 @@ export class Forwarder {
   }
 
   snapshot(): ForwardState {
+    this.sampleRates();
     return {
+      key: this.key,
       kind: this.spec.kind,
       listenHost: this.spec.listenHost,
       listenPort: this.spec.listenPort,
       destHost: this.spec.destHost,
       destPort: this.spec.destPort,
+      origin: this.origin,
       active: this.isActive(),
       bytesIn: this.bytesIn,
       bytesOut: this.bytesOut,
+      rateIn: this.rateIn,
+      rateOut: this.rateOut,
+      ...this.meta,
     };
+  }
+
+  /**
+   * Port of `get_stats()` (`forwarder.py:303-326`): deltas since the previous
+   * sample divided by the elapsed wall time. Mutating inside `snapshot()` is
+   * deliberate and matches the Python — the alternative is a second timer per
+   * forward for a purely cosmetic number.
+   */
+  private sampleRates(): void {
+    const now = Date.now();
+    const elapsed = now - this.lastSampleAt;
+    if (elapsed < RATE_SAMPLE_MIN_MS) return;
+    this.rateIn = Math.max(0, ((this.bytesIn - this.lastBytesIn) * 1000) / elapsed);
+    this.rateOut = Math.max(0, ((this.bytesOut - this.lastBytesOut) * 1000) / elapsed);
+    this.lastSampleAt = now;
+    this.lastBytesIn = this.bytesIn;
+    this.lastBytesOut = this.bytesOut;
   }
 
   private isActive(): boolean {
@@ -96,6 +197,8 @@ export class Forwarder {
       this.server = null;
     }
     if (this.spec.kind === 'remote') {
+      this.unregisterRemote?.();
+      this.unregisterRemote = null;
       const client = this.client();
       if (client) {
         await new Promise<void>((resolve) =>
@@ -110,12 +213,21 @@ export class Forwarder {
   // --- local -L -----------------------------------------------------------
   private startLocal(): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
+      let settled = false;
       const server = createServer((socket) => this.pipeForwardOut(socket));
-      server.on('error', () => resolve(false));
+      server.on('error', () => {
+        if (!settled) {
+          settled = true;
+          resolve(false);
+        }
+      });
       server.listen(this.spec.listenPort, this.spec.listenHost, () => {
         this.server = server;
         this.emit();
-        resolve(true);
+        if (!settled) {
+          settled = true;
+          resolve(true);
+        }
       });
     });
   }
@@ -123,12 +235,23 @@ export class Forwarder {
   // --- dynamic -D (SOCKS5) ------------------------------------------------
   private startDynamic(): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
-      const server = createServer((socket) => handleSocks5(socket, (host, port) => this.forwardOutTo(socket, host, port)));
-      server.on('error', () => resolve(false));
+      let settled = false;
+      const server = createServer((socket) =>
+        handleSocks5(socket, (host, port) => this.forwardOutTo(socket, host, port)),
+      );
+      server.on('error', () => {
+        if (!settled) {
+          settled = true;
+          resolve(false);
+        }
+      });
       server.listen(this.spec.listenPort, this.spec.listenHost, () => {
         this.server = server;
         this.emit();
-        resolve(true);
+        if (!settled) {
+          settled = true;
+          resolve(true);
+        }
       });
     });
   }
@@ -144,40 +267,32 @@ export class Forwarder {
           return;
         }
         this.remoteAccepted = true;
-        // Accept incoming channels for the remote forward. The ssh2 client
-        // emits an untyped 'tcp' event for forwarded connections; cast to a
-        // minimal handler shape (@types/ssh2 does not model this event).
-        (client as unknown as {
-          on(
-            event: 'tcp',
-            listener: (
-              info: { destIP: string; destPort: number; srcIP: string; srcPort: number },
-              accept: () => Socket,
-              deny: () => void,
-            ) => void,
-          ): unknown;
-        }).on('tcp', (info, accept, deny) => this.onRemoteConnection(info, accept, deny));
+        // ONE 'tcp' listener per ssh2 Client, shared by every -R forward on
+        // that client and dispatched by bind address. Registering per forward
+        // (as this used to) meant N remote forwards each handled every single
+        // inbound channel N times.
+        this.unregisterRemote = RemoteChannelDispatcher.for(client).register(
+          this.spec.destHost,
+          this.spec.destPort,
+          (accept) => this.onRemoteConnection(accept),
+        );
         this.emit();
         resolve(true);
       });
     });
   }
 
-  private onRemoteConnection(
-    info: { destIP: string; destPort: number; srcIP: string; srcPort: number },
-    accept: () => Socket,
-    deny: () => void,
-  ): void {
-    void info;
+  private onRemoteConnection(accept: () => Socket): void {
     const remote = accept();
-    // For a basic -R without a local listener, just keep the channel open and
-    // count bytes. (A full local-destination mapping is a future refinement.)
+    // For a basic -R without a local destination we keep the channel open and
+    // count bytes. Data arriving from the server is inbound (download).
     remote.on('data', (d: Buffer) => {
       this.bytesIn += d.length;
     });
+    remote.on('error', () => remote.destroy());
     remote.on('close', () => this.emit());
+    this.armIdleReaper(remote, null);
     this.emit();
-    void deny;
   }
 
   // --- shared helpers -----------------------------------------------------
@@ -200,25 +315,138 @@ export class Forwarder {
       socket.destroy();
       return;
     }
-    client.forwardOut(socket.remoteAddress ?? '127.0.0.1', socket.remotePort ?? 0, destHost, destPort, (err, channel) => {
-      if (err || !channel) {
-        socket.destroy();
+    client.forwardOut(
+      socket.remoteAddress ?? '127.0.0.1',
+      socket.remotePort ?? 0,
+      destHost,
+      destPort,
+      (err, channel) => {
+        if (err || !channel) {
+          socket.destroy();
+          return;
+        }
+        socket.pipe(channel);
+        channel.pipe(socket);
+        // DIRECTION: the local socket carries what the user's client SENDS
+        // (upload = bytesOut); the SSH channel carries what the remote service
+        // REPLIES (download = bytesIn). These were previously swapped, so the
+        // panel's "In" column showed upload.
+        socket.on('data', (buf: Buffer) => {
+          this.bytesOut += buf.length;
+        });
+        channel.on('data', (buf: Buffer) => {
+          this.bytesIn += buf.length;
+        });
+        const done = (): void => this.emit();
+        socket.on('error', () => socket.destroy());
+        channel.on('error', () => socket.destroy());
+        socket.on('close', done);
+        channel.on('close', done);
+        this.armIdleReaper(socket, channel);
+      },
+    );
+  }
+
+  /**
+   * Tear a proxied connection down once it has been silent in BOTH directions
+   * for `idleTimeoutMs`. Any data on either side rearms the timer.
+   */
+  private armIdleReaper(
+    socket: Socket,
+    channel: { destroy: () => void; on: (e: 'data' | 'close', cb: () => void) => unknown } | null,
+  ): void {
+    if (this.idleTimeoutMs <= 0) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const kill = (): void => {
+      socket.destroy();
+      channel?.destroy();
+    };
+    const rearm = (): void => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(kill, this.idleTimeoutMs);
+      timer.unref?.();
+    };
+    const clear = (): void => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+    socket.on('data', rearm);
+    socket.on('close', clear);
+    channel?.on('data', rearm);
+    channel?.on('close', clear);
+    rearm();
+  }
+}
+
+/**
+ * ssh2 emits a single untyped `'tcp'` event per Client for every inbound
+ * channel of every active `forwardIn`, so the listener must live on the
+ * client, not on the forward. This routes each channel to the one forward
+ * that asked for that bind address, and denies anything unclaimed.
+ *
+ * One instance per Client, held in a WeakMap so a closed connection's entry
+ * is collectable.
+ */
+class RemoteChannelDispatcher {
+  private static readonly instances = new WeakMap<Client, RemoteChannelDispatcher>();
+
+  private readonly handlers = new Map<string, (accept: () => Socket) => void>();
+
+  private constructor(client: Client) {
+    // @types/ssh2 does not model the 'tcp' event; narrow to the shape we use.
+    (
+      client as unknown as {
+        on(
+          event: 'tcp',
+          listener: (
+            info: { destIP: string; destPort: number; srcIP: string; srcPort: number },
+            accept: () => Socket,
+            deny: () => void,
+          ) => void,
+        ): unknown;
+      }
+    ).on('tcp', (info, accept, deny) => {
+      const handler =
+        this.handlers.get(bindKey(info.destIP, info.destPort)) ??
+        // OpenSSH may report a wildcard bind back as '' or '0.0.0.0'; accept
+        // any registration on the same port when the address does not match.
+        this.handlers.get(bindKey('*', info.destPort));
+      if (!handler) {
+        deny();
         return;
       }
-      socket.pipe(channel);
-      channel.pipe(socket);
-      const count = (buf: Buffer) => {
-        this.bytesIn += buf.length;
-      };
-      socket.on('data', count);
-      channel.on('data', (buf: Buffer) => {
-        this.bytesOut += buf.length;
-      });
-      const done = () => this.emit();
-      socket.on('close', done);
-      channel.on('close', done);
+      handler(accept);
     });
   }
+
+  static for(client: Client): RemoteChannelDispatcher {
+    let instance = RemoteChannelDispatcher.instances.get(client);
+    if (!instance) {
+      instance = new RemoteChannelDispatcher(client);
+      RemoteChannelDispatcher.instances.set(client, instance);
+    }
+    return instance;
+  }
+
+  /** Register a handler for one bind address. Returns an unregister function. */
+  register(
+    bindAddress: string,
+    bindPort: number,
+    handler: (accept: () => Socket) => void,
+  ): () => void {
+    const key = bindKey(bindAddress, bindPort);
+    const wildcard = bindKey('*', bindPort);
+    this.handlers.set(key, handler);
+    this.handlers.set(wildcard, handler);
+    return () => {
+      if (this.handlers.get(key) === handler) this.handlers.delete(key);
+      if (this.handlers.get(wildcard) === handler) this.handlers.delete(wildcard);
+    };
+  }
+}
+
+function bindKey(address: string, port: number): string {
+  return `${address}:${port}`;
 }
 
 /**
@@ -226,10 +454,7 @@ export class Forwarder {
  * destination, then hand the socket + target to `connect` for the caller to
  * open a `forwardOut`. Used by the dynamic (-D) forwarder.
  */
-function handleSocks5(
-  socket: Socket,
-  connect: (host: string, port: number) => void,
-): void {
+function handleSocks5(socket: Socket, connect: (host: string, port: number) => void): void {
   socket.once('data', (buf: Buffer) => {
     // Greeting: ver, nmethods, methods... (we only support no-auth = 0x00).
     if (buf.length < 2 || buf[0] !== 0x05) {

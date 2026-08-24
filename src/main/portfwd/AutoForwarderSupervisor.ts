@@ -1,118 +1,85 @@
-import type { SshService } from '../ssh/SshService.js';
-import type { ConnectionRegistry } from '../ssh/ConnectionRegistry.js';
-import type { ConnectOptions } from '../ssh/SshService.js';
-import { AutoForwarder, type AutoForwardConfig, type ForwardState } from './AutoForwarder.js';
-
 /**
- * Owns an AutoForwarder across transport drops. When the underlying SSH
- * connection is lost, the supervisor reconnects (exponential backoff
- * 5s->60s, capped) and lets the new forwarder's scan loop rediscover and
- * re-open forwards based on still-listening remote ports — matching the
- * Android AutoForwarderSupervisor contract.
+ * Reconnect backoff timing for the port-forward panel.
  *
- * Manual toggles persist within a session via the supervisor's remap config.
+ * This file previously held an `AutoForwarderSupervisor` that called
+ * `ssh.connect()` itself. That contradicted the single-connection decision
+ * this app is built on — one auth, one keepalive, one TOFU prompt, one
+ * reconnect FSM per host — and it was never wired to anything. Connection
+ * lifecycle belongs to `SshService`; `ForwardService` subscribes to its
+ * `onCloseConnection` and suspends/evicts the forwarder from there.
+ *
+ * What remains is the part that was genuinely worth keeping: the schedule.
+ * The Python has two contradictory implementations of it — the CLI does
+ * 5 -> 10 -> 20 -> 40 -> 60s exponential and retries forever
+ * (`forwarder.py:1141`), while the TUI does a flat 5s countdown with no
+ * backoff at all (`dashboard.py:1036-1038`), hammering a down host every 5
+ * seconds. We keep the CLI's exponential curve and, unlike either, stop after
+ * `maxAttempts` so a permanently dead host does not spin forever.
+ *
+ * This is a pure value object: no timers, no I/O, no SSH. The countdown
+ * itself belongs in the renderer, which is handed `retryAtEpochMs` and ticks
+ * the number down.
  */
+
+/** Connection states the port panel can render. */
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'lost';
 
-export interface SupervisorEvents {
-  state: (s: ConnectionState) => void;
-  forwards: (states: ForwardState[]) => void;
-  error: (message: string) => void;
+export const INITIAL_DELAY_MS = 5_000;
+export const MAX_DELAY_MS = 60_000;
+export const MAX_ATTEMPTS = 10;
+
+export interface ReconnectBackoffOptions {
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+  maxAttempts?: number;
 }
 
-const INITIAL_DELAY_MS = 5_000;
-const MAX_DELAY_MS = 60_000;
-const MAX_ATTEMPTS = 10;
+/** One scheduled retry, or `null` when the budget is spent. */
+export interface RetryPlan {
+  /** 1-based attempt number this plan describes. */
+  attempt: number;
+  /** Milliseconds to wait before attempting. */
+  delayMs: number;
+  /** Absolute time to retry, for a renderer-side countdown. */
+  retryAtEpochMs: number;
+}
 
-export class AutoForwarderSupervisor {
-  private state: ConnectionState = 'idle';
+export class ReconnectBackoff {
   private attempt = 0;
-  private forwarder: AutoForwarder | null = null;
-  private connectionId: string | null = null;
-  private stopped = false;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly initialDelayMs: number;
+  private readonly maxDelayMs: number;
+  private readonly maxAttempts: number;
 
-  constructor(
-    private readonly ssh: SshService,
-    private readonly registry: ConnectionRegistry,
-    private readonly connectOpts: ConnectOptions,
-    private readonly config: AutoForwardConfig,
-    private readonly remappings: Record<number, number>,
-    private readonly handlers: {
-      onState?: (s: ConnectionState) => void;
-      onForwards?: (states: ForwardState[]) => void;
-      onError?: (message: string) => void;
-    } = {},
-  ) {}
-
-  async start(): Promise<void> {
-    this.stopped = false;
-    await this.connectAndRun();
+  constructor(options: ReconnectBackoffOptions = {}) {
+    this.initialDelayMs = options.initialDelayMs ?? INITIAL_DELAY_MS;
+    this.maxDelayMs = options.maxDelayMs ?? MAX_DELAY_MS;
+    this.maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
   }
 
-  async stop(): Promise<void> {
-    this.stopped = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.forwarder) {
-      this.forwarder.stop();
-      this.forwarder = null;
-    }
-    if (this.connectionId) {
-      this.ssh.close(this.connectionId);
-      this.connectionId = null;
-    }
-    this.setState('idle');
+  /** Attempts consumed so far. */
+  get attempts(): number {
+    return this.attempt;
   }
 
-  /** Force an immediate reconnect (wakes the backoff sleep). */
-  async reconnectNow(): Promise<void> {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.connectionId) {
-      this.ssh.close(this.connectionId);
-      this.connectionId = null;
-    }
-    if (this.forwarder) {
-      this.forwarder.stop();
-      this.forwarder = null;
-    }
-    await this.connectAndRun();
+  /** True once the retry budget is spent — the caller should go to 'lost'. */
+  get exhausted(): boolean {
+    return this.attempt >= this.maxAttempts;
   }
 
-  getForwarder(): AutoForwarder | null {
-    return this.forwarder;
+  /**
+   * Consume one attempt and describe when to retry, or null when the budget
+   * is spent. Delays double from `initialDelayMs`, capped at `maxDelayMs`:
+   * 5, 10, 20, 40, 60, 60, ... seconds.
+   */
+  next(now: number = Date.now()): RetryPlan | null {
+    if (this.exhausted) return null;
+    this.attempt += 1;
+    const delayMs = Math.min(this.initialDelayMs * 2 ** (this.attempt - 1), this.maxDelayMs);
+    return { attempt: this.attempt, delayMs, retryAtEpochMs: now + delayMs };
   }
 
-  private async connectAndRun(): Promise<void> {
-    if (this.stopped) return;
-    this.setState(this.attempt === 0 ? 'connecting' : 'reconnecting');
-    const result = await this.ssh.connect(this.connectOpts);
-    if (!result.ok || !result.connectionId) {
-      this.attempt++;
-      if (this.attempt > MAX_ATTEMPTS) {
-        this.setState('lost');
-        this.handlers.onError?.(result.error ?? 'connection lost');
-        return;
-      }
-      const delay = Math.min(INITIAL_DELAY_MS * 2 ** (this.attempt - 1), MAX_DELAY_MS);
-      this.reconnectTimer = setTimeout(() => void this.connectAndRun(), delay);
-      return;
-    }
-    this.connectionId = result.connectionId;
+  /** Call on a successful connect: the next failure starts at the bottom. */
+  reset(): void {
     this.attempt = 0;
-    this.setState('connected');
-    this.forwarder = new AutoForwarder(this.ssh, this.connectionId, this.registry, this.config, this.remappings);
-    this.forwarder.onStates((states) => this.handlers.onForwards?.(states));
-    this.forwarder.start();
-  }
-
-  private setState(s: ConnectionState): void {
-    this.state = s;
-    this.handlers.onState?.(s);
   }
 }
