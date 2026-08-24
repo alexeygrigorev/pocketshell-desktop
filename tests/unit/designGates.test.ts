@@ -29,10 +29,11 @@ function rel(file: string): string {
 }
 
 /**
- * Lines of `file` with every comment body blanked out — `//`, `/* *​/` and
- * `<!-- -->` alike. Newlines are preserved so reported line numbers still
- * point at the real line. Both gates exempt comments: a comment explaining
- * which glyph was removed must not itself trip the rule.
+ * Lines of `file` with every comment body blanked out: line comments,
+ * block comments, and HTML comments alike. Newlines are preserved so
+ * reported line numbers still point at the real line. Both gates exempt
+ * comments: a comment explaining which glyph was removed must not itself
+ * trip the rule.
  */
 function codeLines(source: string): { line: number; text: string }[] {
   const blank = (m: string): string => m.replace(/[^\n]/g, ' ');
