@@ -8,14 +8,21 @@
 //   - The terminal pane stays mounted (v-show, not v-if) across tab switches;
 //     unmounting it would close the SSH shell and drop the tmux attach.
 //   - `.session-body` is a column whose tab content flexes, leaving the bottom
-//     of this pane free for the prompt composer to dock into later.
+//     of this pane free for the prompt composer, which docks there.
+//
+// The composer is mounted ONCE here, outside `.tab-body` and never behind a
+// `v-if` on the tab, so the draft, caret and staged attachments survive a tab
+// switch. It is hidden (v-show) on Files, which has its own surface.
+// See docs/COMPOSER.md §11.
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useConnectionStore } from '../stores/connection';
 import { useSessionsStore } from '../stores/sessions';
 import TerminalView from '../components/TerminalView.vue';
+import PromptComposer from '../components/PromptComposer.vue';
 import ConversationView from './ConversationView.vue';
 import FilesView from './FilesView.vue';
+import { composerAgentKind } from '../../shared/composerSend';
 
 const route = useRoute();
 const router = useRouter();
@@ -33,6 +40,13 @@ const summary = computed(() => sessions.sessions.find((s) => s.name === sessionN
 /** Working directory of the session, used to seed the Files tab. */
 const sessionPath = computed(() => summary.value?.path ?? undefined);
 
+/**
+ * The engine recorded host-side for this session, narrowed to what the composer
+ * can route to. This is what lights up its slash-command catalog: an agent
+ * session gets the dropdown, a shell never does (docs/COMPOSER.md §18).
+ */
+const agentKind = computed(() => composerAgentKind(summary.value?.agentKind));
+
 const command = computed(() => {
   if (!sessionName.value) return undefined;
   return `tmux attach -t '${sessionName.value.replace(/'/g, "'\\''")}'`;
@@ -49,6 +63,15 @@ onMounted(async () => {
 /** Deselect: back to the right pane's empty state, panel untouched. */
 function onCloseSession(): void {
   router.push({ name: 'host-sessions', params: { name: route.params['name'] as string } });
+}
+
+/** Template ref on the terminal, so the composer's Escape ladder can un-focus. */
+const terminalRef = ref<InstanceType<typeof TerminalView> | null>(null);
+
+/** Escape rung 3: blur the draft and put the caret back in the pane. */
+function onFocusTerminal(): void {
+  if (tab.value !== 'terminal') tab.value = 'terminal';
+  terminalRef.value?.focus();
 }
 </script>
 
@@ -76,6 +99,7 @@ function onCloseSession(): void {
         <div v-show="tab === 'terminal'" class="terminal-area">
           <TerminalView
             v-if="connection.connectionId && sessionName"
+            ref="terminalRef"
             :connection-id="connection.connectionId"
             :command="command"
             :session-key="sessionName"
@@ -89,7 +113,19 @@ function onCloseSession(): void {
 
         <FilesView v-if="tab === 'files' && connection.connectionId" :start-path="sessionPath" />
       </div>
-      <!-- The prompt composer docks here, below the tab content. -->
+
+      <!-- The prompt composer docks here, below the tab content. Mounted once,
+           v-show (never v-if) so a tab switch cannot cost the user a draft. -->
+      <PromptComposer
+        v-if="connection.connectionId && sessionName"
+        v-show="tab !== 'files'"
+        :connection-id="connection.connectionId"
+        :session-name="sessionName"
+        :agent-kind="agentKind"
+        :viewing-conversation="tab === 'conversation'"
+        :connected="connection.state === 'connected'"
+        @focus-terminal="onFocusTerminal"
+      />
     </div>
   </div>
 </template>

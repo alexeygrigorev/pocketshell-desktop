@@ -15,8 +15,15 @@ import { Terminal, type IDisposable, type ITerminalOptions } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api } from '../ipc';
+import { useShellsStore } from '../stores/shells';
 import type { ConnectionId, ShellId } from '../../shared/types';
 import '@xterm/xterm/css/xterm.css';
+
+// The PTY this component owns is published to the shells store so other
+// surfaces — the prompt composer, first of all — can write to the same pane.
+// Ownership of the open/close lifecycle deliberately stays here; see the header
+// comment of stores/shells.ts for why.
+const shells = useShellsStore();
 
 const props = defineProps<{
   connectionId: ConnectionId;
@@ -104,6 +111,8 @@ const containerEl = ref<HTMLDivElement | null>(null);
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let shellId: ShellId | null = null;
+/** The key `shellId` is currently published under, so a re-open can retract it. */
+let registeredKey: string | null = null;
 let unsubscribeData: (() => void) | null = null;
 let unsubscribeExit: (() => void) | null = null;
 /**
@@ -114,6 +123,16 @@ let unsubscribeExit: (() => void) | null = null;
  * sent to the PTY N times, which is what leaked `0;276;0c` into the output.
  */
 let termDisposables: IDisposable[] = [];
+/**
+ * Refits when the CONTAINER changes size, not only when the window does. The
+ * prompt composer docks below this pane and grows/shrinks/hides underneath it,
+ * which resizes the terminal without any window resize event — without this the
+ * xterm canvas keeps its old row count and either clips the tmux status bar or
+ * leaves dead black space below it.
+ */
+let resizeObserver: ResizeObserver | null = null;
+/** Coalesces a burst of resize callbacks into one fit per frame. */
+let fitFrame = 0;
 /** True between mousedown inside the terminal and the mouse-up that ends it. */
 let selecting = false;
 
@@ -139,6 +158,9 @@ async function openShell(): Promise<void> {
       term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n');
     }
   });
+  // Publish it before the first byte can be typed at it.
+  registeredKey = props.sessionKey ?? '';
+  shells.register(registeredKey, shellId);
   // Push the current geometry at the freshly-opened shell: the bound onResize
   // only fires when xterm's own dimensions change, which a re-open does not do.
   void api.shell.resize(shellId, cols, rows);
@@ -153,6 +175,10 @@ function closeShell(): void {
   if (unsubscribeExit) {
     unsubscribeExit();
     unsubscribeExit = null;
+  }
+  if (registeredKey !== null) {
+    shells.unregister(registeredKey, shellId ?? undefined);
+    registeredKey = null;
   }
   if (shellId) {
     void api.shell.close(shellId);
@@ -262,10 +288,30 @@ onMounted(async () => {
 
   // Re-fit on window resize.
   window.addEventListener('resize', onWindowResize);
+  if (typeof ResizeObserver !== 'undefined' && containerEl.value) {
+    resizeObserver = new ResizeObserver(scheduleFit);
+    resizeObserver.observe(containerEl.value);
+  }
 });
 
 function onWindowResize(): void {
-  fitAddon?.fit();
+  scheduleFit();
+}
+
+/**
+ * Fit once per animation frame. `fit()` writes to xterm's dimensions, which the
+ * ResizeObserver can observe again — coalescing keeps that from looping and
+ * keeps a drag-resize of the composer cheap.
+ */
+function scheduleFit(): void {
+  if (fitFrame) return;
+  fitFrame = requestAnimationFrame(() => {
+    fitFrame = 0;
+    // Skip degenerate geometry: a v-show'd pane measures 0 and fit() would
+    // then push a 1x1 PTY at the remote.
+    if (!containerEl.value?.clientHeight || !containerEl.value.clientWidth) return;
+    fitAddon?.fit();
+  });
 }
 
 onBeforeUnmount(() => {
@@ -287,6 +333,13 @@ watch(
     void reopen();
   },
 );
+
+/**
+ * Lets the workspace hand focus back to the pane — the Escape ladder's third
+ * rung blurs the composer draft and returns the user to the terminal
+ * (docs/COMPOSER.md §12.2).
+ */
+defineExpose({ focus: (): void => term?.focus() });
 </script>
 
 <template>
