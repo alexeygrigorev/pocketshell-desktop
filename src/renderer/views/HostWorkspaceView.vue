@@ -1,34 +1,65 @@
 <script setup lang="ts">
-// Host workspace: the shell for a connected host. Tabs:
-//   - Sessions: session tree + attached terminal (Phase 1 core flow)
-//   - Files:    SFTP browser + editor (Phase 2)
-//   - Ports:    port-forward panel (Phase 3)
-//   - Conversation: agent conversation view (Phase 4)
-//   - Usage:    provider quota dashboard (Phase 4)
-import { computed, ref } from 'vue';
-import { useRouter } from 'vue-router';
+// Host workspace: the shell for a connected host.
+//
+// Layout: a persistent left panel holding the folder-grouped session list,
+// and a right pane showing the selected session's workspace. The panel never
+// goes away — picking a session only swaps what the right pane renders:
+//
+//   /host/:name                  -> SessionPlaceholderView (nothing selected)
+//   /host/:name/session/:session -> SessionWorkspaceView (Terminal/Conversation/Files)
+//
+// There is deliberately NO tab bar at this level. Sessions are the default
+// view of a host, and tabs belong to the selected session. The two host-scoped
+// panels — port forwarding and provider usage — are header buttons that open
+// an overlay, because neither is a property of a single session.
+import { computed, onBeforeUnmount, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useConnectionStore } from '../stores/connection';
+import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
-import TerminalView from '../components/TerminalView.vue';
-import FilesView from './FilesView.vue';
 import PortPanelView from './PortPanelView.vue';
-import ConversationView from './ConversationView.vue';
 import UsageView from './UsageView.vue';
 import type { SessionSummary } from '../../shared/types';
 
+const route = useRoute();
 const router = useRouter();
 const connection = useConnectionStore();
-const selected = ref<SessionSummary | null>(null);
-const tab = ref<'sessions' | 'files' | 'ports' | 'conversation' | 'usage'>('sessions');
 
-const command = computed(() => {
-  if (!selected.value) return undefined;
-  return `tmux attach -t '${selected.value.name.replace(/'/g, "'\\''")}'`;
-});
+/** Which host-level panel is open as an overlay, if any. */
+const panel = ref<'ports' | 'usage' | null>(null);
 
-function onAttach(session: SessionSummary): void {
-  selected.value = session;
+/** Session-panel geometry. Collapsed hides it entirely; width is drag-resized. */
+const panelCollapsed = ref(false);
+const panelWidth = ref(280);
+const MIN_PANEL_WIDTH = 200;
+const MAX_PANEL_WIDTH = 560;
+
+/** Session named by the route, so the panel can highlight the current row. */
+const activeSession = computed(() => (route.params['session'] as string | undefined) ?? null);
+
+function onSelectSession(session: SessionSummary): void {
+  if (session.name === activeSession.value) return;
+  router.push({
+    name: 'session',
+    params: { name: route.params['name'] as string, session: session.name },
+  });
 }
+
+function onDragStart(): void {
+  document.addEventListener('mousemove', onDragMove);
+  document.addEventListener('mouseup', onDragEnd);
+}
+
+function onDragMove(e: MouseEvent): void {
+  panelWidth.value = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, e.clientX));
+}
+
+function onDragEnd(): void {
+  document.removeEventListener('mousemove', onDragMove);
+  document.removeEventListener('mouseup', onDragEnd);
+}
+
+onBeforeUnmount(onDragEnd);
 
 async function onDisconnect(): Promise<void> {
   await connection.disconnect();
@@ -44,6 +75,13 @@ function onBack(): void {
   <div class="workspace">
     <header class="topbar">
       <button class="icon-btn" @click="onBack" title="Back to hosts">←</button>
+      <button
+        class="icon-btn"
+        :title="panelCollapsed ? 'Show session panel' : 'Hide session panel'"
+        @click="panelCollapsed = !panelCollapsed"
+      >
+        ☰
+      </button>
       <span class="host-label">
         {{ connection.activeHost?.name ?? 'host' }}
         <span class="muted">·</span>
@@ -57,56 +95,44 @@ function onBack(): void {
           tmux {{ connection.bootstrap.tmux.installed ? '✓' : '✗' }}
         </span>
       </span>
-      <button class="icon-btn disconnect" @click="onDisconnect">disconnect</button>
+      <div class="host-actions">
+        <button class="icon-btn" @click="panel = 'ports'" title="Port forwarding">Ports</button>
+        <button class="icon-btn" @click="panel = 'usage'" title="Provider usage">Usage</button>
+        <button class="icon-btn disconnect" @click="onDisconnect">disconnect</button>
+      </div>
     </header>
 
-    <nav class="tabs">
-      <button :class="['tab', { active: tab === 'sessions' }]" @click="tab = 'sessions'">
-        Sessions
-      </button>
-      <button :class="['tab', { active: tab === 'files' }]" @click="tab = 'files'">
-        Files
-      </button>
-      <button :class="['tab', { active: tab === 'ports' }]" @click="tab = 'ports'">
-        Ports
-      </button>
-      <button :class="['tab', { active: tab === 'conversation' }]" @click="tab = 'conversation'">
-        Conversation
-      </button>
-      <button :class="['tab', { active: tab === 'usage' }]" @click="tab = 'usage'">
-        Usage
-      </button>
-    </nav>
-
     <div class="body">
-      <!-- Sessions tab: tree + terminal -->
-      <template v-if="tab === 'sessions'">
-        <SessionTree @attach="onAttach" />
-        <div class="terminal-area">
-          <TerminalView
-            v-if="selected && connection.connectionId"
-            :connection-id="connection.connectionId"
-            :command="command"
-            :session-key="selected.name"
-          />
-          <div v-else class="placeholder">
-            <p class="muted">select a session to attach</p>
-          </div>
-        </div>
-      </template>
+      <!-- Persistent session panel: always mounted, never navigated away from. -->
+      <aside
+        v-show="!panelCollapsed"
+        class="session-panel"
+        :style="{ width: `${panelWidth}px` }"
+      >
+        <SessionTree :active-session="activeSession" @select="onSelectSession" />
+      </aside>
+      <div
+        v-show="!panelCollapsed"
+        class="splitter"
+        role="separator"
+        aria-orientation="vertical"
+        title="Drag to resize"
+        @mousedown.prevent="onDragStart"
+      />
 
-      <!-- Files tab: SFTP browser + editor -->
-      <FilesView v-else-if="tab === 'files' && connection.connectionId" />
-
-      <!-- Ports tab: port-forward panel -->
-      <PortPanelView v-else-if="tab === 'ports' && connection.connectionId" />
-
-      <!-- Conversation tab: agent conversation view -->
-      <ConversationView v-else-if="tab === 'conversation' && connection.connectionId" />
-
-      <!-- Usage tab: provider quota dashboard -->
-      <UsageView v-else-if="tab === 'usage' && connection.connectionId" />
+      <!-- Right pane: the selected session's workspace, or the empty state. -->
+      <main class="session-pane">
+        <router-view />
+      </main>
     </div>
+
+    <!-- Host-level panels: overlays, never peers of the session tabs. -->
+    <OverlayPanel v-if="panel === 'ports'" title="Port forwarding" @close="panel = null">
+      <PortPanelView v-if="connection.connectionId" />
+    </OverlayPanel>
+    <OverlayPanel v-if="panel === 'usage'" title="Provider usage" @close="panel = null">
+      <UsageView v-if="connection.connectionId" />
+    </OverlayPanel>
   </div>
 </template>
 
@@ -144,44 +170,37 @@ function onBack(): void {
 .chip.warn {
   color: #f9e2af;
 }
-.tabs {
+.host-actions {
   display: flex;
-  gap: 0.25rem;
-  padding: 0 1rem;
-  border-bottom: 1px solid var(--border);
-  background: #181825;
-}
-.tab {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--muted);
-  padding: 0.5rem 0.75rem;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.tab:hover {
-  color: var(--fg);
-}
-.tab.active {
-  color: var(--fg);
-  border-bottom-color: var(--accent);
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
 }
 .body {
   display: flex;
   flex: 1;
   min-height: 0;
 }
-.terminal-area {
+.session-panel {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.splitter {
+  flex: 0 0 auto;
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border);
+}
+.splitter:hover {
+  background: var(--accent);
+}
+.session-pane {
   flex: 1;
   min-width: 0;
   display: flex;
-}
-.placeholder {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
 }
 .muted {
   color: var(--muted);
@@ -194,8 +213,5 @@ function onBack(): void {
   padding: 0.2rem 0.6rem;
   cursor: pointer;
   font-size: 0.85rem;
-}
-.disconnect {
-  margin-left: auto;
 }
 </style>

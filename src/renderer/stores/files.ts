@@ -21,9 +21,10 @@ export const useFilesStore = defineStore('files', () => {
   const dirty = ref(false);
   const saving = ref(false);
 
-  async function open(connectionId: ConnectionId): Promise<void> {
-    // Default to the testuser home; sftp realPath('.') resolves it.
-    cwd.value = await api.sftp.realPath(connectionId, '.');
+  async function open(connectionId: ConnectionId, startPath?: string): Promise<void> {
+    // Default to the login home; sftp realPath('.') resolves it. Callers with
+    // a better starting point (e.g. a session's working directory) pass one.
+    cwd.value = await api.sftp.realPath(connectionId, startPath || '.');
     await refresh(connectionId);
   }
 

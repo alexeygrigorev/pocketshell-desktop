@@ -7,12 +7,17 @@ import { useConnectionStore } from '../stores/connection';
 import { useAgentsStore } from '../stores/agents';
 import type { ConversationBlock } from '../../main/agents/conversation';
 
+const props = defineProps<{
+  /** Session whose log to preload — set when rendered inside a session workspace. */
+  sessionId?: string;
+}>();
+
 const connection = useConnectionStore();
 const agents = useAgentsStore();
 const connId = computed(() => connection.connectionId);
 
 const engine = ref<'claude' | 'codex' | 'opencode'>('claude');
-const sessionInput = ref('');
+const sessionInput = ref(props.sessionId ?? '');
 
 const expanded = ref<Set<string>>(new Set());
 function toggle(key: string): void {
@@ -32,6 +37,9 @@ async function onLoadResumable(): Promise<void> {
 
 onMounted(() => {
   void onLoadResumable();
+  // Scoped to a session: load its log straight away instead of making the
+  // user retype the id the route already knows.
+  if (sessionInput.value) void onLoad();
 });
 
 function blockKey(i: number, j: number): string {

@@ -11,12 +11,17 @@ import { useConnectionStore } from '../stores/connection';
 import { useFilesStore } from '../stores/files';
 import FileTree from '../components/FileTree.vue';
 
+const props = defineProps<{
+  /** Directory to open first (e.g. the selected session's cwd). Defaults to home. */
+  startPath?: string;
+}>();
+
 const connection = useConnectionStore();
 const files = useFilesStore();
 const connId = computed(() => connection.connectionId);
 
 onMounted(async () => {
-  if (connId.value) await files.open(connId.value);
+  if (connId.value) await files.open(connId.value, props.startPath);
 });
 
 onBeforeUnmount(() => {

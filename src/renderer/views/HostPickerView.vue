@@ -22,7 +22,8 @@ async function onConnect(host: HostEntry): Promise<void> {
   const ok = await connection.connect(host);
   connectingTo.value = null;
   if (ok) {
-    router.push({ name: 'host', params: { name: host.name } });
+    // Land on the host's default view: the session list.
+    router.push({ name: 'host-sessions', params: { name: host.name } });
   } else {
     connectError.value = connection.error ?? 'Connection failed';
   }
