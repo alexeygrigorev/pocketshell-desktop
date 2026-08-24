@@ -116,6 +116,10 @@ module.exports = tseslint.config(
       '*.config.ts',
       '*.config.js',
       'eslint.config.js',
+      // scripts/ holds standalone build tooling run by `node`, not by any
+      // bundler. .mjs so it can use ESM despite the package being CommonJS;
+      // ESLint infers sourceType: module from the extension.
+      'scripts/**/*.mjs',
     ],
     languageOptions: { globals: globals.node },
   },

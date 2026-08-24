@@ -1,5 +1,6 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { join, dirname } from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ConnectionRegistry } from './ssh/ConnectionRegistry.js';
 import { SshService } from './ssh/SshService.js';
@@ -30,6 +31,22 @@ ssh.onCloseConnection((id) => {
 
 let mainWindow: BrowserWindow | null = null;
 
+/**
+ * The window icon, or undefined when the generated file is not present.
+ *
+ * Only unpackaged runs need this. A packaged Windows build takes its icon
+ * from the .exe resource and a packaged macOS build from the bundle, both
+ * written by electron-builder from build/icon.* — so `build/` is deliberately
+ * absent from the `files` allow-list in electron-builder.yml and this lookup
+ * simply misses there. It matters for `npm run dev` and for the desktop
+ * shortcut (scripts/install-desktop-shortcut.ps1), which launch Electron
+ * directly and would otherwise show the default Electron atom in the taskbar.
+ */
+function windowIcon(): string | undefined {
+  const icon = join(__dir, '../../build/icon.png');
+  return existsSync(icon) ? icon : undefined;
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -39,6 +56,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'PocketShell',
+    icon: windowIcon(),
     webPreferences: {
       preload: join(__dir, '../preload/index.js'),
       contextIsolation: true,
