@@ -27,18 +27,76 @@ const props = defineProps<{
 }>();
 
 /**
- * Terminal look & feel. Kept as a standalone object so the font/theme can be
- * swapped wholesale without touching the wiring below.
+ * Terminal look & feel, transcribed from the user's Windows Terminal config.
+ * Kept as a standalone object so the font/theme can be swapped wholesale
+ * without touching the wiring below. See docs/DESIGN.md §3.
+ *
+ * Source: %LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\
+ *         LocalState\settings.json  (font face/size, bellStyle)
+ *   plus  Windows Terminal 1.24 defaults.json  (everything the user's file
+ *         leaves unset: the Campbell scheme, bar cursor, 8px padding,
+ *         9001-line scrollback, grayscale AA, word delimiters).
+ * The user's settings.json has "schemes": [] and no `colorScheme` key, so the
+ * built-in default scheme — Campbell — is what they actually see.
  */
 const TERMINAL_OPTIONS: ITerminalOptions = {
-  fontFamily: 'ui-monospace, "Cascadia Code", "Fira Code", monospace',
-  fontSize: 13,
+  // profiles.defaults.font.face = "Consolas"
+  fontFamily: 'Consolas, "Cascadia Mono", ui-monospace, monospace',
+  // profiles.defaults.font.size = 16. Windows Terminal reads that as points
+  // (16pt = 21.33px at 96 DPI), but the user chose to take the number
+  // literally as pixels here, so 16 it is. Mirrored by --term-font-size.
+  fontSize: 16,
+  fontWeight: 400,
+  fontWeightBold: 700,
+  // No `font.cellHeight` override, so Consolas' natural cell (~1.0em).
+  lineHeight: 1.0,
+  letterSpacing: 0,
+
+  // defaults.json: cursorShape "bar". Windows Terminal blinks by default.
+  cursorStyle: 'bar',
   cursorBlink: true,
-  scrollback: 5000,
+  cursorInactiveStyle: 'outline',
+
+  // defaults.json: historySize 9001, snapOnInput true.
+  scrollback: 9001,
+  scrollOnUserInput: true,
+
+  // defaults.json: wordDelimiters — makes double-click word selection split
+  // paths and punctuation exactly as it does in Windows Terminal.
+  wordSeparator: ' /\\()"\'-.,:;<>~!@#$%^&*|+=[]{}~?│',
+
+  drawBoldTextInBrightColors: true,
+  // Campbell's dim blue (2.38:1) and magenta (2.44:1) are unreadable on its
+  // own background; this lifts only those and leaves the rest untouched.
+  minimumContrastRatio: 3,
+
+  // Built-in "Campbell" scheme, verbatim. Windows Terminal names the
+  // magenta slot "purple"; xterm calls it `magenta`.
   theme: {
-    background: '#1e1e2e',
-    foreground: '#cdd6f4',
-    cursor: '#f5e0dc',
+    background: '#0C0C0C',
+    foreground: '#CCCCCC',
+    cursor: '#FFFFFF',
+    cursorAccent: '#0C0C0C',
+    // Campbell defines no selectionBackground; Windows Terminal falls back to
+    // white drawn at ~50% alpha. Kept translucent so text stays readable.
+    selectionBackground: 'rgba(255, 255, 255, 0.35)',
+    selectionInactiveBackground: 'rgba(255, 255, 255, 0.18)',
+    black: '#0C0C0C',
+    red: '#C50F1F',
+    green: '#13A10E',
+    yellow: '#C19C00',
+    blue: '#0037DA',
+    magenta: '#881798',
+    cyan: '#3A96DD',
+    white: '#CCCCCC',
+    brightBlack: '#767676',
+    brightRed: '#E74856',
+    brightGreen: '#16C60C',
+    brightYellow: '#F9F1A5',
+    brightBlue: '#3B78FF',
+    brightMagenta: '#B4009E',
+    brightCyan: '#61D6D6',
+    brightWhite: '#F2F2F2',
   },
 };
 
@@ -239,9 +297,12 @@ watch(
 .terminal {
   width: 100%;
   height: 100%;
-  padding: 6px;
-  background: #1e1e2e;
+  /* Windows Terminal defaults.json: padding "8, 8, 8, 8" */
+  padding: var(--term-padding);
+  background: var(--term-bg);
   overflow: hidden;
+  /* Windows Terminal defaults.json: antialiasingMode "grayscale" */
+  -webkit-font-smoothing: antialiased;
 }
 .terminal :deep(.xterm) {
   height: 100%;

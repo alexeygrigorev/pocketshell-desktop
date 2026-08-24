@@ -104,43 +104,60 @@ function onCloseSession(): void {
 .session-bar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.4rem 1rem;
+  gap: var(--sp-3);
+  height: var(--topbar-h);
+  flex: 0 0 auto;
+  padding: 0 var(--sp-3);
   border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 .session-name {
-  font-family: ui-monospace, monospace;
-  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: var(--fs-400);
+  line-height: var(--lh-400);
+  font-weight: var(--fw-semibold);
 }
 .session-path {
-  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-200);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .close {
   margin-left: auto;
+  flex-shrink: 0;
 }
+/* Underline tabs, not Android's filled segmented control: a solid cyan
+   segment at 13px in a 32px strip is heavy for a mouse UI. See DESIGN.md §5.4. */
 .tabs {
   display: flex;
-  gap: 0.25rem;
-  padding: 0 1rem;
+  gap: var(--sp-1);
+  height: var(--tabbar-h);
+  flex: 0 0 auto;
+  padding: 0 var(--sp-3);
   border-bottom: 1px solid var(--border);
 }
 .tab {
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  color: var(--muted);
-  padding: 0.5rem 0.75rem;
+  color: var(--fg-secondary);
+  padding: 0 var(--sp-3);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
+  font-weight: var(--fw-medium);
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
 }
 .tab:hover {
   color: var(--fg);
 }
 .tab.active {
   color: var(--fg);
+  font-weight: var(--fw-semibold);
   border-bottom-color: var(--accent);
 }
 .session-body {
@@ -158,17 +175,5 @@ function onCloseSession(): void {
   flex: 1;
   min-width: 0;
   display: flex;
-}
-.muted {
-  color: var(--muted);
-}
-.icon-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg);
-  padding: 0.2rem 0.6rem;
-  cursor: pointer;
-  font-size: 0.85rem;
 }
 </style>

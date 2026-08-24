@@ -78,8 +78,11 @@ function onKeydown(e: KeyboardEvent): void {
 </template>
 
 <style scoped>
+/* `flex: 1` because the parent `.tab-body` is a flex row — see ConversationView. */
 .files-view {
   display: flex;
+  flex: 1;
+  min-width: 0;
   height: 100%;
 }
 .editor-area {
@@ -91,49 +94,60 @@ function onKeydown(e: KeyboardEvent): void {
 .editor-bar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.4rem 0.75rem;
+  gap: var(--sp-3);
+  height: var(--tabbar-h);
+  flex: 0 0 auto;
+  padding: 0 var(--sp-3);
   border-bottom: 1px solid var(--border);
-  background: #181825;
-  font-size: 0.85rem;
+  background: var(--surface);
+  font-size: var(--fs-200);
 }
 .path {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .dirty {
-  color: #f9e2af;
-  font-size: 0.75rem;
+  color: var(--warning);
+  font-size: var(--fs-100);
 }
 .save-btn {
+  height: var(--control-h-sm);
   background: var(--accent);
-  color: #1e1e2e;
+  color: var(--on-accent);
   border: none;
-  border-radius: 6px;
-  padding: 0.25rem 0.75rem;
-  font-weight: 600;
+  border-radius: var(--r-md);
+  padding: 0 var(--sp-3);
+  font-family: var(--font-ui);
+  font-weight: var(--fw-semibold);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--fs-200);
+  transition: background var(--dur-fast) var(--ease);
+}
+.save-btn:hover:not(:disabled) {
+  background: var(--accent-dim);
+  color: var(--fg);
 }
 .save-btn:disabled {
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
   cursor: default;
 }
+/* Deliberately the terminal's own background: an open file and the shell it
+   came from should read as the same surface. */
 .editor {
   flex: 1;
   width: 100%;
   border: none;
   outline: none;
   resize: none;
-  background: #1e1e2e;
-  color: #cdd6f4;
-  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
-  font-size: 13px;
+  background: var(--term-bg);
+  color: var(--term-fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-300);
   line-height: 1.5;
-  padding: 0.75rem 1rem;
+  padding: var(--sp-3) var(--sp-4);
   tab-size: 2;
 }
 .placeholder {
@@ -142,12 +156,10 @@ function onKeydown(e: KeyboardEvent): void {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.25rem;
-}
-.muted {
-  color: var(--muted);
+  gap: var(--sp-1);
 }
 .small {
-  font-size: 0.8rem;
+  font-size: var(--fs-200);
+  color: var(--fg-muted);
 }
 </style>

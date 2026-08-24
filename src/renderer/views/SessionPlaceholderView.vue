@@ -18,6 +18,6 @@
   justify-content: center;
 }
 .muted {
-  color: var(--muted);
+  font-size: var(--fs-300);
 }
 </style>

@@ -96,7 +96,7 @@ function fmtTime(epoch: number): string {
           :title="folder.path"
           @click="toggleFolder(folder.path)"
         >
-          <span class="disclosure">{{ isExpanded(folder.path) ? '▾' : '▸' }}</span>
+          <span class="disclosure" :class="{ open: isExpanded(folder.path) }">▸</span>
           <span class="dot" :class="{ active: folder.active }" />
           <span class="folder-label">{{ folder.label }}</span>
           <span class="folder-count muted">· {{ sessionCountLabel(folder.sessions.length) }}</span>
@@ -142,48 +142,61 @@ function fmtTime(epoch: number): string {
   flex-direction: column;
   height: 100%;
   min-width: 240px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
 }
 .tree-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1rem;
+  height: var(--topbar-h);
+  padding: 0 var(--sp-3);
   border-bottom: 1px solid var(--border);
 }
 .title {
-  font-size: 0.75rem;
+  font-size: var(--fs-100);
+  font-weight: var(--fw-semibold);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--muted);
+  color: var(--fg-muted);
 }
 .folder-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0.5rem 0;
+  padding: var(--sp-2) 0;
 }
 .folder {
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--sp-1);
 }
 .folder-header {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--sp-2);
   width: 100%;
+  height: 26px;
   background: transparent;
   border: none;
   color: var(--fg);
   text-align: left;
-  padding: 0.35rem 1rem;
+  padding: 0 var(--sp-3) 0 var(--sp-2);
   cursor: pointer;
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-family: var(--font-ui);
+  font-size: var(--fs-400);
+  line-height: var(--lh-400);
+  font-weight: var(--fw-semibold);
 }
 .folder-header:hover {
-  background: rgba(137, 180, 250, 0.08);
+  background: var(--state-hover);
 }
 .disclosure {
-  width: 0.8rem;
-  color: var(--muted);
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  font-size: var(--fs-200);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.disclosure.open {
+  transform: rotate(90deg);
 }
 .folder-label {
   overflow: hidden;
@@ -191,8 +204,9 @@ function fmtTime(epoch: number): string {
   white-space: nowrap;
 }
 .folder-count {
-  font-weight: 400;
-  font-size: 0.75rem;
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-100);
+  white-space: nowrap;
 }
 .session-list {
   list-style: none;
@@ -202,83 +216,79 @@ function fmtTime(epoch: number): string {
 .session-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 1rem 0.4rem 2rem;
+  gap: var(--sp-2);
+  min-height: var(--row-h);
+  /* 2px of the left inset is the selection rail's slot, so a row does not
+     shift horizontally when it becomes current. */
+  padding: var(--row-pad-y) var(--row-pad-x) var(--row-pad-y) var(--sp-4);
+  border-left: 2px solid transparent;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--fs-300);
+  line-height: var(--lh-300);
 }
 .session-row:hover {
-  background: rgba(137, 180, 250, 0.08);
+  background: var(--state-hover);
 }
+/* Selection is accent-tinted and railed; hover is a neutral lift. The two
+   used to be the same cyan at two alphas, which read as one state. */
 .session-row.current {
-  background: rgba(137, 180, 250, 0.14);
+  background: var(--state-selected);
+  border-left-color: var(--accent);
 }
 .dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--muted);
+  background: var(--fg-muted);
   flex-shrink: 0;
 }
 .dot.active {
-  background: #a6e3a1;
+  background: var(--success);
 }
 .session-name {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
+  color: var(--fg);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tag {
-  font-size: 0.7rem;
-  color: var(--muted);
+  font-size: var(--fs-100);
+  color: var(--fg-secondary);
   border: 1px solid var(--border);
-  padding: 0 0.3rem;
-  border-radius: 3px;
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
 }
 .session-time {
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-.empty {
-  padding: 1rem;
-  font-style: italic;
+  font-size: var(--fs-100);
+  color: var(--fg-secondary);
+  text-align: right;
+  white-space: nowrap;
 }
 .new-session {
   display: flex;
-  gap: 0.4rem;
-  padding: 0.75rem 1rem;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
   border-top: 1px solid var(--border);
 }
 .new-session input {
   flex: 1;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.35rem 0.5rem;
+  min-width: 0;
+  height: var(--control-h);
+  background: var(--surface-2);
+  /* WCAG 1.4.11: --border (1.49:1) cannot be the sole boundary of a control. */
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 0 var(--sp-2);
   color: var(--fg);
-  font-size: 0.85rem;
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
 }
-.icon-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg);
-  padding: 0.2rem 0.6rem;
-  cursor: pointer;
-  font-size: 0.95rem;
-}
-.icon-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.muted {
-  color: var(--muted);
+.new-session input::placeholder {
+  color: var(--fg-muted);
 }
 .error {
-  color: var(--error);
-  padding: 0 1rem;
-  font-size: 0.8rem;
+  padding: 0 var(--sp-3) var(--sp-2);
 }
 </style>

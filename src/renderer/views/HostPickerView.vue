@@ -34,7 +34,6 @@ async function onConnect(host: HostEntry): Promise<void> {
   <div class="picker">
     <header>
       <h1>PocketShell</h1>
-      <span class="badge">select a host</span>
     </header>
     <main>
       <p v-if="!connection.hosts.length && !connection.error" class="muted">
@@ -47,12 +46,15 @@ async function onConnect(host: HostEntry): Promise<void> {
             :disabled="connectingTo !== null"
             @click="onConnect(host)"
           >
+            <!-- Mirrors the Android StatusDot: the desktop used to show
+                 connection state only as the word "connecting…". -->
+            <span class="status-dot" :class="{ connecting: connectingTo === host.name }" />
             <span class="host-name">{{ host.name }}</span>
             <span class="host-detail">
               {{ host.user || '(default user)' }}@{{ host.hostname }}:{{ host.port }}
             </span>
             <span v-if="connectingTo === host.name" class="muted">connecting…</span>
-            <span v-else class="muted">→</span>
+            <span v-else class="muted chevron">→</span>
           </button>
         </li>
       </ul>
@@ -65,74 +67,104 @@ async function onConnect(host: HostEntry): Promise<void> {
 .picker {
   max-width: 720px;
   margin: 0 auto;
-  padding: 2rem 1.5rem;
+  padding: var(--sp-6) var(--sp-5);
 }
 header {
   display: flex;
   align-items: baseline;
-  gap: 0.75rem;
+  gap: var(--sp-3);
   border-bottom: 1px solid var(--border);
-  padding-bottom: 1rem;
-  margin-bottom: 1.5rem;
+  padding-bottom: var(--sp-4);
+  margin-bottom: var(--sp-5);
 }
 h1 {
   margin: 0;
-  font-size: 1.5rem;
-}
-.badge {
-  color: var(--muted);
-  font-size: 0.8rem;
-  border: 1px solid var(--border);
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
+  font-size: var(--fs-600);
+  line-height: var(--lh-600);
+  font-weight: var(--fw-bold);
+  color: var(--fg);
 }
 .host-list {
   list-style: none;
   padding: 0;
   margin: 0;
 }
+/* The one place a taller, card-like row is right: this is a landing screen,
+   not a dense list. Matches the Android HostCard's 14dp/44dp geometry. */
 .host-row {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--sp-3);
+  min-height: 44px;
   text-align: left;
-  background: transparent;
+  background: var(--surface);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.75rem 1rem;
-  margin-bottom: 0.5rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-lg);
+  padding: var(--sp-2) var(--sp-4);
+  margin-bottom: var(--sp-2);
   cursor: pointer;
-  font-size: 0.95rem;
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
 }
+/* Hover is a neutral lift + a stronger edge. Accent is reserved for
+   *selected*, never for hover. */
 .host-row:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: rgba(137, 180, 250, 0.06);
+  background: var(--state-hover);
+  border-color: var(--border-strong);
 }
 .host-row:disabled {
-  opacity: 0.6;
+  opacity: var(--disabled-opacity);
   cursor: default;
 }
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+.status-dot.connecting {
+  background: var(--warning);
+  animation: pulse 1.2s var(--ease) infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.connecting {
+    animation: none;
+  }
+}
 .host-name {
-  font-weight: 600;
+  font-size: var(--fs-400);
+  line-height: var(--lh-400);
+  font-weight: var(--fw-semibold);
 }
 .host-detail {
-  color: var(--muted);
-  font-family: ui-monospace, monospace;
-  font-size: 0.85rem;
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-200);
   flex: 1;
 }
-.muted {
-  color: var(--muted);
+.chevron {
+  color: var(--fg-muted);
 }
 .error {
-  color: var(--error);
+  font-size: var(--fs-300);
 }
 code {
-  background: var(--border);
-  padding: 0.1rem 0.3rem;
-  border-radius: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
   font-size: 0.9em;
 }
 </style>

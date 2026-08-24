@@ -3,6 +3,11 @@
 // reachable from the host header but are not peer tabs of the session tabs.
 // Closes on backdrop click and on Escape; the content is supplied by the
 // default slot so the panels themselves stay plain views.
+//
+// The overlay chrome owns the heading. A hosted view that carries its own
+// title must suppress it when embedded (see UsageView's `embedded` prop),
+// otherwise the name appears twice — which it used to, see
+// docs/screenshots/07-usage-overlay.png.
 import { onBeforeUnmount, onMounted } from 'vue';
 
 defineProps<{ title: string }>();
@@ -34,7 +39,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 .overlay-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -45,22 +51,24 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   flex-direction: column;
   width: min(960px, 92vw);
   height: min(720px, 88vh);
-  background: var(--bg);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-xl);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
 .overlay-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 1rem;
+  padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--border);
 }
 .overlay-title {
   margin: 0;
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: var(--fs-500);
+  line-height: var(--lh-500);
+  font-weight: var(--fw-semibold);
 }
 .overlay-body {
   flex: 1;
@@ -71,14 +79,5 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 .overlay-body > :deep(*) {
   flex: 1;
   min-width: 0;
-}
-.icon-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg);
-  padding: 0.2rem 0.6rem;
-  cursor: pointer;
-  font-size: 0.85rem;
 }
 </style>

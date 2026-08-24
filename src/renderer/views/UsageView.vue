@@ -5,6 +5,15 @@ import { computed, onMounted } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useAgentsStore } from '../stores/agents';
 
+const props = defineProps<{
+  /**
+   * True when hosted inside OverlayPanel, which supplies the title itself.
+   * Without this the name renders twice — see docs/DESIGN.md §5.5 and
+   * docs/screenshots/07-usage-overlay.png.
+   */
+  embedded?: boolean;
+}>();
+
 const connection = useConnectionStore();
 const agents = useAgentsStore();
 const connId = computed(() => connection.connectionId);
@@ -14,10 +23,10 @@ onMounted(async () => {
 });
 
 function pctColor(p: number | undefined): string {
-  if (p === undefined) return 'var(--muted)';
-  if (p > 50) return '#a6e3a1';
-  if (p > 20) return '#f9e2af';
-  return '#f38ba8';
+  if (p === undefined) return 'var(--fg-muted)';
+  if (p > 50) return 'var(--success)';
+  if (p > 20) return 'var(--warning)';
+  return 'var(--error)';
 }
 function fmtReset(iso: string | null): string {
   if (!iso) return '—';
@@ -29,8 +38,8 @@ function fmtReset(iso: string | null): string {
 <template>
   <div class="usage">
     <div class="usage-bar">
-      <h2>Provider usage</h2>
-      <button class="icon-btn" @click="agents.loadUsage(connId!)">⟳</button>
+      <h2 v-if="!props.embedded">Provider usage</h2>
+      <button class="icon-btn" title="Refresh" @click="agents.loadUsage(connId!)">⟳</button>
     </div>
     <div class="cards">
       <div v-for="row in agents.usage" :key="row.provider" class="card">
@@ -73,96 +82,104 @@ function fmtReset(iso: string | null): string {
 
 <style scoped>
 .usage {
-  padding: 1rem 1.5rem;
+  padding: var(--sp-4) var(--sp-5);
   overflow-y: auto;
   height: 100%;
 }
 .usage-bar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
 }
 h2 {
   margin: 0;
-  font-size: 1.1rem;
-}
-.icon-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--fg);
-  cursor: pointer;
-  padding: 0.2rem 0.5rem;
+  font-size: var(--fs-500);
+  line-height: var(--lh-500);
+  font-weight: var(--fw-semibold);
 }
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 1rem;
+  gap: var(--sp-4);
 }
 .card {
-  background: #181825;
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem;
+  border-radius: var(--r-lg);
+  padding: var(--sp-4);
 }
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.75rem;
+  margin-bottom: var(--sp-3);
 }
 .provider {
-  font-weight: 600;
+  font-size: var(--fs-400);
+  line-height: var(--lh-400);
+  font-weight: var(--fw-semibold);
   text-transform: capitalize;
 }
 .status {
-  font-size: 0.7rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 3px;
-  border: 1px solid var(--border);
+  font-size: var(--fs-100);
+  line-height: var(--lh-100);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
 }
-.status.ok { color: #a6e3a1; }
-.status.limited { color: #f9e2af; }
-.status.blocked, .status.error { color: #f38ba8; }
+.status.ok {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.status.limited {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.status.blocked,
+.status.error {
+  color: var(--error);
+  background: var(--error-soft);
+}
 .meter-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.2rem;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
 }
 .meter-label {
   width: 5rem;
-  font-size: 0.75rem;
-  color: var(--muted);
+  font-size: var(--fs-100);
+  color: var(--fg-secondary);
 }
 .meter {
   flex: 1;
-  height: 8px;
-  background: #11111b;
-  border-radius: 4px;
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: var(--r-sm);
   overflow: hidden;
 }
 .meter-fill {
   height: 100%;
-  border-radius: 4px;
-  transition: width 0.3s;
+  border-radius: var(--r-sm);
+  transition: width var(--dur-normal) var(--ease);
 }
 .meter-pct {
   width: 3rem;
   text-align: right;
-  font-size: 0.8rem;
-  font-family: ui-monospace, monospace;
+  font-size: var(--fs-200);
+  font-family: var(--font-mono);
 }
 .reset {
-  font-size: 0.72rem;
-  margin: 0 0 0.5rem 5.5rem;
+  font-size: var(--fs-100);
+  margin: 0 0 var(--sp-2) 5.5rem;
 }
 .block-reason {
-  color: #f9e2af;
-  font-size: 0.8rem;
-  margin: 0.5rem 0 0;
+  color: var(--warning);
+  font-size: var(--fs-200);
+  margin: var(--sp-2) 0 0;
 }
-.muted { color: var(--muted); }
-.empty { font-style: italic; }
+.empty {
+  grid-column: 1 / -1;
+}
 </style>

@@ -109,64 +109,92 @@ function isText(b: ConversationBlock): boolean {
 </template>
 
 <style scoped>
+/* `flex: 1` because the parent `.tab-body` is a flex row: without it this
+   view is shrink-to-fit and its toolbar surface stops mid-pane. */
 .conversation {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-width: 0;
   height: 100%;
 }
 .bar {
   display: flex;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
-  background: #181825;
+  background: var(--surface);
 }
-.bar select, .session-input, .load-btn {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
+.bar select,
+.session-input,
+.load-btn {
+  height: var(--control-h);
+  background: var(--surface-2);
+  /* WCAG 1.4.11: controls need a >=3:1 boundary; --border is 1.49:1. */
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
   color: var(--fg);
-  padding: 0.25rem 0.5rem;
-  font-size: 0.85rem;
+  padding: 0 var(--sp-2);
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
 }
 .session-input {
   flex: 1;
-  font-family: ui-monospace, monospace;
+  min-width: 0;
+  font-family: var(--font-mono);
+}
+.session-input::placeholder {
+  color: var(--fg-muted);
 }
 .load-btn {
   background: var(--accent);
-  color: #1e1e2e;
-  border: none;
-  font-weight: 600;
+  color: var(--on-accent);
+  border-color: var(--accent);
+  padding: 0 var(--sp-3);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.load-btn:hover:not(:disabled) {
+  background: var(--accent-dim);
+  color: var(--fg);
+}
+.load-btn:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
 }
 .resumable {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 1rem;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
 .label {
-  font-size: 0.75rem;
+  font-size: var(--fs-100);
 }
 .resume-chip {
-  background: transparent;
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   color: var(--accent);
-  padding: 0.15rem 0.4rem;
-  font-size: 0.72rem;
+  padding: 2px var(--sp-1);
+  font-size: var(--fs-100);
   cursor: pointer;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
+  transition: background var(--dur-fast) var(--ease);
+}
+.resume-chip:hover {
+  background: var(--state-active);
 }
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 1rem;
+  padding: var(--sp-4);
 }
 .message {
-  margin-bottom: 1rem;
+  margin-bottom: var(--sp-4);
   max-width: 90%;
 }
 .message.user {
@@ -176,54 +204,65 @@ function isText(b: ConversationBlock): boolean {
   margin-right: auto;
 }
 .role {
-  font-size: 0.7rem;
+  font-size: var(--fs-100);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--fg-muted);
   display: block;
-  margin-bottom: 0.2rem;
+  margin-bottom: var(--sp-1);
 }
+/* The two speakers are told apart by a coloured rail, not by a green-vs-blue
+   fill — the old rgba(166,227,161,.08) read as a success state, not a voice. */
 .text {
-  background: rgba(137, 180, 250, 0.08);
-  border-radius: 8px;
-  padding: 0.5rem 0.75rem;
+  border-radius: var(--r-lg);
+  padding: var(--sp-2) var(--sp-3);
   white-space: pre-wrap;
-  font-size: 0.88rem;
+  /* The only prose in the app; --lh-300 (1.3846) is too tight for paragraphs. */
+  font-size: var(--fs-300);
   line-height: 1.5;
 }
 .message.user .text {
-  background: rgba(166, 227, 161, 0.08);
+  background: var(--accent-soft);
+  border-left: 2px solid var(--accent);
+}
+.message.assistant .text {
+  background: var(--surface);
+  border-left: 2px solid var(--agent);
 }
 .block {
-  margin-top: 0.3rem;
+  margin-top: var(--sp-1);
 }
 .block-toggle {
-  background: transparent;
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--muted);
-  padding: 0.15rem 0.4rem;
-  font-size: 0.75rem;
+  border-radius: var(--r-sm);
+  color: var(--fg-secondary);
+  padding: 2px var(--sp-1);
+  font-size: var(--fs-100);
   cursor: pointer;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
+.block-toggle:hover {
+  color: var(--fg);
+}
+/* Deliberately the terminal's background, so code blocks and the terminal
+   agree about what "a shell surface" looks like. */
 .block pre {
-  margin: 0.3rem 0 0;
-  padding: 0.5rem;
-  background: #11111b;
-  border-radius: 4px;
-  font-size: 0.78rem;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-3);
+  background: var(--term-bg);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: var(--fs-200);
   overflow-x: auto;
-  color: #bac2de;
-}
-.muted {
-  color: var(--muted);
+  color: var(--term-fg);
 }
 .empty {
-  font-style: italic;
   text-align: center;
-  padding: 2rem;
+  padding: var(--sp-6);
 }
 .error {
-  color: var(--error);
+  padding: 0 var(--sp-4);
 }
 </style>

@@ -8,14 +8,121 @@
 </template>
 
 <style>
+/* ---------------------------------------------------------------------------
+ * Design tokens — see docs/DESIGN.md §4.3.
+ *
+ * Palette is the Android client's (GitHub-dark-derived): #0D1117 ground,
+ * #E6EDF3 text, cyan #22D3EE accent. Contrast ratios in the comments are
+ * WCAG 2.1 relative-luminance, computed per pair against --bg unless noted.
+ *
+ * The six original names (--bg --fg --muted --accent --error --border) are
+ * still defined, so nothing that predates the token set breaks.
+ * ------------------------------------------------------------------------- */
 :root {
-  --bg: #1e1e2e;
-  --fg: #cdd6f4;
-  --muted: #7f849c;
-  --accent: #89b4fa;
-  --error: #f38ba8;
-  --border: #313244;
+  color-scheme: dark;
+
+  /* ---- Surfaces (elevation 0 -> 3) ----------------------------------- */
+  --bg: #0d1117; /* window / page ground */
+  --surface: #161b22; /* topbar, side panel, cards, overlay body */
+  --surface-2: #1c2129; /* inputs, chips, table heads, menus */
+  --surface-3: #232a34; /* popovers / anything above an overlay */
+  --scrim: rgba(1, 4, 9, 0.72); /* modal backdrop */
+
+  /* ---- Text ---------------------------------------------------------- */
+  --fg: #e6edf3; /* 16.02:1 on --bg */
+  --fg-secondary: #8b949e; /*  6.15:1 — subtitles, timestamps, counts */
+  --fg-muted: #6e7681; /*  4.12:1 — >=15px or decorative ONLY */
+  --muted: var(--fg-secondary); /* back-compat alias */
+
+  /* ---- Lines --------------------------------------------------------- */
+  --border: #2d333b; /* default hairline */
+  --border-soft: #21262d; /* row separators inside a panel */
+  --border-strong: #6e7681; /* 4.12:1 — inputs & controls (WCAG 1.4.11) */
+
+  /* ---- Accent -------------------------------------------------------- */
+  --accent: #22d3ee; /* 10.47:1 on --bg */
+  --accent-dim: #0891b2; /* accent borders, active separators */
+  --accent-soft: rgba(34, 211, 238, 0.12); /* selected row fill */
+  --on-accent: #04101a; /* 10.62:1 on --accent */
+
+  /* ---- Status -------------------------------------------------------- */
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --agent: #a78bfa; /* agent/assistant role, per Android */
+  --success-soft: rgba(34, 197, 94, 0.12);
+  --warning-soft: rgba(245, 158, 11, 0.12);
+  --error-soft: rgba(239, 68, 68, 0.12);
+  --agent-soft: rgba(167, 139, 250, 0.14);
+
+  /* ---- Interaction states -------------------------------------------- */
+  /* Neutral lift for hover: tinting every hover with the accent makes hover
+     read as selection, which is what the old rgba(137,180,250,.08) did. */
+  --state-hover: rgba(230, 237, 243, 0.05);
+  --state-active: rgba(230, 237, 243, 0.09);
+  --state-selected: var(--accent-soft);
+  --focus-ring: var(--accent);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --disabled-opacity: 0.45;
+
+  /* ---- Terminal (see docs/DESIGN.md §3 — Windows Terminal / Campbell) -- */
+  --term-bg: #0c0c0c;
+  --term-fg: #cccccc;
+  --term-font-size: 16px;
+  --term-padding: 8px;
+
+  /* ---- Typography ---------------------------------------------------- */
+  --font-ui: 'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: Consolas, 'Cascadia Mono', ui-monospace, monospace;
+
+  --fs-100: 11px;
+  --lh-100: 1.45;
+  --fs-200: 12px;
+  --lh-200: 1.45;
+  --fs-300: 13px;
+  --lh-300: 1.3846; /* = Android bodyDense 13sp/18sp */
+  --fs-400: 15px;
+  --lh-400: 1.3;
+  --fs-500: 18px;
+  --lh-500: 1.25;
+  --fs-600: 20px;
+  --lh-600: 1.2;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* ---- Space (4px grid, per Android Spacing.kt) ----------------------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* ---- Radii --------------------------------------------------------- */
+  --r-sm: 4px; /* chips, badges, tags, selected-row band */
+  --r-md: 6px; /* buttons, inputs, tab segments */
+  --r-lg: 10px; /* cards, panels */
+  --r-xl: 14px; /* overlay / modal */
+
+  /* ---- Density ------------------------------------------------------- */
+  --row-h: 28px; /* list rows: session, file, forward */
+  --row-pad-x: 10px;
+  --row-pad-y: 6px;
+  --control-h: 28px; /* buttons, inputs, selects */
+  --control-h-sm: 24px;
+  --topbar-h: 40px;
+  --tabbar-h: 32px;
+
+  /* ---- Motion (per Android docs/design-system.md §motion) ------------- */
+  --dur-fast: 150ms;
+  --dur-normal: 200ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
 }
+
 * {
   box-sizing: border-box;
 }
@@ -28,7 +135,79 @@ body,
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 14px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
+  line-height: var(--lh-300);
+  /* CSS equivalent of Windows Terminal's "antialiasingMode": "grayscale", so
+     the UI and the terminal it frames are rasterised the same way. */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Numbers must not jitter between rows: timestamps, ports, percentages. */
+.session-time,
+.fwd-table,
+.meter-pct,
+.sz,
+.host-detail,
+.folder-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* One focus treatment for the whole app. The app is keyboard-driven around a
+   terminal, and the transparent-background buttons suppress the UA default. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--r-md);
+}
+
+/* ---------------------------------------------------------------------------
+ * Shared primitives — see docs/DESIGN.md §5.1.
+ *
+ * These were previously copy-pasted per component (.icon-btn in 7 files,
+ * .muted in 10, .error in 5, .empty in 5), each drifting a little. They live
+ * here now; the component <style scoped> blocks no longer redefine them.
+ * ------------------------------------------------------------------------- */
+.icon-btn {
+  height: var(--control-h);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--fg-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
+  font-weight: var(--fw-medium);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.icon-btn:hover:not(:disabled) {
+  background: var(--state-active);
+  color: var(--fg);
+}
+.icon-btn:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+.muted {
+  color: var(--fg-secondary);
+}
+.error {
+  color: var(--error);
+  font-size: var(--fs-200);
+}
+.empty {
+  color: var(--fg-muted);
+  font-style: italic;
+  padding: var(--sp-4);
 }
 </style>

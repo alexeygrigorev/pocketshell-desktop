@@ -131,7 +131,8 @@ function onBack(): void {
       <PortPanelView v-if="connection.connectionId" />
     </OverlayPanel>
     <OverlayPanel v-if="panel === 'usage'" title="Provider usage" @close="panel = null">
-      <UsageView v-if="connection.connectionId" />
+      <!-- `embedded`: the overlay header already renders the title. -->
+      <UsageView v-if="connection.connectionId" embedded />
     </OverlayPanel>
   </div>
 </template>
@@ -145,36 +146,54 @@ function onBack(): void {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 1rem;
+  gap: var(--sp-2);
+  height: var(--topbar-h);
+  flex: 0 0 auto;
+  padding: 0 var(--sp-3);
   border-bottom: 1px solid var(--border);
-  background: #181825;
+  background: var(--surface);
 }
 .host-label {
-  font-weight: 600;
-  font-size: 0.95rem;
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-400);
+  line-height: var(--lh-400);
+  margin-left: var(--sp-1);
+}
+.host-label .muted {
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-200);
+  font-family: var(--font-mono);
 }
 .bootstrap {
   display: flex;
-  gap: 0.4rem;
+  gap: var(--sp-1);
 }
 .chip {
-  font-size: 0.72rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
+  font-size: var(--fs-100);
+  line-height: var(--lh-100);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
   border: 1px solid var(--border);
 }
 .chip.ok {
-  color: #a6e3a1;
+  color: var(--success);
+  background: var(--success-soft);
 }
 .chip.warn {
-  color: #f9e2af;
+  color: var(--warning);
+  background: var(--warning-soft);
 }
 .host-actions {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--sp-1);
   margin-left: auto;
+}
+/* Destructive: neutral at rest, error-tinted only on hover. */
+.icon-btn.disconnect:hover:not(:disabled) {
+  background: var(--error-soft);
+  border-color: var(--error);
+  color: var(--error);
 }
 .body {
   display: flex;
@@ -190,28 +209,18 @@ function onBack(): void {
   flex: 0 0 auto;
   width: 4px;
   cursor: col-resize;
-  background: var(--border);
+  background: var(--bg);
+  transition: background var(--dur-fast) var(--ease);
 }
 .splitter:hover {
-  background: var(--accent);
+  background: var(--accent-dim);
 }
+/* No border-left here: SessionTree already draws the panel's right hairline
+   and the splitter sits between them. */
 .session-pane {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border);
-}
-.muted {
-  color: var(--muted);
-}
-.icon-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg);
-  padding: 0.2rem 0.6rem;
-  cursor: pointer;
-  font-size: 0.85rem;
 }
 </style>

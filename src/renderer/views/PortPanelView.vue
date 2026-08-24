@@ -110,49 +110,71 @@ function fmtBytes(n: number): string {
 
 <style scoped>
 .port-panel {
-  padding: 1rem 1.5rem;
+  padding: var(--sp-4) var(--sp-5);
   overflow-y: auto;
   height: 100%;
 }
 .panel-bar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
 }
-.icon-btn, .toggle, .add-btn {
-  background: transparent;
+.toggle,
+.add-btn {
+  height: var(--control-h);
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg);
-  padding: 0.3rem 0.75rem;
+  border-radius: var(--r-md);
+  color: var(--fg-secondary);
+  padding: 0 var(--sp-3);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
+  font-weight: var(--fw-medium);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.toggle:hover {
+  color: var(--fg);
 }
 .toggle.on {
-  background: rgba(166, 227, 161, 0.15);
-  border-color: #a6e3a1;
-  color: #a6e3a1;
+  background: var(--accent-soft);
+  border-color: var(--accent-dim);
+  color: var(--accent);
 }
 .hint {
-  font-size: 0.78rem;
+  font-size: var(--fs-200);
 }
 .add-form {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
   flex-wrap: wrap;
+  font-size: var(--fs-200);
+  color: var(--fg-secondary);
 }
-.add-form select, .add-form input {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
+.add-form select,
+.add-form input {
+  height: var(--control-h);
+  background: var(--surface-2);
+  /* WCAG 1.4.11: controls need a >=3:1 boundary; --border is 1.49:1. */
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
   color: var(--fg);
-  padding: 0.25rem 0.4rem;
-  font-size: 0.85rem;
+  padding: 0 var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-300);
 }
-.add-form input[type="number"] {
+.add-form label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.add-form input[type='number'] {
   width: 5rem;
 }
 .add-form input.host {
@@ -160,39 +182,64 @@ function fmtBytes(n: number): string {
 }
 .add-btn {
   background: var(--accent);
-  color: #1e1e2e;
-  border: none;
-  font-weight: 600;
+  color: var(--on-accent);
+  border-color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
+.add-btn:hover {
+  background: var(--accent-dim);
+  color: var(--fg);
 }
 .fwd-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: var(--fs-200);
 }
-.fwd-table th, .fwd-table td {
+.fwd-table th,
+.fwd-table td {
   text-align: left;
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--border);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border-soft);
 }
 .fwd-table th {
-  color: var(--muted);
-  font-weight: 500;
-  font-size: 0.75rem;
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-100);
   text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.fwd-table td {
+  font-family: var(--font-mono);
 }
 .kind {
-  font-size: 0.72rem;
-  padding: 0.1rem 0.35rem;
-  border-radius: 3px;
+  font-size: var(--fs-100);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
   border: 1px solid var(--border);
 }
-.kind.local { color: #89b4fa; }
-.kind.remote { color: #f9e2af; }
-.kind.dynamic { color: #cba6f7; }
-.ok { color: #a6e3a1; }
-.warn { color: #f9e2af; }
-.mono { font-family: ui-monospace, monospace; font-size: 0.8rem; color: var(--muted); }
-.muted { color: var(--muted); }
-.empty { font-style: italic; }
-.error { color: var(--error); }
+.kind.local {
+  color: var(--accent);
+}
+.kind.remote {
+  color: var(--warning);
+}
+.kind.dynamic {
+  color: var(--agent);
+}
+.ok {
+  color: var(--success);
+}
+.warn {
+  color: var(--warning);
+}
+.mono {
+  color: var(--fg-secondary);
+}
+.empty {
+  padding: var(--sp-4) var(--sp-2);
+}
+.error {
+  padding-top: var(--sp-2);
+}
 </style>

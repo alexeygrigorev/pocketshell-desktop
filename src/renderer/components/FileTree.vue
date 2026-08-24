@@ -88,15 +88,17 @@ function icon(entry: DirEntry): string {
   flex-direction: column;
   min-width: 260px;
   border-right: 1px solid var(--border);
+  background: var(--surface);
   height: 100%;
 }
 .breadcrumb {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.5rem 0.75rem;
+  gap: var(--sp-1);
+  min-height: var(--tabbar-h);
+  padding: var(--sp-1) var(--sp-3);
   border-bottom: 1px solid var(--border);
-  font-size: 0.85rem;
+  font-size: var(--fs-200);
   flex-wrap: wrap;
 }
 .crumb a {
@@ -107,67 +109,63 @@ function icon(entry: DirEntry): string {
   text-decoration: underline;
 }
 .sep {
-  color: var(--muted);
-  margin: 0 0.15rem;
+  color: var(--fg-muted);
+  margin: 0 2px;
 }
 .icon-btn {
   margin-left: auto;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--fg);
-  cursor: pointer;
-  padding: 0.1rem 0.5rem;
-}
-.icon-btn:disabled {
-  opacity: 0.5;
+  height: var(--control-h-sm);
 }
 .entries {
   list-style: none;
   margin: 0;
-  padding: 0.25rem 0;
+  padding: var(--sp-1) 0;
   flex: 1;
   overflow-y: auto;
 }
 .entry {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0.75rem;
+  gap: var(--sp-2);
+  min-height: var(--row-h);
+  padding: var(--row-pad-y) var(--row-pad-x);
   cursor: pointer;
-  font-size: 0.88rem;
+  font-size: var(--fs-300);
+  line-height: var(--lh-300);
 }
 .entry:hover {
-  background: rgba(137, 180, 250, 0.08);
+  background: var(--state-hover);
 }
 .entry.active {
-  background: rgba(137, 180, 250, 0.16);
+  background: var(--state-selected);
 }
+/* DESIGN.md §5.7 asks for a --warning folder glyph and a --fg-muted file
+   glyph. `icon()` returns colour emoji (📁/📄), and `color` has no effect on
+   colour-emoji rasterisation — so this only reaches the monochrome symlink
+   glyph (↪). Tinting the other two needs the emoji replaced first. */
 .ic {
   width: 1.1rem;
+  flex-shrink: 0;
   text-align: center;
+  color: var(--fg-muted);
 }
 .nm {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 .sz {
-  color: var(--muted);
-  font-size: 0.75rem;
+  color: var(--fg-secondary);
+  font-size: var(--fs-100);
+  text-align: right;
+  white-space: nowrap;
 }
 .empty {
-  padding: 1rem 0.75rem;
-  font-style: italic;
-}
-.muted {
-  color: var(--muted);
+  padding: var(--sp-4) var(--sp-3);
 }
 .error {
-  color: var(--error);
-  padding: 0 0.75rem;
-  font-size: 0.8rem;
+  padding: 0 var(--sp-3) var(--sp-2);
 }
 </style>
