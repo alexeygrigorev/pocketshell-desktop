@@ -27,6 +27,12 @@ export interface ConnectOptions {
   host: string;
   port?: number;
   user: string;
+  /**
+   * The `~/.ssh/config` `Host` alias this connection came from
+   * (`HostEntry.name`). Optional — a manually-entered host has none, and
+   * everything downstream falls back to `user@host:port`.
+   */
+  hostAlias?: string;
   /** Absolute path to a private key file. */
   privateKeyPath?: string;
   /** Inline private key PEM/OpenSSH-v1 text (wins over privateKeyPath). */
@@ -120,6 +126,7 @@ export class SshService {
           host: opts.host,
           port: opts.port ?? 22,
           user: opts.user,
+          ...(opts.hostAlias?.trim() ? { hostAlias: opts.hostAlias.trim() } : {}),
           knownHosts: opts.knownHosts ?? null,
           connectedAt: Date.now(),
         });

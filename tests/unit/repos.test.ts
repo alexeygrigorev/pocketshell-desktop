@@ -10,16 +10,20 @@ import {
 
 /**
  * Captured verbatim from the Docker fixture (`tests-docker` helper service,
- * port 3205) running pocketshell 0.4.8 — nothing here is hand-authored except
- * the `--remote` payload, which the fixture cannot produce because the image
- * ships no `gh`. That one is copied from the schema block in the helper's own
- * `pocketshell/repos.py` module docstring, read off the same container.
+ * port 3205) running pocketshell **0.4.44** on alpine 3.20 / tmux 3.4 —
+ * nothing here is hand-authored.
+ *
+ * The `--remote` payload needs a `gh` the image does not ship, so it was
+ * captured by putting a stub `gh` on PATH that replays the GitHub REST shape
+ * `gh api user/repos --paginate --slurp` returns; the REAL helper then did the
+ * normalisation, which is the part these tests assert. It came back
+ * byte-identical to the 0.4.8 capture, as did every other file here.
  */
 const FIXTURES = resolve(__dirname, 'fixtures');
 const readFixture = (name: string): string => readFileSync(resolve(FIXTURES, name), 'utf8');
 
 describe('parseReposJson — real `repos list --local --json` output', () => {
-  const rows = parseReposJson(readFixture('v0.4.8-repos-list-local.json'));
+  const rows = parseReposJson(readFixture('v0.4.44-repos-list-local.json'));
 
   it('parses every row', () => {
     expect(rows).toHaveLength(2);
@@ -50,7 +54,7 @@ describe('parseReposJson — real `repos list --local --json` output', () => {
 });
 
 describe('parseReposJson — `--remote` schema', () => {
-  const rows = parseReposJson(readFixture('v0.4.8-repos-list-remote-schema.json'));
+  const rows = parseReposJson(readFixture('v0.4.44-repos-list-remote-schema.json'));
 
   it('carries a populated remote block and a null local block', () => {
     expect(rows).toHaveLength(2);
@@ -96,8 +100,8 @@ describe('parseReposJson — degradation', () => {
 });
 
 describe('mergeRepos', () => {
-  const local = parseReposJson(readFixture('v0.4.8-repos-list-local.json'));
-  const remote = parseReposJson(readFixture('v0.4.8-repos-list-remote-schema.json'));
+  const local = parseReposJson(readFixture('v0.4.44-repos-list-local.json'));
+  const remote = parseReposJson(readFixture('v0.4.44-repos-list-remote-schema.json'));
 
   it('joins a cloned repo and its GitHub row into ONE entry carrying both blocks', () => {
     const merged = mergeRepos(local, [
@@ -144,7 +148,7 @@ describe('mergeRepos', () => {
 describe('classifyReposFailure', () => {
   it('reports a missing `gh` as gh-missing, not as a broken helper', () => {
     // Real stderr, exit 127, from `repos list --remote --json` on the fixture.
-    const stderr = readFixture('v0.4.8-repos-list-remote-gh-missing.stderr.txt');
+    const stderr = readFixture('v0.4.44-repos-list-remote-gh-missing.stderr.txt');
     const out = classifyReposFailure(127, '', stderr);
     expect(out.state).toBe('gh-missing');
     expect(out.error).toContain('`gh` is not installed on this host');
@@ -153,7 +157,7 @@ describe('classifyReposFailure', () => {
   it('does not let the gh-missing message read as gh-unauthenticated', () => {
     // The gh-missing text mentions `gh auth login`, which is also the
     // unauthenticated marker — the "is not installed" check has to win.
-    const stderr = readFixture('v0.4.8-repos-list-remote-gh-missing.stderr.txt');
+    const stderr = readFixture('v0.4.44-repos-list-remote-gh-missing.stderr.txt');
     expect(stderr).toContain('gh auth login');
     expect(classifyReposFailure(127, '', stderr).state).toBe('gh-missing');
   });
@@ -198,7 +202,7 @@ describe('isHelperMissing', () => {
 
   it('is false for the gh 127, which is a different absence entirely', () => {
     expect(
-      isHelperMissing(127, readFixture('v0.4.8-repos-list-remote-gh-missing.stderr.txt')),
+      isHelperMissing(127, readFixture('v0.4.44-repos-list-remote-gh-missing.stderr.txt')),
     ).toBe(false);
   });
 

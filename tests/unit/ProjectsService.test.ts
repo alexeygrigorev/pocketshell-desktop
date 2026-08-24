@@ -294,10 +294,10 @@ describe('ProjectsService.createFolder', () => {
 
 describe('ProjectsService.reposList', () => {
   const localOk: Responder = (c) =>
-    c.includes('repos list --local') ? ok(readFixture('v0.4.8-repos-list-local.json')) : null;
+    c.includes('repos list --local') ? ok(readFixture('v0.4.44-repos-list-local.json')) : null;
   const ghMissing: Responder = (c) =>
     c.includes('repos list --remote')
-      ? fail(127, readFixture('v0.4.8-repos-list-remote-gh-missing.stderr.txt'))
+      ? fail(127, readFixture('v0.4.44-repos-list-remote-gh-missing.stderr.txt'))
       : null;
 
   it('runs both scopes and merges them', async () => {
@@ -305,7 +305,7 @@ describe('ProjectsService.reposList', () => {
       localOk,
       (c) =>
         c.includes('repos list --remote')
-          ? ok(readFixture('v0.4.8-repos-list-remote-schema.json'))
+          ? ok(readFixture('v0.4.44-repos-list-remote-schema.json'))
           : null,
     ]);
     const out = await projects.reposList(CONN);
@@ -375,7 +375,7 @@ describe('ProjectsService.cloneRepo', () => {
     const { projects } = service([
       (c) =>
         c.includes('repos clone')
-          ? fail(1, readFixture('v0.4.8-repos-clone-exists.stderr.txt'))
+          ? fail(1, readFixture('v0.4.44-repos-clone-exists.stderr.txt'))
           : null,
     ]);
     const out = await projects.cloneRepo(CONN, { repository: 'octocat/Hello-World' });
@@ -391,7 +391,7 @@ describe('ProjectsService.cloneRepo', () => {
     const { projects } = service([
       (c) =>
         c.includes('repos clone')
-          ? fail(128, readFixture('v0.4.8-repos-clone-failed.stderr.txt'))
+          ? fail(128, readFixture('v0.4.44-repos-clone-failed.stderr.txt'))
           : null,
     ]);
     const out = await projects.cloneRepo(CONN, { repository: 'nosuchowner/nosuchrepo-xyz' });
@@ -412,14 +412,15 @@ describe('ProjectsService.cloneRepo', () => {
 describe('PocketshellClient.createSession — real fixture output', () => {
   it('reads the resolved name off stdout and ignores the tmuxctl stderr notice', async () => {
     // Captured from `pocketshell sessions create fixture-probe-2 -c $HOME`
-    // on the Docker fixture: the name on stdout, a "systemd-run unavailable;
-    // session runs without a memory cap" notice on stderr, exit 0.
+    // on the Docker fixture (helper 0.4.44): the name on stdout, a
+    // "systemd-run unavailable; session runs without a memory cap" notice on
+    // stderr, exit 0.
     const { ssh } = fakeSsh([
       (c) =>
         c.includes('sessions create')
           ? {
-              stdout: readFixture('v0.4.8-sessions-create.stdout.txt'),
-              stderr: readFixture('v0.4.8-sessions-create.stderr.txt'),
+              stdout: readFixture('v0.4.44-sessions-create.stdout.txt'),
+              stderr: readFixture('v0.4.44-sessions-create.stderr.txt'),
               exitCode: 0,
             }
           : null,

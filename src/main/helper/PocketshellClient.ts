@@ -24,6 +24,7 @@ import {
   type SessionEnrichment,
 } from './parsers.js';
 import { pathAwareCommand } from './bootstrap.js';
+import { shellQuote, shellQuoteRemotePath } from './shellQuote.js';
 import {
   createSessionCommand,
   fallbackCreateSessionCommand,
@@ -302,11 +303,16 @@ export class PocketshellClient {
     }
   }
 
-  /** Env keys for a folder (`pocketshell env list --dir D --json`). */
+  /**
+   * Env keys for a folder (`pocketshell env list --dir D --json`).
+   *
+   * Rows are `{file, has_value, key}` — names only, never values (the
+   * helper's write-only default, D24).
+   */
   async envList(connectionId: string, dir: string): Promise<unknown[]> {
     const res = await this.ssh.exec(
       connectionId,
-      pathAwareCommand(`pocketshell env list --dir '${dir.replace(/'/g, "'\\''")}' --json`),
+      pathAwareCommand(`pocketshell env list --dir ${shellQuoteRemotePath(dir)} --json`),
     );
     if (res.exitCode !== 0) return [];
     try {
@@ -319,17 +325,56 @@ export class PocketshellClient {
     }
   }
 
-  /** Env values for a folder (`pocketshell env get --dir D --json`). */
-  async envGet(connectionId: string, dir: string): Promise<Record<string, string>> {
+  /**
+   * Env values for a folder (`pocketshell env get --dir D --key K … --json`).
+   *
+   * `--key` is **required** and repeatable on 0.4.44 — `env get --dir D
+   * --json` alone exits **2** with `Error: Missing option '--key'`. The old
+   * call omitted it, so every lookup hit the non-zero branch and silently
+   * returned `{}`: the env editor could never show a single value. Verified
+   * on the fixture (`pocketshell env get --help`).
+   *
+   * With no `keys` the folder's whole env is read, which takes the two calls
+   * the helper's write-only default forces: `env list` for the names, then
+   * one `env get` revealing them. Pass `keys` to reveal only some.
+   */
+  async envGet(
+    connectionId: string,
+    dir: string,
+    keys?: readonly string[],
+  ): Promise<Record<string, string>> {
+    const wanted = keys?.length ? [...keys] : await this.envKeyNames(connectionId, dir);
+    if (wanted.length === 0) return {};
+    const keyArgs = wanted.map((key) => `--key ${shellQuote(key)}`).join(' ');
     const res = await this.ssh.exec(
       connectionId,
-      pathAwareCommand(`pocketshell env get --dir '${dir.replace(/'/g, "'\\''")}' --json`),
+      pathAwareCommand(
+        `pocketshell env get --dir ${shellQuoteRemotePath(dir)} ${keyArgs} --json`,
+      ),
     );
     if (res.exitCode !== 0) return {};
     try {
-      return JSON.parse(res.stdout.trim()) as Record<string, string>;
+      const parsed: unknown = JSON.parse(res.stdout.trim());
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      const out: Record<string, string> = {};
+      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof value === 'string') out[key] = value;
+      }
+      return out;
     } catch {
       return {};
     }
+  }
+
+  /** The `key` field of every {@link envList} row, deduped and in order. */
+  private async envKeyNames(connectionId: string, dir: string): Promise<string[]> {
+    const rows = await this.envList(connectionId, dir);
+    const names: string[] = [];
+    for (const row of rows) {
+      if (row === null || typeof row !== 'object') continue;
+      const key = (row as { key?: unknown }).key;
+      if (typeof key === 'string' && key.length > 0 && !names.includes(key)) names.push(key);
+    }
+    return names;
   }
 }

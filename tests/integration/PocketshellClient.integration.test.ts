@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, expect, it } from 'vitest';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { SshService } from '@main/ssh/SshService';
 import { PocketshellClient } from '@main/helper/PocketshellClient';

@@ -68,17 +68,28 @@ features on its presence. Version analysed: **0.4.44** — re-verified against
 a live host (`pocketshell --version` → `0.4.44`, tmux 3.4) by running each
 command below and reading the installed package source.
 
-> **The `tests-docker` helper image pins nothing.** `Dockerfile.helper` runs
-> a bare `uv tool install pocketshell`, so the version baked into the image is
-> whatever was latest when the layer was first built — today that layer holds
-> **0.4.8**, four minor-patch generations behind what the app actually meets.
-> Every integration and E2E run has therefore been exercising a helper nobody
-> runs. Worse, the same unpinned install means a cache-busting rebuild would
-> silently jump versions mid-suite. That image also cannot serve
-> `sessions list` at all: its bundled `tmuxctl` fails with
-> `Error: not enough values to unpack (expected 3, got 1)`, so the integration
-> tests only ever reach the raw-tmux fallback. Pinning both tools to an
-> explicit version is a prerequisite for trusting those tiers.
+> **The `tests-docker` helper image is now pinned.** `Dockerfile.helper` sets
+> `ARG POCKETSHELL_VERSION=0.4.44` and installs `pocketshell==${POCKETSHELL_VERSION}`,
+> on `alpine:3.20` (tmux 3.4) — the same pair a real host runs. It previously
+> ran a bare `uv tool install pocketshell`, which does not mean "latest" but
+> "whatever was latest when the layer was first cached": the image sat at
+> **0.4.8** while hosts ran 0.4.44, and four parser bugs reached the app
+> through that gap (the `{profiles: […]}` envelope, a null `percent_remaining`,
+> a removed `--json` flag, and the overflowing fixed-width resumable table).
+> The `tests/unit/fixtures/v0.4.44-*` files are captured against this image;
+> re-capture them whenever the pin moves.
+>
+> **The image still cannot serve `sessions list`.** Its `tmuxctl` asks tmux for
+> a tab-delimited `list-sessions` format and tmux rewrites those tabs to
+> underscores, so the command dies with
+> `Error: not enough values to unpack (expected 3, got 1)`. This reproduces on
+> tmux 3.4 and 3.6b alike, so it is not a version regression — it is
+> [tmuxctl#6](https://github.com/alexeygrigorev/tmuxctl/issues/6). Until that
+> is fixed upstream the integration tests only ever reach the raw-tmux
+> fallback path, and the `sessions-list` / `sessions-resumable` /
+> `usage` / `tmux-list-panes` fixtures stay **host**-captured: the image also
+> has no agent history for `sessions resumable` to find and no provider
+> credentials, so every `usage --json` row on it comes back `status: "error"`.
 
 ### Subcommand surface (what the desktop app will call)
 
@@ -92,7 +103,7 @@ command below and reading the installed package source.
 | `agent-log --engine E --session S [--cwd D] [--tail N] [--json]` | Read per-engine JSONL conversation log | raw JSONL lines, or `--json` envelope `{count, engine, lines, path, session}`; exit 66 = not found |
 | `usage [--json] [--no-daemon] [--no-cache] [--capture] [--cached] [--reset-events]` | Provider quota (delegates to `quse`, 30s daemon cache) | NDJSON rows, keys sorted: `{provider, status, short_term:{percent_remaining, reset_at, window}, long_term:{...}, error, details}`. **`block_reason` is gone**; `percent_remaining`/`reset_at`/`window` are **nullable** for a provider with no such window (codex, grok). |
 | `profiles list [--engine E] [--json]` | Agent config-dir profiles (claude `CLAUDE_CONFIG_DIR`, codex `CODEX_HOME`) | YAML default / `--json` **envelope** `{"profiles": [{name, engine, config_dir, default}]}` — not a bare array |
-| `env list/get/set/unset/copy/export --dir D` | Read/write a folder's `.env` + `.envrc` (secrets via stdin, never argv) | `list --json`: `[{file, has_value, key}]`; `get --json`: `{KEY:val}` |
+| `env list/get/set/unset/copy/export --dir D` | Read/write a folder's `.env` + `.envrc` (secrets via stdin, never argv) | `list --json`: `[{file, has_value, key}]` — names only, never values (write-only default, D24). `get --json`: `{KEY: val}`, but **`--key` is REQUIRED and repeatable** — there is no "reveal everything" mode, and `env get --dir D --json` alone exits **2** with `Error: Missing option '--key'`. Reading a whole folder therefore costs `env list` **then** `env get --key …` per name. Missing keys are simply absent from the output; only a hard error is non-zero. |
 | `jobs list/add/edit/remove/trigger [--session S]` | Recurring tmux-send jobs (delegates to `tmuxctl jobs`) | text table / plain status lines |
 | `jobs daemon start/status/stop` | Lifecycle of the scheduler | `status` → `running`/`not running` (exit 0/3) |
 | `hooks install/uninstall/status/events` | Cross-engine stop/idle hooks → normalised JSONL bus | `status --json` |
@@ -112,6 +123,7 @@ command below and reading the installed package source.
 | `usage --json` | `percent_remaining` a number | `null` for a provider with no window in that band (codex/grok short-term) | Formatting it unguarded throws |
 | `usage --json` | `{percent_remaining, reset_at}` | plus a `window` label (`5h`/`7d`/`weekly`/`monthly`) | New field available to label meters |
 | `profiles list --json` | bare JSON array | `{"profiles": [...]}` envelope | An `Array.isArray` guard silently yields zero profiles |
+| `env get --json` | `--dir D --json` returns the folder's env | `--key` is a REQUIRED, repeatable option; without it the command exits **2** (`Missing option '--key'`) | A client that omits `--key` hits the non-zero branch and silently returns `{}` — the env editor can never show a value. Read the names with `env list` first. |
 | `sessions list` footer | `Join a session: pocketshell sessions <id>` | `Join a session: tmuxctl <id>` | Cosmetic; the timestamp anchor is unaffected |
 | `agent-log --json` | `{count, engine, lines, path, session}` | unchanged | — |
 | `sessions list` table | unchanged | unchanged | — |
@@ -209,6 +221,16 @@ systemd user unit for the jobs daemon.
 - `AutoForwarderSupervisor` survives transport drops: tears down the
   forwarder, reconnects with exponential backoff, lets the new scan loop
   rediscover. Manual-toggle ports persist only within a session's lifetime.
+- **Desktop divergence — persistence.** The Python tool persists only
+  `~/.ssh-auto-forward/port-names.json`, and Android's manual toggles die with
+  the session. The desktop persists friendly names, local remaps, per-port
+  on/off intents and the auto-enabled flag across restarts, in `PortfwdStore`
+  (electron-store, `portfwd.json`). State is keyed by **`~/.ssh/config` host
+  alias** when the connection carries one — `ConnectionRecord.hostAlias`,
+  threaded from `ConnectOptions` — matching the Python's `self.host_alias`, so
+  two aliases on the same box keep separate name sets and a host's settings
+  survive its IP changing. A manually-entered host has no alias and falls back
+  to `user@host:port`. `hostKeyFor` is the single place that choice is made.
 
 ---
 

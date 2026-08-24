@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, expect, it } from 'vitest';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { writeFileSync, unlinkSync, existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';

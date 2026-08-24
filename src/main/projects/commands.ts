@@ -27,8 +27,8 @@ export const FREE_SESSION_NAME_MAX_SUFFIX = 200;
 /**
  * Is [path] an existing directory? Exit 0 yes, non-zero no.
  *
- * This pre-flight is NOT optional. Measured on the Docker fixture (helper
- * 0.4.8): `pocketshell sessions create probe -c "$HOME/no/such/dir"` exits 0
+ * This pre-flight is NOT optional. Re-measured on the Docker fixture (helper
+ * 0.4.44): `pocketshell sessions create probe -c "$HOME/no/such/dir"` exits 0
  * and creates a session whose `session_path` is the missing directory — the
  * pane actually lands in `$HOME`. Without this check the desktop would report
  * "session created in ~/git/typo" for a session that is not there. The phone

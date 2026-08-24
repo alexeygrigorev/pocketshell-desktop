@@ -1,4 +1,5 @@
-import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import net from 'node:net';
+import { beforeAll, afterAll, expect, it } from 'vitest';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { ConnectionRegistry } from '@main/ssh/ConnectionRegistry';
 import { SshService } from '@main/ssh/SshService';
@@ -53,8 +54,6 @@ describeDocker('ForwardService integration', () => {
   /** True if a local TCP port accepts a connection within `timeoutMs`. */
   function isPortOpen(port: number, host = '127.0.0.1', timeoutMs = 2000): Promise<boolean> {
     return new Promise((resolve) => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const net = require('node:net');
       const socket = net.connect({ port, host }, () => {
         socket.end();
         resolve(true);

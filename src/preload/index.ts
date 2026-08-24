@@ -15,6 +15,8 @@ import type { UsageRow } from '../main/helper/parsers.js';
 import type { DirEntry, FileStat, TransferProgress } from '../main/sftp/SftpService.js';
 import type { RemotePort } from '../main/portfwd/PortScanner.js';
 import type { ForwardState } from '../main/portfwd/Forwarder.js';
+import type { AutoForwarderStatus, DiscoveredPort } from '../main/portfwd/AutoForwarder.js';
+import type { PortIntent } from '../main/portfwd/PortfwdStore.js';
 import type { ForwardSpec } from '../shared/types.js';
 import type {
   CloneProgress,
@@ -46,11 +48,22 @@ const api = {
     /** Read ~/.ssh/config into HostEntry rows. Empty if no config. */
     listConfigHosts: (): Promise<HostEntry[]> => ipcRenderer.invoke(ipc.ssh.listConfigHosts),
 
-    /** Connect; resolves a ConnectResult (never rejects). */
+    /**
+     * Connect; resolves a ConnectResult (never rejects).
+     *
+     * Pass `hostAlias: entry.name` whenever the host came from
+     * `~/.ssh/config`. Port-forward preferences (friendly port names, local
+     * remaps, on/off intents) are persisted under the alias when it is
+     * present and under `user@host:port` when it is not — so omitting it for
+     * a config host silently re-keys that host's saved state to its current
+     * IP, and loses it the day the IP changes.
+     */
     connect: (payload: {
       host: string;
       port?: number;
       user: string;
+      /** The `~/.ssh/config` `Host` alias (`HostEntry.name`), when there is one. */
+      hostAlias?: string;
       privateKeyPath?: string;
       privateKey?: string;
       passphrase?: string;
@@ -296,9 +309,16 @@ const api = {
     scan: (connectionId: string): Promise<RemotePort[]> =>
       ipcRenderer.invoke(ipc.forwards.scan, connectionId),
 
-    /** Start the auto-forwarder for a connection. */
-    startAuto: (connectionId: string): Promise<boolean> =>
-      ipcRenderer.invoke(ipc.forwards.startAuto, connectionId),
+    /**
+     * Start the auto-forwarder for a connection (idempotent).
+     *
+     * Pass the host's `~/.ssh/config` `LocalForward` lines as
+     * `configForwards` (`HostEntry.localForwards`) to have them opened
+     * alongside the scan loop, tagged `origin: 'ssh-config'`. Omit for a
+     * manually-entered host, which has none.
+     */
+    startAuto: (connectionId: string, configForwards?: ForwardSpec[]): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.startAuto, connectionId, configForwards),
 
     /** Stop the auto-forwarder for a connection. */
     stopAuto: (connectionId: string): Promise<boolean> =>
@@ -315,6 +335,60 @@ const api = {
     /** Current snapshot for a connection. */
     list: (connectionId: string): Promise<ForwardState[]> =>
       ipcRenderer.invoke(ipc.forwards.list, connectionId),
+
+    /**
+     * Run one scan pass now, APPLYING the forward policy — the "Scan" button.
+     * Unlike `scan`, which only lists ports, this opens and closes forwards.
+     * A no-op when the auto-forwarder is not running.
+     */
+    refresh: (connectionId: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.refresh, connectionId),
+
+    /**
+     * Every port the last scan saw, annotated with whether it is forwarded,
+     * its local port, intent, name, auto-eligibility and last error —
+     * including ports we do NOT forward, so the panel can offer them.
+     */
+    discovered: (connectionId: string): Promise<DiscoveredPort[]> =>
+      ipcRenderer.invoke(ipc.forwards.discovered, connectionId),
+
+    /**
+     * Scan health, so the panel can tell "idle" from "scan failing".
+     * Null when no forwarder is running for this connection.
+     */
+    status: (connectionId: string): Promise<AutoForwarderStatus | null> =>
+      ipcRenderer.invoke(ipc.forwards.status, connectionId),
+
+    /** Set a port's friendly name; null or blank deletes it. Persisted per host. */
+    setName: (connectionId: string, remotePort: number, name: string | null): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.setName, connectionId, remotePort, name),
+
+    /** Pin a remote port to a specific local port. Persisted per host. */
+    setRemap: (connectionId: string, remotePort: number, localPort: number): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.setRemap, connectionId, remotePort, localPort),
+
+    /** Drop a pin, returning the port to mirror-then-allocate resolution. */
+    clearRemap: (connectionId: string, remotePort: number): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.clearRemap, connectionId, remotePort),
+
+    /** Force a port on, off, or (null) back to the automatic policy. Persisted. */
+    setIntent: (
+      connectionId: string,
+      remotePort: number,
+      intent: PortIntent | null,
+    ): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.setIntent, connectionId, remotePort, intent),
+
+    /** Flip a remote port between forwarded and silenced. Persisted. */
+    togglePort: (connectionId: string, remotePort: number): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.togglePort, connectionId, remotePort),
+
+    /**
+     * Whether auto-forward was left enabled for this connection's host —
+     * restore the panel's toggle from this on connect.
+     */
+    isAutoEnabled: (connectionId: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.forwards.isAutoEnabled, connectionId),
 
     /** Subscribe to forward-state snapshots. Returns an unsubscribe fn. */
     onStates: (
@@ -383,9 +457,17 @@ const api = {
     envList: (connectionId: string, dir: string): Promise<unknown[]> =>
       ipcRenderer.invoke(ipc.agent.envList, connectionId, dir),
 
-    /** Env values for a folder. */
-    envGet: (connectionId: string, dir: string): Promise<Record<string, string>> =>
-      ipcRenderer.invoke(ipc.agent.envGet, connectionId, dir),
+    /**
+     * Env values for a folder. Omit `keys` for the whole env; pass them to
+     * reveal only some. (`pocketshell env get` has no "all keys" mode, so the
+     * omitted case costs one extra `env list` round-trip on the host.)
+     */
+    envGet: (
+      connectionId: string,
+      dir: string,
+      keys?: string[],
+    ): Promise<Record<string, string>> =>
+      ipcRenderer.invoke(ipc.agent.envGet, connectionId, dir, keys),
   },
 } as const;
 

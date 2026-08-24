@@ -65,11 +65,20 @@ export const ipc = {
   },
   forwards: {
     scan: 'forwards:scan', // run a one-shot port scan, return RemotePort[]
-    startAuto: 'forwards:startAuto', // start the auto-forwarder for a connection
+    startAuto: 'forwards:startAuto', // start the auto-forwarder (+ ssh-config LocalForwards)
     stopAuto: 'forwards:stopAuto',
     addManual: 'forwards:addManual', // add a -L/-R/-D forward
     remove: 'forwards:remove', // remove a forward by key
     list: 'forwards:list', // current snapshot
+    refresh: 'forwards:refresh', // one policy-applying scan pass now ("Scan" button)
+    discovered: 'forwards:discovered', // DiscoveredPort[] — incl. ports we do NOT forward
+    status: 'forwards:status', // AutoForwarderStatus | null — scan health
+    setName: 'forwards:setName', // set/clear a port's friendly name (persisted)
+    setRemap: 'forwards:setRemap', // pin a remote port to a local port (persisted)
+    clearRemap: 'forwards:clearRemap', // drop a pin (persisted)
+    setIntent: 'forwards:setIntent', // force-on / force-off / null (persisted)
+    togglePort: 'forwards:togglePort', // flip a remote port forwarded <-> silenced
+    isAutoEnabled: 'forwards:isAutoEnabled', // was auto left enabled for this host?
     states: 'forwards:event:states', // event: { connectionId, states[] }
   },
   attachments: {

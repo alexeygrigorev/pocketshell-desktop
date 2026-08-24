@@ -280,7 +280,8 @@ export interface UsageRow {
   /**
    * Present on 0.4.8, GONE on 0.4.44 — `normalize_usage_stdout` is a thin
    * pass-through of quse's record (usage.py:176-218) and quse dropped the
-   * field. Optional so the pinned 0.4.8 fixture still types, but nothing may
+   * field. No fixture carries it any more (the image is pinned to 0.4.44);
+   * it stays optional only so an older host still types, and nothing may
    * rely on it being there.
    */
   block_reason?: string | null;

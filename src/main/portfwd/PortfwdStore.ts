@@ -102,10 +102,11 @@ export function createElectronBackend(options: { cwd?: string } = {}): PortfwdBa
  *
  * The Python keys on the **SSH config host alias** (`self.host_alias`), not
  * the hostname, so two aliases pointing at the same box keep separate name
- * sets. The main process does not carry the alias yet (`ConnectionRecord` has
- * no `hostAlias`), so this one helper owns the fallback — when the alias is
- * threaded through the connect options, only this function changes and every
- * caller keeps working.
+ * sets. `ConnectionRecord.hostAlias` now carries it, so a config host keys on
+ * its alias and survives the box changing IP.
+ *
+ * The `user@host:port` fallback stays for a manually-entered host, which has
+ * no alias to key on. This function is the single place that choice is made.
  */
 export function hostKeyFor(rec: {
   hostAlias?: string | null;

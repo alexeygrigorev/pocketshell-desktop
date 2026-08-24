@@ -3,7 +3,7 @@
  *
  * The unified schema is documented in the helper's own
  * `pocketshell/repos.py` module docstring (read off the Docker fixture,
- * helper 0.4.8) and confirmed against real `--local --json` output:
+ * helper 0.4.44) and confirmed against real `--local --json` output:
  *
  * ```json
  * {
@@ -193,7 +193,7 @@ export function mergeRepos(local: RepoEntry[], remote: RepoEntry[]): RepoEntry[]
 /**
  * Classify a non-zero `pocketshell repos …` exit.
  *
- * The exit code alone is not enough. Captured on the fixture (helper 0.4.8):
+ * The exit code alone is not enough. Captured on the fixture (helper 0.4.44):
  *
  *  - `repos list --remote --json` with no `gh` on PATH exits **127** with
  *    "pocketshell: `gh` is not installed on this host. …" on stderr;

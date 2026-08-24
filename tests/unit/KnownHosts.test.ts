@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { KnownHosts } from '@main/ssh-config/KnownHosts';
 
@@ -84,7 +85,6 @@ good.com ${ED25519} ${KEY_A}
 
   it('handles a hashed host entry (|1|salt|hash)', () => {
     // Generate a valid hashed entry for 'dev.example.com'.
-    const { createHmac, randomBytes } = require('node:crypto') as typeof import('node:crypto');
     const salt = randomBytes(20);
     const hmac = createHmac('sha1', salt);
     hmac.update('dev.example.com');

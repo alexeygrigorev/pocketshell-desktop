@@ -17,6 +17,15 @@ export interface ConnectionRecord {
   host: string;
   port: number;
   user: string;
+  /**
+   * The `~/.ssh/config` `Host` alias this connection was opened under, when
+   * there is one (`HostEntry.name`). Absent for a manually-entered host.
+   *
+   * Load-bearing for port-forward persistence: `hostKeyFor` (PortfwdStore)
+   * keys the saved names/remaps/intents on the alias, so they follow the
+   * alias rather than the IP the alias currently resolves to.
+   */
+  hostAlias?: string;
   knownHosts: KnownHosts | null;
   /** Epoch ms the connection became ready. */
   connectedAt: number;

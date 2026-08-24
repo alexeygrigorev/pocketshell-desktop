@@ -188,21 +188,14 @@ export class ForwardService {
   }
 
   /**
-   * The persistence key for a connection.
-   *
-   * `ConnectionRecord` has no `hostAlias` yet, so this falls back to
-   * `user@host:port`. When an optional `hostAlias` is threaded through the
-   * connect options, {@link hostKeyFor} is the only place that changes.
+   * The persistence key for a connection: the `~/.ssh/config` alias when the
+   * connection carries one, else `user@host:port`. {@link hostKeyFor} owns
+   * that choice; this only supplies the record.
    */
   private hostKey(connectionId: string): string {
     const rec = this.registry.get(connectionId);
     if (!rec) return connectionId;
-    return hostKeyFor({
-      hostAlias: (rec as { hostAlias?: string }).hostAlias ?? null,
-      user: rec.user,
-      host: rec.host,
-      port: rec.port,
-    });
+    return hostKeyFor(rec);
   }
 
   /** Lazily create the forwarder so a manual forward works before auto is on. */

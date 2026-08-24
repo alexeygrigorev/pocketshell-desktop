@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, expect, it } from 'vitest';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { SshService } from '@main/ssh/SshService';
 import { PocketshellClient } from '@main/helper/PocketshellClient';
@@ -71,6 +71,33 @@ describeDocker('Agent features integration', () => {
     const rows = await helper.usage(connectionId!);
     expect(rows.length).toBeGreaterThanOrEqual(1);
     expect(rows.some((r) => r.provider === 'codex')).toBe(true);
+  });
+
+  /**
+   * Regression for the drift that unit tests could not see: on helper 0.4.44
+   * `env get` REQUIRES a repeatable `--key`, so the old
+   * `env get --dir D --json` exited 2 and `envGet` silently answered `{}` for
+   * every folder. Only a real helper can catch that — a fake `SshService`
+   * would have happily returned whatever stdout the test author imagined.
+   */
+  it('envList names a folder\'s keys and envGet reveals their values', async () => {
+    const dir = '/home/testuser/env-int';
+    await ssh.exec(
+      connectionId!,
+      `mkdir -p ${dir} && printf 'FOO=bar\\nBAZ=qux\\n' > ${dir}/.env`,
+    );
+
+    const listed = await helper.envList(connectionId!, dir);
+    expect(listed.map((row) => (row as { key: string }).key).sort()).toEqual(['BAZ', 'FOO']);
+    // `list` is write-only by design — it must never carry the values.
+    expect(JSON.stringify(listed)).not.toContain('bar');
+
+    // No keys supplied: read the whole folder (list, then get).
+    expect(await helper.envGet(connectionId!, dir)).toEqual({ FOO: 'bar', BAZ: 'qux' });
+    // Keys supplied: reveal only those.
+    expect(await helper.envGet(connectionId!, dir, ['FOO'])).toEqual({ FOO: 'bar' });
+    // A key that is not there is absent, not an error.
+    expect(await helper.envGet(connectionId!, dir, ['NOPE'])).toEqual({});
   });
 
   it('listResumable returns conversations', async () => {

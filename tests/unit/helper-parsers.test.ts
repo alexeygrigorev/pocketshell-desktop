@@ -18,9 +18,15 @@ const FIXTURES = resolve(__dirname, '..', '..', 'tests-docker', 'fixtures');
 const readFixture = (name: string): string => readFileSync(resolve(FIXTURES, name), 'utf8');
 
 /**
- * Output captured verbatim from the helper the user actually runs (0.4.44 on
- * the `hetzner` box, tmux 3.4) — the shipped tests-docker fixtures pin 0.4.8,
- * which has drifted. Nothing in here is hand-authored.
+ * Output captured verbatim from the helper the user actually runs (0.4.44,
+ * tmux 3.4). Nothing in here is hand-authored.
+ *
+ * These four files stay host-captured rather than Docker-captured: the
+ * fixture image cannot produce any of them. `sessions list` dies on the
+ * tmuxctl `list-sessions` tab bug (tmuxctl#6), `sessions resumable` has no
+ * agent history to list, and `usage --json` has no provider credentials, so
+ * every row comes back `status: "error"`. The image and the host now run the
+ * same pinned 0.4.44, so the two agree on wire format.
  */
 const V44 = resolve(__dirname, 'fixtures');
 const readV44 = (name: string): string => readFileSync(resolve(V44, name), 'utf8');
