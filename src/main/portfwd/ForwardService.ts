@@ -164,14 +164,25 @@ export class ForwardService {
     await this.forwarders.get(connectionId)?.clearRemap(remotePort);
   }
 
-  /** Force a port on, off, or back to the automatic policy. Persisted. */
+  /**
+   * Force a port on, off, or back to the automatic policy. Persisted.
+   *
+   * `ensure`, not `forwarders.get(...)?`: forcing a port on is one of the two
+   * ways a user starts the engine from a cold panel, and the renderer already
+   * documents it as such (stores/forwards.ts re-reads `isAutoEnabled` after
+   * this call precisely because "forcing a single port on lazily starts the
+   * whole engine"). With the optional call it did not — the intent was
+   * persisted, nothing opened, and the call reported success. Its sibling
+   * `togglePort` has always used `ensure`; this is the same operation reached
+   * from the other affordance.
+   */
   async setIntent(
     connectionId: string,
     remotePort: number,
     intent: PortIntent | null,
   ): Promise<void> {
     this.store.setIntent(this.hostKey(connectionId), remotePort, intent);
-    await this.forwarders.get(connectionId)?.setIntent(remotePort, intent);
+    await this.ensure(connectionId).setIntent(remotePort, intent);
   }
 
   /** Toggle a remote port between forwarded and silenced. Persisted. */

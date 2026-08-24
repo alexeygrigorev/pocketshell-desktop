@@ -196,9 +196,10 @@ describeDocker('ForwardService integration', () => {
    * exactly what happened while writing this.
    */
   async function freshAutoForward(): Promise<ForwardState> {
-    // Explicit, not inherited: `setIntent`/`refresh` are no-ops when no
-    // forwarder exists for the connection, so relying on an earlier case
-    // having lazily started one makes this pass or fail on test ORDER.
+    // Explicit, not inherited. `setIntent` now starts the engine itself, but
+    // `refresh` below is still a no-op when no forwarder exists, so leaning on
+    // an earlier case having started one would make this pass or fail on test
+    // ORDER. Starting it here states the precondition instead of assuming it.
     forwards.startAuto(connectionId!);
     await dropTrafficForwards();
     await forwards.setIntent(connectionId!, TRAFFIC_PORT, null);
