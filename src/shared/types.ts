@@ -96,6 +96,51 @@ export interface SessionSummary {
   path: string | null;
 }
 
+/**
+ * One item to stage as a prompt attachment.
+ *
+ * The two variants are the two ways a user attaches something: a
+ * clipboard paste (bytes already in memory) and a picked or dropped
+ * file (a local path we can stream from). Both land in the same remote
+ * directory under the same naming scheme — see AttachmentStager.
+ */
+export type AttachmentSource =
+  | {
+      kind: 'bytes';
+      /** Raw file bytes. Structured-cloned across the IPC boundary. */
+      data: Uint8Array;
+      /** Suggested filename, when the clipboard offered one. */
+      name?: string | null;
+      /** Mime type, e.g. 'image/png'. Used only to default a missing extension. */
+      mimeType?: string | null;
+    }
+  | {
+      kind: 'file';
+      /** Absolute path on this machine; streamed to the remote, never read into memory. */
+      path: string;
+      /** Overrides the path's basename as the display name, when set. */
+      name?: string | null;
+      mimeType?: string | null;
+    };
+
+/**
+ * Outcome of staging a batch of attachments. Never thrown.
+ *
+ * A partial failure resolves with `ok: false` AND a populated `paths` —
+ * those files DID upload and must still be attached (Android issue
+ * #570). Only an empty `paths` means nothing landed.
+ */
+export interface StageAttachmentsResult {
+  /** True only when every source uploaded. */
+  ok: boolean;
+  /** Tilde-form remote paths, e.g. `~/.pocketshell/attachments/main/20260824-101500-01-shot.png`. */
+  paths: string[];
+  /** How many sources failed. */
+  failedCount: number;
+  /** Present whenever `ok` is false; safe to show to the user. */
+  error?: string;
+}
+
 /** Connection state surfaced to the UI. */
 export type ConnectionState =
   | 'idle'

@@ -53,6 +53,10 @@ export const ipc = {
     list: 'forwards:list', // current snapshot
     states: 'forwards:event:states', // event: { connectionId, states[] }
   },
+  attachments: {
+    stage: 'attachments:stage', // upload pasted bytes / picked files, return ~/ display paths
+    pickFiles: 'attachments:pickFiles', // native open dialog, returns local paths
+  },
   agent: {
     log: 'agent:log', // agent-log --json for an engine+session
     resumable: 'agent:resumable', // sessions resumable

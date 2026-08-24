@@ -1,6 +1,12 @@
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, dialog } from 'electron';
 import { ipc } from '../shared/channels.js';
-import type { BootstrapResult, HostEntry, SessionSummary } from '../shared/types.js';
+import type {
+  AttachmentSource,
+  BootstrapResult,
+  HostEntry,
+  SessionSummary,
+  StageAttachmentsResult,
+} from '../shared/types.js';
 import { SshService } from './ssh/SshService.js';
 import { ConnectionRegistry } from './ssh/ConnectionRegistry.js';
 import { PocketshellClient } from './helper/PocketshellClient.js';
@@ -12,6 +18,7 @@ import { SftpService, type DirEntry, type FileStat, type TransferProgress } from
 import { ForwardService } from './portfwd/ForwardService.js';
 import type { RemotePort } from './portfwd/PortScanner.js';
 import type { ForwardSpec } from '../shared/types.js';
+import { AttachmentStager } from './attachments/AttachmentStager.js';
 
 /**
  * Registers all ipcMain handlers. Called once from the main process entry.
@@ -32,6 +39,10 @@ export function registerIpcHandlers(deps: {
   getWindows: () => BrowserWindow[];
 }): void {
   const { registry, ssh, helper, sftp, forwards, getWindows } = deps;
+
+  // Prompt attachments ride the SSH/SFTP services that are already here —
+  // no second connection, no shelling out to scp.
+  const attachments = new AttachmentStager({ ssh, sftp });
 
   // Subscribe to forward-state changes and broadcast them to the renderer.
   forwards.onStates((connectionId, states) => {
@@ -277,6 +288,44 @@ export function registerIpcHandlers(deps: {
   ipcMain.handle(ipc.forwards.list, async (_evt, connectionId: string) => {
     return forwards.list(connectionId);
   });
+
+  // --- attachments:* ------------------------------------------------------
+  // Prompt attachments: upload pasted bytes / picked files into
+  // `~/.pocketshell/attachments/<scope>/` and hand back the remote paths the
+  // composer splices into the prompt text (the agent reads them off disk).
+  // Never rejects — a partial batch resolves with the survivors in `paths`
+  // AND an `error` describing the shortfall (Android issue #570).
+  ipcMain.handle(
+    ipc.attachments.stage,
+    async (
+      _evt,
+      payload: { connectionId: string; scopeKey: string; sources: AttachmentSource[] },
+    ): Promise<StageAttachmentsResult> => {
+      return attachments.stage(payload.connectionId, payload.scopeKey, payload.sources ?? []);
+    },
+  );
+
+  // Native file picker. Lives on this side so the renderer never needs
+  // filesystem access — it gets back opaque paths it can only hand to
+  // `attachments:stage`.
+  ipcMain.handle(
+    ipc.attachments.pickFiles,
+    async (_evt, payload?: { title?: string; multiple?: boolean }): Promise<string[]> => {
+      const parent = getWindows().find((w) => !w.isDestroyed());
+      const options: Electron.OpenDialogOptions = {
+        title: payload?.title ?? 'Attach files',
+        buttonLabel: 'Attach',
+        properties:
+          payload?.multiple === false
+            ? ['openFile']
+            : ['openFile', 'multiSelections'],
+      };
+      const result = parent
+        ? await dialog.showOpenDialog(parent, options)
+        : await dialog.showOpenDialog(options);
+      return result.canceled ? [] : result.filePaths;
+    },
+  );
 
   // --- agent:* ------------------------------------------------------------
   // Agent-awareness: conversation logs, resumable conversations, profiles,

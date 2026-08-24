@@ -1,12 +1,14 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { ipc } from '../shared/channels.js';
 import type {
+  AttachmentSource,
   BootstrapResult,
   ConnectResult,
   ExecResult,
   HostEntry,
   SessionSummary,
   ShellId,
+  StageAttachmentsResult,
 } from '../shared/types.js';
 import type { UsageRow } from '../main/helper/parsers.js';
 import type { DirEntry, FileStat, TransferProgress } from '../main/sftp/SftpService.js';
@@ -217,6 +219,26 @@ const api = {
       ipcRenderer.on(ipc.forwards.states, listener);
       return () => ipcRenderer.removeListener(ipc.forwards.states, listener);
     },
+  },
+
+  attachments: {
+    /**
+     * Upload pasted bytes and/or picked files into
+     * `~/.pocketshell/attachments/<scope>/` and get back the remote paths
+     * to splice into the prompt text.
+     *
+     * Never rejects. On a partial batch `ok` is false but `paths` still
+     * holds the files that DID upload — attach those and show `error`.
+     */
+    stage: (payload: {
+      connectionId: string;
+      scopeKey: string;
+      sources: AttachmentSource[];
+    }): Promise<StageAttachmentsResult> => ipcRenderer.invoke(ipc.attachments.stage, payload),
+
+    /** Open the native file picker; resolves [] if the user cancelled. */
+    pickFiles: (payload?: { title?: string; multiple?: boolean }): Promise<string[]> =>
+      ipcRenderer.invoke(ipc.attachments.pickFiles, payload),
   },
 
   agent: {
