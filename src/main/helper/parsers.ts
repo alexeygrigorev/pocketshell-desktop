@@ -271,7 +271,10 @@ export interface UsageWindow {
 
 export interface UsageRow {
   provider: string;
-  status: 'ok' | 'limited' | 'blocked' | 'error' | string;
+  // `string & {}` keeps the documented literals visible to narrowing and
+  // autocomplete while still accepting values a newer helper may add. A bare
+  // `| string` would absorb the literals and enforce nothing.
+  status: 'ok' | 'limited' | 'blocked' | 'error' | (string & {});
   short_term: UsageWindow;
   long_term: UsageWindow;
   /**
@@ -329,7 +332,9 @@ export function parseUsageNdjson(stdout: string): UsageRow[] {
 // field whose vocabulary is closed.
 
 export interface ResumableSession {
-  engine: 'claude' | 'codex' | 'opencode' | string;
+  // See UsageRow.status: `string & {}` preserves narrowing on the known
+  // engines while still round-tripping an unrecognised one.
+  engine: 'claude' | 'codex' | 'opencode' | (string & {});
   project: string;
   /** Relative-time label as printed (e.g. "3h", "just now"). */
   when: string;

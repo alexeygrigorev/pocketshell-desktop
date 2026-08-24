@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 
 /**
  * Minimal ~/.ssh/known_hosts loader + matcher.
@@ -162,9 +162,7 @@ function hashedHostMatches(token: string, host: string): boolean {
   const salt = Buffer.from(segs[2] ?? '', 'base64');
   const expected = Buffer.from(segs[3] ?? '', 'base64');
   // OpenSSH hashes the host with HMAC-SHA1 keyed by the salt.
-  const h = createHash('sha1'); // hmac via createHmac is cleaner, but sha1 is what openssh uses
-  // Use createHmac properly:
-  const hmac = require('node:crypto').createHmac('sha1', salt) as ReturnType<typeof createHash>;
+  const hmac = createHmac('sha1', salt);
   hmac.update(host);
   const digest = hmac.digest();
   return digest.equals(expected) || digest.toString('base64') === expected.toString('base64');

@@ -47,7 +47,7 @@ function createWindow(): void {
 
   // Open external links in the system browser, never in-app.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    void shell.openExternal(url);
     return { action: 'deny' };
   });
 
@@ -72,21 +72,29 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(() => {
-    registerIpcHandlers({
-      registry,
-      ssh,
-      helper,
-      sftp,
-      forwards,
-      getWindows: () => BrowserWindow.getAllWindows(),
-    });
-    createWindow();
+  // A rejection here means no window and no error surfaced anywhere, so the
+  // app would just look dead on launch. Log it and exit non-zero instead.
+  app.whenReady().then(
+    () => {
+      registerIpcHandlers({
+        registry,
+        ssh,
+        helper,
+        sftp,
+        forwards,
+        getWindows: () => BrowserWindow.getAllWindows(),
+      });
+      createWindow();
 
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
-    });
-  });
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      });
+    },
+    (err: unknown) => {
+      console.error('[pocketshell] startup failed:', err);
+      app.exit(1);
+    },
+  );
 }
 
 // Quit when all windows are closed, except on macOS.
