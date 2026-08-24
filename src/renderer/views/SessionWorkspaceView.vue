@@ -24,6 +24,7 @@ import PromptComposer from '../components/PromptComposer.vue';
 import ConversationView from './ConversationView.vue';
 import FilesView from './FilesView.vue';
 import { composerAgentKind } from '../../shared/composerSend';
+import { sessionAttachCommand } from '../../shared/attachCommand';
 
 const route = useRoute();
 const router = useRouter();
@@ -50,7 +51,7 @@ const agentKind = computed(() => composerAgentKind(summary.value?.agentKind));
 
 const command = computed(() => {
   if (!sessionName.value) return undefined;
-  return `tmux attach -t '${sessionName.value.replace(/'/g, "'\\''")}'`;
+  return sessionAttachCommand(sessionName.value);
 });
 
 onMounted(async () => {
