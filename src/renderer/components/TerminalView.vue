@@ -188,7 +188,16 @@ function closeShell(): void {
 
 async function reopen(): Promise<void> {
   closeShell();
-  term?.clear();
+  // `reset()`, not `clear()`. clear() only empties the scrollback — it leaves
+  // every DEC private mode set, and mouse tracking (1000/1002/1003 + SGR 1006)
+  // is the one that matters. tmux turns mouse reporting ON when it attaches and
+  // OFF when it exits cleanly; a session that dies, is killed, or whose attach
+  // fails never sends the OFF. The mode then survives into the next shell this
+  // component opens, where nothing is consuming mouse reports — so the wheel
+  // and click-drag get encoded as `\x1b[<0;2;1M` and typed at the prompt, which
+  // the shell echoes as literal `0;2;1M`, and drag-select stops working because
+  // xterm is claiming the drag for reporting. reset() clears modes with it.
+  term?.reset();
   await openShell();
 }
 
