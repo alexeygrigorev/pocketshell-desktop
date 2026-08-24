@@ -49,6 +49,18 @@ export function registerIpcHandlers(deps: {
     broadcast(ipc.forwards.states, { connectionId, states });
   });
 
+  // Connection liveness. `ssh:event:state` was declared but nothing ever
+  // emitted it, so a dropped link left the renderer showing `connected`
+  // indefinitely — the composer could not tell the user a send would go
+  // nowhere. 'lost' means the transport dropped; 'idle' is a clean
+  // disconnect the user asked for.
+  ssh.onCloseConnection((connectionId, reason) => {
+    broadcast(ipc.ssh.state, {
+      connectionId,
+      state: reason === 'lost' ? 'lost' : 'idle',
+    });
+  });
+
   const broadcast = (channel: string, payload: unknown): void => {
     for (const win of getWindows()) {
       if (!win.isDestroyed()) win.webContents.send(channel, payload);
@@ -129,14 +141,14 @@ export function registerIpcHandlers(deps: {
   );
 
   // --- shell:input / resize / close ---------------------------------------
-  ipcMain.handle(ipc.shell.input, async (_evt, shellId: string, data: string) => {
-    ssh.shellInput(shellId, data);
-    return true;
-  });
-  ipcMain.handle(ipc.shell.resize, async (_evt, shellId: string, cols: number, rows: number) => {
-    ssh.shellResize(shellId, cols, rows);
-    return true;
-  });
+  // Return what actually happened, not an unconditional true: the composer's
+  // delivery-failure path depends on this being honest.
+  ipcMain.handle(ipc.shell.input, async (_evt, shellId: string, data: string) =>
+    ssh.shellInput(shellId, data),
+  );
+  ipcMain.handle(ipc.shell.resize, async (_evt, shellId: string, cols: number, rows: number) =>
+    ssh.shellResize(shellId, cols, rows),
+  );
   ipcMain.handle(ipc.shell.close, async (_evt, shellId: string) => {
     ssh.shellClose(shellId);
     return true;

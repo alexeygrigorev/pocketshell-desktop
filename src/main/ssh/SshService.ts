@@ -62,10 +62,19 @@ export interface TailHandle {
   stop(): void;
 }
 
+/** Why a connection closed: an explicit disconnect, or the transport dropping. */
+export type CloseReason = 'user' | 'lost';
+
 export class SshService {
   private readonly shells: ShellTracker;
-  /** Listeners fired (best-effort) when a connection is closed. */
-  private readonly closeListeners = new Set<(connectionId: string) => void>();
+  /**
+   * Listeners fired (best-effort) when a connection is closed. `reason`
+   * distinguishes a user-initiated disconnect from the transport dropping
+   * underneath us, so the UI can say which one happened.
+   */
+  private readonly closeListeners = new Set<
+    (connectionId: string, reason: CloseReason) => void
+  >();
   constructor(
     private readonly registry: ConnectionRegistry = new ConnectionRegistry(),
     shells?: ShellTracker,
@@ -79,7 +88,7 @@ export class SshService {
   }
 
   /** Subscribe to connection-close events (for evicting cached per-conn state). */
-  onCloseConnection(listener: (connectionId: string) => void): () => void {
+  onCloseConnection(listener: (connectionId: string, reason: CloseReason) => void): () => void {
     this.closeListeners.add(listener);
     return () => this.closeListeners.delete(listener);
   }
@@ -114,6 +123,15 @@ export class SshService {
           knownHosts: opts.knownHosts ?? null,
           connectedAt: Date.now(),
         });
+
+        // Post-ready transport lifecycle. Without this the registry keeps
+        // reporting `connected` after the link has gone away: the renderer
+        // never learns the session died, and a send silently goes nowhere.
+        // `close()` is idempotent, so a drop that emits both 'error' and
+        // 'close' still notifies exactly once.
+        client.on('error', () => this.close(id, 'lost'));
+        client.on('close', () => this.close(id, 'lost'));
+
         resolve({ ok: true, connectionId: id });
       });
 
@@ -248,16 +266,36 @@ export class SshService {
     return id;
   }
 
-  /** Write input bytes to a tracked shell's stdin (xterm.js -> remote). */
-  shellInput(shellId: ShellId, data: string | Buffer): void {
+  /**
+   * Write input bytes to a tracked shell's stdin (xterm.js -> remote).
+   *
+   * Returns whether the bytes reached the channel. This used to be `void`,
+   * which let the composer's send path report success for a write that never
+   * happened. Note `channel.write()` returning false means backpressure, not
+   * failure — the data is still queued — so only an unknown shell or a throw
+   * counts as a genuine failure.
+   */
+  shellInput(shellId: ShellId, data: string | Buffer): boolean {
     const rec = this.shells.get(shellId);
-    if (rec) rec.channel.write(data);
+    if (!rec) return false;
+    try {
+      rec.channel.write(data);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
-  /** Resize a tracked shell's PTY. */
-  shellResize(shellId: ShellId, cols: number, rows: number): void {
+  /** Resize a tracked shell's PTY. Returns false if the shell is unknown. */
+  shellResize(shellId: ShellId, cols: number, rows: number): boolean {
     const rec = this.shells.get(shellId);
-    if (rec) rec.channel.setWindow(rows, cols, rows, cols);
+    if (!rec) return false;
+    try {
+      rec.channel.setWindow(rows, cols, rows, cols);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Close a tracked shell. */
@@ -309,23 +347,29 @@ export class SshService {
     };
   }
 
-  /** Close a connection idempotently (also tears down its shells). */
-  close(connectionId: string): void {
+  /**
+   * Close a connection idempotently (also tears down its shells).
+   *
+   * `reason` is 'user' for an explicit disconnect and 'lost' when the
+   * transport dropped underneath us. Listeners only fire on the transition,
+   * so a repeat call for an already-removed connection is silent — which is
+   * what makes the paired 'error'/'close' events safe to wire.
+   */
+  close(connectionId: string, reason: CloseReason = 'user'): void {
     this.shells.closeAllForConnection(connectionId);
     const rec = this.registry.remove(connectionId);
+    if (!rec) return;
     for (const listener of this.closeListeners) {
       try {
-        listener(connectionId);
+        listener(connectionId, reason);
       } catch {
         // a listener failure must not break teardown
       }
     }
-    if (rec) {
-      try {
-        rec.client.end();
-      } catch {
-        // ignore
-      }
+    try {
+      rec.client.end();
+    } catch {
+      // ignore
     }
   }
 
@@ -380,7 +424,7 @@ function openShell(
         reject(err ?? new Error('shell failed'));
         return;
       }
-      resolve(stream as unknown as ClientChannel);
+      resolve(stream);
     });
   });
 }
