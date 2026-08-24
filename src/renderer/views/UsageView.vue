@@ -22,11 +22,39 @@ onMounted(async () => {
   if (connId.value) await agents.loadUsage(connId.value);
 });
 
-function pctColor(p: number | undefined): string {
-  if (p === undefined) return 'var(--fg-muted)';
+/**
+ * `percent_remaining` is nullable in the helper's 0.4.44 shape
+ * (parsers.ts:266) and codex and grok both really do emit null. An unknown
+ * window must NOT be drawn as an empty meter — a 0%-wide bar reads as "quota
+ * exhausted" when the truth is "the provider did not report". So the meter is
+ * omitted entirely and the row says so.
+ */
+function hasPct(p: number | null | undefined): p is number {
+  return typeof p === 'number' && Number.isFinite(p);
+}
+function pctColor(p: number): string {
   if (p > 50) return 'var(--success)';
   if (p > 20) return 'var(--warning)';
   return 'var(--error)';
+}
+function pctWidth(p: number): string {
+  return `${Math.max(0, Math.min(100, p))}%`;
+}
+function pctText(p: number): string {
+  return `${p.toFixed(0)}%`;
+}
+
+/**
+ * The "why is this provider blocked" line. `block_reason` existed on helper
+ * 0.4.8 and is GONE on 0.4.44 (parsers.ts:277-283), so reading only that field
+ * leaves a branch that can never render on a current host. Fall back to the
+ * pass-through `details.limit_reached` the newer helper does emit.
+ */
+function blockNote(row: { block_reason?: string | null; details?: Record<string, unknown> }): string | null {
+  if (row.block_reason) return row.block_reason;
+  const reason = row.details?.['limit_reached'];
+  if (typeof reason === 'string' && reason.trim()) return reason;
+  return null;
 }
 function fmtReset(iso: string | null): string {
   if (!iso) return '—';
@@ -48,32 +76,54 @@ function fmtReset(iso: string | null): string {
           <span :class="['status', row.status]">{{ row.status }}</span>
         </div>
         <div class="meter-row">
-          <span class="meter-label">short-term</span>
-          <div class="meter">
-            <div
-              class="meter-fill"
-              :style="{ width: `${row.short_term.percent_remaining}%`, background: pctColor(row.short_term.percent_remaining) }"
-            />
-          </div>
-          <span class="meter-pct" :style="{ color: pctColor(row.short_term.percent_remaining) }">
-            {{ row.short_term.percent_remaining.toFixed(0) }}%
+          <span class="meter-label">
+            short-term
+            <span v-if="row.short_term.window" class="window-tag">{{ row.short_term.window }}</span>
           </span>
+          <template v-if="hasPct(row.short_term.percent_remaining)">
+            <div class="meter">
+              <div
+                class="meter-fill"
+                :style="{
+                  width: pctWidth(row.short_term.percent_remaining),
+                  background: pctColor(row.short_term.percent_remaining),
+                }"
+              />
+            </div>
+            <span class="meter-pct" :style="{ color: pctColor(row.short_term.percent_remaining) }">
+              {{ pctText(row.short_term.percent_remaining) }}
+            </span>
+          </template>
+          <span v-else class="meter-unknown muted">not reported</span>
         </div>
-        <div class="reset muted">resets {{ fmtReset(row.short_term.reset_at) }}</div>
+        <div v-if="row.short_term.reset_at" class="reset muted">
+          resets {{ fmtReset(row.short_term.reset_at) }}
+        </div>
         <div class="meter-row">
-          <span class="meter-label">long-term</span>
-          <div class="meter">
-            <div
-              class="meter-fill"
-              :style="{ width: `${row.long_term.percent_remaining}%`, background: pctColor(row.long_term.percent_remaining) }"
-            />
-          </div>
-          <span class="meter-pct" :style="{ color: pctColor(row.long_term.percent_remaining) }">
-            {{ row.long_term.percent_remaining.toFixed(0) }}%
+          <span class="meter-label">
+            long-term
+            <span v-if="row.long_term.window" class="window-tag">{{ row.long_term.window }}</span>
           </span>
+          <template v-if="hasPct(row.long_term.percent_remaining)">
+            <div class="meter">
+              <div
+                class="meter-fill"
+                :style="{
+                  width: pctWidth(row.long_term.percent_remaining),
+                  background: pctColor(row.long_term.percent_remaining),
+                }"
+              />
+            </div>
+            <span class="meter-pct" :style="{ color: pctColor(row.long_term.percent_remaining) }">
+              {{ pctText(row.long_term.percent_remaining) }}
+            </span>
+          </template>
+          <span v-else class="meter-unknown muted">not reported</span>
         </div>
-        <div class="reset muted">resets {{ fmtReset(row.long_term.reset_at) }}</div>
-        <p v-if="row.block_reason" class="block-reason">{{ row.block_reason }}</p>
+        <div v-if="row.long_term.reset_at" class="reset muted">
+          resets {{ fmtReset(row.long_term.reset_at) }}
+        </div>
+        <p v-if="blockNote(row)" class="block-reason">{{ blockNote(row) }}</p>
       </div>
       <p v-if="!agents.usage.length" class="muted empty">no usage data — is `pocketshell usage` available on this host?</p>
     </div>
@@ -81,6 +131,21 @@ function fmtReset(iso: string | null): string {
 </template>
 
 <style scoped>
+.window-tag {
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--fg-secondary);
+  font-size: var(--fs-100);
+  font-variant-numeric: tabular-nums;
+}
+/* No meter at all when the provider reported no percentage — see hasPct(). */
+.meter-unknown {
+  flex: 1;
+  font-size: var(--fs-200);
+  font-style: italic;
+}
 .usage {
   padding: var(--sp-4) var(--sp-5);
   overflow-y: auto;
@@ -148,7 +213,10 @@ h2 {
   margin-bottom: var(--sp-1);
 }
 .meter-label {
-  width: 5rem;
+  flex: 0 0 auto;
+  min-width: 5rem;
+  display: flex;
+  align-items: center;
   font-size: var(--fs-100);
   color: var(--fg-secondary);
 }

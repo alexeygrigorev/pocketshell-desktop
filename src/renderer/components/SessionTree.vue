@@ -9,8 +9,6 @@
 // collapse is remembered for as long as the list is mounted.
 //
 // Deviations from the phone, forced by the desktop session IPC (see report):
-//   - No agent-kind badge and no agent-first sort key — `SessionSummary`
-//     carries no agent kind.
 //   - No window child rows — `SessionSummary` carries no window list.
 //   - Last-activity is shown on the row (the phone shows no timestamp); the
 //     desktop has the room and already had this column.
@@ -18,7 +16,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useSessionsStore } from '../stores/sessions';
 import { groupSessionsByFolder } from '../sessionGrouping';
-import type { SessionSummary } from '../../shared/types';
+import type { SessionAgentKind, SessionSummary } from '../../shared/types';
 
 const props = defineProps<{
   /** Name of the session currently open, so its row can be marked. */
@@ -72,6 +70,36 @@ function sessionCountLabel(n: number): string {
   return n === 1 ? '1 session' : `${n} sessions`;
 }
 
+/**
+ * Row badge for the host-recorded `@ps_agent_kind` (types.ts:103). Null,
+ * undefined and `unknown` are all the phone's "Unknown" and get NO badge — a
+ * foreign session we did not launch should not be labelled as if we had.
+ * `shell` gets none either: a shell is the unremarkable case.
+ */
+function agentBadge(kind: SessionAgentKind | null | undefined): string | null {
+  switch (kind) {
+    case 'claude':
+      return 'claude';
+    case 'codex':
+      return 'codex';
+    case 'opencode':
+      return 'opencode';
+    case 'grok':
+      return 'grok';
+    case 'probing':
+      return 'probing…';
+    case 'exited':
+      return 'exited';
+    case 'shell':
+    case 'unknown':
+    case null:
+    case undefined:
+      return null;
+    default:
+      return null;
+  }
+}
+
 function fmtTime(epoch: number): string {
   if (!epoch) return '';
   const d = new Date(epoch * 1000);
@@ -112,6 +140,13 @@ function fmtTime(epoch: number): string {
           >
             <span class="dot" :class="{ active: s.attached }" />
             <span class="session-name">{{ s.name }}</span>
+            <span
+              v-if="agentBadge(s.agentKind)"
+              class="agent-badge"
+              :class="{ dim: s.agentKind === 'probing' || s.agentKind === 'exited' }"
+              :title="`agent: ${s.agentKind}`"
+              >{{ agentBadge(s.agentKind) }}</span
+            >
             <span v-if="s.attached" class="tag">attached</span>
             <span class="session-time">{{ fmtTime(s.activity || s.created) }}</span>
           </li>
@@ -252,6 +287,23 @@ function fmtTime(epoch: number): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.agent-badge {
+  flex-shrink: 0;
+  font-size: var(--fs-100);
+  font-weight: var(--fw-medium);
+  color: var(--agent);
+  background: var(--agent-soft);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 0 var(--sp-1);
+  white-space: nowrap;
+}
+/* Transient detector states read as "not settled yet", not as a live agent. */
+.agent-badge.dim {
+  color: var(--fg-secondary);
+  background: transparent;
+  border-color: var(--border);
 }
 .tag {
   font-size: var(--fs-100);

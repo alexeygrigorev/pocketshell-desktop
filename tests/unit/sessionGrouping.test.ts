@@ -5,8 +5,9 @@ import {
   canonicalisePath,
   defaultLabelForPath,
   groupSessionsByFolder,
+  isAgentSession,
 } from '../../src/renderer/sessionGrouping';
-import type { SessionSummary } from '../../src/shared/types';
+import type { SessionAgentKind, SessionSummary } from '../../src/shared/types';
 
 /** Terse SessionSummary factory — only the fields grouping cares about. */
 function session(
@@ -17,6 +18,64 @@ function session(
 ): SessionSummary {
   return { name, created: activity, activity, attached, path };
 }
+
+/** Same, plus the host-recorded agent kind. */
+function agentSession(
+  name: string,
+  path: string | null,
+  activity: number,
+  agentKind: SessionAgentKind | null,
+): SessionSummary {
+  return { name, created: activity, activity, attached: false, path, agentKind };
+}
+
+describe('isAgentSession (FolderTreeProjection.kt:588)', () => {
+  it('counts every launched engine, plus the transient detector states', () => {
+    for (const k of ['claude', 'codex', 'opencode', 'grok', 'probing', 'exited'] as const) {
+      expect(isAgentSession(k)).toBe(true);
+    }
+  });
+
+  it('groups shells, unknown and absent kinds together as non-agents (#821)', () => {
+    expect(isAgentSession('shell')).toBe(false);
+    expect(isAgentSession('unknown')).toBe(false);
+    expect(isAgentSession(null)).toBe(false);
+    expect(isAgentSession(undefined)).toBe(false);
+  });
+});
+
+describe('within-folder order: agents first (recencySessionSort)', () => {
+  it('sorts an agent session ahead of a more recent shell', () => {
+    const folders = groupSessionsByFolder([
+      agentSession('shell-new', '/srv/app', 900, 'shell'),
+      agentSession('claude-old', '/srv/app', 100, 'claude'),
+    ]);
+    expect(folders[0]?.sessions.map((s) => s.name)).toEqual(['claude-old', 'shell-new']);
+  });
+
+  it('falls back to activity-desc then name-asc within each agent/non-agent band', () => {
+    const folders = groupSessionsByFolder([
+      agentSession('b-shell', '/srv/app', 500, null),
+      agentSession('a-shell', '/srv/app', 500, null),
+      agentSession('codex-1', '/srv/app', 100, 'codex'),
+      agentSession('claude-1', '/srv/app', 700, 'claude'),
+    ]);
+    expect(folders[0]?.sessions.map((s) => s.name)).toEqual([
+      'claude-1',
+      'codex-1',
+      'a-shell',
+      'b-shell',
+    ]);
+  });
+
+  it('leaves rows with no agentKind at all ordered purely by recency', () => {
+    const folders = groupSessionsByFolder([
+      session('old', '/srv/app', 100),
+      session('new', '/srv/app', 900),
+    ]);
+    expect(folders[0]?.sessions.map((s) => s.name)).toEqual(['new', 'old']);
+  });
+});
 
 describe('canonicalisePath', () => {
   it('strips trailing slashes so /a/b/ and /a/b are one folder', () => {

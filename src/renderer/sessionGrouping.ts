@@ -14,7 +14,7 @@
  * fallback path — `groupSessionsIntoFolders` — where folder groups are the
  * top level. The sort rules below are the same functions that path uses.
  */
-import type { SessionSummary } from '../shared/types';
+import type { SessionAgentKind, SessionSummary } from '../shared/types';
 
 /** Sentinel path for sessions whose working directory is unknown. */
 export const UNTRACKED_PATH = '::untracked::';
@@ -71,14 +71,43 @@ export function sessionActivity(session: SessionSummary): number {
 }
 
 /**
- * Within-folder session order, mirroring the phone's `recencySessionSort`:
- * most-recent activity first, then session name ascending.
+ * Does this kind sort with the agents? Port of `SessionAgentKind.isAgentSession`
+ * (FolderTreeProjection.kt:588-600).
  *
- * NOTE: the phone sorts agent sessions (Claude/Codex/OpenCode) ahead of plain
- * shells as the primary key. The desktop session IPC returns no agent kind, so
- * that key is absent here — see the module docs in SessionTree.vue.
+ * `probing` / `exited` group WITH the agents — they are sessions we launched,
+ * just not currently classified. `unknown` (foreign, never classified) groups
+ * with shells, per #821. Null/absent is the phone's "Unknown".
+ */
+export function isAgentSession(kind: SessionAgentKind | null | undefined): boolean {
+  switch (kind) {
+    case 'claude':
+    case 'codex':
+    case 'opencode':
+    case 'grok':
+    case 'probing':
+    case 'exited':
+      return true;
+    case 'shell':
+    case 'unknown':
+    case null:
+    case undefined:
+      return false;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Within-folder session order, mirroring the phone's `recencySessionSort`
+ * (FolderTreeProjection.kt:564-568): **agents first**, then most-recent
+ * activity descending, then session name ascending.
+ *
+ * The agent key is the primary one on purpose — a folder full of shells should
+ * never bury the agent session you are actually talking to.
  */
 function compareSessions(a: SessionSummary, b: SessionSummary): number {
+  const byAgent = Number(isAgentSession(b.agentKind)) - Number(isAgentSession(a.agentKind));
+  if (byAgent !== 0) return byAgent;
   const byActivity = sessionActivity(b) - sessionActivity(a);
   if (byActivity !== 0) return byActivity;
   return a.name.localeCompare(b.name);
