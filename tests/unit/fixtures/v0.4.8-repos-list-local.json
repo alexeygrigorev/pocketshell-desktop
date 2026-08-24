@@ -1,0 +1,22 @@
+[
+  {
+    "full_name": null,
+    "local": {
+      "head": "master",
+      "path": "/home/testuser/git/demo-repo"
+    },
+    "name": "demo-repo",
+    "owner": null,
+    "remote": null
+  },
+  {
+    "full_name": "octocat/Hello-World",
+    "local": {
+      "head": "master",
+      "path": "/home/testuser/git/Hello-World"
+    },
+    "name": "Hello-World",
+    "owner": "octocat",
+    "remote": null
+  }
+]

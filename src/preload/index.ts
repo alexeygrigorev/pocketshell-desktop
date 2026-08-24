@@ -16,6 +16,18 @@ import type { DirEntry, FileStat, TransferProgress } from '../main/sftp/SftpServ
 import type { RemotePort } from '../main/portfwd/PortScanner.js';
 import type { ForwardState } from '../main/portfwd/Forwarder.js';
 import type { ForwardSpec } from '../shared/types.js';
+import type {
+  CloneProgress,
+  CloneResult,
+  CreateFolderRequest,
+  CreateFolderResult,
+  HomeResult,
+  ReposCloneOptions,
+  ReposListRequest,
+  ReposListResult,
+  StartSessionRequest,
+  StartSessionResult,
+} from '../main/projects/ProjectsService.js';
 
 /**
  * The typed API surface exposed to the renderer as `window.api`.
@@ -126,13 +138,91 @@ const api = {
     ): Promise<SessionSummary[]> =>
       ipcRenderer.invoke(ipc.helper.sessionsList, connectionId, sortBy),
 
-    /** Create a detached tmux session. */
-    sessionsCreate: (connectionId: string, name: string, cwd?: string): Promise<boolean> =>
+    /**
+     * Create a detached tmux session under an EXPLICIT name.
+     *
+     * Prefer `projects.startSession` — it derives the name from the folder the
+     * way the phone and `tmuxctl` do, so all three clients agree on which
+     * session belongs to which folder. Use this only when the exact tmux name
+     * is already known.
+     */
+    sessionsCreate: (connectionId: string, name: string, cwd: string): Promise<boolean> =>
       ipcRenderer.invoke(ipc.helper.sessionsCreate, connectionId, name, cwd),
 
     /** Provider usage/quota rows. */
     usage: (connectionId: string): Promise<UsageRow[]> =>
       ipcRenderer.invoke(ipc.helper.usage, connectionId),
+  },
+
+  /**
+   * Project-folder-first session creation.
+   *
+   * Three routes, one destination: pick an EXISTING folder, create a NEW empty
+   * one, or CLONE a GitHub repo — then `startSession` on the resulting path.
+   * The session name is derived from the folder, never typed.
+   *
+   * Browsing for the existing folder uses the `sftp` surface above:
+   * `projects.home()` for the starting point, then `sftp.list(path)` filtered
+   * to `type === 'dir'`.
+   */
+  projects: {
+    /** Resolve the remote `$HOME` — the browse root and the name-derivation input. */
+    home: (connectionId: string): Promise<HomeResult> =>
+      ipcRenderer.invoke(ipc.projects.home, connectionId),
+
+    /**
+     * Preview the session name a folder would get (`~/git/pocketshell` ->
+     * `git-pocketshell`). Base name only — no `-2` suffix, which only the host
+     * can decide at create time.
+     */
+    deriveName: (connectionId: string, folder: string, customName?: string): Promise<string> =>
+      ipcRenderer.invoke(ipc.projects.deriveName, connectionId, folder, customName),
+
+    /** Create a new empty project folder and get back its canonical path. */
+    createFolder: (
+      connectionId: string,
+      request: CreateFolderRequest,
+    ): Promise<CreateFolderResult> =>
+      ipcRenderer.invoke(ipc.projects.createFolder, connectionId, request),
+
+    /**
+     * Local clones + the user's GitHub repos, merged by `fullName`.
+     *
+     * A host with no `gh`, or one that is not logged in, is a NORMAL state:
+     * `remote.state` says which, `remote.repos` is empty, and the local list
+     * is unaffected. Show a hint, not an error.
+     */
+    reposList: (connectionId: string, request?: ReposListRequest): Promise<ReposListResult> =>
+      ipcRenderer.invoke(ipc.projects.reposList, connectionId, request),
+
+    /**
+     * Clone a GitHub repo. Slow — subscribe with `onCloneProgress` and pass a
+     * `requestId` to correlate the started/finished events. An already-cloned
+     * target resolves `{ ok: true, alreadyExists: true }` with its path, so the
+     * caller can go straight on to `startSession`.
+     */
+    reposClone: (
+      connectionId: string,
+      request: ReposCloneOptions & { requestId?: string },
+    ): Promise<CloneResult> => ipcRenderer.invoke(ipc.projects.reposClone, connectionId, request),
+
+    /**
+     * Start (or re-open) the session for a folder. Idempotent by default:
+     * `reused: true` means a session for this folder was already open.
+     * Pass `namePolicy: 'unique'` for a deliberate second session.
+     */
+    startSession: (
+      connectionId: string,
+      request: StartSessionRequest,
+    ): Promise<StartSessionResult> =>
+      ipcRenderer.invoke(ipc.projects.startSession, connectionId, request),
+
+    /** Subscribe to clone lifecycle events. Returns an unsubscribe fn. */
+    onCloneProgress: (handler: (progress: CloneProgress) => void): Unsubscribe => {
+      const listener = (_evt: IpcRendererEvent, progress: CloneProgress) => handler(progress);
+      ipcRenderer.on(ipc.projects.cloneProgress, listener);
+      return () => ipcRenderer.removeListener(ipc.projects.cloneProgress, listener);
+    },
   },
 
   sftp: {

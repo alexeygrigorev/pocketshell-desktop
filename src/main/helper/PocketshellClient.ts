@@ -24,6 +24,45 @@ import {
   type SessionEnrichment,
 } from './parsers.js';
 import { pathAwareCommand } from './bootstrap.js';
+import {
+  createSessionCommand,
+  fallbackCreateSessionCommand,
+  reposCloneCommand,
+  reposListCommand,
+  type ReposCloneOptions,
+  type ReposListOptions,
+} from '../projects/commands.js';
+import {
+  classifyReposFailure,
+  isHelperMissing,
+  parseReposJson,
+  type ReposScopeResult,
+  type ReposScopeState,
+} from '../projects/repos.js';
+
+/** How a session create was satisfied. */
+export type CreateSessionVia = 'helper' | 'tmux-fallback';
+
+/** Outcome of {@link PocketshellClient.createSession}. Never thrown. */
+export interface CreateSessionOutcome {
+  ok: boolean;
+  /** The name the host actually used (the helper echoes it back). */
+  name: string | null;
+  via: CreateSessionVia;
+  error: string | null;
+}
+
+/** Outcome of {@link PocketshellClient.reposClone}. Never thrown. */
+export interface CloneOutcome {
+  ok: boolean;
+  /** Absolute path of the clone on the host. */
+  path: string | null;
+  /** True when the clone was already there and we recovered its path. */
+  alreadyExists: boolean;
+  error: string | null;
+  /** Set on failure so the UI can distinguish "install gh" from a git error. */
+  state?: Exclude<ReposScopeState, 'ok'>;
+}
 
 /**
  * One-shot helper invocations over a connected host. Stateless: pass the
@@ -82,14 +121,126 @@ export class PocketshellClient {
     return parseSessionEnrichment(res.stdout);
   }
 
-  /** Create a new detached tmux session via `pocketshell sessions create`. */
-  async createSession(connectionId: string, name: string, cwd?: string): Promise<boolean> {
-    const cwdArg = cwd ? ` -c '${cwd.replace(/'/g, "'\\''")}'` : '';
+  /**
+   * Create a detached tmux session called [name] in [cwd].
+   *
+   * `--mem` is NOT passed — see {@link createSessionCommand}.
+   *
+   * ## Idempotency
+   *
+   * Both the helper path (`sessions create` -> `tmuxctl create-detached`) and
+   * the fallback (`tmux new-session -A -d`) are no-op successes when the named
+   * session already exists. That is load-bearing for the folder-first flow:
+   * the session name is derived from the folder, so "start a session here" for
+   * a folder that already has one must re-open it, not fail and not create a
+   * second one.
+   *
+   * ## One fallback layer, not the phone's two
+   *
+   * The Android gateway builds a POSIX-sh wrapper that probes `command -v
+   * tmuxctl` and `tmuxctl create-detached --help`, exits a sentinel 97 when
+   * either fails, and falls back to raw `tmux new-session` — because the phone
+   * invokes **tmuxctl directly** and therefore owns that capability question.
+   * The desktop goes through `pocketshell sessions create`, which IS the
+   * helper's own wrapper around tmuxctl: it already resolves the memory cap
+   * from the repo's `cgroups.toml`, and on a host with no cgroup support it
+   * prints "tmuxctl: systemd-run unavailable; session runs without a memory
+   * cap" to stderr and exits 0 (observed on the Docker fixture). So the
+   * phone's layer 2 is handled server-side and its layer 1 is the helper's
+   * business, not ours.
+   *
+   * What is left is the one case the helper cannot handle for us: the helper
+   * is not installed at all, or is too old to have the subcommand. That is
+   * detected by {@link isHelperMissing} — narrowly, so a genuine create
+   * failure is reported rather than being silently downgraded to an uncapped
+   * session — and only then do we run the raw tmux create. `via` in the result
+   * tells the caller which path ran, so the UI can say "created without a
+   * memory cap" honestly.
+   */
+  async createSession(
+    connectionId: string,
+    opts: { name: string; cwd: string },
+  ): Promise<CreateSessionOutcome> {
     const res = await this.ssh.exec(
       connectionId,
-      pathAwareCommand(`pocketshell sessions create '${name.replace(/'/g, "'\\''")}'${cwdArg}`),
+      pathAwareCommand(createSessionCommand(opts.name, opts.cwd)),
     );
-    return res.exitCode === 0;
+    if (res.exitCode === 0) {
+      // The helper echoes the resolved name on stdout; trust it over ours.
+      const printed = res.stdout
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l.length > 0);
+      return { ok: true, name: printed ?? opts.name, via: 'helper', error: null };
+    }
+    if (!isHelperMissing(res.exitCode, `${res.stdout}\n${res.stderr}`)) {
+      return {
+        ok: false,
+        name: null,
+        via: 'helper',
+        error: res.stderr.trim() || res.stdout.trim() || `sessions create exited ${res.exitCode}`,
+      };
+    }
+    const fallback = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(fallbackCreateSessionCommand(opts.name, opts.cwd)),
+    );
+    if (fallback.exitCode === 0) {
+      return { ok: true, name: opts.name, via: 'tmux-fallback', error: null };
+    }
+    return {
+      ok: false,
+      name: null,
+      via: 'tmux-fallback',
+      error:
+        fallback.stderr.trim() ||
+        fallback.stdout.trim() ||
+        `tmux new-session exited ${fallback.exitCode}`,
+    };
+  }
+
+  /**
+   * `pocketshell repos list` for ONE scope.
+   *
+   * Never throws and never reports a missing/unauthenticated `gh` as a
+   * failure of the call — those come back as a typed `state` with an empty
+   * row list, because a host without the GitHub CLI is a normal host.
+   */
+  async reposList(connectionId: string, options: ReposListOptions): Promise<ReposScopeResult> {
+    const res = await this.ssh.exec(connectionId, pathAwareCommand(reposListCommand(options)));
+    if (res.exitCode === 0) {
+      return { state: 'ok', repos: parseReposJson(res.stdout), error: null };
+    }
+    const { state, error } = classifyReposFailure(res.exitCode, res.stdout, res.stderr);
+    return { state, repos: [], error };
+  }
+
+  /**
+   * `pocketshell repos clone <owner/repo>` — clone and return the path.
+   *
+   * Not idempotent, unlike session creation: re-cloning an existing target
+   * exits 1 with "clone target already exists: <path>". That path is the
+   * useful part of the answer, so it is recovered into `path` with
+   * `alreadyExists: true` rather than being reported as a bare failure — the
+   * folder-first flow can then just start a session in the existing clone.
+   */
+  async reposClone(connectionId: string, options: ReposCloneOptions): Promise<CloneOutcome> {
+    const res = await this.ssh.exec(connectionId, pathAwareCommand(reposCloneCommand(options)));
+    if (res.exitCode === 0) {
+      const path = res.stdout
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l.length > 0);
+      if (path) return { ok: true, path, alreadyExists: false, error: null };
+      return { ok: false, path: null, alreadyExists: false, error: 'clone printed no path' };
+    }
+    const stderr = res.stderr.trim();
+    const existing = /clone target already exists:\s*(.+)$/m.exec(stderr);
+    if (existing) {
+      return { ok: true, path: existing[1]!.trim(), alreadyExists: true, error: null };
+    }
+    const { state, error } = classifyReposFailure(res.exitCode, res.stdout, res.stderr);
+    return { ok: false, path: null, alreadyExists: false, error, state };
   }
 
   /** Provider quota via `pocketshell usage --json`. Returns [] if unavailable. */

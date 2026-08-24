@@ -63,10 +63,32 @@ describeDocker('PocketshellClient integration', () => {
 
   it('createSession + listSessions reflects the new session', async () => {
     const name = `test-${Date.now()}`;
-    const ok = await helper.createSession(connectionId!, name);
-    expect(ok).toBe(true);
+    const created = await helper.createSession(connectionId!, { name, cwd: '$HOME' });
+    expect(created.ok).toBe(true);
+    // The helper echoes the resolved name back on stdout.
+    expect(created.name).toBe(name);
     const sessions = await helper.listSessions(connectionId!, 'activity');
     expect(sessions.map((s) => s.name)).toContain(name);
+  });
+
+  it('createSession is idempotent — a second create is a no-op success', async () => {
+    const name = `test-idem-${Date.now()}`;
+    const first = await helper.createSession(connectionId!, { name, cwd: '$HOME' });
+    const second = await helper.createSession(connectionId!, { name, cwd: '$HOME' });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(second.name).toBe(name);
+    const sessions = await helper.listSessions(connectionId!, 'activity');
+    expect(sessions.filter((s) => s.name === name)).toHaveLength(1);
+  });
+
+  it('reposList reports gh-missing for the remote scope instead of failing', async () => {
+    const local = await helper.reposList(connectionId!, { scope: 'local' });
+    expect(local.state).toBe('ok');
+    const remote = await helper.reposList(connectionId!, { scope: 'remote' });
+    // The fixture image ships no `gh`; that is a normal host state.
+    expect(remote.state).toBe('gh-missing');
+    expect(remote.repos).toEqual([]);
   });
 
   it('usage returns the seeded provider rows', async () => {

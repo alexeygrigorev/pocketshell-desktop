@@ -19,6 +19,18 @@ import { ForwardService } from './portfwd/ForwardService.js';
 import type { RemotePort } from './portfwd/PortScanner.js';
 import type { ForwardSpec } from '../shared/types.js';
 import { AttachmentStager } from './attachments/AttachmentStager.js';
+import type {
+  CloneResult,
+  CreateFolderRequest,
+  CreateFolderResult,
+  HomeResult,
+  ProjectsService,
+  ReposCloneOptions,
+  ReposListRequest,
+  ReposListResult,
+  StartSessionRequest,
+  StartSessionResult,
+} from './projects/ProjectsService.js';
 
 /**
  * Registers all ipcMain handlers. Called once from the main process entry.
@@ -36,9 +48,10 @@ export function registerIpcHandlers(deps: {
   helper: PocketshellClient;
   sftp: SftpService;
   forwards: ForwardService;
+  projects: ProjectsService;
   getWindows: () => BrowserWindow[];
 }): void {
-  const { registry, ssh, helper, sftp, forwards, getWindows } = deps;
+  const { registry, ssh, helper, sftp, forwards, projects, getWindows } = deps;
 
   // Prompt attachments ride the SSH/SFTP services that are already here —
   // no second connection, no shelling out to scp.
@@ -172,10 +185,15 @@ export function registerIpcHandlers(deps: {
   );
 
   // --- helper:sessionsCreate ----------------------------------------------
+  // Explicit-name create. The folder-first flow goes through
+  // `projects:startSession`; this remains for a caller that genuinely knows
+  // the tmux session name it wants (and it must supply the cwd — a session
+  // with no start folder is not a project session).
   ipcMain.handle(
     ipc.helper.sessionsCreate,
-    async (_evt, connectionId: string, name: string, cwd?: string): Promise<boolean> => {
-      return helper.createSession(connectionId, name, cwd);
+    async (_evt, connectionId: string, name: string, cwd: string): Promise<boolean> => {
+      const outcome = await helper.createSession(connectionId, { name, cwd });
+      return outcome.ok;
     },
   );
 
@@ -183,6 +201,72 @@ export function registerIpcHandlers(deps: {
   ipcMain.handle(ipc.helper.usage, async (_evt, connectionId: string): Promise<UsageRow[]> => {
     return helper.usage(connectionId);
   });
+
+  // --- projects:* ----------------------------------------------------------
+  // Folder-first session creation. The renderer browses folders with the SFTP
+  // channels below (there is no second folder-listing path here on purpose);
+  // these add the pieces SFTP cannot answer: where home is, what a folder's
+  // session would be called, the repo list, the clone, and the create.
+  ipcMain.handle(ipc.projects.home, async (_evt, connectionId: string): Promise<HomeResult> => {
+    return projects.home(connectionId);
+  });
+
+  ipcMain.handle(
+    ipc.projects.deriveName,
+    async (_evt, connectionId: string, folder: string, customName?: string): Promise<string> => {
+      return projects.deriveSessionName(connectionId, folder, customName);
+    },
+  );
+
+  ipcMain.handle(
+    ipc.projects.createFolder,
+    async (
+      _evt,
+      connectionId: string,
+      request: CreateFolderRequest,
+    ): Promise<CreateFolderResult> => {
+      return projects.createFolder(connectionId, request);
+    },
+  );
+
+  ipcMain.handle(
+    ipc.projects.reposList,
+    async (
+      _evt,
+      connectionId: string,
+      request?: ReposListRequest,
+    ): Promise<ReposListResult> => {
+      return projects.reposList(connectionId, request ?? {});
+    },
+  );
+
+  // A clone can run for tens of seconds. The invoke still resolves with the
+  // final result, but `projects:event:cloneProgress` fires immediately with
+  // phase 'started' (and again on 'finished') so the UI has something to show
+  // rather than looking hung — the same shape as sftp transfer progress.
+  ipcMain.handle(
+    ipc.projects.reposClone,
+    async (
+      _evt,
+      connectionId: string,
+      request: ReposCloneOptions & { requestId?: string },
+    ): Promise<CloneResult> => {
+      return projects.cloneRepo(connectionId, request, (progress) => {
+        broadcast(ipc.projects.cloneProgress, progress);
+      });
+    },
+  );
+
+  ipcMain.handle(
+    ipc.projects.startSession,
+    async (
+      _evt,
+      connectionId: string,
+      request: StartSessionRequest,
+    ): Promise<StartSessionResult> => {
+      return projects.startSession(connectionId, request);
+    },
+  );
 
   // --- sftp:* --------------------------------------------------------------
   // File operations over SFTP on the existing connection. Upload/download

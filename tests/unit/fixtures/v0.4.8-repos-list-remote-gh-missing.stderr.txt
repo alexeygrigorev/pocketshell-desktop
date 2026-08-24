@@ -1,0 +1,1 @@
+pocketshell: `gh` is not installed on this host. Install it (`apt install gh` on Debian/Ubuntu, `brew install gh` on macOS) and authenticate with `gh auth login -s repo:read` before re-running.

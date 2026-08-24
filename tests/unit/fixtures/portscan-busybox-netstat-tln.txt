@@ -1,0 +1,4 @@
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       
+tcp        0      0 :::19840                :::*                    LISTEN      
+tcp        0      0 :::8081                 :::*                    LISTEN      

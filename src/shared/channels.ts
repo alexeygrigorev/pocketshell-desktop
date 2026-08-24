@@ -27,8 +27,27 @@ export const ipc = {
   helper: {
     bootstrap: 'helper:bootstrap',
     sessionsList: 'helper:sessionsList',
+    /**
+     * Create a session under an EXPLICIT name. The folder-first flow uses
+     * `projects:startSession` instead, which derives the name from the folder;
+     * this stays as the escape hatch for a caller that already knows the exact
+     * tmux session name it wants.
+     */
     sessionsCreate: 'helper:sessionsCreate',
     usage: 'helper:usage',
+  },
+  /**
+   * Project-folder-first session creation: pick a folder (existing / new /
+   * freshly cloned), and the session name is derived from it.
+   */
+  projects: {
+    home: 'projects:home', // resolve the remote $HOME (browse root + name input)
+    deriveName: 'projects:deriveName', // preview the name a folder would get
+    createFolder: 'projects:createFolder', // mkdir -p a new empty project folder
+    reposList: 'projects:reposList', // local clones + GitHub repos
+    reposClone: 'projects:reposClone', // clone a GitHub repo, return its path
+    startSession: 'projects:startSession', // folder-first session create
+    cloneProgress: 'projects:event:cloneProgress', // event: CloneProgress
   },
   sftp: {
     list: 'sftp:list',

@@ -6,6 +6,7 @@ import { SshService } from './ssh/SshService.js';
 import { PocketshellClient } from './helper/PocketshellClient.js';
 import { SftpService } from './sftp/SftpService.js';
 import { ForwardService } from './portfwd/ForwardService.js';
+import { ProjectsService } from './projects/ProjectsService.js';
 import { registerIpcHandlers } from './ipc.js';
 
 // Electron + ESM: __dirname is not defined for the bundled output under some
@@ -18,10 +19,13 @@ const ssh = new SshService(registry);
 const helper = new PocketshellClient(ssh);
 const sftp = new SftpService(registry);
 const forwards = new ForwardService(ssh, registry);
-// Evict cached per-connection state (SFTP wrapper, forwarders) on close.
+const projects = new ProjectsService(ssh, helper);
+// Evict cached per-connection state (SFTP wrapper, forwarders, remote $HOME)
+// on close.
 ssh.onCloseConnection((id) => {
   sftp.evict(id);
   forwards.evict(id);
+  projects.evict(id);
 });
 
 let mainWindow: BrowserWindow | null = null;
@@ -82,6 +86,7 @@ if (!gotLock) {
         helper,
         sftp,
         forwards,
+        projects,
         getWindows: () => BrowserWindow.getAllWindows(),
       });
       createWindow();

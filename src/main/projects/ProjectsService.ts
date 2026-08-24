@@ -1,0 +1,427 @@
+/**
+ * Project-folder-first session creation — the desktop half of the flow the
+ * Android app already ships.
+ *
+ * A session is not named, it is *placed*. The user picks a project folder on
+ * the remote host by one of three routes — an existing folder, a new empty
+ * folder, or a fresh GitHub clone — and the session name is DERIVED from that
+ * folder (see ./sessionName.ts). That derivation is the same one `tmuxctl` and
+ * the phone use, so `~/git/pocketshell` is `git-pocketshell` everywhere and
+ * the three clients agree about which session belongs to which folder.
+ *
+ * ## Browsing folders is NOT here
+ *
+ * The renderer picks the existing folder with the SFTP surface that already
+ * exists: `sftp:list` for the entries (filter `type === 'dir'`), `sftp:stat`,
+ * `sftp:realPath`. Re-exposing a "list remote folders" channel here would be a
+ * second, thinner path to the same ssh2 SFTP wrapper — one more thing to keep
+ * in sync for no capability gained. The only thing this service adds for
+ * browsing is {@link home}, because `$HOME` is where a picker starts and it is
+ * also an input to the name derivation.
+ */
+
+import type { SshService } from '../ssh/SshService.js';
+import type { PocketshellClient } from '../helper/PocketshellClient.js';
+import type { CreateSessionVia } from '../helper/PocketshellClient.js';
+import { pathAwareCommand } from '../helper/bootstrap.js';
+import {
+  HOME_COMMAND,
+  directoryExistsCommand,
+  freeSessionNameCommand,
+  mkdirCommand,
+  resolveDirectoryCommand,
+  sessionExistsCommand,
+  type ReposCloneOptions,
+  type ReposListOptions,
+} from './commands.js';
+import { childPath, normaliseProjectFolderName, resolveSessionName } from './sessionName.js';
+import {
+  mergeRepos,
+  type ReposListResult,
+  type ReposScopeResult,
+  type ReposScopeState,
+} from './repos.js';
+
+/** Resolved remote home. */
+export interface HomeResult {
+  ok: boolean;
+  home: string | null;
+  error: string | null;
+}
+
+/** Result of creating a new empty project folder. */
+export interface CreateFolderResult {
+  ok: boolean;
+  /** Canonical absolute path of the created folder. */
+  path: string | null;
+  error: string | null;
+}
+
+/** Result of a clone request. */
+export interface CloneResult {
+  ok: boolean;
+  path: string | null;
+  /** True when the clone target was already on disk and we reused it. */
+  alreadyExists: boolean;
+  error: string | null;
+  /**
+   * On failure, WHY — so the UI can say "this host has no pocketshell" rather
+   * than dumping a git error. Absent on success.
+   */
+  state?: Exclude<ReposScopeState, 'ok'>;
+}
+
+/** Progress event pushed while a clone runs. */
+export interface CloneProgress {
+  requestId: string;
+  phase: 'started' | 'finished';
+  repository: string;
+  path?: string;
+  error?: string;
+}
+
+/**
+ * What `sessionName` means for a start request.
+ *
+ *  - `reuse` (default): the derived name is the EXACT name to use. If a
+ *    session for this folder is already open, re-open it. This is the
+ *    idempotent attach-or-create semantics `create-detached` provides and the
+ *    folder-first flow depends on.
+ *  - `unique`: give me a genuinely NEW session for this folder, walking
+ *    `<base>`, `<base>-2`, `<base>-3`… The walk runs on the host, in one exec,
+ *    immediately before the create (see {@link freeSessionNameCommand}) — the
+ *    phone learned the hard way that a client-side session cache answers this
+ *    question wrongly.
+ */
+export type SessionNamePolicy = 'reuse' | 'unique';
+
+/** Request for {@link ProjectsService.startSession}. */
+export interface StartSessionRequest {
+  /** Remote folder to start in. Absolute, or `~`-relative. */
+  folder: string;
+  /** Optional user label; blank/punctuation-only falls back to the derived name. */
+  customName?: string;
+  /** Defaults to `reuse`. */
+  namePolicy?: SessionNamePolicy;
+}
+
+/** Why a start request failed, for a UI that wants to react rather than print. */
+export type StartSessionFailure = 'folder-missing' | 'create-failed';
+
+/** Result of {@link ProjectsService.startSession}. Never thrown. */
+export interface StartSessionResult {
+  ok: boolean;
+  /** The session name on the host — what to attach to. */
+  sessionName: string | null;
+  /** The canonical folder the session was started in. */
+  folder: string | null;
+  /** True when a session for this folder was already open and got reused. */
+  reused: boolean;
+  /** Which create path ran; `tmux-fallback` means no memory cap. */
+  via: CreateSessionVia | null;
+  error: string | null;
+  code: StartSessionFailure | null;
+}
+
+/** Request for {@link ProjectsService.createFolder}. */
+export interface CreateFolderRequest {
+  /** Existing parent directory. */
+  parent: string;
+  /** Single folder name to create under it. */
+  name: string;
+}
+
+/** Request for {@link ProjectsService.reposList}. */
+export interface ReposListRequest {
+  /** Which scopes to run. Defaults to `both`. */
+  scope?: 'local' | 'remote' | 'both';
+  /** Local scan roots (replaces the helper default `~/git`). */
+  roots?: string[];
+  /** Local scan depth. */
+  maxDepth?: number;
+  /** Cap on remote rows. */
+  limit?: number;
+}
+
+export class ProjectsService {
+  /**
+   * Remote `$HOME` per connection. It cannot change for the life of a
+   * connection, and it is read on every name derivation, so caching it keeps
+   * the picker from spending a round-trip per keystroke.
+   */
+  private readonly homes = new Map<string, string>();
+
+  constructor(
+    private readonly ssh: SshService,
+    private readonly helper: PocketshellClient,
+  ) {}
+
+  /** Drop cached per-connection state. Call on disconnect. */
+  evict(connectionId: string): void {
+    this.homes.delete(connectionId);
+  }
+
+  /** Resolve (and cache) the remote `$HOME`. */
+  async home(connectionId: string): Promise<HomeResult> {
+    const cached = this.homes.get(connectionId);
+    if (cached != null) return { ok: true, home: cached, error: null };
+    const res = await this.ssh.exec(connectionId, pathAwareCommand(HOME_COMMAND));
+    const home = res.stdout.trim();
+    if (res.exitCode !== 0 || home.length === 0) {
+      return {
+        ok: false,
+        home: null,
+        error: res.stderr.trim() || 'could not resolve $HOME on the host',
+      };
+    }
+    this.homes.set(connectionId, home);
+    return { ok: true, home, error: null };
+  }
+
+  /**
+   * The session name a folder WOULD get, for previewing in the picker.
+   *
+   * This is the derived base name only — it does not consult the host, so it
+   * carries no `-2` suffix even under a `unique` policy. Resolving that
+   * suffix requires the host and belongs at create time.
+   */
+  async deriveSessionName(
+    connectionId: string,
+    folder: string,
+    customName?: string,
+  ): Promise<string> {
+    const { home } = await this.home(connectionId);
+    return resolveSessionName(customName ?? null, folder, home);
+  }
+
+  /**
+   * Create a new empty project folder under [parent] and return its canonical
+   * path. Does not start a session — the renderer chains
+   * {@link startSession} on the returned path.
+   */
+  async createFolder(
+    connectionId: string,
+    request: CreateFolderRequest,
+  ): Promise<CreateFolderResult> {
+    const safeName = normaliseProjectFolderName(request.name);
+    if (safeName === null) {
+      return { ok: false, path: null, error: 'Enter a single folder name (no "/" or "..").' };
+    }
+    const target = childPath(request.parent, safeName);
+    const made = await this.ssh.exec(connectionId, pathAwareCommand(mkdirCommand(target)));
+    if (made.exitCode !== 0) {
+      return {
+        ok: false,
+        path: null,
+        error: made.stderr.trim() || made.stdout.trim() || `mkdir exited ${made.exitCode}`,
+      };
+    }
+    return { ok: true, path: await this.canonicalise(connectionId, target), error: null };
+  }
+
+  /**
+   * Run `repos list` for the requested scopes and merge them.
+   *
+   * The two scopes are independent execs on one connection, so they are issued
+   * together: the local scan touches the filesystem and the remote one calls
+   * the GitHub API, and serialising them would add the slower of the two to
+   * every picker open for nothing.
+   *
+   * A missing or unauthenticated `gh` leaves `remote.state` set to
+   * `gh-missing` / `gh-unauthenticated` with no rows, and `ok` stays true for
+   * the local scope — the picker still lists local clones. Only a genuine
+   * failure of a requested scope clears `ok`.
+   */
+  async reposList(connectionId: string, request: ReposListRequest = {}): Promise<ReposListResult> {
+    const scope = request.scope ?? 'both';
+    const wantLocal = scope === 'local' || scope === 'both';
+    const wantRemote = scope === 'remote' || scope === 'both';
+
+    const localOptions: ReposListOptions = {
+      scope: 'local',
+      roots: request.roots,
+      maxDepth: request.maxDepth,
+    };
+    const remoteOptions: ReposListOptions = { scope: 'remote', limit: request.limit };
+
+    const [local, remote] = await Promise.all([
+      wantLocal ? this.helper.reposList(connectionId, localOptions) : Promise.resolve(null),
+      wantRemote ? this.helper.reposList(connectionId, remoteOptions) : Promise.resolve(null),
+    ]);
+
+    return {
+      ok: scopeOk(local) && scopeOk(remote),
+      repos: mergeRepos(local?.repos ?? [], remote?.repos ?? []),
+      local,
+      remote,
+    };
+  }
+
+  /**
+   * Clone a GitHub repo and return the created path.
+   *
+   * A clone is the one slow step in this flow — tens of seconds for a large
+   * repo — so it emits lifecycle events through [onProgress] the way SFTP
+   * transfers do: `started` as soon as the exec is issued, `finished` when it
+   * lands. The renderer keys them by its own `requestId`, exactly as it keys
+   * `sftp:event:progress` by `transferId`.
+   *
+   * They are lifecycle events, not byte counts, and deliberately so: `git`
+   * writes its progress meter to stderr, and `SshService.exec` buffers a
+   * channel to completion. Streaming real percentages would mean a new
+   * raw-channel exec API on SshService for one call site. What the renderer
+   * needs from this is "it started, it is still going, it finished" — which
+   * these give — rather than a progress bar the helper cannot feed anyway.
+   */
+  async cloneRepo(
+    connectionId: string,
+    request: ReposCloneOptions & { requestId?: string },
+    onProgress?: (progress: CloneProgress) => void,
+  ): Promise<CloneResult> {
+    const requestId = request.requestId ?? '';
+    const repository = request.repository;
+    onProgress?.({ requestId, phase: 'started', repository });
+    const outcome = await this.helper.reposClone(connectionId, {
+      repository,
+      root: request.root,
+      folder: request.folder,
+      protocol: request.protocol,
+    });
+    const result: CloneResult = {
+      ok: outcome.ok,
+      path: outcome.path,
+      alreadyExists: outcome.alreadyExists,
+      error: outcome.error,
+      ...(outcome.state ? { state: outcome.state } : {}),
+    };
+    onProgress?.({
+      requestId,
+      phase: 'finished',
+      repository,
+      ...(result.path ? { path: result.path } : {}),
+      ...(result.error ? { error: result.error } : {}),
+    });
+    return result;
+  }
+
+  /**
+   * Start a session in [folder] — the single entry point all three routes
+   * converge on.
+   *
+   * Sequence:
+   *  1. resolve `$HOME` (cached) and canonicalise the folder;
+   *  2. confirm the folder EXISTS — the helper does not (a `-c` pointing at a
+   *     missing directory still exits 0 and lands the pane in `$HOME`);
+   *  3. derive the name from the folder;
+   *  4. ask the host whether that session is already open, and — under the
+   *     `unique` policy — for the first free `-N` variant;
+   *  5. create, idempotently.
+   */
+  async startSession(
+    connectionId: string,
+    request: StartSessionRequest,
+  ): Promise<StartSessionResult> {
+    const { home } = await this.home(connectionId);
+    const folder = request.folder.trim();
+
+    const exists = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(directoryExistsCommand(folder)),
+    );
+    if (exists.exitCode !== 0) {
+      return {
+        ok: false,
+        sessionName: null,
+        folder: null,
+        reused: false,
+        via: null,
+        error: `Start folder does not exist on the host: ${folder}`,
+        code: 'folder-missing',
+      };
+    }
+    // Canonicalise AFTER the existence check so `~` and symlinked paths derive
+    // the same name as the folder the user browsed to.
+    const canonical = await this.canonicalise(connectionId, folder);
+    const base = resolveSessionName(request.customName ?? null, canonical, home);
+
+    const policy = request.namePolicy ?? 'reuse';
+    let name = base;
+    let reused = false;
+    if (policy === 'unique') {
+      name = await this.freeSessionName(connectionId, base);
+    } else {
+      const has = await this.ssh.exec(
+        connectionId,
+        pathAwareCommand(sessionExistsCommand(base)),
+      );
+      reused = has.exitCode === 0;
+    }
+
+    const created = await this.helper.createSession(connectionId, { name, cwd: canonical });
+    if (!created.ok) {
+      return {
+        ok: false,
+        sessionName: null,
+        folder: canonical,
+        reused: false,
+        via: created.via,
+        error: created.error,
+        code: 'create-failed',
+      };
+    }
+    return {
+      ok: true,
+      sessionName: created.name,
+      folder: canonical,
+      reused,
+      via: created.via,
+      error: null,
+      code: null,
+    };
+  }
+
+  /**
+   * The first free `<base>`, `<base>-2`, … on the host.
+   *
+   * Fail-safe: any non-zero exit or unparseable reply falls back to [base], so
+   * a broken probe can never BLOCK a create — it just gives up its opinion and
+   * lets the idempotent create do what it always did.
+   */
+  private async freeSessionName(connectionId: string, base: string): Promise<string> {
+    const probe = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(freeSessionNameCommand(base)),
+    );
+    if (probe.exitCode !== 0) return base;
+    const lines = probe.stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    return lines[lines.length - 1] ?? base;
+  }
+
+  /** `cd … && pwd -P`, falling back to the input when it cannot be resolved. */
+  private async canonicalise(connectionId: string, path: string): Promise<string> {
+    const res = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(resolveDirectoryCommand(path)),
+    );
+    if (res.exitCode !== 0) return path;
+    const line = res.stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0);
+    return line ?? path;
+  }
+}
+
+/** A scope that was not requested cannot make the call fail. */
+function scopeOk(scope: ReposScopeResult | null): boolean {
+  if (scope === null) return true;
+  // gh being absent or logged out is a normal host state, not a failed call.
+  return scope.state === 'ok' || scope.state === 'gh-missing' || scope.state === 'gh-unauthenticated';
+}
+
+// Re-exported so the preload can type `window.api.projects` without reaching
+// into three modules.
+export type { ReposListResult, ReposScopeResult, ReposCloneOptions, CreateSessionVia };

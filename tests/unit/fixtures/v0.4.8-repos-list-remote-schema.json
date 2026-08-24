@@ -1,0 +1,26 @@
+[
+  {
+    "full_name": "alexeygrigorev/pocketshell",
+    "local": null,
+    "name": "pocketshell",
+    "owner": "alexeygrigorev",
+    "remote": {
+      "default_branch": "main",
+      "html_url": "https://github.com/alexeygrigorev/pocketshell",
+      "ssh_url": "git@github.com:alexeygrigorev/pocketshell.git",
+      "updated_at": "2026-05-27T12:00:00Z"
+    }
+  },
+  {
+    "full_name": "alexeygrigorev/dataops",
+    "local": null,
+    "name": "dataops",
+    "owner": "alexeygrigorev",
+    "remote": {
+      "default_branch": "main",
+      "html_url": "https://github.com/alexeygrigorev/dataops",
+      "ssh_url": "git@github.com:alexeygrigorev/dataops.git",
+      "updated_at": "2026-04-02T08:15:00Z"
+    }
+  }
+]
