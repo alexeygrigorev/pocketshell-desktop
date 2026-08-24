@@ -44,7 +44,10 @@ async function launchApp(): Promise<ElectronApplication> {
     launch(opts: { executablePath: string; args: string[]; env: NodeJS.ProcessEnv }): Promise<ElectronApplication>;
   };
   // Use the project's electron to run the built main + preload + renderer.
-  const electronPath = require.resolve('electron/cli.js');
+  // `require('electron')` resolves to the real binary (electron.exe on
+  // Windows); electron/cli.js is not launchable and fails with
+  // "Process failed to launch!".
+  const electronPath = require('electron') as unknown as string;
   const mainPath = resolve(__dirname, '..', '..', 'out', 'main', 'index.js');
   return electron.launch({
     executablePath: electronPath,
