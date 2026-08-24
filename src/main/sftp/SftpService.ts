@@ -241,7 +241,7 @@ function stat(sftp: SFTPWrapper, path: string): Promise<StatsLike> {
   return new Promise((resolve, reject) => {
     sftp.stat(path, (err, stats) => {
       if (err) reject(err);
-      else resolve(stats as unknown as StatsLike);
+      else resolve(stats);
     });
   });
 }

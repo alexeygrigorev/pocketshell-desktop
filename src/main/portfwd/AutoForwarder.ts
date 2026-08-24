@@ -3,7 +3,6 @@ import type { ConnectionRegistry } from '../ssh/ConnectionRegistry.js';
 import type { ForwardSpec } from '../../shared/types.js';
 import { Forwarder, type ForwardState } from './Forwarder.js';
 import { scanRemotePorts, type RemotePort } from './scanRemotePorts.js';
-import { pathAwareCommand } from '../helper/bootstrap.js';
 
 /** Re-exported so the IPC/preload layer imports the type from one place. */
 export type { ForwardState };

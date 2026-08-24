@@ -141,9 +141,11 @@ export class PocketshellClient {
     if (res.exitCode !== 0) return [];
     try {
       const parsed: unknown = JSON.parse(res.stdout.trim());
-      if (Array.isArray(parsed)) return parsed;
+      // Array.isArray narrows `unknown` to `any[]`, so each branch is cast
+      // back to `unknown[]` rather than leaking `any` to the caller.
+      if (Array.isArray(parsed)) return parsed as unknown[];
       const envelope = (parsed as { profiles?: unknown } | null)?.profiles;
-      return Array.isArray(envelope) ? envelope : [];
+      return Array.isArray(envelope) ? (envelope as unknown[]) : [];
     } catch {
       return [];
     }
@@ -157,8 +159,10 @@ export class PocketshellClient {
     );
     if (res.exitCode !== 0) return [];
     try {
-      const parsed = JSON.parse(res.stdout.trim());
-      return Array.isArray(parsed) ? parsed : [];
+      // Typed `unknown`, matching listProfiles above: an untyped JSON.parse
+      // leaks `any` through the return and defeats checking downstream.
+      const parsed: unknown = JSON.parse(res.stdout.trim());
+      return Array.isArray(parsed) ? (parsed as unknown[]) : [];
     } catch {
       return [];
     }
