@@ -3,10 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Strict CSP: no inline scripts/styles in prod. Dev injects its own via Vite. -->
+    <!-- Strict CSP: no inline scripts/styles in prod. Dev injects its own via Vite.
+         img-src carries `blob:` for the object URLs the composer mints to preview
+         a locally-staged attachment (PromptComposer's previewFor). Those bytes are
+         already in this process and never touch the network, so the grant widens
+         nothing: without it the thumbnails are simply blocked in the built app. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'"
     />
     <title>PocketShell</title>
   </head>
