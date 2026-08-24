@@ -18,7 +18,17 @@ RUN apk add --no-cache python3 py3-pip git bash \
 # the named package's entrypoints to ~/.local/bin — so pocketshell's
 # `shutil.which("tmuxctl")` finds nothing unless tmuxctl is installed as its
 # own tool too. Install both so their CLIs land on PATH.
-RUN su testuser -c 'uv tool install pocketshell && uv tool install tmuxctl' \
+#
+# PIN THE VERSION. This was previously an unpinned `uv tool install
+# pocketshell`, which does not mean "latest" — it means "whatever was latest
+# when this layer was first cached". The image sat at 0.4.8 while real hosts
+# ran 0.4.44, so integration and E2E never exercised what users actually run,
+# and four parser bugs reached the app that way (a `{profiles: [...]}`
+# envelope, a null `percent_remaining`, a removed `--json` flag, and a
+# fixed-width resumable table whose columns overflow). Bump this deliberately
+# and re-capture the fixtures under tests/unit/fixtures/ when you do.
+ARG POCKETSHELL_VERSION=0.4.44
+RUN su testuser -c "uv tool install 'pocketshell==${POCKETSHELL_VERSION}' && uv tool install tmuxctl" \
     && mkdir -p /home/testuser/.local/bin
 
 ENV PATH="/home/testuser/.local/bin:${PATH}"
