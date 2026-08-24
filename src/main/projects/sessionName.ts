@@ -27,21 +27,12 @@
  * create time. See `freeSessionNameCommand` in ./commands.ts.
  */
 
-/**
- * Normalise a single path component to tmux-safe characters.
- *
- * Order matters and mirrors tmuxctl: `.` and `:` collapse to `_` FIRST
- * (tmux forbids both in session names — `:` is its window/pane separator),
- * then any other disallowed run collapses to a single `-`, then leading and
- * trailing `-` are stripped.
- */
-export function sanitisePart(part: string): string {
-  return part
-    .replace(/[.:]+/g, '_')
-    .replace(/[^A-Za-z0-9_-]+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-}
+import { sanitisePart } from '../../shared/sessionNameParts.js';
+
+// The component sanitiser lives in shared because the renderer must test names
+// against the same regex this module derives them with; re-exported here so
+// callers of this module are unaffected. See ../../shared/sessionNameParts.ts.
+export { sanitisePart };
 
 /** Sanitise a whole user-entered label (trimmed, then per-component rules). */
 export function sanitiseName(name: string): string {

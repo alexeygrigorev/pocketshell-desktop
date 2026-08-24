@@ -4,7 +4,6 @@ import {
   normaliseProjectFolderName,
   resolveSessionName,
   sanitiseName,
-  sanitisePart,
   sessionBaseName,
 } from '@main/projects/sessionName';
 
@@ -73,24 +72,8 @@ describe('sessionBaseName', () => {
   });
 });
 
-describe('sanitisePart', () => {
-  it('collapses `.`/`:` runs to a single `_` before anything else', () => {
-    expect(sanitisePart('a..b')).toBe('a_b');
-    expect(sanitisePart('a::b')).toBe('a_b');
-    expect(sanitisePart('v1.2.3')).toBe('v1_2_3');
-  });
-
-  it('collapses any other disallowed run to a single `-` and trims it', () => {
-    expect(sanitisePart('a  b')).toBe('a-b');
-    expect(sanitisePart('!!a!!')).toBe('a');
-    expect(sanitisePart('...')).toBe('_');
-    expect(sanitisePart('!!!')).toBe('');
-  });
-
-  it('leaves already-safe characters alone', () => {
-    expect(sanitisePart('Abc_123-x')).toBe('Abc_123-x');
-  });
-});
+// `sanitisePart` itself now lives in src/shared/sessionNameParts.ts and is
+// covered by tests/unit/sessionNameParts.test.ts; this module re-exports it.
 
 describe('resolveSessionName', () => {
   it('prefers a meaningful custom label', () => {

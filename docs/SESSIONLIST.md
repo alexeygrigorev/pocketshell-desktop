@@ -28,7 +28,7 @@ imagery lags the code). Five compounding failures at the real distribution:
    row and a disclosure affordance to convey zero information.
 2. **The two lines are near-duplicates by construction.** The session name
    is *derived from the folder path*: `~/git/dataops` → `git-dataops`
-   (`sessionBaseName`, src/main/projects/sessionName.ts:75-104). Folder
+   (`sessionBaseName`, src/main/projects/sessionName.ts:66-95). Folder
    `dataops` + session `git-dataops` is the same fact twice.
 3. **Both levels truncate into uselessness.** The session row indents 28px
    (SessionTree.vue:287), then spends width on a dot, an agent badge, an
@@ -122,8 +122,8 @@ disambiguator — always lives, and where the absolute timestamp retreats to.
 ## 4. Display-label rules
 
 Let `label = defaultLabelForPath(canonicalisePath(session.path))`
-(sessionGrouping.ts:45-66) and `base = sanitisePart(label)` (the regex at
-src/main/projects/sessionName.ts:38-44; see §8 for where it must live).
+(sessionGrouping.ts:56-84) and `base = sanitisePart(label)` (the regex at
+src/shared/sessionNameParts.ts:21-27; see §8 for why it lives there).
 
 1. **Derived-name suppression.** The session name is *redundant* when
    `name === base || name.endsWith('-' + base)` — this covers
@@ -221,10 +221,11 @@ sessionGrouping.ts:69-71) → name asc.
   `defaultLabelForPath` / `sessionActivity`. Keep `groupSessionsByFolder`
   exported — `NewSessionDialog`'s folder-first flow and the unit tests
   still speak folders.
-- **`sanitisePart` must reach the renderer.** It lives in the main process
-  (src/main/projects/sessionName.ts:38-44). Lift it (and only it) to a
-  shared module (e.g. `src/shared/sessionNameParts.ts`) re-exported by
-  `sessionName.ts`, rather than duplicating the regex.
+- **`sanitisePart` reaches the renderer via shared.** It (and only it) now
+  lives in `src/shared/sessionNameParts.ts:21-27`, re-exported by
+  `src/main/projects/sessionName.ts:30-35` for that module's callers, so the
+  renderer's redundancy test runs the derivation's own regex instead of a
+  duplicate. Covered by tests/unit/sessionNameParts.test.ts.
 - **Design gates** (tests/unit/designGates.test.ts:53, 74): no new hex —
   every color above is an existing token (DESIGN.md:506-539); no
   character-as-icon — the chevron *disappears* rather than being replaced,

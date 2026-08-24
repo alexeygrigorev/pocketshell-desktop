@@ -31,14 +31,8 @@
  * `defaultLabelForPath` are the shared label rules, and the folder-first
  * creation flow still speaks folders.
  */
+import { sanitisePart } from '../shared/sessionNameParts';
 import type { SessionAgentKind, SessionSummary } from '../shared/types';
-// Value import across the main/renderer line, deliberately and narrowly:
-// `sanitisePart` is pure string logic with no Node dependency, and the
-// redundancy test below must use the EXACT regex the host derives names with
-// or it will suppress the wrong rows. docs/SESSIONLIST.md §8 asks for it to be
-// lifted into `src/shared/` and re-exported; that file belongs to another
-// owner, so this import stands in until it moves. Nothing else crosses.
-import { sanitisePart } from '../main/projects/sessionName';
 
 /** Sentinel path for sessions whose working directory is unknown. */
 export const UNTRACKED_PATH = '::untracked::';
