@@ -3,6 +3,7 @@ import { ipc } from '../shared/channels.js';
 import type {
   AttachmentSource,
   BootstrapResult,
+  ConnectionState,
   ConnectResult,
   ExecResult,
   HostEntry,
@@ -51,6 +52,23 @@ const api = {
     /** Close a connection. */
     close: (connectionId: string): Promise<boolean> =>
       ipcRenderer.invoke(ipc.ssh.close, connectionId),
+
+    /**
+     * Subscribe to connection-state changes. Fires `'lost'` when the
+     * transport drops underneath us and `'idle'` on a clean disconnect, so
+     * the UI can distinguish "your link died" from "you clicked disconnect".
+     * Returns an unsubscribe function.
+     */
+    onState: (
+      listener: (payload: { connectionId: string; state: ConnectionState }) => void,
+    ): (() => void) => {
+      const handler = (
+        _e: unknown,
+        payload: { connectionId: string; state: ConnectionState },
+      ): void => listener(payload);
+      ipcRenderer.on(ipc.ssh.state, handler);
+      return () => ipcRenderer.removeListener(ipc.ssh.state, handler);
+    },
   },
 
   shell: {
