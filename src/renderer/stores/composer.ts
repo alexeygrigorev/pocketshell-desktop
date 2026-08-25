@@ -10,6 +10,7 @@ import {
   insertCommandText,
 } from '../../shared/composerText';
 import { composerTiming, withTimeout } from '../../shared/composerSend';
+import { defaultGeometry, type ComposerGeometry } from '../../shared/composerGeometry';
 
 /**
  * Prompt-composer state: one record per session, plus ONE app-level visibility.
@@ -24,15 +25,24 @@ import { composerTiming, withTimeout } from '../../shared/composerSend';
  *
  * The split between what is keyed and what is not is the whole design here:
  *
- *   per session   draft, staged attachments, caret, dragged height, the error
- *                 banner, in-flight flags. These are FACTS ABOUT A SESSION —
- *                 your half-written prompt for `build` has no business showing
- *                 up in `main`.
- *   app level     open / closed / maximized. That is a PREFERENCE ABOUT THE
- *                 TOOL. Keying it per session meant a session you had never
- *                 opened the composer on started from `blankState()` — open —
- *                 so closing the panel and switching sessions brought it
- *                 straight back, which is exactly what the user reported.
+ *   per session   draft, staged attachments, caret, the error banner,
+ *                 in-flight flags. These are FACTS ABOUT A SESSION — your
+ *                 half-written prompt for `build` has no business showing up
+ *                 in `main`.
+ *   app level     open / closed / maximized, and the card's GEOMETRY. Those are
+ *                 PREFERENCES ABOUT THE TOOL. Keying the mode per session meant
+ *                 a session you had never opened the composer on started from
+ *                 `blankState()` — open — so closing the panel and switching
+ *                 sessions brought it straight back, which is what the user
+ *                 reported.
+ *
+ * The card's size and position sit on the app-level side for the same reason,
+ * and the height moved there with them (it used to be per session). Where the
+ * composer sits on screen describes your WINDOW LAYOUT, not any conversation:
+ * a per-session position would make the card jump around as you switch
+ * sessions, which is precisely the bug just fixed for open/closed. The pane is
+ * shared by every session too, so a placement that is legal for one is legal
+ * for all.
  *
  * Every action below maps one-for-one onto a Kotlin method so the port stays
  * auditable; the citations are in the doc comments.
@@ -58,8 +68,6 @@ export interface ComposerSessionState {
   /** 0 = idle. Mirrors Android's AttachmentUploadState. */
   uploadingCount: number;
   connectionDegraded: boolean;
-  /** User-dragged height in px; null = the default for the mode. */
-  height: number | null;
   /** Caret offset, so a session switch restores where you were typing. */
   caret: number;
 }
@@ -68,25 +76,30 @@ export interface ComposerSessionState {
 interface PersistedState {
   draft: string;
   attachments: Omit<StagedAttachment, 'previewDataUrl'>[];
-  height: number | null;
   caret: number;
 }
 
-/** The app-level half: whether the panel is showing, and how, when it is. */
-interface PersistedVisibility {
+/** The app-level half: whether the panel is showing, and where its box is. */
+interface PersistedLayout {
   mode: ComposerMode;
   lastOpenMode: 'docked' | 'expanded';
+  geometry: ComposerGeometry;
 }
 
 const STORAGE_KEY = 'pocketshell.composer.v1';
 /**
  * Deliberately a SECOND key rather than a version bump of the first. The
  * per-session blob keeps its shape and its name, so the drafts a user already
- * has on disk survive this change; the two fields that moved out of it simply
- * stop being read there. An old blob's leftover `mode` is ignored, which is the
- * correct migration — a per-session mode is exactly what is being retired.
+ * has on disk survive this change; the fields that moved out of it simply stop
+ * being read there. An old blob's leftover `mode`/`height` are ignored, which
+ * is the correct migration — per-session visibility and size are exactly what
+ * is being retired.
+ *
+ * The STRING keeps its old `visibility` name even though the payload has since
+ * grown `geometry`: renaming it would orphan the blob and silently reopen every
+ * user's composer. A stale name is cheaper than a lost preference.
  */
-const VISIBILITY_KEY = 'pocketshell.composer.visibility.v1';
+const LAYOUT_KEY = 'pocketshell.composer.visibility.v1';
 
 function blankState(): ComposerSessionState {
   return {
@@ -96,7 +109,6 @@ function blankState(): ComposerSessionState {
     sendInFlight: false,
     uploadingCount: 0,
     connectionDegraded: false,
-    height: null,
     caret: 0,
   };
 }
@@ -121,11 +133,20 @@ export const useComposerStore = defineStore('composer', () => {
   const batches = new Map<string, Batch>();
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const restoredVisibility = loadVisibility();
+  const restoredLayout = loadLayout();
   /** Open / closed / maximized — ONE value for the app, not one per session. */
-  const mode = ref<ComposerMode>(restoredVisibility.mode);
+  const mode = ref<ComposerMode>(restoredLayout.mode);
   /** What `hidden` re-opens into, so docked-vs-maximized survives a close. */
-  const lastOpenMode = ref<'docked' | 'expanded'>(restoredVisibility.lastOpenMode);
+  const lastOpenMode = ref<'docked' | 'expanded'>(restoredLayout.lastOpenMode);
+  /**
+   * Where the card sits and how big it is, in dock coordinates
+   * (src/shared/composerGeometry.ts). Stored RAW — never re-clamped to the
+   * current pane — so shrinking the window and restoring it puts the card back
+   * where the user left it instead of permanently rewriting their layout to
+   * whatever fitted the smallest window they ever had. The component clamps for
+   * display on every render.
+   */
+  const geometry = ref<ComposerGeometry>(restoredLayout.geometry);
 
   // -------------------------------------------------------------------------
   // Persistence — the desktop replacement for SavedStateHandle (:2544, :2558).
@@ -143,7 +164,6 @@ export const useComposerStore = defineStore('composer', () => {
           ...blankState(),
           draft: value.draft ?? '',
           attachments: (value.attachments ?? []).map((a) => ({ ...a })),
-          height: value.height ?? null,
           caret: value.caret ?? 0,
         };
       }
@@ -155,16 +175,30 @@ export const useComposerStore = defineStore('composer', () => {
   }
 
   /** Defaults to `docked`: the composer is the app's primary surface (§11). */
-  function loadVisibility(): PersistedVisibility {
-    const fallback: PersistedVisibility = { mode: 'docked', lastOpenMode: 'docked' };
+  function loadLayout(): PersistedLayout {
+    const fallback: PersistedLayout = {
+      mode: 'docked',
+      lastOpenMode: 'docked',
+      geometry: defaultGeometry(),
+    };
     if (typeof localStorage === 'undefined') return fallback;
     try {
-      const raw = localStorage.getItem(VISIBILITY_KEY);
+      const raw = localStorage.getItem(LAYOUT_KEY);
       if (!raw) return fallback;
-      const parsed = JSON.parse(raw) as Partial<PersistedVisibility>;
+      const parsed = JSON.parse(raw) as Partial<PersistedLayout>;
+      const g = parsed.geometry;
       return {
         mode: parsed.mode ?? fallback.mode,
         lastOpenMode: parsed.lastOpenMode ?? fallback.lastOpenMode,
+        // Every field checked: a blob written before geometry existed, or one a
+        // half-finished write truncated, must not put NaN into a style.
+        geometry:
+          g &&
+          [g.right, g.bottom, g.width, g.height].every(
+            (n) => typeof n === 'number' && Number.isFinite(n),
+          )
+            ? { right: g.right, bottom: g.bottom, width: g.width, height: g.height }
+            : fallback.geometry,
       };
     } catch {
       return fallback;
@@ -185,7 +219,7 @@ export const useComposerStore = defineStore('composer', () => {
       // A record that says nothing is not worth a line in the blob. `ensure()`
       // touches a key for every session merely visited, so without this the map
       // grows one empty entry per session, forever.
-      if (s.draft === '' && s.attachments.length === 0 && s.height === null) continue;
+      if (s.draft === '' && s.attachments.length === 0) continue;
       out[key] = {
         draft: s.draft,
         attachments: s.attachments.map(({ remotePath, displayName, mimeType }) => ({
@@ -193,15 +227,18 @@ export const useComposerStore = defineStore('composer', () => {
           displayName,
           ...(mimeType === undefined ? {} : { mimeType }),
         })),
-        height: s.height,
         caret: s.caret,
       };
     }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
       localStorage.setItem(
-        VISIBILITY_KEY,
-        JSON.stringify({ mode: mode.value, lastOpenMode: lastOpenMode.value }),
+        LAYOUT_KEY,
+        JSON.stringify({
+          mode: mode.value,
+          lastOpenMode: lastOpenMode.value,
+          geometry: geometry.value,
+        }),
       );
     } catch {
       // Quota or a locked profile — losing a draft on restart beats throwing.
@@ -525,8 +562,20 @@ export const useComposerStore = defineStore('composer', () => {
     else if (mode.value === 'docked') setMode('hidden');
   }
 
-  function setHeight(key: string, height: number | null): void {
-    ensure(key).height = height;
+  /**
+   * The card's box, from a move or a resize drag. Takes the already-clamped
+   * result rather than clamping here: the component owns the pane measurement,
+   * and a store that re-derived it would need a second copy of the DOM's idea
+   * of how big the pane is.
+   */
+  function setGeometry(next: ComposerGeometry): void {
+    geometry.value = next;
+    schedulePersist();
+  }
+
+  /** Back to the resting bottom-right corner at the default size. */
+  function resetGeometry(): void {
+    geometry.value = defaultGeometry();
     schedulePersist();
   }
 
@@ -534,6 +583,7 @@ export const useComposerStore = defineStore('composer', () => {
     states,
     mode,
     lastOpenMode,
+    geometry,
     targetKey,
     ensure,
     setDraft,
@@ -554,7 +604,8 @@ export const useComposerStore = defineStore('composer', () => {
     toggleHidden,
     grow,
     shrink,
-    setHeight,
+    setGeometry,
+    resetGeometry,
     persistNow,
   };
 });

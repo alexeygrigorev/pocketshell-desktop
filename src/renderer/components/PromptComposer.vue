@@ -63,6 +63,16 @@ import {
   type ComposerAgentKind,
 } from '../../shared/composerSend';
 import { filteredCommands, insertionTextFor, type AgentCommand } from '../../shared/agentCommands';
+import {
+  clampGeometry,
+  maximizedGeometry,
+  moveGeometry,
+  resizeGeometry,
+  snapGeometry,
+  type ComposerGeometry,
+  type PaneBox,
+  type ResizeEdge,
+} from '../../shared/composerGeometry';
 import type { AttachmentSource, ConnectionId } from '../../shared/types';
 
 const props = defineProps<{
@@ -82,22 +92,17 @@ const emit = defineEmits<{ (e: 'focus-terminal'): void }>();
 const composer = useComposerStore();
 const shells = useShellsStore();
 
-/** Panel height before the user has ever dragged it. */
-const DEFAULT_HEIGHT = 240;
 /**
- * Floor. Sized so that AT the floor the toolbar, two lines of draft, the tile
- * strip and the Send row all still fit — verified from
- * docs/screenshots/composer-03-min-height.png, where the previous 150px floor
- * squeezed the textarea into a clipped sliver.
+ * Every edge and every corner, so the card resizes the way a window does.
+ *
+ * Edges first, corners last: they are siblings at one z-index, so DOM order is
+ * the hit-test tiebreak, and a corner has to come after the two edges it
+ * overlaps or it would never be reachable.
+ *
+ * The sizes and floors these drags clamp against live in
+ * src/shared/composerGeometry.ts, with the reasoning for each number.
  */
-const MIN_HEIGHT = 190;
-/**
- * VS Code caps its panel at ~80% of the editor area, and so do we: at 85% the
- * Conversation tab above it lost its empty state entirely
- * (docs/screenshots/composer-11-conversation-tab.png), which is the one thing a
- * split panel must never do.
- */
-const MAX_HEIGHT_FRACTION = 0.8;
+const RESIZE_EDGES: readonly ResizeEdge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 
 const rootEl = ref<HTMLDivElement | null>(null);
 const draftEl = ref<HTMLTextAreaElement | null>(null);
@@ -114,7 +119,6 @@ const FALLBACK: ComposerSessionState = {
   sendInFlight: false,
   uploadingCount: 0,
   connectionDegraded: false,
-  height: null,
   caret: 0,
 };
 
@@ -122,6 +126,19 @@ const state = computed<ComposerSessionState>(() => composer.states[key.value] ??
 /** App-level, not per session — see the store's header comment. */
 const mode = computed(() => composer.mode);
 const attachments = computed(() => state.value.attachments);
+
+/**
+ * What the collapsed pill says.
+ *
+ * A preserved draft has to stay discoverable (§12), and the pill used to signal
+ * one with a dot beside the words "Compose prompt—". Showing the draft's own
+ * first line instead answers the question that dot could only raise — WHICH
+ * unsent prompt is waiting — in the same space, so the dot went with it.
+ */
+const railPreview = computed(() => {
+  const line = state.value.draft.split('\n').find((l) => l.trim() !== '');
+  return line === undefined ? '' : line.trim();
+});
 
 // ---------------------------------------------------------------------------
 // Slash commands
@@ -631,53 +648,97 @@ function onGlobalKey(e: KeyboardEvent): void {
 }
 
 // ---------------------------------------------------------------------------
-// Drag-to-resize (§23.7)
+// Moving and resizing the card (§21.1, §23.7)
+//
+// One drag loop serves both: a press on the header MOVES the card, a press on
+// an edge grip RESIZES it. The arithmetic for each lives in
+// shared/composerGeometry.ts, so the rules that keep the card on-screen and
+// usable are unit-tested rather than re-derived from mouse events here.
 // ---------------------------------------------------------------------------
 
-let dragStartY = 0;
-let dragStartHeight = 0;
+/** The dock's content box — what the card's geometry is measured against. */
+const paneBox = ref<PaneBox | null>(null);
+let dockEl: HTMLElement | null = null;
+let paneObserver: ResizeObserver | null = null;
+
+function measurePane(): void {
+  if (!dockEl) return;
+  paneBox.value = { width: dockEl.clientWidth, height: dockEl.clientHeight };
+}
+
+type DragIntent = { kind: 'move' } | { kind: 'resize'; edge: ResizeEdge };
+let drag: (DragIntent & { x: number; y: number; from: ComposerGeometry }) | null = null;
 
 /**
- * The height `.composer`'s own `max-height: 80%` is a percentage OF — the dock's
- * content box, i.e. the session body minus the float inset at top and bottom.
- *
- * Measuring the padding rather than assuming it matters: the drag clamp and the
- * CSS cap have to agree, or dragging past the cap keeps growing the REMEMBERED
- * height while the card visibly stops, and the panel then restores to a size it
- * never had. (Before the dock spanned the body this read the card's own height
- * as the room available for the card, so dragging upward clamped against 80% of
- * the current height and walked the panel down to the floor instead.)
+ * The box to PAINT, which is not always the box that is stored: `expanded`
+ * ignores the remembered geometry entirely (that is what restore returns to),
+ * and every other mode is clamped to the current pane for display only. The
+ * store keeps the raw numbers, so shrinking the window and restoring it puts
+ * the card back where the user left it.
  */
-function roomForCard(): number {
-  const dock = rootEl.value?.parentElement;
-  if (!dock) return window.innerHeight;
-  const style = getComputedStyle(dock);
-  const inset = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-  return dock.clientHeight - (Number.isFinite(inset) ? inset : 0);
-}
+const card = computed<ComposerGeometry>(() => {
+  const pane = paneBox.value;
+  // One frame, before the first measurement lands: the stored box is the best
+  // guess available, and it was legal for the last pane this window had.
+  if (!pane) return composer.geometry;
+  if (mode.value === 'expanded') return maximizedGeometry(pane);
+  return clampGeometry(composer.geometry, pane);
+});
 
-function onHandleDown(e: MouseEvent): void {
-  if (!rootEl.value) return;
+function beginDrag(e: MouseEvent, intent: DragIntent): void {
+  if (mode.value === 'hidden' || e.button !== 0) return;
+  // Also stops the press from moving focus, so dragging the card by its header
+  // never costs the caret its place in the draft.
   e.preventDefault();
-  dragStartY = e.clientY;
-  dragStartHeight = rootEl.value.offsetHeight;
-  window.addEventListener('mousemove', onHandleMove);
-  window.addEventListener('mouseup', onHandleUp);
+  measurePane();
+  drag = { ...intent, x: e.clientX, y: e.clientY, from: card.value };
+  window.addEventListener('mousemove', onDragMove);
+  window.addEventListener('mouseup', onDragEnd);
 }
 
-function onHandleMove(e: MouseEvent): void {
-  const raw = dragStartHeight + (dragStartY - e.clientY);
-  const max = Math.round(roomForCard() * MAX_HEIGHT_FRACTION);
-  const height = Math.max(MIN_HEIGHT, Math.min(raw, max));
-  composer.setHeight(key.value, height);
-  // A drag always produces a concrete remembered size, so it leaves the
-  // maximized state — exactly like dragging the VS Code panel's sash.
+function onDragMove(e: MouseEvent): void {
+  const pane = paneBox.value;
+  if (!drag || !pane) return;
+  const dx = e.clientX - drag.x;
+  const dy = e.clientY - drag.y;
+  composer.setGeometry(
+    drag.kind === 'move'
+      ? moveGeometry(drag.from, dx, dy, pane)
+      : resizeGeometry(drag.from, dx, dy, drag.edge, pane),
+  );
+  // A drag always produces a concrete remembered box, so it leaves the
+  // maximized state — exactly like dragging a maximized OS window restores it
+  // under the cursor. `drag.from` IS the maximized box, so nothing jumps.
   if (mode.value !== 'docked') composer.setMode('docked');
 }
 
-function onHandleUp(): void {
-  window.removeEventListener('mousemove', onHandleMove);
-  window.removeEventListener('mouseup', onHandleUp);
+function onDragEnd(): void {
+  window.removeEventListener('mousemove', onDragMove);
+  window.removeEventListener('mouseup', onDragEnd);
+  const pane = paneBox.value;
+  // Snap on release only, and only after a MOVE. During the drag the card
+  // follows the pointer 1:1 (DESIGN.md §5.9), and snapping a RESIZE would
+  // silently change the size the user had just chosen.
+  if (drag?.kind === 'move' && pane) {
+    composer.setGeometry(snapGeometry(composer.geometry, pane));
+  }
+  drag = null;
+}
+
+/**
+ * The header strip is the card's title bar: press it and the card follows the
+ * pointer. Presses that land on a button are left alone — maximize and close
+ * are the two things in this strip that are not the handle.
+ */
+function onHeaderDown(e: MouseEvent): void {
+  if ((e.target as HTMLElement).closest('button')) return;
+  beginDrag(e, { kind: 'move' });
+}
+
+/** Double-clicking a title bar maximizes the window, everywhere. Same here. */
+function onHeaderDoubleClick(e: MouseEvent): void {
+  if ((e.target as HTMLElement).closest('button')) return;
+  toggleExpanded();
 }
 
 // ---------------------------------------------------------------------------
@@ -685,19 +746,36 @@ function onHandleUp(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * VS Code semantics: `expanded` is MAXIMIZED (a fraction of the body, ignoring
- * the remembered size), `docked` is the remembered size. Restoring from
- * maximized therefore lands back on exactly the height the user last dragged.
+ * Where the card is painted. `hidden` contributes nothing: the pill is pinned to
+ * the dock's corner by CSS, deliberately ignoring the remembered geometry
+ * (§21.1 — the reserved strip is the one place it can sit without covering a
+ * terminal row).
  */
 const rootStyle = computed(() => {
-  // `hidden` sizes itself from `.composer.hidden`, so it contributes no height.
   if (mode.value === 'hidden') return {};
-  if (mode.value === 'expanded') return { height: `${MAX_HEIGHT_FRACTION * 100}%` };
-  return { height: `${state.value.height ?? DEFAULT_HEIGHT}px` };
+  const g = card.value;
+  return {
+    right: `${g.right}px`,
+    bottom: `${g.bottom}px`,
+    width: `${g.width}px`,
+    height: `${g.height}px`,
+  };
 });
 
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKey, { capture: true });
+  // The dock is this card's containing block AND its bounds; it is the parent
+  // element because the card is mounted straight into it
+  // (SessionWorkspaceView.vue).
+  dockEl = rootEl.value?.parentElement ?? null;
+  measurePane();
+  if (dockEl && typeof ResizeObserver !== 'undefined') {
+    // The pane changes without a window resize too — the session panel's
+    // splitter moves it — and a card clamped to a stale pane would hang off
+    // the edge. Nothing in here resizes the dock, so this cannot feed back.
+    paneObserver = new ResizeObserver(measurePane);
+    paneObserver.observe(dockEl);
+  }
   caret.value = state.value.caret;
   // The composer is the primary surface: land in it (§11).
   if (mode.value !== 'hidden') focusDraft();
@@ -705,7 +783,9 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKey, { capture: true });
-  onHandleUp();
+  paneObserver?.disconnect();
+  paneObserver = null;
+  onDragEnd();
 });
 
 defineExpose({ focusDraft, openComposer });
@@ -731,8 +811,9 @@ defineExpose({ focusDraft, openComposer });
     >
       <AppIcon class="chevron" name="chevron-up" />
       <span class="rail-title">Prompt</span>
-      <span class="ghost">{{ COMPOSER_STRINGS.placeholder }}</span>
-      <AppIcon v-if="state.draft.length" class="draft-dot" name="dot" title="unsent draft" />
+      <span :class="['ghost', { placeholder: !railPreview }]">
+        {{ railPreview || COMPOSER_STRINGS.placeholder }}
+      </span>
       <span v-if="attachments.length" class="rail-badge">
         <AppIcon name="paperclip" />
         {{ attachments.length }}
@@ -741,26 +822,24 @@ defineExpose({ focusDraft, openComposer });
     </button>
 
     <template v-else>
-      <!-- VS Code's sash: a thin row-resize strip on the panel's top edge. -->
+      <!-- Every edge and corner is a resize grip. The top one keeps the sash's
+           look and its double-click, so that affordance is where it always was. -->
       <div
-        class="sash"
-        role="separator"
-        aria-orientation="horizontal"
-        title="Drag to resize · double-click to maximize"
-        @mousedown="onHandleDown"
-        @dblclick="toggleExpanded"
+        v-for="edge in RESIZE_EDGES"
+        :key="edge"
+        :class="['grip', `grip-${edge}`, { sash: edge === 'n' }]"
+        :title="edge === 'n' ? 'Drag to resize · double-click to maximize' : undefined"
+        aria-hidden="true"
+        @mousedown="beginDrag($event, { kind: 'resize', edge })"
+        @dblclick="edge === 'n' && toggleExpanded()"
       ></div>
 
-      <!-- Panel toolbar: title left, window actions right. -->
-      <div class="panel-header">
+      <!-- Panel toolbar, and the card's title bar: press it to move the card.
+           The session name used to sit here and no longer does. The session bar
+           names the session one row above, and the composer is mounted inside
+           that session's workspace, so it could never have meant another one. -->
+      <div class="panel-header" @mousedown="onHeaderDown" @dblclick="onHeaderDoubleClick">
         <span class="panel-title">Prompt</span>
-        <span class="panel-scope">{{ sessionName }}</span>
-        <AppIcon
-          v-if="state.draft.length || attachments.length"
-          class="panel-dirty"
-          name="dot"
-          title="unsent draft"
-        />
         <span class="spacer"></span>
         <button
           class="panel-action"
@@ -947,42 +1026,31 @@ defineExpose({ focusDraft, openComposer });
 
 <style scoped>
 /* ---- the floating card --------------------------------------------------
- * The card is a flex item of `.composer-dock`, which spans the whole session
- * body and pins it bottom-right (SessionWorkspaceView.vue). Everything that
- * makes it read as HOVERING rather than as a bar lives here: it is inset from
- * the pane's edges by the dock's padding, it closes its own corners, and its
- * shadow falls on all four sides instead of only upward.
+ * The card is absolutely positioned inside `.composer-dock`, which is the
+ * session body inset on all four sides (SessionWorkspaceView.vue). Its box —
+ * right, bottom, width, height — is computed in JS and arrives as an inline
+ * style, because the user can now drag all four of those numbers and they have
+ * to be clamped against the pane by rules a unit test can check
+ * (src/shared/composerGeometry.ts).
  *
- * `flex: 0 1 auto` — the inline `height` (the remembered px size, or 80% when
- * maximized) is the basis; it may shrink to honour `max-height` and must never
- * grow to fill the dock, which is body-height now.
+ * What is left here is only what makes it read as HOVERING rather than as a
+ * bar: its own corners, an opaque surface, and a shadow on every side.
  */
 .composer {
-  position: relative;
-  flex: 0 1 auto;
+  position: absolute;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* ~80 columns of the draft's 13px mono, which is the width a prompt is
-     actually written at. Wider than that and the card stops being a card and
-     starts being the old full-bleed bar with corners. */
-  width: min(720px, 100%);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   /* OverlayPanel's elevation, with the Y offset pulled in: that panel is
-     centred and can afford to cast 16px downward, while this one sits a --sp-3
-     gap off the bottom edge and would throw most of its shadow off the pane —
-     leaving the TOP edge, the one that has terminal text behind it, with no
-     separation at all. Same colour, same blur, so both read as one material. */
+     centred and can afford to cast 16px downward, while this one can sit right
+     against the bottom of its dock and would throw most of its shadow off the
+     pane — leaving the TOP edge, the one that has terminal text behind it,
+     with no separation at all. Same colour, same blur, so both read as one
+     material. */
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-}
-/* Backstop for a short window: the remembered height is an absolute px value,
-   so without this a 500px-tall body plus a 600px panel would cover the terminal
-   whole. Resolves against the dock, which is why the dock spans the body. */
-.composer.docked,
-.composer.expanded {
-  max-height: 80%;
 }
 /* Chromium follows the element's own corners here, so the dashed accent traces
    the card's radius rather than boxing it. */
@@ -992,15 +1060,20 @@ defineExpose({ focusDraft, openComposer });
 }
 
 /* ---- closed: the rail pill, so the panel can always be found by eye ------
- * It keeps the card's corner and its elevation and simply shrinks to its
- * content, so closing the panel is the card contracting in place rather than
- * the affordance jumping to a different edge of the window. Its height is the
- * one the pane reserves permanently, so — unlike the open card — the pill
- * never covers a terminal row.
+ * PINNED to the dock's bottom-right corner, deliberately ignoring wherever the
+ * user dragged the open card. Two reasons, which are one reason twice: the pane
+ * permanently reserves `rail + inset` at its bottom edge, and that budget is
+ * only honest if the pill actually lives in it — a pill that wandered would
+ * cover terminal rows while the app went on paying for a strip nobody used. It
+ * also keeps the pill where the eye already learnt to look, which is the whole
+ * job of a collapsed rail. The card's own position is remembered and restored
+ * when it re-opens.
  */
 .composer.hidden {
+  right: 0;
+  bottom: 0;
   width: auto;
-  max-width: min(720px, 100%);
+  max-width: 100%;
   height: var(--composer-rail-h, 32px);
   border-radius: 999px;
 }
@@ -1035,17 +1108,18 @@ defineExpose({ focusDraft, openComposer });
   color: var(--fg-secondary);
   flex: 0 0 auto;
 }
+/* The waiting draft's own first line. Real content, so it reads as text; the
+   placeholder is the only italic, which is what tells the two apart at a glance
+   now that the pill has no separate draft pip. */
 .ghost {
-  font-style: italic;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--fg-secondary);
 }
-/* 8px, not the icon's default 16 — this is a status pip, not an affordance. */
-.draft-dot {
-  color: var(--accent);
-  width: 8px;
-  height: 8px;
+.ghost.placeholder {
+  font-style: italic;
+  color: var(--fg-muted);
 }
 .rail-badge {
   display: inline-flex;
@@ -1068,22 +1142,95 @@ defineExpose({ focusDraft, openComposer });
   flex: 0 0 auto;
 }
 
-/* ---- the sash: VS Code's row-resize strip on the panel's top edge -------
-   The card is not `overflow: hidden` — the slash dropdown deliberately escapes
-   above it — so the one child that paints to a corner has to close it itself. */
-.sash {
-  flex: 0 0 auto;
+/* ---- resize grips -------------------------------------------------------
+ * Overlays on the card's edges, NOT rows in its flex column: an edge strip that
+ * took part in the layout would steal 6px from the draft on every side it
+ * touched, and the corners could not exist at all. Each sits over the card's
+ * own padding, so none of them covers the textarea.
+ *
+ * Corners are declared after edges here as well as in the template, so they win
+ * the hit test at the four points where both would answer.
+ */
+.grip {
+  position: absolute;
+  z-index: 2;
+}
+.grip-n,
+.grip-s {
+  left: 0;
+  right: 0;
   height: 6px;
-  cursor: row-resize;
+  cursor: ns-resize;
+}
+.grip-n {
+  top: 0;
+}
+.grip-s {
+  bottom: 0;
+}
+.grip-e,
+.grip-w {
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+.grip-w {
+  left: 0;
+}
+.grip-e {
+  right: 0;
+}
+.grip-nw,
+.grip-ne,
+.grip-sw,
+.grip-se {
+  width: 14px;
+  height: 14px;
+}
+.grip-nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.grip-ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.grip-sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+.grip-se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+/* The top edge keeps the sash's look: transparent until the cursor rests on it,
+   then VS Code's accent bar. The card is not `overflow: hidden` — the slash
+   dropdown deliberately escapes above it — so this closes its own corners. */
+.grip.sash {
   background: transparent;
   border-radius: var(--r-xl) var(--r-xl) 0 0;
   transition: background var(--dur-fast) var(--ease);
+}
+.grip.sash:hover {
+  background: var(--accent-dim);
+}
+/* Anything clickable that reaches into the 6px edge band has to sit above the
+   grips, or the grip swallows a click that was aimed at the button. */
+.panel-action,
+.send {
+  position: relative;
+  z-index: 3;
 }
 .sash:hover {
   background: var(--accent-dim);
 }
 
-/* ---- panel toolbar ----------------------------------------------------- */
+/* ---- panel toolbar, and the card's title bar ---------------------------- */
 .panel-header {
   flex: 0 0 auto;
   display: flex;
@@ -1092,6 +1239,11 @@ defineExpose({ focusDraft, openComposer });
   height: var(--tabbar-h);
   padding: 0 var(--sp-2) 0 var(--sp-3);
   border-bottom: 1px solid var(--border-soft);
+  /* It is the move handle. `user-select` matters as much as the cursor: without
+     it a drag that starts on the title paints a text selection across the strip
+     while the card moves. */
+  cursor: move;
+  user-select: none;
 }
 .panel-title {
   font-size: var(--fs-100);
@@ -1100,20 +1252,6 @@ defineExpose({ focusDraft, openComposer });
   letter-spacing: 0.08em;
   color: var(--fg);
   flex: 0 0 auto;
-}
-.panel-scope {
-  font-family: var(--font-mono);
-  font-size: var(--fs-100);
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-.panel-dirty {
-  color: var(--accent);
-  width: 8px;
-  height: 8px;
 }
 .panel-action {
   flex: 0 0 auto;

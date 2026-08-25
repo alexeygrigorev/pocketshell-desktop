@@ -4,11 +4,16 @@
 // rather than at the host level, so what you switch between is always
 // "this session's ...". The session list stays visible in the left panel.
 //
-// Two structural notes:
+// Three structural notes:
 //   - The terminal pane stays mounted (v-show, not v-if) across tab switches;
 //     unmounting it would close the SSH shell and drop the tmux attach.
-//   - `.session-body` is a column whose tab content flexes, leaving the bottom
-//     of this pane free for the prompt composer, which docks there.
+//   - The session's identity and its tabs share ONE bar. They were two
+//     full-height rows, which spent 72px of every window on chrome above the
+//     terminal; merging them gives --topbar-h of that back to the pane.
+//   - `.session-body` is the composer's stage: the card floats over the tab
+//     content inside it rather than docking below, and the body reserves a
+//     constant strip at the bottom so the terminal's size never depends on
+//     what the composer is doing.
 //
 // The composer is mounted ONCE here, outside `.tab-body` and never behind a
 // `v-if` on the tab, so the draft, caret and staged attachments survive a tab
@@ -41,6 +46,16 @@ const summary = computed(() => sessions.sessions.find((s) => s.name === sessionN
 
 /** Working directory of the session, used to seed the Files tab. */
 const sessionPath = computed(() => summary.value?.path ?? undefined);
+
+/**
+ * The name's tooltip. The path used to have a line of its own in the header;
+ * now that the header is one row it lives here, because the session name is
+ * derived from that path and rendering both spends the tabs' width restating a
+ * fact the name already carries.
+ */
+const sessionTitle = computed(() =>
+  sessionPath.value ? `${sessionName.value}\n${sessionPath.value}` : sessionName.value,
+);
 
 /**
  * The engine recorded host-side for this session, narrowed to what the composer
@@ -87,23 +102,33 @@ function onFocusTerminal(): void {
 
 <template>
   <div class="session-workspace">
+    <!-- ONE row of chrome, not two. The tabs come first because they are the
+         only thing here that gets clicked, and a leading identity label of
+         unpredictable length would move them horizontally on every session
+         switch — a control that shifts under the cursor per session is worse
+         than a name that sits a little further right. The name trails, where it
+         is read rather than aimed at, and truncates before the tabs ever do. -->
     <header class="session-bar">
-      <span class="session-name">{{ sessionName }}</span>
-      <span v-if="sessionPath" class="session-path muted">{{ sessionPath }}</span>
+      <nav class="tabs">
+        <button :class="['tab', { active: tab === 'terminal' }]" @click="tab = 'terminal'">
+          Terminal
+        </button>
+        <button :class="['tab', { active: tab === 'conversation' }]" @click="tab = 'conversation'">
+          Conversation
+        </button>
+        <button :class="['tab', { active: tab === 'files' }]" @click="tab = 'files'">Files</button>
+      </nav>
+
+      <!-- The path is NOT rendered beside the name. A session is named after
+           the directory it runs in, so the two are one fact written twice —
+           the same redundancy the session panel dropped in b841362. The full
+           path lives on the tooltip, one hover away, where it costs no width. -->
+      <span class="session-name" :title="sessionTitle">{{ sessionName }}</span>
+
       <button class="icon-btn close" title="Close session view" @click="onCloseSession">
         <AppIcon name="close" />
       </button>
     </header>
-
-    <nav class="tabs">
-      <button :class="['tab', { active: tab === 'terminal' }]" @click="tab = 'terminal'">
-        Terminal
-      </button>
-      <button :class="['tab', { active: tab === 'conversation' }]" @click="tab = 'conversation'">
-        Conversation
-      </button>
-      <button :class="['tab', { active: tab === 'files' }]" @click="tab = 'files'">Files</button>
-    </nav>
 
     <div class="session-body">
       <div :class="['tab-body', { 'with-composer': tab !== 'files' }]">
@@ -172,47 +197,64 @@ function onFocusTerminal(): void {
   --composer-rail-h: 32px;
   --composer-inset: var(--sp-3);
 }
+/* ---- one row of chrome ---------------------------------------------------
+ * Identity and tabs used to be two full-height bars, 72px of chrome above every
+ * terminal. Merged they cost --topbar-h and nothing else: the row is ONE bar
+ * height rather than a compromise between two, so the saving is the whole 40px
+ * the tab strip used to occupy.
+ *
+ * The row has no vertical padding on purpose. The tabs are full-height children
+ * of it, which is what lets the active tab's 2px underline sit exactly on the
+ * row's own bottom border — the treatment DESIGN.md §5.4 specifies. Centring
+ * shorter tab buttons inside a taller bar would leave that underline floating
+ * in mid-row with a gap beneath it.
+ */
 .session-bar {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: var(--sp-3);
   height: var(--topbar-h);
   flex: 0 0 auto;
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-3) 0 0;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
+/* Takes the slack, so the name sits hard against the close button rather than
+   drifting with the tab labels' length. */
 .session-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: center;
+  text-align: right;
   font-family: var(--font-mono);
-  font-size: var(--fs-400);
-  line-height: var(--lh-400);
-  font-weight: var(--fw-semibold);
-}
-.session-path {
-  font-family: var(--font-mono);
-  font-size: var(--fs-200);
+  font-size: var(--fs-300);
+  line-height: var(--lh-300);
+  font-weight: var(--fw-medium);
+  color: var(--fg-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .close {
-  margin-left: auto;
+  align-self: center;
   flex-shrink: 0;
 }
 /* Underline tabs, not Android's filled segmented control: a solid cyan
-   segment at 13px in a 32px strip is heavy for a mouse UI. See DESIGN.md §5.4. */
+   segment at 13px is heavy for a mouse UI. See DESIGN.md §5.4. */
 .tabs {
   display: flex;
   gap: var(--sp-1);
-  height: var(--tabbar-h);
   flex: 0 0 auto;
-  padding: 0 var(--sp-3);
-  border-bottom: 1px solid var(--border);
+  padding: 0 0 0 var(--sp-3);
 }
 .tab {
   background: transparent;
   border: none;
+  /* The 2px underline lands on the bar's bottom border because the button is
+     the bar's full height; the -1px pulls it over that hairline instead of
+     stacking a second line under it. */
   border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
   color: var(--fg-secondary);
   padding: 0 var(--sp-3);
   cursor: pointer;
@@ -272,33 +314,32 @@ function onFocusTerminal(): void {
  *
  * Why the dock is the WHOLE body and not a strip at the bottom.
  *
- * It was `left/right/bottom: 0` with an auto height, which made it exactly as
- * tall as the card inside it — and that broke both of the things that need to
- * measure the pane: the card's own `max-height: 80%` had no definite height to
- * resolve against, and the drag-resize handler (which measures its offset
- * parent) was reading the card's height as the room available for the card.
- * Dragging upward therefore clamped against 80% of the card's CURRENT height
- * and collapsed it to the floor. Spanning the body fixes both by making the
- * containing block mean what the code already assumed it meant.
+ * Because the card MOVES. The user drags it anywhere in the pane, so the box it
+ * is confined to has to be the pane, and every clamp in
+ * src/shared/composerGeometry.ts is measured against this element. It also
+ * gives the card's percentages something definite to resolve against, which an
+ * auto-height strip could not.
  *
- * `pointer-events: none` is the price of covering the body: the dock must be
- * transparent to the mouse or it would eat every click meant for the terminal.
- * The card re-enables them for itself.
+ * What it does NOT do is change the terminal's size. The reserve below is a
+ * constant; the dock is an overlay that takes no part in the tab body's layout.
+ * Moving or resizing the card therefore cannot alter the terminal's row count,
+ * whatever corner the user drags it into.
  */
 .composer-dock {
   position: absolute;
-  inset: 0;
+  /* INSET rather than padded. An absolutely positioned child resolves its
+     offsets against its containing block's PADDING box, so padding here would
+     not have held the card off the pane's edges — and, more usefully, insetting
+     the dock itself makes `right: 0; bottom: 0` mean "the resting corner". That
+     is why src/shared/composerGeometry.ts never has to know what the inset is:
+     the dock has already subtracted it. */
+  inset: var(--composer-inset);
   z-index: 5;
-  display: flex;
-  flex-direction: column;
-  /* Bottom-RIGHT, per the user's own sketch, and the side that costs the least:
-     terminal output is left-aligned, so the line starts, the prompt column and
-     the left half of tmux's status bar all stay readable beside the card. */
-  justify-content: flex-end;
-  align-items: flex-end;
-  padding: var(--composer-inset);
   pointer-events: none;
 }
+/* The dock covers the whole pane so the card can be dragged anywhere in it, so
+   the dock MUST be transparent to the mouse or it would eat every click meant
+   for the terminal. The card takes its own events back. */
 .composer-dock > * {
   pointer-events: auto;
 }

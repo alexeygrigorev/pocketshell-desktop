@@ -527,9 +527,9 @@ type ComposerMode = 'hidden' | 'docked' | 'expanded';
 
 | State | Rendering | Geometry |
 | --- | --- | --- |
-| `hidden` | The card shrinks to a **rail pill** in the same corner: chevron, `PROMPT` label, a `Compose prompt…` ghost label, a "draft" dot when a draft exists, an attachment-count badge, and the `Ctrl+\`` hint | 32px tall, width shrink-to-fit, capped at the card's width |
-| `docked` (default) | Full card | the remembered dragged height, default 240px, floor 190px |
-| `expanded` | Same card, maximized | 80% of the workspace body, ignoring the remembered height, which `docked` returns to |
+| `hidden` | A **rail pill**: chevron, `PROMPT` label, the waiting draft's first line (or the `Compose prompt…` placeholder), an attachment-count badge, and the `Ctrl+\`` hint | 32px tall, shrink-to-fit, **pinned** to the dock's bottom-right corner (§21.4) |
+| `docked` (default) | Full card | the remembered geometry: position and size, both dragged by the user, default 720—240 in the resting corner |
+| `expanded` | Same card, maximized | fills the dock: full width, height capped at 80% of the body. Ignores the remembered geometry, which `docked` returns to |
 
 The `hidden` rail is a **desktop addition** and is deliberate: the phone loses
 the composer entirely when closed, so a preserved "Not sent" draft becomes
@@ -583,9 +583,11 @@ justified divergence — record it in the component's header comment.
 ### 12.4 What persists — and the one mechanism NOT to port
 
 Per session key, everything persists across every mode transition and every tab
-switch: draft text, caret/selection, staged attachments, error banner, scroll
-position, and the dragged panel height. The **mode is not among them** — it is
-app-level, stored under its own key (§12, §15).
+switch: draft text, caret/selection, staged attachments, error banner and scroll
+position. The **mode and the card's geometry are not among them** — both are
+app-level, stored under their own key (§12, §15). The height moved to that side
+with the rest of the geometry: a box split across two scopes would have to be
+assembled from two places on every render.
 
 **Do not port the #746 owner-stamp discard-on-switch mechanism.** It exists
 solely because the Android ViewModel is a single activity-scoped instance shared
@@ -701,13 +703,20 @@ export interface ComposerSessionState {
 Keyed by `targetKey = `${connectionId}/${sessionName}``, mirroring the phone's
 `"$hostId/$sessionName"` (`TmuxSessionScreen.kt:2207`).
 
-**Not keyed** (revised, §12): `mode` and `lastOpenMode` are two plain refs on the
-store, persisted under `pocketshell.composer.visibility.v1` — a second key
+**Not keyed** (revised, §12): `mode`, `lastOpenMode` and `geometry` are plain refs
+on the store, persisted under `pocketshell.composer.visibility.v1` — a second key
 rather than a version bump of `pocketshell.composer.v1`, so the drafts already on
-disk survive the change and an old blob's per-session `mode` is simply ignored.
-A record with no draft, no attachments and no dragged height is not written at
-all: `ensure()` touches a key for every session merely visited, and without that
-filter the blob grows one empty entry per session forever.
+disk survive the change and an old blob's per-session `mode`/`height` are simply
+ignored. That key keeps its `visibility` name even though the payload has since
+grown `geometry`: renaming it would orphan the blob and silently reopen every
+user's composer, and a stale name is cheaper than a lost preference. A record
+with no draft and no attachments is not written at all: `ensure()` touches a key
+for every session merely visited, and without that filter the blob grows one
+empty entry per session forever.
+
+`geometry` is stored RAW and never re-clamped to the current pane. A window that
+is briefly made small would otherwise permanently rewrite the user's layout to
+whatever fitted it; the component clamps for display instead (§21.1).
 
 Actions, one-for-one with the Kotlin so the mapping stays auditable:
 
@@ -725,6 +734,7 @@ Actions, one-for-one with the Kotlin so the mapping stays auditable:
 | `discard(key)` — cancels an in-flight upload first | `discardDraft` `:783` |
 | `setConnectionDegraded(key, boolean)` | `setConnectionDegraded` `:850` |
 | `setMode(mode)` / `toggleHidden()` / `grow()` / `shrink()` — **no key**, §12 | *(desktop only)* |
+| `setGeometry(box)` / `resetGeometry()` — **no key**, §21.1 | *(desktop only)* |
 
 Copy the strings exactly:
 
@@ -919,49 +929,72 @@ mapping is: panel chrome `var(--surface)`, draft-box fill `var(--bg)`, draft
 border `var(--border-strong)` (WCAG 1.4.11 — an input's boundary must be ≥3:1),
 accent `var(--accent)`, muted text `var(--fg-secondary)`.
 
-### 21.1 The composer FLOATS — it is a card, not a bar
+### 21.1 The composer FLOATS, and the user places it
 
-The composer is not a docked row and no longer a full-bleed strip either. It is
-a card hovering over the bottom-right of the session body. Three states, one
-geometry:
+The composer is not a docked row, not a full-bleed strip, and no longer even
+fixed to a corner. It is a card the user can drag anywhere in the session body
+and resize from any edge.
 
 ```
  .session-body            position: relative
- └── .composer-dock       position: absolute; inset: 0
-                          justify-content: flex-end; align-items: flex-end
-                          padding: var(--composer-inset)
+ └── .composer-dock       position: absolute; inset: var(--composer-inset)
                           pointer-events: none      ← the terminal stays clickable
-     └── .composer        the card; pointer-events: auto
+     └── .composer        position: absolute; right/bottom/width/height inline
+                          pointer-events: auto
 ```
 
-| Property | Value | Why |
-| --- | --- | --- |
-| Anchor | bottom-**right** of the session body | The user's own sketch, and the cheap side: terminal output is left-aligned, so line starts, the prompt column and the left half of tmux's status bar stay readable beside the card |
-| Inset | `--composer-inset` = `var(--sp-3)` on all four sides | The gap is what reads as *floating*. Zero inset is an overlay that still looks welded to the window |
-| Width | `min(720px, 100%)` | ≈80 columns of the draft's 13px mono — the width a prompt is written at. On a narrow pane it degrades to an inset full-width card |
-| Corners | `var(--r-xl)` | Same radius as `OverlayPanel`: both are panels floating above the workspace, so they are one material |
-| Elevation | `0 8px 32px rgba(0, 0, 0, 0.5)` | `OverlayPanel`'s shadow with the Y offset pulled in from 16px. That panel is centred; this one sits `--sp-3` off the bottom edge and would throw most of a 16px shadow off the pane, leaving the *top* edge — the one with terminal text behind it — with no separation |
-| Height | inline: the remembered px (default 240, floor 190), or `80%` when maximized. `max-height: 80%` is the backstop | The dock spans the whole body precisely so this percentage has a definite height to resolve against |
-| Closed | the card shrinks in place to a 32px rail **pill** (`border-radius: 999px`, width shrink-to-fit) | Closing is the card contracting, not the affordance jumping to another edge |
+**The dock is INSET, not padded.** An absolutely positioned child resolves its
+offsets against its containing block's *padding* box, so padding on the dock
+would not have held the card off the pane's edges. Insetting the dock itself
+does, and it buys something better: `right: 0; bottom: 0` now *means* the
+resting corner, so `src/shared/composerGeometry.ts` never has to know what the
+inset is. The dock has already subtracted it.
 
-**The dock spans the body, and must.** It used to be `left/right/bottom: 0` with
-an auto height, i.e. exactly as tall as the card inside it — which broke both
-things that need to measure the pane: the card's `max-height: 80%` had no
-definite height to resolve against, and the drag-resize handler read the card's
-own height as the room available for the card, so dragging upward clamped to 80%
-of the current height and walked the panel down to its floor. `pointer-events`
-is the price of covering the body and is paid on the dock, not the card.
+**Geometry** is four numbers, in dock coordinates, measured from the corner the
+card rests in:
+
+```ts
+interface ComposerGeometry { right: number; bottom: number; width: number; height: number }
+```
+
+`right`/`bottom` rather than `left`/`top` because the card's home is the
+bottom-right: the resting state is two zeroes instead of arithmetic over the
+pane size, and a pane that gets *shorter* carries the card up with its bottom
+edge instead of pushing it out of sight. The left and top edges are derived when
+a resize needs them.
+
+| | |
+|---|---|
+| Move handle | the **header strip** — the card's title bar, `cursor: move`, `user-select: none`. Presses that land on the maximize/close buttons are excluded; double-clicking it maximizes, as a title bar does everywhere |
+| Resize | **all four edges and all four corners**, 6px strips and 14px corner boxes overlaid on the card's own padding, so none of them covers the textarea. The top one keeps the old sash's look and its double-click. Corners are declared after edges so they win the hit test where both would answer |
+| Floors | 360—190. 360 leaves ~40 mono columns beside the tools pill and Send; 190 is the height at which the toolbar, two draft lines, the tiles and the Send row all still fit |
+| Cap | 80% of the pane's height, and never wider or taller than the pane |
+| Containment | clamped **fully inside** the pane, always. The strongest form of "never draggable off-screen": there is no partially-lost state to recover from, so no rescue affordance is needed |
+| Snapping | on mouse-**up** after a MOVE only, 12px, each axis independently, to that axis's two flush positions. Never during a drag (DESIGN.md §5.9 wants pointer-1:1) and never after a resize, which would silently change the size just chosen |
+| Maximize | fills the dock — full width, capped height. Deliberately unlike the resting card: "maximize" is a request for all the room there is, a different question from how wide a prompt wants to be |
+| Corners / elevation | `--r-xl` and `0 8px 32px rgba(0,0,0,.5)` — §5.5's `OverlayPanel` treatment with the Y offset pulled in from 16px, because a card that can sit flush against the bottom of its dock would throw that shadow off the pane and leave its *top* edge, the one with terminal text behind it, unseparated |
+
+Every rule above is pure arithmetic in `src/shared/composerGeometry.ts` and is
+unit-tested in `tests/unit/composerGeometry.test.ts`. The component's only job
+is to measure the dock (one `ResizeObserver`) and feed deltas in.
+
+Dragging a **maximized** card leaves the maximized state and keeps the box it
+had, exactly like dragging a maximized OS window restores it under the cursor.
 
 ### 21.2 The terminal-never-resizes guarantee
 
 `.tab-body.with-composer` reserves
-`calc(var(--composer-rail-h) + var(--composer-inset))` — **permanently**, open or
-closed or mid-drag. The terminal is therefore sized as though the composer were
-closed and stays that size whatever the panel does, so opening a prompt is never
-an SSH window-change and never makes the remote tmux reflow. The reserve is the
-pill's height *plus* its inset, so the collapsed pill is the one state that
-covers no terminal row at all, including tmux's status bar. The open card does
-overlay rows; that is the trade, and it is why it is only 720px wide.
+`calc(var(--composer-rail-h) + var(--composer-inset))` — **permanently**, open
+or closed, moved or resized or mid-drag. The terminal is therefore sized as
+though the composer were closed and stays that size whatever the card does, so
+opening a prompt is never an SSH window-change and never makes the remote tmux
+reflow.
+
+**Moving and resizing did not weaken this.** The dock is an overlay: it takes no
+part in the tab body's layout, so no card geometry can reach the terminal's box.
+What *did* change is what the reserve is for. It used to be "the strip the pill
+lives in"; it is now "the strip the composer's resting place lives in", and it
+is the one piece of the composer's geometry the user cannot move — see §21.4.
 
 Both constants are declared on `.session-workspace` in `SessionWorkspaceView.vue`
 rather than in `App.vue`'s `:root`: they describe that pane's relationship with
@@ -978,6 +1011,21 @@ That last one is why the card is *not* `overflow: hidden`, which in turn is why
 `.sash` closes the card's top corners itself.
 
 `<style scoped>` per component, matching every existing view.
+### 21.4 The collapsed pill stays in the corner
+
+The card moves; the pill does not. Closing a card the user has dragged to the
+middle of the pane puts the pill back in the dock's bottom-right corner, and
+re-opening restores the card to where they left it.
+
+That asymmetry is deliberate, and the reserve is the argument. The pane gives up
+`rail + inset` px of terminal **forever** so that a closed composer costs
+nothing and stays visible. That budget is only honest if the pill actually lives
+in the strip it paid for: a pill that wandered with the card would cover
+terminal rows — including tmux's status line — while the app went on reserving
+a strip nobody used. It also keeps the pill where the eye already learnt to look,
+which is the entire job of a collapsed rail (§12), and it keeps a 32px target
+free of any drag-versus-click ambiguity.
+
 
 ## 22. Deliberately NOT ported
 

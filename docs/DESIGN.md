@@ -727,21 +727,38 @@ already documents this. The badge slot should be laid out now (fixed 72px
 trailing column) so adding the field later is a data change, not a layout
 change.
 
-### 5.4 Session workspace tabs (`03`, `04`, `05`)
+### 5.4 Session workspace header — ONE row (`03`, `04`, `05`)
 
-Currently an underline tab strip. Android uses a filled `SegmentedToggle`
-(selected = accent fill, `--on-accent` label). **Keep the underline** on
-desktop — a filled cyan segment at 13px in a 32px strip is heavy for a mouse
-UI, and the underline already reads correctly in `03-terminal-attached.png`.
-Tighten it instead:
+Android uses a filled `SegmentedToggle` (selected = accent fill, `--on-accent`
+label). **Keep the underline** on desktop — a filled cyan segment at 13px is
+heavy for a mouse UI, and the underline already reads correctly in
+`03-terminal-attached.png`.
 
-- `.tabs` height `--tabbar-h`, `border-bottom: 1px solid var(--border)`
-- `.tab` `--fs-300`/`--fw-medium`/`--fg-secondary`, padding `0 var(--sp-3)`,
-  `border-bottom: 2px solid transparent`
+**Revised: the identity bar and the tab strip are one row.** They were two
+full-height bars, `--topbar-h` + `--tabbar-h` = 72px of chrome above every
+terminal, in an app whose whole point is the terminal. Merged, the row is one
+`--topbar-h` — a full bar height, not a compromise between two — and the
+terminal gains the 40px the tab strip used to take.
+
+- `.session-bar` `height: var(--topbar-h)`, `align-items: stretch`, **no
+  vertical padding**, `border-bottom: 1px solid var(--border)`
+- **Tabs lead.** They are the only thing in the row that is clicked, and a
+  leading identity label of unpredictable length would shift them horizontally
+  on every session switch. A control that moves under the cursor per session is
+  worse than a name that sits further right
+- `.tab` full row height, `--fs-300`/`--fw-medium`/`--fg-secondary`, padding
+  `0 var(--sp-3)`, `border-bottom: 2px solid transparent`, `margin-bottom: -1px`.
+  Full height is what lets the active tab's 2px underline land **on the row's own
+  bottom border**; centring shorter buttons in a taller bar would leave that
+  underline floating mid-row with a gap beneath it
 - `.tab:hover` → `color: var(--fg)`; `.tab.active` → `color: var(--fg)`,
   `--fw-semibold`, `border-bottom-color: var(--accent)`
-- `.session-bar` above it: session name in `--font-mono`/`--fs-400`, path in
-  `--fs-200`/`--fg-secondary`, close button as `.icon-btn`
+- Session name trails, `flex: 1`, right-aligned, `--font-mono`/`--fs-300`/
+  `--fg-secondary`, end-ellipsis; close button as `.icon-btn` at the far right
+- **The path is not rendered.** A session is named after the directory it runs
+  in, so name-plus-path is one fact written twice — the same redundancy
+  `docs/SESSIONLIST.md` removed from the session panel. The full path is the
+  name's `title` tooltip, where it costs no width
 
 ### 5.5 Overlays — Usage and Ports (`06`, `07`)
 
@@ -814,21 +831,24 @@ Both are header buttons opening `OverlayPanel.vue`. Current backdrop is
 - `.toggle.on` (Auto-forward) → `--accent-soft` fill, `--accent` text,
   `--accent-dim` border.
 
-### 5.4b Prompt composer — a floating card (`composer-*` · `PromptComposer.vue`)
+### 5.4b Prompt composer — a floating, movable card (`PromptComposer.vue`)
 
 Behaviour is `docs/COMPOSER.md`'s; this is only where it sits and what it is
 made of. The composer is **not** a docked row and **not** a full-bleed bar: it
-is a card hovering over the **bottom-right** of the session body, out of a
-`.composer-dock` that spans that body and is transparent to the mouse.
+is a card hovering over the session body, inside a `.composer-dock` that is
+inset from that body and transparent to the mouse. **The user drags it and
+resizes it**; what follows is where it starts and what it is made of.
 
 | | |
 |---|---|
-| Inset | `--sp-3` on all four sides. The gap *is* the floating cue; without it an overlay still reads as welded to the window |
-| Width | `min(720px, 100%)` — ≈80 columns of the draft's 13px mono. Terminal output is left-aligned, so anchoring right and stopping at 720px keeps line starts, the prompt column and the left of tmux's status bar readable beside it |
-| Corners / elevation | `--r-xl` and `0 8px 32px rgba(0,0,0,.5)` — §5.5's `OverlayPanel` treatment, Y offset pulled in from 16px because a card sitting `--sp-3` off the bottom edge would throw that shadow off the pane and leave its *top* edge, the one with terminal text behind it, unseparated |
+| Inset | `--sp-3` on all four sides, applied to the dock. The gap *is* the floating cue; without it an overlay still reads as welded to the window |
+| Rest | bottom-**right**, 720×240. ≈80 columns of the draft's 13px mono. Terminal output is left-aligned, so resting right and stopping at 720px keeps line starts, the prompt column and the left of tmux's status bar readable beside it |
+| Move | by the header strip (`cursor: move`), clamped fully inside the pane, 12px edge snap on release |
+| Resize | eight grips: four 6px edges, four 14px corners. Floors 360×190, height capped at 80% of the pane |
+| Corners / elevation | `--r-xl` and `0 8px 32px rgba(0,0,0,.5)` — §5.5's `OverlayPanel` treatment, Y offset pulled in from 16px because a card that can sit flush against the bottom of its dock would throw that shadow off the pane and leave its *top* edge, the one with terminal text behind it, unseparated |
 | Surface | `--surface`, fully opaque, `--border` hairline. Never translucent: terminal text bleeding through a prompt field is unreadable for both |
-| Closed | the card contracts in place to a 32px rail **pill** (`border-radius: 999px`, shrink-to-fit) in the same corner, carrying a draft dot and an attachment count |
-| Reserved | `.tab-body` permanently pads the pill's height plus its inset, whatever the composer is doing — so the terminal's row count never changes and the remote tmux never reflows. See COMPOSER.md §21.2 |
+| Closed | a 32px rail **pill** (`border-radius: 999px`, shrink-to-fit) **pinned** to the resting corner wherever the card was dragged, showing the waiting draft's first line and an attachment count |
+| Reserved | `.tab-body` permanently pads the pill's height plus its inset, whatever the composer is doing — so the terminal's row count never changes and the remote tmux never reflows. See COMPOSER.md §21.2 and §21.4 |
 
 The two constants (`--composer-rail-h`, `--composer-inset`) live on
 `.session-workspace`, not in `:root`: they describe one pane's relationship with

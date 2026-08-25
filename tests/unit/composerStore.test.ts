@@ -23,6 +23,7 @@ vi.mock('../../src/renderer/ipc', () => ({
 }));
 
 const { useComposerStore } = await import('../../src/renderer/stores/composer');
+const { defaultGeometry } = await import('../../src/shared/composerGeometry');
 const { COMPOSER_STRINGS } = await import('../../src/shared/composerText');
 const { composerTiming } = await import('../../src/shared/composerSend');
 
@@ -390,10 +391,36 @@ describe('visibility state machine (§12.1)', () => {
     expect(composer.mode).toBe('expanded');
   });
 
-  it('keeps the dragged height per session even though the mode is shared', () => {
-    composer.setHeight(KEY, 420);
-    expect(composer.ensure(OTHER).height).toBeNull();
-    expect(composer.states[KEY]?.height).toBe(420);
+
+  /**
+   * The card's box is a preference about the tool, exactly like open/closed:
+   * where the composer sits describes the window layout, not any conversation.
+   * A per-session position would make the card jump as you switch sessions,
+   * which is the bug this file already pins for the mode.
+   */
+  it('shares one card geometry across sessions', () => {
+    composer.setGeometry({ right: 120, bottom: 40, width: 640, height: 300 });
+    composer.ensure(OTHER);
+    expect(composer.geometry).toEqual({ right: 120, bottom: 40, width: 640, height: 300 });
+  });
+
+  it('starts in the resting corner at the default size', () => {
+    expect(composer.geometry).toEqual(defaultGeometry());
+  });
+
+  it('resetGeometry puts a card the user has lost back in its corner', () => {
+    composer.setGeometry({ right: 900, bottom: 400, width: 380, height: 200 });
+    composer.resetGeometry();
+    expect(composer.geometry).toEqual(defaultGeometry());
+  });
+
+  it('keeps the geometry across every mode transition', () => {
+    const g = { right: 60, bottom: 80, width: 500, height: 260 };
+    composer.setGeometry(g);
+    for (const m of ['hidden', 'docked', 'expanded', 'docked'] as const) {
+      composer.setMode(m);
+      expect(composer.geometry).toEqual(g);
+    }
   });
 
   it('a delivered send re-opens a hidden composer rather than leaving it hidden', async () => {

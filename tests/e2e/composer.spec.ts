@@ -172,11 +172,22 @@ test.describe('prompt composer panel', () => {
     await page.locator('.composer .panel-action').nth(1).click();
     await expect(page.locator('.composer .rail')).toBeVisible();
     await expect(page.locator('.composer .draft')).toHaveCount(0);
-    // The rail says a draft is waiting — the whole point of keeping it.
-    await expect(page.locator('.composer .draft-dot')).toBeVisible();
+    // The pill says a draft is waiting by SHOWING it: a dot could only raise
+    // the question of which unsent prompt was sitting there.
+    await expect(page.locator('.composer .ghost')).toHaveText('hello there');
 
     await page.locator('.composer .rail').click();
     await expect(page.locator('.composer .draft')).toHaveValue('hello there');
+  });
+
+  test('does not restate the session name inside the composer', async () => {
+    // The session bar names the session one row above, and the composer is
+    // mounted inside that session's workspace — it could never have meant
+    // another one.
+    const header = page.locator('.composer .panel-header');
+    await expect(header).toBeVisible();
+    await expect(header).toHaveText('Prompt');
+    await expect(page.locator('.composer .panel-scope')).toHaveCount(0);
   });
 
   test('Ctrl+` toggles the panel from the terminal', async () => {
@@ -195,6 +206,64 @@ test.describe('prompt composer panel', () => {
     expect(maximized!.height).toBeGreaterThan(restored!.height);
     await expect(page.locator('.composer .draft')).toHaveValue('hello there');
     await expect(page.locator('.terminal-area > .terminal')).toBeVisible();
+  });
+
+  test('the card can be dragged around the pane by its header', async () => {
+    const composer = page.locator('.composer');
+    const before = await composer.boundingBox();
+    const body = await page.locator('.session-body').boundingBox();
+
+    // Grab the title bar well clear of the maximize/close buttons.
+    const header = await page.locator('.composer .panel-header').boundingBox();
+    await page.mouse.move(header!.x + 40, header!.y + header!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(header!.x - 260, header!.y - 160, { steps: 12 });
+    await page.mouse.up();
+
+    const after = await composer.boundingBox();
+    expect(after!.x).toBeLessThan(before!.x - 100);
+    expect(after!.y).toBeLessThan(before!.y - 100);
+    // Same card, just somewhere else.
+    expect(Math.round(after!.width)).toBe(Math.round(before!.width));
+    // Still fully inside the pane: there is no half-lost state to recover from.
+    expect(after!.x).toBeGreaterThanOrEqual(body!.x);
+    expect(after!.y).toBeGreaterThanOrEqual(body!.y);
+    expect(after!.x + after!.width).toBeLessThanOrEqual(body!.x + body!.width + 1);
+    await expect(page.locator('.composer .draft')).toHaveValue('hello there');
+  });
+
+  test('the card resizes in BOTH axes from its edges', async () => {
+    const composer = page.locator('.composer');
+    const before = await composer.boundingBox();
+
+    // West edge: drag it left, and only the width changes.
+    await page.mouse.move(before!.x + 2, before!.y + before!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(before!.x - 120, before!.y + before!.height / 2, { steps: 10 });
+    await page.mouse.up();
+    const wider = await composer.boundingBox();
+    expect(wider!.width).toBeGreaterThan(before!.width + 80);
+    expect(Math.round(wider!.height)).toBe(Math.round(before!.height));
+    // The right edge — the one NOT dragged — has not moved.
+    expect(Math.round(wider!.x + wider!.width)).toBe(Math.round(before!.x + before!.width));
+
+    // North edge: drag it up, and only the height changes.
+    await page.mouse.move(wider!.x + wider!.width / 2, wider!.y + 2);
+    await page.mouse.down();
+    await page.mouse.move(wider!.x + wider!.width / 2, wider!.y - 90, { steps: 10 });
+    await page.mouse.up();
+    const taller = await composer.boundingBox();
+    expect(taller!.height).toBeGreaterThan(wider!.height + 60);
+    expect(Math.round(taller!.width)).toBe(Math.round(wider!.width));
+  });
+
+  test('the card’s geometry is shared by every session, like open/closed', async () => {
+    const mine = await page.locator('.composer').boundingBox();
+    await openSession(page, 'build');
+    const theirs = await page.locator('.composer').boundingBox();
+    expect(Math.round(theirs!.x)).toBe(Math.round(mine!.x));
+    expect(Math.round(theirs!.width)).toBe(Math.round(mine!.width));
+    await openSession(page, 'main');
   });
 
   test('drafts are per session and survive switching away and back', async () => {
@@ -229,6 +298,28 @@ test.describe('prompt composer panel', () => {
     // Re-opening restores the panel, and the draft belonging to THIS session.
     await page.locator('.composer .rail').click();
     await expect(page.locator('.composer .draft')).toHaveValue('');
+  });
+
+  test('the terminal’s last row is not sliced by its own container', async () => {
+    // tmux's status line is the bottom row and the one the user reads
+    // constantly. It gets clipped when xterm is told it has more room than the
+    // container's CONTENT box actually has: FitAddon reads
+    // getComputedStyle(parent).height, which under `box-sizing: border-box`
+    // INCLUDES the container's padding, and then subtracts only the padding of
+    // its own element. Assert the drawn screen fits the box that clips it.
+    const fit = await page.evaluate(() => {
+      const host = document.querySelector('.terminal-area > .terminal');
+      const screen = host?.querySelector('.xterm-screen');
+      if (!host || !screen) return null;
+      const cs = getComputedStyle(host);
+      const hostRect = host.getBoundingClientRect();
+      return {
+        screenBottom: screen.getBoundingClientRect().bottom,
+        contentBottom: hostRect.bottom - parseFloat(cs.paddingBottom),
+      };
+    });
+    expect(fit).not.toBeNull();
+    expect(fit!.screenBottom).toBeLessThanOrEqual(fit!.contentBottom + 1);
   });
 
   test('a multi-line prompt reaches the pane carrying every line', async () => {
