@@ -58,6 +58,7 @@ import TerminalView from '../components/TerminalView.vue';
 import PromptComposer from '../components/PromptComposer.vue';
 import FilesView from './FilesView.vue';
 import PopupMenu from '../components/PopupMenu.vue';
+import LaunchSessionDialog from '../components/LaunchSessionDialog.vue';
 import { type Box } from '../../shared/popupPlacement';
 import { composerAgentKind } from '../../shared/composerSend';
 import { sanitisePart, sessionBaseName } from '../../shared/sessionNameParts';
@@ -67,7 +68,12 @@ import {
   type WorkspaceTab,
 } from '../../shared/workspaceTabs';
 import { groupSessionsIntoRoots, UNTRACKED_PATH } from '../sessionGrouping';
-import type { SessionAgentKind } from '../../shared/types';
+import {
+  buildLaunchCommand,
+  KIND_LABELS,
+  launchBlocker,
+  type LaunchChoice,
+} from '../../shared/agentLaunch';
 
 const route = useRoute();
 const router = useRouter();
@@ -341,6 +347,9 @@ watch(folderKey, () => {
   cancelRename();
   addAnchor.value = null;
   createError.value = null;
+  // The dialog is bound to the OUTGOING folder's path; leaving it open would
+  // let a confirm create a session in the folder we just left.
+  launching.value = false;
   // A launch armed for the folder we are leaving must not fire a message into
   // the folder we are arriving at.
   pendingLaunch.value = null;
@@ -458,14 +467,27 @@ async function commitRename(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Creating a session in this folder (docs/WORKSPACE.md §5)
 // ---------------------------------------------------------------------------
-/** The engines the `+` menu offers, plus a plain shell. */
-const AGENT_CHOICES: { kind: SessionAgentKind | null; label: string }[] = [
-  { kind: 'claude', label: 'Claude Code' },
-  { kind: 'codex', label: 'Codex' },
-  { kind: 'opencode', label: 'OpenCode' },
-  { kind: 'grok', label: 'Grok' },
-  { kind: null, label: 'Shell' },
-];
+/**
+ * True while the launch dialog is up.
+ *
+ * The `+` menu used to list the engines itself and start one on a single
+ * click. It no longer can: a launch needs a directory, and it may want a
+ * profile and a permissions answer, none of which fit in a menu row. So the
+ * menu collapsed to "New session…" — the ellipsis is the usual promise that a
+ * dialog follows — and "New Files tab", which STAYS a direct action because it
+ * creates nothing on the host and has nothing to configure. Putting a free
+ * action behind a dialog would make it feel expensive.
+ *
+ * The menu also used to offer Grok, which could never have worked: 0.4.44's
+ * `pocketshell agent` has no `grok` subcommand (see shared/agentLaunch.ts).
+ */
+const launching = ref(false);
+
+function openLaunchDialog(): void {
+  addAnchor.value = null;
+  createError.value = null;
+  launching.value = true;
+}
 
 /**
  * The `+` menu's anchor box, or null when it is shut.
@@ -500,7 +522,7 @@ function toggleAddMenu(): void {
  * watch below is that wait; it is one-shot, and a session whose PTY never comes
  * up simply gets a shell, which is what it would have been anyway.
  */
-const pendingLaunch = ref<{ session: string; kind: SessionAgentKind } | null>(null);
+const pendingLaunch = ref<{ session: string; choice: LaunchChoice } | null>(null);
 /** Cleared when the launch lands; fires if it never does. See below. */
 let launchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -531,7 +553,13 @@ watch(
     // Through the wrapper, never the bare `claude`/`codex` binary: the wrapper
     // is what records the kind, and a session started around it shows up as
     // `unknown` forever.
-    void api.shell.input(shellId, `pocketshell agent ${pending.kind}\r`);
+    //
+    // The line itself is built in shared/agentLaunch.ts against the captured
+    // `--help`, never assembled here. It used to be a template string, and it
+    // was WRONG — a bare `pocketshell agent claude` with no `--dir`, which the
+    // helper rejects with exit 2 and a usage message, so the session came up as
+    // a plain shell every single time.
+    void api.shell.input(shellId, `${buildLaunchCommand(pending.choice)}\r`);
   },
 );
 
@@ -549,30 +577,50 @@ watch(
  * a rollback: the user has a working shell in the right folder and can start
  * the agent by hand. Telling them that is the entire remedy.
  */
-function armLaunch(session: string, kind: SessionAgentKind): void {
+function armLaunch(session: string, choice: LaunchChoice): void {
   clearLaunchTimer();
-  pendingLaunch.value = { session, kind };
+  pendingLaunch.value = { session, choice };
   launchTimer = setTimeout(() => {
     if (pendingLaunch.value?.session !== session) return;
     pendingLaunch.value = null;
     launchTimer = null;
+    // The remedy is the EXACT line we would have typed, so the user can paste
+    // it rather than reconstruct which flags their choices implied.
     createError.value =
       `Started "${session}", but its terminal did not come up in time, so ` +
-      `${kind} was not launched. The session is a plain shell - run ` +
-      `\`pocketshell agent ${kind}\` in it to start the agent.`;
+      `${KIND_LABELS[choice.kind]} was not launched. The session is a plain shell - run ` +
+      `\`${buildLaunchCommand(choice)}\` in it to start the agent.`;
   }, LAUNCH_TIMEOUT_MS);
 }
 
 onBeforeUnmount(clearLaunchTimer);
 
-async function createSession(kind: SessionAgentKind | null): Promise<void> {
+/**
+ * Create a session here, and launch [choice] in it once its PTY exists.
+ *
+ * [choice] is null for a plain shell. It arrives already validated — the
+ * dialog will not let a broken one be confirmed — but it is re-checked here
+ * anyway, because this is the last point at which nothing has been created
+ * yet. That ordering is the fix for the old flow's worst property: it created
+ * a session and only then found out the command was malformed, so a failed
+ * launch still cost the user a stray session and an error to read in a
+ * terminal.
+ */
+async function createSession(choice: LaunchChoice | null): Promise<void> {
   addAnchor.value = null;
+  launching.value = false;
   createError.value = null;
   const connectionId = connection.connectionId;
   const path = folderPath.value;
   if (!connectionId || !path) {
     createError.value =
       'This folder has no known directory on the host, so a session cannot be started in it.';
+    return;
+  }
+  // Fail BEFORE creating anything, never after.
+  const blocker = choice ? launchBlocker(choice) : null;
+  if (blocker) {
+    createError.value = blocker;
     return;
   }
   // `unique` and not `reuse`: the folder's default session already has a tab,
@@ -595,7 +643,7 @@ async function createSession(kind: SessionAgentKind | null): Promise<void> {
     createError.value = result.error ?? 'Could not start a session here.';
     return;
   }
-  if (kind) armLaunch(result.sessionName, kind);
+  if (choice) armLaunch(result.sessionName, choice);
   await sessions.refresh(connectionId);
   selected.value = result.sessionName;
   persist();
@@ -789,9 +837,16 @@ function onFocusTerminal(): void {
         >
           <AppIcon name="plus" :size="14" />
         </button>
-        <!-- A menu rather than the folder-first dialog: that dialog exists to
-             CHOOSE a folder, and inside a folder workspace the folder is
-             already chosen. What is left to choose is the engine. -->
+        <!-- Two items, and the asymmetry between them is deliberate.
+             "New session…" opens a dialog because a launch has real choices
+             behind it (engine, permissions, profile) and creates something on
+             the host. "New Files tab" stays a DIRECT action: it creates
+             nothing, configures nothing, and a dialog would make a free action
+             feel expensive.
+
+             Still a menu rather than the folder-first NewSessionDialog: that
+             dialog exists to CHOOSE a folder, and inside a folder workspace
+             the folder is already chosen. -->
         <PopupMenu
           v-if="addAnchor"
           :anchor="addAnchor"
@@ -800,11 +855,8 @@ function onFocusTerminal(): void {
           @close="addAnchor = null"
         >
           <ul>
-            <li class="menu-head">New session</li>
-            <li v-for="choice in AGENT_CHOICES" :key="choice.label">
-              <button class="menu-item" @click="createSession(choice.kind)">
-                {{ choice.label }}
-              </button>
+            <li>
+              <button class="menu-item" @click="openLaunchDialog">New session…</button>
             </li>
             <li class="menu-sep" />
             <li>
@@ -859,11 +911,14 @@ function onFocusTerminal(): void {
 
         <!-- No tabs at all: the folder's sessions were killed while this was
              open, or a deep link outlived them. There is exactly one useful
-             thing to do here, so the empty state IS the create affordance. -->
+             thing to do here, so the empty state IS the create affordance.
+             It opens the same dialog the `+` does rather than starting a bare
+             shell, so there is ONE way to create a session in a folder and it
+             is the one that can also start an agent. -->
         <div v-if="!tabs.length" class="empty">
           <p class="muted">{{ folderPath ?? folderKey }}</p>
           <p class="muted">nothing is running in this folder</p>
-          <button class="btn-ghost" @click="createSession(null)">Start a session here</button>
+          <button class="btn-ghost" @click="openLaunchDialog">Start a session here</button>
         </div>
       </div>
 
@@ -885,6 +940,16 @@ function onFocusTerminal(): void {
         />
       </div>
     </div>
+
+    <!-- Nothing is created until `confirm` fires, so Escape, the backdrop and
+         Cancel all cost the user exactly nothing. -->
+    <LaunchSessionDialog
+      v-if="launching"
+      :folder-path="folderPath"
+      :folder-label="folder?.label ?? folderKey"
+      @confirm="createSession"
+      @close="launching = false"
+    />
   </div>
 </template>
 

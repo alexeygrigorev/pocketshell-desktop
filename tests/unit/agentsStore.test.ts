@@ -18,18 +18,24 @@ import { createPinia, setActivePinia } from 'pinia';
 
 const usage = vi.fn();
 
+const profiles = vi.fn();
+
 vi.mock('../../src/renderer/ipc', () => ({
-  api: { helper: { usage: (connectionId: string): unknown => usage(connectionId) } },
+  api: {
+    helper: { usage: (connectionId: string): unknown => usage(connectionId) },
+    agent: { profiles: (connectionId: string): unknown => profiles(connectionId) },
+  },
 }));
 
 import { useAgentsStore } from '../../src/renderer/stores/agents';
 
-describe('agents store (usage)', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia());
-    usage.mockReset();
-  });
+beforeEach(() => {
+  setActivePinia(createPinia());
+  usage.mockReset();
+  profiles.mockReset();
+});
 
+describe('agents store (usage)', () => {
   it('loads the usage rows', async () => {
     usage.mockResolvedValue([{ provider: 'codex', status: 'ok' }]);
     const store = useAgentsStore();
@@ -59,5 +65,63 @@ describe('agents store (usage)', () => {
     const store = useAgentsStore();
     await expect(useAgentsStore().loadUsage('conn-1')).rejects.toThrow('no helper');
     expect(store.loading).toBe(false);
+  });
+});
+
+/**
+ * The profile half, which had no renderer caller at all until the launch
+ * dialog. `agent:profiles` has been wired end to end since 88cc932 taught it
+ * the 0.4.44 `{"profiles": […]}` envelope, so what is new here is only the
+ * store: parsing rows into something the picker can render, and — unlike
+ * `loadUsage` above — SWALLOWING a failure rather than rethrowing it.
+ *
+ * The swallow is deliberate and is why it gets a test. A profile is optional:
+ * omitting `--profile` launches the engine default, which is exactly what a
+ * host with no profiles wants. So a failed fetch must degrade the picker, not
+ * the launch.
+ */
+describe('agents store (profiles)', () => {
+  it('parses the rows the host actually emits', async () => {
+    profiles.mockResolvedValue([
+      { name: 'Claude', engine: 'claude', config_dir: null, default: true },
+      { name: 'Claude (Z.AI)', engine: 'claude', config_dir: '/home/t/.zlaude', default: false },
+    ]);
+    const store = useAgentsStore();
+    await store.loadProfiles('conn-1');
+    expect(profiles).toHaveBeenCalledWith('conn-1');
+    expect(store.profiles.map((p) => p.name)).toEqual(['Claude', 'Claude (Z.AI)']);
+    expect(store.profilesError).toBeNull();
+  });
+
+  it('treats a host with no profiles as empty, not an error', async () => {
+    profiles.mockResolvedValue([]);
+    const store = useAgentsStore();
+    await store.loadProfiles('conn-1');
+    expect(store.profiles).toEqual([]);
+    expect(store.profilesError).toBeNull();
+  });
+
+  it('records a failure instead of throwing, so the dialog still opens', async () => {
+    profiles.mockRejectedValue(new Error('no helper'));
+    const store = useAgentsStore();
+    await expect(store.loadProfiles('conn-1')).resolves.toBeUndefined();
+    expect(store.profiles).toEqual([]);
+    expect(store.profilesError).toBe('no helper');
+    expect(store.profilesLoading).toBe(false);
+  });
+
+  it('lets a later host win, so a stale answer cannot overwrite it', async () => {
+    let releaseOld: (rows: unknown[]) => void = () => {};
+    profiles.mockReturnValueOnce(new Promise((r) => { releaseOld = r; }));
+    profiles.mockResolvedValueOnce([
+      { name: 'Codex', engine: 'codex', config_dir: null, default: true },
+    ]);
+    const store = useAgentsStore();
+    const old = store.loadProfiles('conn-1');
+    await store.loadProfiles('conn-2');
+    // conn-1 answers late, after we have already moved to conn-2.
+    releaseOld([{ name: 'Claude', engine: 'claude', config_dir: null, default: true }]);
+    await old;
+    expect(store.profiles.map((p) => p.name)).toEqual(['Codex']);
   });
 });

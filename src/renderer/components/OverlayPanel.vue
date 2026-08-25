@@ -17,9 +17,11 @@ withDefaults(
     /**
      * Content width. `lg` (960px) suits the wide port-forward table; `md`
      * (720px) suits a panel whose content is narrower — a panel wider than its
-     * content is just a void with a border around it.
+     * content is just a void with a border around it. `sm` (480px) is for a
+     * short form of stacked label/control rows, where `md` would stretch every
+     * control to twice the width its content needs.
      */
-     size?: 'md' | 'lg';
+     size?: 'sm' | 'md' | 'lg';
   }>(),
   { size: 'lg' },
 );
@@ -93,6 +95,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 }
 .overlay-panel.md {
   width: min(720px, 92vw);
+}
+.overlay-panel.sm {
+  width: min(480px, 92vw);
 }
 .overlay-header {
   display: flex;

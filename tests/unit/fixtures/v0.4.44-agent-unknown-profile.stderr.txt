@@ -1,0 +1,1 @@
+pocketshell agent: unknown claude profile: 'nope' (see `pocketshell profiles list --engine claude`)

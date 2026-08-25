@@ -24,7 +24,7 @@ import { pathAwareCommand } from './bootstrap.js';
 import { gitRepoProbeCommand } from '../projects/commands.js';
 import { parseWorktreeRoots } from '../projects/worktrees.js';
 import { log } from '../log.js';
-import { shellQuote, shellQuoteRemotePath } from './shellQuote.js';
+import { shellQuote, shellQuoteRemotePath } from '../../shared/shellQuote.js';
 import {
   createSessionCommand,
   fallbackCreateSessionCommand,

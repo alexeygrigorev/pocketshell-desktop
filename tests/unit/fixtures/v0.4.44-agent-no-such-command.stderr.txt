@@ -1,0 +1,4 @@
+Usage: pocketshell agent [OPTIONS] COMMAND [ARGS]...
+Try 'pocketshell agent --help' for help.
+
+Error: No such command 'grok'.

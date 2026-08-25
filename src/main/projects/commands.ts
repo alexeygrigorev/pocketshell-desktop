@@ -7,14 +7,14 @@
  * shell will parse. That is the injection boundary of this feature, so it is
  * a pure function with unit tests rather than a template literal buried in a
  * service method. Every interpolation goes through
- * {@link shellQuote}/{@link shellQuoteRemotePath} — see ../helper/shellQuote.ts.
+ * {@link shellQuote}/{@link shellQuoteRemotePath} — see ../../shared/shellQuote.ts.
  *
  * Wrap the result in `pathAwareCommand` (../helper/bootstrap.ts) before
  * exec'ing: sshd runs a non-login shell, so `$HOME/.local/bin` — where uv
  * installs `pocketshell` and `tmuxctl` — is not on PATH by default.
  */
 
-import { shellQuote, shellQuoteRemotePath } from '../helper/shellQuote.js';
+import { shellQuote, shellQuoteRemotePath } from '../../shared/shellQuote.js';
 
 /**
  * Ceiling on the `-2`/`-3`… walk in {@link freeSessionNameCommand}. Ported

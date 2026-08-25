@@ -8,6 +8,7 @@ import {
 } from '../fonts';
 import { normaliseRootList, normaliseRootPath, SESSION_ROOTS_MAX } from '../sessionGrouping';
 import { parseZoomPercent, stepZoomPercent, ZOOM_PERCENT_DEFAULT } from '../zoom';
+import { isLaunchableKind, type LaunchableKind } from '../../shared/agentLaunch';
 
 /**
  * App-level preferences — the settings screen's model.
@@ -125,6 +126,38 @@ export interface AppSettings {
    * three roots on each box they connect to.
    */
   sessionRoots: string[];
+  /**
+   * What the agent-launch dialog pre-selects, carried over from last time.
+   *
+   * The phone deliberately does NOT persist these — its picker is plain
+   * `remember { mutableStateOf(…) }`, so every open resets to
+   * claude / skip-permissions ON / no profile. On a desktop that is the wrong
+   * call: the dialog is opened from a `+` menu many times a session, and a
+   * user who always wants the same engine and the same profile should not
+   * re-answer three questions each time. So this is a deliberate divergence,
+   * not a port.
+   *
+   * `profiles` is keyed by ENGINE rather than being a single name because a
+   * profile only means anything within its engine — the host's `Claude (Z.AI)`
+   * is not a codex profile, and remembering one flat name would offer it to
+   * codex and get `unknown codex profile` back. A remembered name that the
+   * host no longer lists is dropped at render time rather than rewritten here:
+   * profiles live on the host and can come and go per host, and a stale entry
+   * costs nothing until that host lists it again.
+   *
+   * The defaults match the helper's own (`skipPermissions: true` is
+   * `[default: skip-permissions]`) and the phone's first segment (claude), so
+   * a fresh install behaves exactly like the phone's picker does.
+   */
+  agentLaunchDefaults: AgentLaunchDefaults;
+}
+
+/** @see AppSettings.agentLaunchDefaults */
+export interface AgentLaunchDefaults {
+  kind: LaunchableKind;
+  skipPermissions: boolean;
+  /** Last profile NAME chosen per engine (`claude` / `codex`). */
+  profiles: Record<string, string>;
 }
 
 /**
@@ -170,6 +203,40 @@ function asRootList(raw: unknown): string[] | undefined {
   return Array.isArray(raw) ? normaliseRootList(raw) : undefined;
 }
 
+/** The launch dialog's remembered answers. @see AppSettings.agentLaunchDefaults */
+const AGENT_LAUNCH_DEFAULTS: AgentLaunchDefaults = {
+  kind: 'claude',
+  skipPermissions: true,
+  profiles: {},
+};
+
+/**
+ * Degrade the launch defaults per FIELD, the way `asRootList` degrades per
+ * entry. A blob whose `kind` is a stale engine the helper dropped must not
+ * cost the user their skip-permissions answer too, and it especially must not
+ * survive into {@link buildLaunchCommand} — `isLaunchableKind` is the same
+ * guard the dialog uses, so a value that gets past here is one the helper can
+ * actually launch.
+ */
+function asAgentLaunchDefaults(raw: unknown): AgentLaunchDefaults | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  const profiles: Record<string, string> = {};
+  if (typeof r['profiles'] === 'object' && r['profiles'] !== null) {
+    for (const [engine, name] of Object.entries(r['profiles'] as Record<string, unknown>)) {
+      if (typeof name === 'string' && name.trim() !== '') profiles[engine] = name.trim();
+    }
+  }
+  return {
+    kind: isLaunchableKind(r['kind'] as never) ? (r['kind'] as LaunchableKind) : AGENT_LAUNCH_DEFAULTS.kind,
+    skipPermissions:
+      typeof r['skipPermissions'] === 'boolean'
+        ? r['skipPermissions']
+        : AGENT_LAUNCH_DEFAULTS.skipPermissions,
+    profiles,
+  };
+}
+
 /** The registry the loader, the defaults and the validator are all generic over. */
 export const SETTING_SPECS: SettingSpecs = {
   // Both composer defaults are TRUE: typing into a terminal that fronts an
@@ -192,6 +259,9 @@ export const SETTING_SPECS: SettingSpecs = {
   // Empty means "derive roots from $HOME", which is what shipped before this
   // setting existed — the same rule the typography defaults follow.
   sessionRoots: { default: [], parse: asRootList },
+  // Matches the helper's own `[default: skip-permissions]` and the phone's
+  // first segment, so a fresh install opens the dialog on claude / skip ON.
+  agentLaunchDefaults: { default: AGENT_LAUNCH_DEFAULTS, parse: asAgentLaunchDefaults },
 };
 
 const STORAGE_KEY = 'pocketshell.settings.v1';
@@ -213,13 +283,26 @@ function settingKeys(): (keyof AppSettings)[] {
  */
 function applyDefault<K extends keyof AppSettings>(out: Partial<AppSettings>, key: K): void {
   const value = SETTING_SPECS[key].default;
-  // `sessionRoots` is the first default that is a REFERENCE rather than a
+  // `sessionRoots` was the first default that is a REFERENCE rather than a
   // primitive. Handing out the spec's own array would mean every defaulted
   // settings object shares one instance, so a mutation anywhere rewrites the
   // default itself — a bug that would only surface on the second load. Copy on
-  // the way out. The cast is the same narrowing the loops below need: the
-  // compiler cannot see that a copy of `AppSettings[K]` is an `AppSettings[K]`.
-  out[key] = (Array.isArray(value) ? [...value] : value) as AppSettings[K];
+  // the way out.
+  //
+  // The copy is DEEP, and was not always: it began as `[...value]`, which was
+  // right for a flat array and silently wrong for the first nested default
+  // (`agentLaunchDefaults`, whose `profiles` map survived a spread by
+  // reference — so remembering a profile once rewrote the shipped default for
+  // every later load). A JSON round-trip rather than a hand-written walk
+  // because this object is JSON BY CONSTRUCTION: it is the same value that
+  // goes through `JSON.stringify` into localStorage a few lines below, so
+  // anything the round-trip could not carry could not have been a setting.
+  //
+  // The cast is the same narrowing the loops below need: the compiler cannot
+  // see that a copy of `AppSettings[K]` is an `AppSettings[K]`.
+  const copied: unknown =
+    value !== null && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value;
+  out[key] = copied as AppSettings[K];
 }
 
 function applyParsed<K extends keyof AppSettings>(

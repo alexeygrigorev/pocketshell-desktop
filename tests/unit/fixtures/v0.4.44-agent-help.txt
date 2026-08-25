@@ -1,0 +1,17 @@
+Usage: pocketshell agent [OPTIONS] COMMAND [ARGS]...
+
+  Launch a coding-agent CLI in a folder, server-side.
+
+  Replaces the giant inline `env -u … <agent>` line the app used to type into
+  the pane. Merges the folder's `.env`/`.envrc`, strips provider API-key vars
+  for every agent (subscription billing), and suppresses each agent's first-
+  run modal (codex update check / claude folder-trust) so the agent is
+  immediately usable. See issue #703.
+
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  claude    Launch `claude` in --dir with first-run prompts suppressed.
+  codex     Launch `codex` in --dir with first-run prompts suppressed.
+  opencode  Launch `opencode` in --dir with first-run prompts suppressed.

@@ -1,0 +1,18 @@
+Usage: pocketshell agent opencode [OPTIONS]
+
+  Launch `opencode` in --dir with first-run prompts suppressed.
+
+Options:
+  --dir TEXT                      Folder to launch the agent in (its cwd).
+                                  [required]
+  --skip-permissions / --no-skip-permissions
+                                  Launch with per-action approval prompts
+                                  disabled (codex YOLO / claude bypass). No-op
+                                  for opencode.  [default: skip-permissions]
+  --config-dir TEXT               Profile config dir: CODEX_HOME (codex) /
+                                  CLAUDE_CONFIG_DIR (claude). Ignored for
+                                  opencode. Mutually exclusive with --profile.
+  --profile TEXT                  Named host profile (see `pocketshell
+                                  profiles list`); resolves to its config dir.
+                                  Mutually exclusive with --config-dir.
+  -h, --help                      Show this message and exit.

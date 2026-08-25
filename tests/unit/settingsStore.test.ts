@@ -288,3 +288,71 @@ describe('session roots', () => {
     expect(settings.defaultHost).toBe('hetzner');
   });
 });
+
+/**
+ * The launch dialog's remembered answers. The defaults matter as much as the
+ * degradation here: they are the helper's own (`[default: skip-permissions]`)
+ * and the phone's first segment, so a fresh install opens the dialog exactly
+ * where the phone's picker opens.
+ */
+describe('agentLaunchDefaults', () => {
+  it('defaults to claude with skip-permissions ON and no profile', () => {
+    const settings = useSettingsStore();
+    expect(settings.agentLaunchDefaults).toEqual({
+      kind: 'claude',
+      skipPermissions: true,
+      profiles: {},
+    });
+  });
+
+  it('hands every caller its own object, never the spec default itself', () => {
+    const a = settingsDefaults();
+    a.agentLaunchDefaults.profiles['claude'] = 'Claude (Z.AI)';
+    expect(settingsDefaults().agentLaunchDefaults.profiles).toEqual({});
+  });
+
+  it('round-trips a full choice', () => {
+    const settings = useSettingsStore();
+    settings.agentLaunchDefaults = {
+      kind: 'codex',
+      skipPermissions: false,
+      profiles: { codex: 'work' },
+    };
+    expect(stored()['agentLaunchDefaults']).toEqual({
+      kind: 'codex',
+      skipPermissions: false,
+      profiles: { codex: 'work' },
+    });
+  });
+
+  it('drops a kind the helper cannot launch, keeping the other answers', () => {
+    // `grok` is in SessionAgentKind but has no `pocketshell agent` subcommand,
+    // so a blob naming it must not reach the command builder.
+    const out = coerceSettings({
+      agentLaunchDefaults: { kind: 'grok', skipPermissions: false, profiles: { claude: 'Z' } },
+    }).agentLaunchDefaults;
+    expect(out).toEqual({ kind: 'claude', skipPermissions: false, profiles: { claude: 'Z' } });
+  });
+
+  it('degrades a corrupt profile map per ENTRY', () => {
+    expect(
+      coerceSettings({
+        agentLaunchDefaults: { kind: 'claude', profiles: { claude: 7, codex: '  ', x: ' ok ' } },
+      }).agentLaunchDefaults,
+    ).toEqual({ kind: 'claude', skipPermissions: true, profiles: { x: 'ok' } });
+  });
+
+  it('falls back wholesale only when the value is not an object', () => {
+    expect(coerceSettings({ agentLaunchDefaults: 'claude' }).agentLaunchDefaults).toEqual({
+      kind: 'claude',
+      skipPermissions: true,
+      profiles: {},
+    });
+  });
+
+  it('keeps the rest of the blob when only this key is corrupt', () => {
+    const settings = coerceSettings({ agentLaunchDefaults: 3, defaultHost: 'hetzner' });
+    expect(settings.agentLaunchDefaults.kind).toBe('claude');
+    expect(settings.defaultHost).toBe('hetzner');
+  });
+});

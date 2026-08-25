@@ -451,12 +451,26 @@ rename never silently produces a different name from the one that was typed.
 The `+` at the end of the tab bar. It does NOT open `NewSessionDialog` — that
 dialog's whole job is choosing a folder (`docs` in its own header: "a session is
 not named, it is PLACED"), and inside a folder workspace the folder is already
-chosen. The `+` opens a small menu of the agent kinds plus **Shell**, and:
+chosen.
+
+The `+` menu has **two items, and the asymmetry between them is deliberate**:
+
+- **New session…** — opens `LaunchSessionDialog`. The ellipsis is the usual
+  promise that a dialog follows. It used to be a flat list of agent kinds that
+  started one on a single click; it cannot be, because a launch has real
+  choices behind it (engine, permissions, profile) and it creates something on
+  the host.
+- **New Files tab** — stays a **direct action**. It creates nothing on the
+  host and has nothing to configure, and putting a free action behind a dialog
+  would make it feel expensive.
+
+The dialog collects the choice and creates nothing; the workspace then:
 
 1. calls `projects:startSession` with `folder` = this workspace's folder and
    `namePolicy: 'unique'` — so the host walks `<base>-2`, `<base>-3` and the new
    tab's label is `Terminal 2`, `Terminal 3` by §3.3's digit rule;
-2. when an agent kind was chosen, writes `pocketshell agent <kind>` into the new
+2. when an agent was chosen, writes the line
+   `src/shared/agentLaunch.ts::buildLaunchCommand` produced into the new
    session's terminal once it is attached.
 
 Step 2 is how the kind becomes real: `@ps_agent_kind` is written **by the helper's
@@ -466,10 +480,50 @@ that sets it. Launching through the wrapper rather than running `claude`
 directly is the difference between a session the app can classify afterwards and
 one that shows up as `unknown` forever.
 
+### 5.1 The command, and why it is captured rather than remembered
+
+Step 2 used to write a bare `pocketshell agent <kind>`. **That never worked.**
+`--dir` is REQUIRED on the helper the user runs, so every launch exited 2 with
+`Error: Missing option '--dir'.`, the session came up a plain shell, and the
+usage message was the only feedback. The same menu also offered **Grok**, which
+0.4.44's `pocketshell agent` has no subcommand for at all
+(`Error: No such command 'grok'.`).
+
+The whole option list is therefore CAPTURED from the pinned fixture image and
+committed at `tests/unit/fixtures/v0.4.44-agent-*.txt`, and
+`tests/unit/agentLaunch.test.ts` asserts the builder against those files. Per
+`docs/ANALYSIS.md`, a documented contract is not evidence here; a captured one
+is. Re-capture whenever `ARG POCKETSHELL_VERSION` moves.
+
+What 0.4.44 accepts:
+
+| Flag | Note |
+|---|---|
+| `--dir TEXT` | **Required.** Quoted with `shellQuoteRemotePath`, not a flat single-quote, because a workspace folder can be a literal unexpanded `~/git/x` |
+| `--skip-permissions` / `--no-skip-permissions` | **Defaults to ON host-side**, so only the negative is ever emitted. A no-op for `opencode`, where the control is hidden |
+| `--profile TEXT` | Claude/Codex only; by display NAME (`Claude (Z.AI)` — spaces and parens, so it is quoted). Mutually exclusive with `--config-dir`, which the desktop never emits |
+
+`SessionAgentKind` keeps `grok` — a session can BE one, and the phone launches
+it through its own engine registry — but `LAUNCHABLE_KINDS` is deliberately
+narrower than the badge enum: it is the three the wrapper actually has.
+
 `NewSessionDialog` and `src/main/projects/` are reused unchanged; nothing about
 folder-first creation is reimplemented. The panel's existing "New session"
 button still opens the dialog, because creating a session in a folder you are
 not currently looking at is still a thing people do.
+
+**Why that is two dialogs and not one.** `NewSessionDialog` answers *which
+folder*; `LaunchSessionDialog` answers *which agent*, in a folder already
+chosen. Merging them would make the `+` flow re-ask a question it knows the
+answer to — the friction the `+` menu existed to remove. The drift a merge
+would have prevented is prevented instead by both ending at the SAME builder,
+`src/shared/agentLaunch.ts`, which is the only code that knows how to spell a
+flag and is pinned against the captured `--help`. A second dialog cannot invent
+a second command. What `NewSessionDialog` still does NOT do is launch an agent:
+its flow ends in an outcome banner and a navigation, with no attached PTY to
+type into, so wiring it would mean carrying a pending launch across a route
+change. Unbuilt on purpose, and the `+` inside the folder is the way to start
+an agent.
 
 ---
 

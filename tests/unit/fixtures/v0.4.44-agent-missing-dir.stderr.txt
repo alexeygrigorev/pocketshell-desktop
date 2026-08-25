@@ -1,0 +1,4 @@
+Usage: pocketshell agent claude [OPTIONS]
+Try 'pocketshell agent claude --help' for help.
+
+Error: Missing option '--dir'.
