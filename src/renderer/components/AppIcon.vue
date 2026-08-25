@@ -51,7 +51,8 @@ export type AppIconName =
   | 'toggle-left'
   | 'toggle-right'
   | 'tool'
-  | 'trash-2';
+  | 'trash-2'
+  | 'type';
 
 /**
  * Feather 4.29 path data (MIT), verbatim. One entry per icon.
@@ -227,6 +228,17 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
       'M14 11v6',
     ],
   },
+  // Feather's `type` — the text annotation tool. A serif "T" with its slab and
+  // its foot, which is the mark every drawing app uses for this and therefore
+  // the one that needs no label to be understood. Its <polyline> (4 7, 4 4,
+  // 20 4, 20 7) is one relative path and its two <line>s are the others.
+  //
+  // NOT a literal letter glyph: docs/POLISH.md §2 is that a character never
+  // stands in for a graphic affordance, and "the affordance happens to be about
+  // letters" is not an exemption — a `T` typed into the template would render
+  // in the UI font at the button's font size and inherit none of the stroke
+  // weight the rest of the toolbar shares.
+  type: { paths: ['M4 7V4h16v3', 'M9 20h6', 'M12 4v16'] },
 };
 
 const props = withDefaults(

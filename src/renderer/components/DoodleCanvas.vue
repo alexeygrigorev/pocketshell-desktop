@@ -11,25 +11,61 @@
  * canvas produces PNG bytes, and `{kind:'bytes'}` staging already accepts
  * exactly that.
  *
- * ## The stroke list is the document, not the pixels
+ * ## The item list is the document, not the pixels
  *
- * Strokes are kept as geometry and the canvas is repainted from them on every
- * change. The obvious alternative — draw straight to the context and snapshot
- * with getImageData for undo — costs a full-frame copy per stroke and cannot
- * survive a resize or a late-loading backdrop, both of which happen here. The
- * repaint is bounded by the stroke count, which for a doodle is tens.
+ * Strokes and text are kept as geometry and the canvas is repainted from them
+ * on every change. The obvious alternative — draw straight to the context and
+ * snapshot with getImageData for undo — costs a full-frame copy per stroke and
+ * cannot survive a resize or a late-loading backdrop, both of which happen
+ * here. The repaint is bounded by the item count, which for a doodle is tens.
  *
- * ## Colour comes from the DOM, not from this file
+ * That is also why the export is trustworthy. There is ONE canvas and ONE
+ * painter: `repaint()` draws the backdrop and then every item, and `commit()`
+ * encodes that same canvas. Nothing is composited into a preview layer that
+ * the exporter would then have to reproduce — the text tool's `<textarea>` is
+ * an EDITING affordance that exists only while a caret is in it, and committing
+ * it turns it into an item that `repaint()` paints like everything else. There
+ * is no second rendering path that could drift.
  *
- * A canvas context needs a resolved colour string; `var(--accent)` means
- * nothing to it. Rather than hard-code the palette (which the design gate in
- * tests/unit/designGates.test.ts rightly forbids in a .vue file, and which
- * would silently drift from DESIGN.md), the pens name tokens and resolve them
- * from computed style at paint time. Change the token, the pen follows.
+ * ## Colour, family and leading come from the DOM, not from this file
+ *
+ * A canvas context needs a resolved colour string and a resolved font string;
+ * `var(--accent)` means nothing to it. Rather than hard-code the palette (which
+ * the design gate in tests/unit/designGates.test.ts rightly forbids in a .vue
+ * file, and which would silently drift from DESIGN.md), the pens name tokens
+ * and resolve them from computed style at paint time. Change the token, the pen
+ * follows. Text does the same for `--font-ui`, `--fw-semibold` and `--lh-300`.
+ *
+ * The one number NOT taken from a token is the text SIZE, and the reasoning is
+ * in `TEXT.sizeRatio` in src/shared/doodleGeometry.ts: the `--fs-*` ladder is a
+ * chrome density system that stops at 20px, while this canvas is a bitmap up to
+ * 2048px wide. Size follows the stroke width the user already picked instead,
+ * so a caption and the arrow pointing at it read as one hand.
+ *
+ * ## Undo covers everything, including edits and Clear
+ *
+ * `history` holds previous versions of the item ARRAY — a list of references,
+ * tens of them, which is a different proposition from the frame-sized pixel
+ * snapshots the original design rejected. It is what lets undo cover the three
+ * things a pop-the-last-item stack cannot: retyping an existing annotation,
+ * emptying one (which deletes it), and Clear. An annotation tool whose Clear is
+ * irreversible is one misclick from losing the whole markup.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import type { AppIconName } from './AppIcon.vue';
+import {
+  arrowHead,
+  constrainToAngle,
+  hitTestText,
+  isBlankText,
+  isDegenerateDrag,
+  layoutText,
+  textFontSize,
+  TEXT,
+  type Point,
+  type TextLayout,
+} from '../../shared/doodleGeometry';
 
 const props = withDefaults(
   defineProps<{
@@ -57,7 +93,9 @@ const emit = defineEmits<{
 // Tools and pens
 // ---------------------------------------------------------------------------
 
-type Tool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse';
+/** Everything that is defined by a pointer drag. */
+type ShapeTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse';
+type Tool = ShapeTool | 'text';
 
 const TOOLS: { id: Tool; icon: AppIconName; label: string }[] = [
   { id: 'pen', icon: 'edit-2', label: 'Draw' },
@@ -65,6 +103,7 @@ const TOOLS: { id: Tool; icon: AppIconName; label: string }[] = [
   { id: 'arrow', icon: 'arrow-right', label: 'Arrow' },
   { id: 'rect', icon: 'square', label: 'Rectangle' },
   { id: 'ellipse', icon: 'circle', label: 'Ellipse' },
+  { id: 'text', icon: 'type', label: 'Text' },
 ];
 
 /**
@@ -73,11 +112,22 @@ const TOOLS: { id: Tool; icon: AppIconName; label: string }[] = [
  * These six are the status/accent tokens that already carry meaning in this
  * UI, so an annotation drawn in `--error` reads the same way an error does
  * everywhere else. No new token is introduced for drawing.
+ *
+ * Text shares this row rather than growing its own. A second colour control
+ * that happened to apply only to text would double the toolbar to express a
+ * distinction nobody drawing on a screenshot has ever wanted: the arrow and the
+ * label at the end of it are one annotation and should be one colour.
  */
 const PENS = ['--error', '--warning', '--success', '--accent', '--agent', '--fg'] as const;
 type Pen = (typeof PENS)[number];
 
-/** Logical stroke widths. Scaled with the canvas, so they hold at any zoom. */
+/**
+ * Logical stroke widths. Scaled with the canvas, so they hold at any zoom.
+ *
+ * Text size is derived from this too (see `TEXT.sizeRatio`), which is why the
+ * control's label is deliberately generic: it is the weight of the mark, not
+ * the thickness of a line.
+ */
 const WIDTHS = [3, 6, 12] as const;
 
 const tool = ref<Tool>('pen');
@@ -88,24 +138,51 @@ const width = ref<number>(WIDTHS[1]);
 // Document
 // ---------------------------------------------------------------------------
 
-interface Point {
-  x: number;
-  y: number;
-}
 interface Stroke {
-  tool: Tool;
+  kind: 'stroke';
+  tool: ShapeTool;
   pen: Pen;
   width: number;
   points: Point[];
 }
 
 /**
+ * A committed text annotation.
+ *
+ * `origin` is the TOP-LEFT of the first line, not a baseline — the same box the
+ * editing `<textarea>` occupies. Keeping the two in the same coordinate space
+ * is what makes the editor a true preview instead of an approximation that
+ * jumps a few pixels when you commit it.
+ *
+ * The raw text is stored, never the wrapped lines: wrapping depends on the
+ * measured font, and the font depends on tokens that can change under a theme
+ * switch. Storing lines would freeze a layout computed against a font that is
+ * no longer the one being painted with.
+ */
+interface TextItem {
+  kind: 'text';
+  pen: Pen;
+  width: number;
+  origin: Point;
+  text: string;
+}
+
+type Item = Stroke | TextItem;
+
+/**
  * shallowRef: strokes accumulate hundreds of points while the pointer is down.
  * Deep reactivity would make Vue walk every point on every move event to no
  * purpose — the canvas is repainted explicitly, not by a template binding.
  */
-const strokes = shallowRef<Stroke[]>([]);
+const items = shallowRef<Item[]>([]);
 const drawing = ref<Stroke | null>(null);
+
+/**
+ * Previous versions of the item list, oldest first. See the header comment:
+ * this is a stack of ARRAYS OF REFERENCES, not of pixels, so an entry costs one
+ * pointer per item on the sheet.
+ */
+const history = shallowRef<Item[][]>([]);
 
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const frameEl = ref<HTMLDivElement | null>(null);
@@ -116,21 +193,134 @@ const busy = ref(false);
 /** Logical canvas size. A blank sheet gets a 16:10 field; an image gets its own. */
 const size = ref({ w: 1024, h: 640 });
 
-const isEmpty = computed(() => strokes.value.length === 0 && drawing.value === null);
-const canUndo = computed(() => strokes.value.length > 0);
+/**
+ * Replace the document, keeping the old version for undo.
+ *
+ * Every mutation goes through here, which is the only way "does undo cover the
+ * new tool?" stays answerable: a tool that forgets to call it is a tool that
+ * cannot be taken back, and there is exactly one place to check.
+ */
+function mutate(next: Item[]): void {
+  history.value = [...history.value, items.value];
+  items.value = next;
+}
 
 // ---------------------------------------------------------------------------
-// Painting
+// Text editing state
 // ---------------------------------------------------------------------------
+
+/**
+ * The open text editor, if any.
+ *
+ * `index` is null for a brand-new annotation and the position in `items` when
+ * an existing one is being retyped. Committed text STAYS EDITABLE — click it
+ * again with the text tool and the caret comes back. The alternative (text is
+ * frozen once committed) means the only cure for a typo is undo-and-retype the
+ * whole line, and annotations are typed fast, on top of a screenshot, by
+ * someone who is looking at the screenshot rather than at what they typed.
+ *
+ * `pen` and `width` are copied onto the editor rather than read live from the
+ * toolbar, so that re-opening an old red annotation while the toolbar happens
+ * to be on green does not silently recolour it. Touching the toolbar WHILE the
+ * editor is open does retarget it — that is the user asking.
+ */
+interface Editing {
+  index: number | null;
+  origin: Point;
+  pen: Pen;
+  width: number;
+  text: string;
+}
+
+const editing = ref<Editing | null>(null);
+const editorEl = ref<HTMLTextAreaElement | null>(null);
+
+/**
+ * Displayed pixels per logical canvas pixel.
+ *
+ * The sheet is CSS-scaled to fit the frame (a 2048px screenshot inside a 720px
+ * panel), so the editor overlay has to be placed and SIZED in display pixels
+ * while the item it edits lives in logical ones. Tracked rather than measured
+ * on demand because it only changes on a resize or a backdrop swap, and reading
+ * `getBoundingClientRect` from a paint that runs on every pointermove would put
+ * a forced layout in the drag loop.
+ */
+const displayScale = ref(1);
+let frameObserver: ResizeObserver | null = null;
+
+function measureScale(): void {
+  const canvas = canvasEl.value;
+  if (!canvas || canvas.width === 0) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width > 0) displayScale.value = rect.width / canvas.width;
+}
+
+const isEmpty = computed(
+  () => items.value.length === 0 && drawing.value === null && editing.value === null,
+);
+const canUndo = computed(() => history.value.length > 0);
+
+// ---------------------------------------------------------------------------
+// Token resolution
+// ---------------------------------------------------------------------------
+
+/** Read a custom property off the live element tree. */
+function readToken(name: string): string {
+  const host = canvasEl.value ?? document.documentElement;
+  return getComputedStyle(host).getPropertyValue(name).trim();
+}
 
 /** Resolve a token to the concrete colour the canvas context needs. */
 function resolve(token: Pen): string {
-  const host = canvasEl.value ?? document.documentElement;
-  const value = getComputedStyle(host).getPropertyValue(token).trim();
+  const value = readToken(token);
   // A token that fails to resolve means the stylesheet is not attached — draw
   // something visible rather than throwing away the stroke.
   return value === '' ? 'white' : value;
 }
+
+/** The blank-sheet ground, taken from the same token the app paints panels with. */
+function getSurface(): string {
+  const value = readToken('--surface-2');
+  return value === '' ? 'black' : value;
+}
+
+/** `--lh-300` as a number. The body ratio: this is body copy, on a picture. */
+function lineHeightRatio(): number {
+  const parsed = Number.parseFloat(readToken('--lh-300'));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : TEXT.lineHeightRatio;
+}
+
+/** The canvas `font` shorthand for a mark of the given width. */
+function fontFor(markWidth: number): string {
+  const family = readToken('--font-ui') || 'sans-serif';
+  const weight = readToken('--fw-semibold') || '600';
+  return `${weight} ${textFontSize(markWidth)}px ${family}`;
+}
+
+/**
+ * Lay a text item out using the canvas's own text metrics.
+ *
+ * The context is mutated (`font`) before measuring, because `measureText`
+ * answers for whatever font is set — measuring in one font and painting in
+ * another is the classic way to get wrapping that is right on screen and wrong
+ * in the export. Setting it here means every caller measures in the font the
+ * very next `fillText` will use.
+ */
+function layoutFor(ctx: CanvasRenderingContext2D, item: TextItem): TextLayout {
+  ctx.font = fontFor(item.width);
+  return layoutText({
+    text: item.text,
+    origin: item.origin,
+    fontSize: textFontSize(item.width),
+    lineHeightRatio: lineHeightRatio(),
+    sheetWidth: size.value.w,
+    measure: (s) => ctx.measureText(s).width,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Painting
+// ---------------------------------------------------------------------------
 
 function strokePath(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
   const { points } = stroke;
@@ -165,10 +355,22 @@ function strokePath(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
   }
 
   if (stroke.tool === 'line' || stroke.tool === 'arrow') {
+    // The head is computed before the shaft is drawn because it decides where
+    // the shaft ENDS — see ArrowHead.shaftEnd for why it is not the tip.
+    const head = stroke.tool === 'arrow' ? arrowHead(first, last, stroke.width) : null;
+    const end = head?.shaftEnd ?? last;
     ctx.moveTo(first.x, first.y);
-    ctx.lineTo(last.x, last.y);
+    ctx.lineTo(end.x, end.y);
     ctx.stroke();
-    if (stroke.tool === 'arrow') drawArrowHead(ctx, first, last, stroke.width);
+    if (head) {
+      ctx.beginPath();
+      ctx.moveTo(head.tip.x, head.tip.y);
+      ctx.lineTo(head.barbA.x, head.barbA.y);
+      ctx.lineTo(head.barbB.x, head.barbB.y);
+      ctx.closePath();
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fill();
+    }
     return;
   }
 
@@ -185,26 +387,26 @@ function strokePath(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
   ctx.stroke();
 }
 
-/** A filled head, sized off the stroke so it stays in proportion at any width. */
-function drawArrowHead(
-  ctx: CanvasRenderingContext2D,
-  from: Point,
-  to: Point,
-  lineWidth: number,
-): void {
-  const angle = Math.atan2(to.y - from.y, to.x - from.x);
-  const length = Math.hypot(to.x - from.x, to.y - from.y);
-  if (length < 1) return;
-  const head = Math.min(lineWidth * 4, length);
-  const spread = Math.PI / 7;
+/**
+ * Paint one text annotation.
+ *
+ * `textBaseline = 'top'` rather than the default alphabetic baseline: the
+ * layout module works in top-left boxes so that the overlaid textarea and the
+ * painted result occupy the same rectangle, and converting between the two
+ * would need an ascent metric that differs per font.
+ */
+function paintText(ctx: CanvasRenderingContext2D, item: TextItem): void {
+  const layout = layoutFor(ctx, item);
+  ctx.fillStyle = resolve(item.pen);
+  ctx.textBaseline = 'top';
+  for (let i = 0; i < layout.lines.length; i++) {
+    ctx.fillText(layout.lines[i], layout.x, layout.y + i * layout.lineHeight);
+  }
+}
 
-  ctx.beginPath();
-  ctx.moveTo(to.x, to.y);
-  ctx.lineTo(to.x - head * Math.cos(angle - spread), to.y - head * Math.sin(angle - spread));
-  ctx.lineTo(to.x - head * Math.cos(angle + spread), to.y - head * Math.sin(angle + spread));
-  ctx.closePath();
-  ctx.fillStyle = ctx.strokeStyle;
-  ctx.fill();
+function paintItem(ctx: CanvasRenderingContext2D, item: Item): void {
+  if (item.kind === 'text') paintText(ctx, item);
+  else strokePath(ctx, item);
 }
 
 function repaint(): void {
@@ -225,15 +427,16 @@ function repaint(): void {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
-  for (const stroke of strokes.value) strokePath(ctx, stroke);
+  // The item currently under a caret is skipped: the textarea is drawn over
+  // that exact rectangle in the same font and colour, and painting both would
+  // show the old text ghosting behind the new. It comes back the instant the
+  // edit commits, which is also the instant before any export can happen.
+  const held = editing.value?.index ?? null;
+  for (let i = 0; i < items.value.length; i++) {
+    if (i === held) continue;
+    paintItem(ctx, items.value[i]);
+  }
   if (drawing.value) strokePath(ctx, drawing.value);
-}
-
-/** The blank-sheet ground, taken from the same token the app paints panels with. */
-function getSurface(): string {
-  const host = canvasEl.value ?? document.documentElement;
-  const value = getComputedStyle(host).getPropertyValue('--surface-2').trim();
-  return value === '' ? 'black' : value;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,14 +456,43 @@ function pointFrom(e: PointerEvent): Point {
   };
 }
 
+/**
+ * The second point of a two-point drag, with Shift applied.
+ *
+ * Shift constrains to 45deg increments, and only for the two tools where an
+ * angle is the thing being drawn. It is NOT wired to the rectangle and the
+ * ellipse, where the same key conventionally means "square"/"circle" — that is
+ * a different constraint with the same keycap, and implementing one of them
+ * while leaving the other to do nothing would be worse than doing neither: a
+ * user who learns Shift on the arrow would reasonably expect a square.
+ *
+ * Why constrain at all: the commonest annotation on a screenshot is a
+ * horizontal or vertical arrow pointing at a row or a column, and a
+ * hand-dragged "horizontal" arrow is out by a degree or two, which is visible
+ * precisely because the thing it points at is aligned.
+ */
+function dragPoint(e: PointerEvent, stroke: Stroke): Point {
+  const point = pointFrom(e);
+  const constrainable = stroke.tool === 'line' || stroke.tool === 'arrow';
+  if (!e.shiftKey || !constrainable) return point;
+  return constrainToAngle(stroke.points[0], point);
+}
+
 function onPointerDown(e: PointerEvent): void {
   if (e.button !== 0) return;
   const canvas = canvasEl.value;
   if (!canvas) return;
+
+  if (tool.value === 'text') {
+    onTextPointerDown(pointFrom(e));
+    return;
+  }
+
   // Capture so a stroke that leaves the canvas keeps tracking, and so the
   // matching up event is delivered here even if it happens over the toolbar.
   canvas.setPointerCapture(e.pointerId);
   drawing.value = {
+    kind: 'stroke',
     tool: tool.value,
     pen: pen.value,
     width: width.value,
@@ -272,12 +504,11 @@ function onPointerDown(e: PointerEvent): void {
 function onPointerMove(e: PointerEvent): void {
   const stroke = drawing.value;
   if (!stroke) return;
-  const point = pointFrom(e);
   if (stroke.tool === 'pen') {
-    stroke.points.push(point);
+    stroke.points.push(pointFrom(e));
   } else {
     // Every other tool is defined by two corners; dragging moves the second.
-    stroke.points = [stroke.points[0], point];
+    stroke.points = [stroke.points[0], dragPoint(e, stroke)];
   }
   repaint();
 }
@@ -286,37 +517,272 @@ function onPointerUp(e: PointerEvent): void {
   const stroke = drawing.value;
   if (!stroke) return;
   canvasEl.value?.releasePointerCapture(e.pointerId);
+  // Take the release position too, so letting go of Shift on the last frame, or
+  // a release that arrives without a preceding move, still lands where the
+  // pointer actually is.
+  if (stroke.tool !== 'pen' && stroke.points.length === 2) {
+    stroke.points = [stroke.points[0], dragPoint(e, stroke)];
+  }
   drawing.value = null;
   // A click with no drag leaves a shape of zero extent; only the pen means
-  // anything by a single point.
+  // anything by a single point. For the arrow in particular this is the whole
+  // answer to "what does a click do?": nothing, deliberately, because the
+  // alternative is an invisible zero-length arrow that still eats an Undo.
   const degenerate =
     stroke.tool !== 'pen' &&
     stroke.points.length === 2 &&
-    Math.hypot(
-      stroke.points[1].x - stroke.points[0].x,
-      stroke.points[1].y - stroke.points[0].y,
-    ) < 2;
-  if (!degenerate) strokes.value = [...strokes.value, stroke];
+    isDegenerateDrag(stroke.points[0], stroke.points[1]);
+  if (!degenerate) mutate([...items.value, stroke]);
   repaint();
 }
+
+// ---------------------------------------------------------------------------
+// Text tool
+// ---------------------------------------------------------------------------
+
+/** Index of the topmost committed text annotation under `point`, or null. */
+function textAt(point: Point): number | null {
+  const ctx = canvasEl.value?.getContext('2d');
+  if (!ctx) return null;
+  // Back to front: later items are painted on top, so they are hit first.
+  for (let i = items.value.length - 1; i >= 0; i--) {
+    const item = items.value[i];
+    if (item.kind !== 'text') continue;
+    if (hitTestText(layoutFor(ctx, item), point)) return i;
+  }
+  return null;
+}
+
+/**
+ * A click with the text tool: commit whatever was open, then edit or place.
+ *
+ * The order is load-bearing. Committing first can DELETE an item (an annotation
+ * emptied to whitespace is a deleted annotation), which shifts every index after
+ * it, so the hit test has to run against the settled list or it would hand back
+ * a stale index and the click would open the wrong annotation.
+ */
+function onTextPointerDown(point: Point): void {
+  commitText();
+  const hit = textAt(point);
+  if (hit !== null) {
+    const item = items.value[hit];
+    if (item.kind === 'text') {
+      const { origin, pen: itemPen, width: itemWidth, text } = item;
+      openEditor({ index: hit, origin, pen: itemPen, width: itemWidth, text });
+      return;
+    }
+  }
+  openEditor({ index: null, origin: point, pen: pen.value, width: width.value, text: '' });
+}
+
+function openEditor(next: Editing): void {
+  editing.value = next;
+  repaint();
+  void nextTick(() => {
+    const el = editorEl.value;
+    if (!el) return;
+    autoSizeEditor();
+    el.focus();
+    // Caret at the END of the existing text, not at the click position.
+    // Mapping a click to a character offset is possible but it would be the
+    // only place in this app where a click inside a canvas is decoded into a
+    // text index, and getting it wrong puts the caret somewhere the user did
+    // not point at — worse than a predictable end-of-text.
+    el.setSelectionRange(el.value.length, el.value.length);
+  });
+}
+
+/**
+ * Fold the open editor back into the document.
+ *
+ * Four things reach here, and they are the entire commit vocabulary of the
+ * tool: Escape, Ctrl/Cmd+Enter, a click elsewhere on the sheet, and Attach.
+ * Blur is deliberately NOT one of them — a blur-commits rule means reaching for
+ * the colour swatch ends the annotation you were in the middle of typing, which
+ * is exactly when a user reaches for the colour swatch.
+ */
+function commitText(): void {
+  const open = editing.value;
+  if (!open) return;
+  editing.value = null;
+
+  if (open.index === null) {
+    // A caret placed and then abandoned leaves nothing behind, and — the point
+    // of checking before `mutate` — costs no Undo either. An Undo that appears
+    // to do nothing is how users conclude undo is broken.
+    if (!isBlankText(open.text)) {
+      mutate([
+        ...items.value,
+        { kind: 'text', pen: open.pen, width: open.width, origin: open.origin, text: open.text },
+      ]);
+    }
+    repaint();
+    return;
+  }
+
+  const existing = items.value[open.index];
+  // Colour and weight are compared alongside the text, not just the text:
+  // reaching for a swatch mid-edit retargets the open annotation (see the
+  // toolbar watcher), so "nothing changed" has to mean all three or a
+  // recolour-without-retype would be silently thrown away here.
+  const unchanged =
+    existing?.kind === 'text' &&
+    existing.text === open.text &&
+    existing.pen === open.pen &&
+    existing.width === open.width;
+  if (existing?.kind !== 'text' || unchanged) {
+    // Re-opened and left alone. No change, so no history entry.
+    repaint();
+    return;
+  }
+
+  const next = [...items.value];
+  // Emptying an annotation is how you delete one. There is no separate delete
+  // control, and inventing one would mean a selection model this surface does
+  // not otherwise have.
+  if (isBlankText(open.text)) next.splice(open.index, 1);
+  else next[open.index] = { ...existing, text: open.text, pen: open.pen, width: open.width };
+  mutate(next);
+  repaint();
+}
+
+/** Grow the textarea to its content so it never scrolls under the caret. */
+function autoSizeEditor(): void {
+  const el = editorEl.value;
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+}
+
+function onEditorInput(e: Event): void {
+  const open = editing.value;
+  if (!open) return;
+  open.text = (e.target as HTMLTextAreaElement).value;
+  autoSizeEditor();
+}
+
+/**
+ * Keys inside the text editor.
+ *
+ * ENTER INSERTS A NEWLINE. It is the default, and it is left alone on purpose:
+ * an annotation on a screenshot wraps and is routinely two or three lines, so
+ * binding Enter to commit would make the multi-line case unreachable. Note this
+ * is the OPPOSITE of the composer's own draft (§12 — bare Enter sends), and the
+ * divergence is fine because they are answering different questions: the draft
+ * is a message you are finishing, this is a caption you are laying out.
+ *
+ * ESCAPE COMMITS AND CLOSES THE EDITOR, and it does not propagate.
+ *
+ * The propagation half is the important half. This canvas is mounted inside an
+ * OverlayPanel (Escape -> close the overlay) which is mounted inside the
+ * composer's `.composer-root` (Escape -> the §12.2 ladder -> hide the whole
+ * composer). Both listen for a bubbling Escape, so without `stopPropagation`
+ * one keypress while typing a caption would throw away the caption, the
+ * drawing, and the composer, in that order. `stopPropagation` here makes the
+ * open editor the innermost rung of that same ladder — Escape closes what you
+ * opened last — without either of the outer handlers needing to know this tool
+ * exists.
+ *
+ * COMMITS, rather than cancels, because this app's Escape never destroys work:
+ * §12.2 says so of the draft in as many words, and Discard is the only control
+ * that throws anything away. The way to take back an annotation you did not
+ * want is Ctrl+Z, which covers it — see `mutate`.
+ *
+ * Ctrl/Cmd+Enter also commits, matching the composer's "modifier plus Enter
+ * finishes this" muscle memory for the many users who will try it first.
+ *
+ * Ctrl+Z is allowed to reach the textarea's native undo and is stopped from
+ * reaching the sheet's: while a caret is in a text box, undo means "undo my
+ * typing", not "delete the arrow I drew a minute ago".
+ */
+function onEditorKeydown(e: KeyboardEvent): void {
+  const mod = e.ctrlKey || e.metaKey;
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    commitText();
+    return;
+  }
+  if (e.key === 'Enter' && mod && !e.isComposing) {
+    e.preventDefault();
+    e.stopPropagation();
+    commitText();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === 'z') {
+    e.stopPropagation();
+  }
+}
+
+/**
+ * Retarget the open editor when the toolbar changes.
+ *
+ * Picking a colour or a weight with a caret in a text box means "make THIS
+ * text that colour" — there is nothing else on the sheet it could plausibly
+ * mean, since every other tool applies its colour at the moment of drawing.
+ * The textarea is styled from the same values, so the change is visible while
+ * typing rather than at commit.
+ */
+watch([pen, width], ([nextPen, nextWidth]) => {
+  const open = editing.value;
+  if (!open) return;
+  open.pen = nextPen;
+  open.width = nextWidth;
+  void nextTick(autoSizeEditor);
+});
+
+/** Leaving the text tool commits; a caret with no text tool has no meaning. */
+watch(tool, () => commitText());
+
+/** Live editor geometry, in DISPLAYED pixels over the scaled sheet. */
+const editorStyle = computed(() => {
+  const open = editing.value;
+  if (!open) return {};
+  const scale = displayScale.value;
+  const fontSize = textFontSize(open.width);
+  // The same available width `layoutText` wraps to, so the textarea breaks its
+  // lines at (very nearly) the same places the painted result will. It cannot
+  // be exact — the browser's inline layout and `measureText` are two different
+  // line breakers — but the box, the family, the size and the leading are the
+  // same, so a caption that fits while typing fits when painted.
+  const available = size.value.w - open.origin.x - fontSize * TEXT.edgePadding;
+  return {
+    left: `${open.origin.x * scale}px`,
+    top: `${open.origin.y * scale}px`,
+    width: `${Math.max(fontSize, available) * scale}px`,
+    fontSize: `${fontSize * scale}px`,
+    lineHeight: String(lineHeightRatio()),
+    color: `var(${open.pen})`,
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
 
 function undo(): void {
-  strokes.value = strokes.value.slice(0, -1);
+  const past = history.value;
+  if (past.length === 0) return;
+  // An open editor is abandoned by undo rather than committed: the user asked
+  // to go back, and committing on the way out would first ADD the annotation
+  // they are undoing past.
+  editing.value = null;
+  items.value = past[past.length - 1];
+  history.value = past.slice(0, -1);
   repaint();
 }
 
 function clear(): void {
-  strokes.value = [];
+  editing.value = null;
   drawing.value = null;
+  if (items.value.length > 0) mutate([]);
   repaint();
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  // Ctrl/Cmd+Z only. Escape is the overlay's to handle, and it already does.
+  // Ctrl/Cmd+Z only. Escape is the overlay's to handle, and it already does —
+  // except while a text editor is open, where the textarea stops it first.
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && canUndo.value) {
     e.preventDefault();
     undo();
@@ -336,6 +802,12 @@ function attachmentName(): string {
 async function commit(): Promise<void> {
   const canvas = canvasEl.value;
   if (!canvas || busy.value) return;
+  // Flush the caret INTO the document first. Without this, attaching while
+  // still typing a caption would export a bitmap with the caption missing —
+  // the textarea is a DOM element floating over the canvas and `toBlob` has
+  // never heard of it. `commitText` repaints synchronously, so the pixels are
+  // right by the time the encoder is asked for them.
+  commitText();
   busy.value = true;
   try {
     const blob = await new Promise<Blob | null>((resolve_) =>
@@ -367,6 +839,7 @@ async function loadBackdrop(source: string | null): Promise<void> {
   if (!source) {
     size.value = { w: 1024, h: 640 };
     await nextTick();
+    measureScale();
     repaint();
     return;
   }
@@ -395,6 +868,7 @@ async function loadBackdrop(source: string | null): Promise<void> {
     backdropImage.value = image;
   }
   await nextTick();
+  measureScale();
   repaint();
 }
 
@@ -402,9 +876,17 @@ watch(() => props.backdrop, loadBackdrop);
 
 onMounted(async () => {
   document.addEventListener('keydown', onKeydown);
+  if (frameEl.value && typeof ResizeObserver !== 'undefined') {
+    frameObserver = new ResizeObserver(measureScale);
+    frameObserver.observe(frameEl.value);
+  }
   await loadBackdrop(props.backdrop);
 });
-onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeydown);
+  frameObserver?.disconnect();
+  frameObserver = null;
+});
 </script>
 
 <template>
@@ -445,14 +927,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 
       <div class="sep" />
 
-      <div class="group" role="group" aria-label="Stroke width">
+      <!-- One control, two meanings: line thickness, and — via
+           TEXT.sizeRatio — text size. They are the same idea (how heavy a
+           mark), which is why this is not two controls. -->
+      <div class="group" role="group" aria-label="Mark weight">
         <button
           v-for="w in WIDTHS"
           :key="w"
           class="width-btn"
           :class="{ active: width === w }"
-          :title="`${w}px`"
-          :aria-label="`Stroke ${w} pixels`"
+          :title="tool === 'text' ? `Text ${w * 4}px` : `${w}px`"
+          :aria-label="`Mark weight ${w}`"
           :aria-pressed="width === w"
           @click="width = w"
         >
@@ -471,20 +956,48 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
     </div>
 
     <div ref="frameEl" class="frame">
-      <canvas
-        ref="canvasEl"
-        class="sheet"
-        :width="size.w"
-        :height="size.h"
-        @pointerdown="onPointerDown"
-        @pointermove="onPointerMove"
-        @pointerup="onPointerUp"
-        @pointercancel="onPointerUp"
-      />
+      <!-- The stage is exactly the canvas's displayed box, so the text editor
+           can be positioned in its coordinate space with nothing but a scale
+           factor. It shrink-wraps: the canvas is `object-fit: contain` inside
+           the frame, and an editor placed against the FRAME would be offset by
+           whatever letterboxing that produced. -->
+      <div class="stage">
+        <canvas
+          ref="canvasEl"
+          class="sheet"
+          :class="{ texting: tool === 'text' }"
+          :width="size.w"
+          :height="size.h"
+          @pointerdown="onPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointercancel="onPointerUp"
+        />
+        <!-- Sized and coloured from the same numbers `paintText` uses, so this
+             is a live preview of the painted result rather than a separate
+             styling of the same string. -->
+        <textarea
+          v-if="editing"
+          ref="editorEl"
+          class="text-editor"
+          :style="editorStyle"
+          :value="editing.text"
+          rows="1"
+          spellcheck="false"
+          aria-label="Annotation text"
+          @input="onEditorInput"
+          @keydown="onEditorKeydown"
+        />
+      </div>
     </div>
 
     <footer class="actions">
       <p v-if="loadError" class="error">{{ loadError }}</p>
+      <p v-else-if="editing" class="hint">Enter for a new line, Esc or Ctrl+Enter to finish</p>
+      <p v-else-if="tool === 'text'" class="hint">Click the sheet to write; click text to edit it</p>
+      <p v-else-if="tool === 'arrow' || tool === 'line'" class="hint">
+        Drag from tail to head; hold Shift for 45&deg; steps
+      </p>
       <p v-else class="hint">{{ backdropName || 'Blank sheet' }}</p>
       <button class="btn" @click="emit('close')">Cancel</button>
       <button class="btn primary" :disabled="busy" @click="commit">Attach</button>
@@ -597,16 +1110,56 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   border: 1px solid var(--border);
   border-radius: var(--r-md);
 }
+/* Shrink-wraps the canvas so `.text-editor`'s containing block IS the sheet.
+   `line-height: 0` kills the inline descender gap that would otherwise put a
+   few pixels between the two boxes and offset every caption. */
+.stage {
+  position: relative;
+  min-width: 0;
+  line-height: 0;
+}
 /* Fit the sheet inside the overlay without ever scaling it up: an 800px-wide
    screenshot blown up to fill a 960px panel would be annotated against soft
    pixels. */
 .sheet {
+  display: block;
   max-width: 100%;
   max-height: 56vh;
   object-fit: contain;
   border-radius: var(--r-sm);
   cursor: crosshair;
   touch-action: none;
+}
+/* The text tool places a caret rather than dragging a shape, and the pointer
+   should say which. */
+.sheet.texting {
+  cursor: text;
+}
+
+/* ---- Text editor --------------------------------------------------------
+ * A transparent textarea sitting exactly where the painted text will be. No
+ * background and no border on purpose: any chrome here would be chrome the
+ * export does not have, so the moment of committing would visibly change the
+ * annotation. The caret and the selection are the only things that appear and
+ * then vanish, which is what a caret is for. */
+.text-editor {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-weight: var(--fw-semibold);
+  overflow: hidden;
+  resize: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  caret-color: currentColor;
+}
+.text-editor:focus {
+  /* No focus ring: the caret is the focus indicator, and a ring drawn around
+     the block would sit over the picture being annotated. */
+  outline: none;
 }
 
 /* ---- Footer ------------------------------------------------------------- */
