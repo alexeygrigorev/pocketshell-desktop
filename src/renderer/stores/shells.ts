@@ -29,9 +29,30 @@ import type { ShellId } from '../../shared/types';
  * it needs while leaving that code path untouched.
  *
  * The map is keyed by the same session key TerminalView takes as a prop, and is
- * reactive, because TerminalView re-opens its shell whenever that key changes
+ * reactive, because TerminalView re-points its pane whenever that key changes
  * (§25.2) — a consumer that captured the id once would end up writing to a
  * closed channel.
+ *
+ * WHAT A SHARED TMUX CLIENT CHANGES
+ * ---------------------------------
+ * Nothing in this file, but a great deal in how to read it. Main now holds ONE
+ * attached tmux client per connection and moves it between sessions with
+ * `switch-client` (src/main/ssh/TmuxClientPool.ts), so several session keys can
+ * name the same ShellId over time, and writing to that shell puts bytes into
+ * whichever session the client is displaying RIGHT NOW — not the session whose
+ * key you looked the id up under.
+ *
+ * That makes the invariant this map has to carry stricter than it looks: at
+ * most one key may be registered against a shared shell at a time, and it must
+ * be the session the pane is actually showing. TerminalView enforces it by
+ * unregistering the outgoing key BEFORE it asks main for the new one, so a
+ * composer bound to the session the user just left resolves to `null` and its
+ * send fails loudly instead of landing in a stranger's pane.
+ *
+ * A registry is still the right shape for that — arguably more so than before.
+ * Ownership of the PTY was already split between the component and main; what
+ * moved is only the decision of whether a new PTY is needed at all, which
+ * belongs on the side that can see the host.
  */
 export const useShellsStore = defineStore('shells', () => {
   /** sessionKey -> the ShellId currently attached to it. */

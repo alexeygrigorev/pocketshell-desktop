@@ -111,9 +111,37 @@ const api = {
       rows?: number;
     }): Promise<ShellId> => ipcRenderer.invoke(ipc.shell.open, payload),
 
-    /** Write input bytes to a shell's stdin (xterm.js -> remote). */
-    input: (shellId: ShellId, data: string): Promise<boolean> =>
-      ipcRenderer.invoke(ipc.shell.input, shellId, data),
+    /**
+     * Show a tmux session in this connection's terminal.
+     *
+     * The reply is deliberately NOT a bare ShellId. Main holds one attached
+     * tmux client per connection and moves it between sessions with
+     * `switch-client`, which is about an order of magnitude cheaper than a
+     * second SSH channel plus a login shell plus `tmuxctl` — but it means the
+     * shell that comes back is often the one the caller already has.
+     * `switched: true` says so, and the caller must then leave its terminal
+     * alone: tmux redraws the client itself, and a reset would drop the modes
+     * the still-attached client set.
+     */
+    attachSession: (payload: {
+      connectionId: string;
+      sessionName: string;
+      cols?: number;
+      rows?: number;
+    }): Promise<{ shellId: ShellId; switched: boolean }> =>
+      ipcRenderer.invoke(ipc.shell.attachSession, payload),
+
+    /**
+     * Write input bytes to a shell's stdin (xterm.js -> remote).
+     *
+     * `sessionName` is an optional fence for callers whose write is part of a
+     * sequence — pass the session the write is FOR, and main refuses (returns
+     * false) if the shared tmux client has since moved somewhere else. Without
+     * it the bytes go to whatever the shell is showing, which is what a live
+     * keystroke from the focused pane wants.
+     */
+    input: (shellId: ShellId, data: string, sessionName?: string): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.shell.input, shellId, data, sessionName),
 
     /** Resize a shell's PTY. */
     resize: (shellId: ShellId, cols: number, rows: number): Promise<boolean> =>

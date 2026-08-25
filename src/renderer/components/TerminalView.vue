@@ -1,16 +1,32 @@
 <script setup lang="ts">
 // TerminalView: an xterm.js terminal attached to an SSH shell channel.
 //
-// On mount, it opens a tracked shell (optionally running a command like
-// `tmux attach -t <session>`) and wires xterm <-> the shell:
+// On mount it asks main for the PTY that should be on screen and wires
+// xterm <-> the shell:
 //   - shell stdout bytes -> xterm.write
 //   - xterm user input   -> shell.input
 //   - xterm resize       -> shell.resize
 // On unmount it closes the shell.
 //
+// TWO WAYS TO GET A PTY, and the difference is the whole point of this
+// component's shape. For a tmux session it calls `shell.attachSession`, which
+// main answers either with a brand-new PTY or — far more often — with the SAME
+// PTY it already gave us, having pointed the attached tmux client at the other
+// session instead (src/main/ssh/TmuxClientPool.ts). Anything else (a bare
+// shell) still goes through `shell.open`.
+//
+// The consequence for this file is that a session change may NOT close
+// anything: closing first would destroy the very client main is about to
+// reuse, and would put back the ~250 ms re-join the pool exists to avoid. So
+// the order is ask-then-adopt, and only a genuinely different ShellId costs a
+// terminal reset. On a switch the terminal is left completely alone: tmux
+// redraws every row of the client itself, and `reset()` would clear the DEC
+// private modes (mouse reporting above all) that the still-attached tmux
+// client set and is relying on.
+//
 // Clipboard: selecting with the mouse copies on mouse-up (see onDocumentMouseUp);
 // Ctrl/Cmd-Shift-V and right-click paste.
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Terminal, type IDisposable, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -27,11 +43,26 @@ const shells = useShellsStore();
 
 const props = defineProps<{
   connectionId: ConnectionId;
-  /** Command to run inside the PTY (e.g. `tmux attach -t main`). Omit for a bare shell. */
+  /**
+   * Command to run inside the PTY. Only used for a pane that is NOT a tmux
+   * session — a session goes through `shell.attachSession`, which builds its
+   * own join command in main so the same code path can also decide to switch
+   * instead of joining.
+   */
   command?: string;
-  /** A key that, when changed, re-opens the shell (used to switch sessions). */
+  /** A key that, when changed, re-points the pane (used to switch sessions). */
   sessionKey?: string;
+  /**
+   * The tmux session to display. Falls back to {@link sessionKey}, which is
+   * the session name at every current call site; the separate prop exists so a
+   * caller whose key is not a session name can say so rather than having main
+   * try to `switch-client` to something that is not a session.
+   */
+  sessionName?: string;
 }>();
+
+/** The tmux session this pane should be showing, or '' for a bare shell. */
+const targetSession = computed(() => props.sessionName ?? props.sessionKey ?? '');
 
 /**
  * Terminal look & feel, transcribed from the user's Windows Terminal config.
@@ -136,30 +167,36 @@ let fitFrame = 0;
 /** True between mousedown inside the terminal and the mouse-up that ends it. */
 let selecting = false;
 
-async function openShell(): Promise<void> {
-  if (!term || !containerEl.value) return;
-  fitAddon?.fit();
-  const cols = term.cols;
-  const rows = term.rows;
-  try {
-    shellId = await api.shell.open({
+/**
+ * Ask main for the PTY that should be on screen, without touching anything.
+ *
+ * A tmux session goes through `attachSession` so main can move the client it
+ * already holds; anything else opens a plain shell, which is always new.
+ */
+async function requestShell(
+  cols: number,
+  rows: number,
+): Promise<{ shellId: ShellId; switched: boolean }> {
+  const session = targetSession.value;
+  if (session) {
+    return api.shell.attachSession({
       connectionId: props.connectionId,
-      command: props.command,
+      sessionName: session,
       cols,
       rows,
     });
-  } catch (e) {
-    // A rejection here used to escape into `onMounted`'s promise, where
-    // nothing was waiting for it: the pane stayed blank and the user was told
-    // nothing at all — indistinguishable from a session that opened and simply
-    // had no output yet. The PTY is the only surface this component owns, so
-    // the failure is written INTO it. Nothing else is torn down: no shellId was
-    // registered, and the retry path (`reopen`) is still armed.
-    shellId = null;
-    term.write(`\r\n\u001b[31mCould not open a shell: ${describe(e)}\u001b[0m\r\n`);
-    return;
   }
-  // shell -> xterm
+  const id = await api.shell.open({
+    connectionId: props.connectionId,
+    command: props.command,
+    cols,
+    rows,
+  });
+  return { shellId: id, switched: false };
+}
+
+/** Bind the main->renderer byte and exit streams for the current `shellId`. */
+function bindShellStream(): void {
   unsubscribeData = api.shell.onData(({ shellId: id, data }) => {
     if (id === shellId && term) {
       term.write(data);
@@ -170,12 +207,90 @@ async function openShell(): Promise<void> {
       term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n');
     }
   });
+}
+
+function unbindShellStream(): void {
+  if (unsubscribeData) {
+    unsubscribeData();
+    unsubscribeData = null;
+  }
+  if (unsubscribeExit) {
+    unsubscribeExit();
+    unsubscribeExit = null;
+  }
+}
+
+/**
+ * Put the current target on screen, whether that means a first join, a switch
+ * of the shared tmux client, or a fresh PTY because the switch could not be
+ * had. Used for the initial mount and for every later session change, because
+ * main — not this component — is what decides which of the three it is.
+ */
+async function showTarget(): Promise<void> {
+  if (!term || !containerEl.value) return;
+  fitAddon?.fit();
+  const cols = term.cols;
+  const rows = term.rows;
+
+  const previousId = shellId;
+  // Retract the OLD key's registration BEFORE asking for the new target.
+  // With one PTY shared across sessions, the shells store stops being a map of
+  // independent per-session channels and becomes the answer to "which session
+  // is this pane showing right now". Leaving the old key registered would let a
+  // composer still bound to it write a prompt into whatever session the pane
+  // switched to. Unregistered, that composer finds no shell and refuses to
+  // send, which is the failure mode to want.
+  if (registeredKey !== null) {
+    shells.unregister(registeredKey, previousId ?? undefined);
+    registeredKey = null;
+  }
+
+  let result: { shellId: ShellId; switched: boolean };
+  try {
+    result = await requestShell(cols, rows);
+  } catch (e) {
+    // A rejection here used to escape into `onMounted`'s promise, where
+    // nothing was waiting for it: the pane stayed blank and the user was told
+    // nothing at all — indistinguishable from a session that opened and simply
+    // had no output yet. The PTY is the only surface this component owns, so
+    // the failure is written INTO it. Nothing is torn down beyond the streams:
+    // main disposes of any shell it failed to replace, and a further session
+    // change still re-arms the whole path.
+    unbindShellStream();
+    shellId = null;
+    term.write(`\r\n\u001b[31mCould not open a shell: ${describe(e)}\u001b[0m\r\n`);
+    return;
+  }
+
+  if (result.shellId !== previousId) {
+    // A different PTY. Main has already closed the one it replaced, so all that
+    // is left here is to stop listening for it, wipe the pane, and adopt the
+    // new id.
+    //
+    // `reset()`, not `clear()`. clear() only empties the scrollback — it leaves
+    // every DEC private mode set, and mouse tracking (1000/1002/1003 + SGR 1006)
+    // is the one that matters. tmux turns mouse reporting ON when it attaches and
+    // OFF when it exits cleanly; a session that dies, is killed, or whose attach
+    // fails never sends the OFF. The mode then survives into the next shell this
+    // component opens, where nothing is consuming mouse reports — so the wheel
+    // and click-drag get encoded as `\x1b[<0;2;1M` and typed at the prompt, which
+    // the shell echoes as literal `0;2;1M`, and drag-select stops working because
+    // xterm is claiming the drag for reporting. reset() clears modes with it.
+    unbindShellStream();
+    if (previousId) term.reset();
+    shellId = result.shellId;
+    bindShellStream();
+  }
+  // Otherwise the same PTY came back and tmux redrew every row of it itself.
+  // Deliberately NO reset here: the tmux client never detached, so it still
+  // owns the modes it set and will not be told to set them again.
+
   // Publish it before the first byte can be typed at it.
   registeredKey = props.sessionKey ?? '';
-  shells.register(registeredKey, shellId);
-  // Push the current geometry at the freshly-opened shell: the bound onResize
-  // only fires when xterm's own dimensions change, which a re-open does not do.
-  void api.shell.resize(shellId, cols, rows);
+  shells.register(registeredKey, result.shellId);
+  // Push the current geometry at the shell: the bound onResize only fires when
+  // xterm's own dimensions change, which neither a re-open nor a switch does.
+  void api.shell.resize(result.shellId, cols, rows);
   term.focus();
 }
 
@@ -186,15 +301,13 @@ function describe(err: unknown): string {
   return String(err);
 }
 
+/**
+ * Give up the PTY for good. Only unmount calls this now — a session change
+ * goes through {@link showTarget}, which must NOT close first: the shell it
+ * would close is the shared tmux client main is about to reuse.
+ */
 function closeShell(): void {
-  if (unsubscribeData) {
-    unsubscribeData();
-    unsubscribeData = null;
-  }
-  if (unsubscribeExit) {
-    unsubscribeExit();
-    unsubscribeExit = null;
-  }
+  unbindShellStream();
   if (registeredKey !== null) {
     shells.unregister(registeredKey, shellId ?? undefined);
     registeredKey = null;
@@ -203,21 +316,6 @@ function closeShell(): void {
     void api.shell.close(shellId);
     shellId = null;
   }
-}
-
-async function reopen(): Promise<void> {
-  closeShell();
-  // `reset()`, not `clear()`. clear() only empties the scrollback — it leaves
-  // every DEC private mode set, and mouse tracking (1000/1002/1003 + SGR 1006)
-  // is the one that matters. tmux turns mouse reporting ON when it attaches and
-  // OFF when it exits cleanly; a session that dies, is killed, or whose attach
-  // fails never sends the OFF. The mode then survives into the next shell this
-  // component opens, where nothing is consuming mouse reports — so the wheel
-  // and click-drag get encoded as `\x1b[<0;2;1M` and typed at the prompt, which
-  // the shell echoes as literal `0;2;1M`, and drag-select stops working because
-  // xterm is claiming the drag for reporting. reset() clears modes with it.
-  term?.reset();
-  await openShell();
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +410,7 @@ onMounted(async () => {
   containerEl.value?.addEventListener('contextmenu', onTerminalContextMenu);
   document.addEventListener('mouseup', onDocumentMouseUp);
 
-  await openShell();
+  await showTarget();
 
   // Re-fit on window resize.
   window.addEventListener('resize', onWindowResize);
@@ -354,11 +452,13 @@ onBeforeUnmount(() => {
   term = null;
 });
 
-// Re-open the shell when the session key changes (switching attached session).
+// Re-point the pane when the session key changes. Note this no longer says
+// "re-open": main answers most of these by switching the tmux client that is
+// already attached, and the PTY behind this terminal survives untouched.
 watch(
   () => props.sessionKey,
   () => {
-    void reopen();
+    void showTarget();
   },
 );
 

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { sessionAttachCommand, shellSingleQuote } from '../../src/shared/attachCommand';
+import {
+  SWITCH_NO_CLIENT_EXIT,
+  clientTtyVar,
+  sessionAttachCommand,
+  sessionSwitchCommand,
+  shellSingleQuote,
+} from '../../src/shared/attachCommand';
 import { USER_BIN_DIRS } from '../../src/shared/userBinPath';
 
 /**
@@ -58,9 +64,11 @@ describe('sessionAttachCommand', () => {
   });
 
   it('never falls back to raw tmux, which is the failure that started this', () => {
-    // The user's sessions are not on the default tmux socket, so this branch
-    // could only ever produce `can't find session` — a failure that looks like
-    // a stale session list rather than a missing helper.
+    // Not because raw tmux cannot reach these sessions — it can; tmuxctl runs
+    // a bare `tmux` on the default socket and so would this. It is because a
+    // second way to join turns "the helper is missing" into "can't find
+    // session", which reads as a stale session list rather than a broken
+    // install. One join, one failure message.
     expect(command).not.toContain('tmux attach');
     expect(command).not.toContain('-t ');
   });
@@ -156,5 +164,144 @@ describe('shellSingleQuote', () => {
 
   it('leaves every other shell metacharacter to the quotes', () => {
     expect(shellSingleQuote('$(id) `id` && rm')).toBe("'$(id) `id` && rm'");
+  });
+});
+
+/**
+ * The handshake half of the join. These pin the two properties that keep the
+ * fast switch path from ever being worse than the slow one it replaces:
+ * publishing the tty must be optional and must not be able to fail the join,
+ * and the join itself must be byte-for-byte what it always was when no
+ * handshake is asked for.
+ */
+describe('sessionAttachCommand with a tty handshake', () => {
+  const ttyVar = clientTtyVar('a1b2c3');
+  const command = sessionAttachCommand('git-red-stamp-sound', ttyVar);
+
+  it('is exactly the old command when no variable is given', () => {
+    // The handshake is an optimisation's setup. A caller that does not want it
+    // must not get a different join.
+    expect(sessionAttachCommand('main')).toBe(
+      sessionAttachCommand('main', undefined),
+    );
+    expect(sessionAttachCommand('main')).not.toContain('set-environment');
+  });
+
+  it('records the tty inside the same subshell as the PATH widening', () => {
+    // Outside the subshell it would run before PATH is set, which is the one
+    // place tmux might not be found on the hosts this app targets.
+    expect(command).toMatch(/^\(\s*PATH=/);
+    expect(command.indexOf('set-environment')).toBeGreaterThan(command.indexOf('PATH='));
+    expect(command.indexOf('set-environment')).toBeLessThan(command.indexOf('tmuxctl'));
+  });
+
+  it('cannot fail the join when the handshake fails', () => {
+    // Silenced and sequenced with `;`, never `&&`: a host with no tmux server
+    // yet, or a tmux too old for set-environment, must still join normally and
+    // simply not get the fast switch.
+    expect(command).toContain('2>/dev/null;');
+    expect(command).not.toContain('set-environment -g ' + ttyVar + ' "$(tty)" &&');
+  });
+
+  it('still joins with exactly one tmuxctl invocation', () => {
+    expect(command.match(/tmuxctl '/g)).toHaveLength(1);
+    expect(command).toContain("tmuxctl 'git-red-stamp-sound'");
+  });
+
+  it('does not smuggle in a second way to attach', () => {
+    // `set-environment` is not a join; nothing here may look like one.
+    expect(command).not.toContain('tmux attach');
+    expect(command).not.toContain('switch-client');
+  });
+});
+
+describe('clientTtyVar', () => {
+  it('produces a shell identifier, whatever the token looks like', () => {
+    // The name is spliced into `${v#NAME=}`, where a non-identifier cannot be
+    // rescued by quoting.
+    expect(clientTtyVar('abc123')).toBe('PS_DESKTOP_TTY_abc123');
+    expect(clientTtyVar('a-b.c/$(id)')).toMatch(/^[A-Za-z0-9_]+$/);
+  });
+
+  it('is prefixed, so an entry left on a tmux server is identifiable', () => {
+    // These outlive the app: a connection cannot unset its own variable,
+    // because by the time it closes there is no channel left to unset it on.
+    expect(clientTtyVar('x')).toMatch(/^PS_DESKTOP_TTY_/);
+  });
+});
+
+describe('sessionSwitchCommand', () => {
+  const ttyVar = clientTtyVar('a1b2c3');
+  const command = sessionSwitchCommand(ttyVar, 'git-red-stamp-sound');
+
+  it('runs under POSIX sh, not whatever login shell the user has', () => {
+    // sshd runs an exec channel under the user's shell, and `${v#NAME=}` is
+    // not csh or fish. Same wrapper as bootstrap.pathAwareCommand.
+    expect(command).toMatch(/^\/bin\/sh -lc '/);
+  });
+
+  it('switches an existing client rather than attaching a new one', () => {
+    expect(command).toContain('switch-client');
+    expect(command).not.toContain('attach-session');
+    expect(command).not.toContain('tmuxctl');
+  });
+
+  it('names the client explicitly, never letting tmux guess', () => {
+    // Without -c, tmux picks a "best" client — which on a host where the user
+    // has their own terminal open could be theirs, not ours.
+    expect(command).toContain('switch-client -c "$t"');
+  });
+
+  it('reads the tty back out of the tmux server it is switching on', () => {
+    expect(command).toContain(`show-environment -g ${ttyVar}`);
+    expect(command).toContain(`\${v#${ttyVar}=}`);
+  });
+
+  it('declines instead of guessing when the handshake finds nothing', () => {
+    // Two ways to find nothing: the variable is unset (tmux exits non-zero),
+    // or the value came back without the prefix, in which case the parameter
+    // expansion is a no-op and the two strings are still equal.
+    expect(command.match(new RegExp(`exit ${SWITCH_NO_CLIENT_EXIT}`, 'g'))).toHaveLength(2);
+    expect(command).toContain('[ "$t" != "$v" ]');
+  });
+
+  it('targets the session exactly, not by prefix', () => {
+    // tmux -t is fnmatch/prefix by default: `api` would match `api-staging`.
+    // Asserted against the UNQUOTED script — the `sh -lc` wrapper escapes the
+    // inner quotes, so the literal form only exists once the outer shell has
+    // taken its layer off.
+    const script = posixUnquote(command.slice('/bin/sh -lc '.length));
+    expect(script).toContain("-t '=git-red-stamp-sound'");
+  });
+
+  it('execs the switch so the caller sees tmux own exit code', () => {
+    // The caller keys its entire fallback off the exit code; a wrapper shell
+    // exiting 0 over a failed switch would strand the pane on the old session.
+    expect(command).toContain('exec tmux switch-client');
+  });
+
+  it('searches the same user-bin dirs as the join and the probe', () => {
+    for (const dir of USER_BIN_DIRS) {
+      expect(command).toContain(dir);
+    }
+  });
+
+  it('quotes a session name carrying a single quote', () => {
+    const nasty = sessionSwitchCommand(ttyVar, "it's mine");
+    // Doubly nested: the name is quoted inside the script, and the script is
+    // quoted inside `sh -lc`, so each `'` becomes `'\''` twice over.
+    expect(nasty).not.toMatch(/-t '=it's mine'/);
+    expect(nasty.endsWith("'")).toBe(true);
+  });
+
+  it('cannot be broken out of by a name built to close the quote', () => {
+    const payload = "x'; rm -rf ~; echo '";
+    const injected = sessionSwitchCommand(ttyVar, payload);
+    // Unquoting the whole `sh -lc` argument must give back a script in which
+    // the payload is still one quoted word — i.e. the payload never reaches
+    // the outer shell as syntax.
+    const script = posixUnquote(injected.slice('/bin/sh -lc '.length));
+    expect(script).toContain(shellSingleQuote(`=${payload}`));
+    expect(script.startsWith('export PATH=')).toBe(true);
   });
 });

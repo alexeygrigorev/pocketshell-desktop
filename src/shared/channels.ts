@@ -18,6 +18,14 @@ export const ipc = {
   },
   shell: {
     open: 'shell:open', // open a PTY shell (optionally running a command)
+    /**
+     * Show a tmux session in this connection's terminal. Distinct from
+     * `shell:open` because it is NOT necessarily a new PTY: main keeps one
+     * attached tmux client per connection and moves it with `switch-client`,
+     * so the reply can carry the SAME shellId the renderer already holds.
+     * See src/main/ssh/TmuxClientPool.ts.
+     */
+    attachSession: 'shell:attachSession',
     input: 'shell:input', // write bytes to a shell's stdin
     resize: 'shell:resize', // setWindow(cols, rows)
     close: 'shell:close', // close a shell

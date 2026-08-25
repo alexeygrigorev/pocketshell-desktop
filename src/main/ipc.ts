@@ -9,6 +9,7 @@ import type {
 } from '../shared/types.js';
 import { SshService } from './ssh/SshService.js';
 import { ConnectionRegistry } from './ssh/ConnectionRegistry.js';
+import { TmuxClientPool } from './ssh/TmuxClientPool.js';
 import { PocketshellClient } from './helper/PocketshellClient.js';
 import { runBootstrap } from './helper/bootstrap.js';
 import { readSshConfig } from './ssh-config/SshConfigParser.js';
@@ -66,6 +67,10 @@ export function registerIpcHandlers(deps: {
   // LocalFileReader for why `attachments:readLocal` needs one at all.
   const localFiles = new LocalFileReader();
 
+  // One attached tmux client per connection, so switching sessions is a tmux
+  // operation rather than a fresh SSH channel + login shell + join.
+  const tmuxClients = new TmuxClientPool(ssh);
+
   // Subscribe to forward-state changes and broadcast them to the renderer.
   forwards.onStates((connectionId, states) => {
     broadcast(ipc.forwards.states, { connectionId, states });
@@ -77,6 +82,10 @@ export function registerIpcHandlers(deps: {
   // nowhere. 'lost' means the transport dropped; 'idle' is a clean
   // disconnect the user asked for.
   ssh.onCloseConnection((connectionId, reason) => {
+    // The shared tmux client dies with its connection; forgetting it here
+    // stops a reconnect that reuses the id from switching a client that is
+    // no longer on the other end.
+    tmuxClients.release(connectionId);
     broadcast(ipc.ssh.state, {
       connectionId,
       state: reason === 'lost' ? 'lost' : 'idle',
@@ -165,11 +174,48 @@ export function registerIpcHandlers(deps: {
     },
   );
 
+  // --- shell:attachSession -------------------------------------------------
+  // The session-switching path. Unlike `shell:open` this may reuse the PTY the
+  // renderer is already looking at: the pool holds one attached tmux client per
+  // connection and points it at another session, which is roughly an order of
+  // magnitude cheaper than a second channel + login shell + `tmuxctl`.
+  // `switched` tells the renderer which of the two happened.
+  ipcMain.handle(
+    ipc.shell.attachSession,
+    async (
+      _evt,
+      payload: { connectionId: string; sessionName: string; cols?: number; rows?: number },
+    ) => {
+      return tmuxClients.attach(payload.connectionId, payload.sessionName, {
+        cols: payload.cols,
+        rows: payload.rows,
+        onData: (shellId, data) => {
+          broadcast(ipc.shell.data, { shellId, data: new Uint8Array(data) });
+        },
+        onExit: (shellId, exitCode) => {
+          broadcast(ipc.shell.exited, { shellId, exitCode });
+        },
+      });
+    },
+  );
+
   // --- shell:input / resize / close ---------------------------------------
   // Return what actually happened, not an unconditional true: the composer's
   // delivery-failure path depends on this being honest.
-  ipcMain.handle(ipc.shell.input, async (_evt, shellId: string, data: string) =>
-    ssh.shellInput(shellId, data),
+  // `sessionName` is optional and is a FENCE, not a target: it says which tmux
+  // session the caller believed it was writing to. One PTY now serves every
+  // session on a connection, so a multi-step write that straddles a session
+  // change — the composer's text-pause-Enter, above all — would otherwise
+  // finish in whatever session the pane switched to. Naming the session turns
+  // that into an honest `false`, which the composer already reports as a
+  // delivery failure. Callers with nothing to be confused about (terminal
+  // keystrokes, which always mean the pane as it is now) leave it off.
+  ipcMain.handle(
+    ipc.shell.input,
+    async (_evt, shellId: string, data: string, sessionName?: string) => {
+      if (sessionName && !tmuxClients.isShowing(shellId, sessionName)) return false;
+      return ssh.shellInput(shellId, data);
+    },
   );
   ipcMain.handle(ipc.shell.resize, async (_evt, shellId: string, cols: number, rows: number) =>
     ssh.shellResize(shellId, cols, rows),
