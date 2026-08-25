@@ -132,6 +132,11 @@ is roughly the order things were asked, and that history is useful.
 | 🔄 | Stop a session from a tab context menu |
 | 🔄 | A `+` on each root row, and one for anywhere; retire "New session" |
 | 🔄 | `docs/WORKSPACE.md` still names the `main` tab label |
+| 🔄 | Markdown preview, reusing the `psview:` pipeline |
+| 🔄 | CodeMirror's baked `dark: true` — reconfigure on theme appearance |
+| 🔄 | `Ctrl+W` closes the window instead of deleting a word |
+| 🔄 | CodeMirror duplicated into the installer |
+| 🔄 | Annotate an image already attached to the composer |
 
 ---
 
