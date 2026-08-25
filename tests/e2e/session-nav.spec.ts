@@ -104,20 +104,27 @@ test.describe('session-scoped navigation + terminal wiring', () => {
   });
 
   test('the host shows a folder session panel and no host-level tabs', async () => {
-    // The panel groups by the root directory under $HOME (docs/SESSIONLIST.md
-    // §2). Both fixture sessions sit in $HOME ITSELF, which has no root folder
-    // to be named after, so the whole fixture lands in the `other` bucket —
-    // one header, two rows. A fixture with sessions under `~/git` and `~/tmp`
-    // would exercise the interesting case; this one pins the degenerate one.
+    // The panel groups by the root directory under $HOME, then by the
+    // DIRECTORY each session runs in (docs/SESSIONLIST.md §2). Both fixture
+    // sessions sit in $HOME ITSELF, which has no root folder to be named
+    // after, so the whole fixture lands in the `other` bucket — and since they
+    // share one directory, that directory is a BRANCH (`testuser`) whose two
+    // children are named by session. A fixture with sessions under `~/git` and
+    // `~/tmp`, one of them alone in its folder, would exercise the common
+    // single-session case; this one pins the branch case.
     await expect(page.locator('.session-panel')).toBeVisible();
     await expect(page.locator('.folder-header')).toHaveCount(1);
     await expect(page.locator('.folder-header .folder-label')).toHaveText('other');
     await expect(page.locator('.folder-header .folder-count')).toHaveText('2');
+    await expect(page.locator('.dir-header')).toHaveCount(1);
+    // `$HOME` itself: the directory key collapses to `~`, so the branch takes
+    // `defaultLabelForPath`'s named fallback rather than the account name.
+    await expect(page.locator('.dir-header .label')).toHaveText('~ (home)');
     await expect(page.locator('.session-row')).toHaveCount(2);
-    // Sharing $HOME, both rows share the label `testuser`, so each must show
-    // its own session name to be distinguishable at all.
-    await expect(page.locator('.session-row .label').first()).toHaveText('testuser');
-    await expect(page.locator('.session-row .row-name')).toHaveCount(2);
+    // Every session row under a branch is labelled by its own session name —
+    // the branch already said the directory, so the row never repeats it.
+    await expect(page.locator('.session-row.child')).toHaveCount(2);
+    await expect(page.locator('.row-name')).toHaveCount(0);
     // The `attached` tag stays retired — the dot, the weight and the sort say it.
     await expect(page.locator('.session-row .tag')).toHaveCount(0);
     // Files/Conversation are NOT host-level tabs any more.

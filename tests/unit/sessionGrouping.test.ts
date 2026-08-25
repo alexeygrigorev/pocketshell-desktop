@@ -6,11 +6,14 @@ import {
   defaultLabelForPath,
   OTHER_LABEL,
   OTHER_ROOT,
+  directoryKey,
   groupSessionsByFolder,
   groupSessionsIntoRoots,
   inferHome,
   isAgentSession,
   rootForPath,
+  rootFromSessionName,
+  type SessionRootFolder,
 } from '../../src/renderer/sessionGrouping';
 import type { SessionAgentKind, SessionSummary } from '../../src/shared/types';
 
@@ -263,10 +266,72 @@ describe('rootForPath', () => {
   });
 });
 
+describe('directoryKey', () => {
+  const home = '/home/alexey';
+
+  it('writes a directory under $HOME home-relative, at full depth', () => {
+    expect(directoryKey('/home/alexey/git/dataops', home)).toBe('~/git/dataops');
+  });
+
+  it('folds the two spellings tmux reports for one directory into one key', () => {
+    expect(directoryKey('~/git/dataops', home)).toBe(
+      directoryKey('/home/alexey/git/dataops', home),
+    );
+  });
+
+  it('resolves ~ without needing $HOME at all', () => {
+    expect(directoryKey('~/git/dataops', null)).toBe('~/git/dataops');
+  });
+
+  it('keeps $HOME itself as ~', () => {
+    expect(directoryKey('/home/alexey', home)).toBe('~');
+    expect(directoryKey('~', home)).toBe('~');
+  });
+
+  it('leaves a path outside $HOME exactly as it is', () => {
+    expect(directoryKey('/var/log', home)).toBe('/var/log');
+    expect(directoryKey('/srv/app', null)).toBe('/srv/app');
+  });
+
+  it('passes the untracked sentinel through', () => {
+    expect(directoryKey(UNTRACKED_PATH, home)).toBe(UNTRACKED_PATH);
+  });
+});
+
+describe('rootFromSessionName', () => {
+  it('reads the root back out of a derived name', () => {
+    expect(rootFromSessionName('git-red-stamp-sound', ['git', 'tmp'])).toBe('git');
+    expect(rootFromSessionName('tmp-scratch', ['git', 'tmp'])).toBe('tmp');
+  });
+
+  it('matches a name that is exactly one component', () => {
+    expect(rootFromSessionName('git', ['git'])).toBe('git');
+  });
+
+  it('refuses to conjure a root nothing else lives in', () => {
+    expect(rootFromSessionName('foo-bar', ['git', 'tmp'])).toBeNull();
+    expect(rootFromSessionName('git-a', [])).toBeNull();
+  });
+
+  it('compares against the sanitised root name, as the derivation wrote it', () => {
+    expect(rootFromSessionName('my_project-thing', ['my.project'])).toBe('my.project');
+  });
+
+  it('returns null for a name with no usable leading component', () => {
+    expect(rootFromSessionName('', ['git'])).toBeNull();
+    expect(rootFromSessionName('---', ['git'])).toBeNull();
+  });
+});
+
 describe('groupSessionsIntoRoots', () => {
   const home = '/home/alexey';
 
-  it('renders one root per $HOME child, holding that root’s sessions', () => {
+  /** Every session under a root, in render order, across its directories. */
+  function sessionNames(root: SessionRootFolder): string[] {
+    return root.directories.flatMap((d) => d.rows.map((r) => r.session.name));
+  }
+
+  it('renders one root per $HOME child, holding that root directories', () => {
     const roots = groupSessionsIntoRoots(
       [
         session('git-dataops', '/home/alexey/git/dataops', 300),
@@ -276,8 +341,80 @@ describe('groupSessionsIntoRoots', () => {
       home,
     );
     expect(roots.map((r) => r.label)).toEqual(['git', 'tmp']);
-    expect(roots[0]!.rows.map((r) => r.session.name)).toEqual(['git-dataops', 'git-pocketshell']);
-    expect(roots[1]!.rows.map((r) => r.session.name)).toEqual(['tmp-scratch']);
+    expect(roots[0]!.directories.map((d) => d.label)).toEqual(['dataops', 'pocketshell']);
+    expect(roots[0]!.sessionCount).toBe(2);
+    expect(roots[1]!.directories.map((d) => d.label)).toEqual(['scratch']);
+  });
+
+  it('names a lone session row after its DIRECTORY, not after the session', () => {
+    const [git] = groupSessionsIntoRoots(
+      [session('git-dtc-website', '/home/alexey/git/merry-sniffing-token', 100)],
+      home,
+    );
+    const [dir] = git!.directories;
+    // The worktree case: the name diverges from the folder, and the folder
+    // still wins the row. The name is not lost — it is in the tooltip.
+    expect(dir!.label).toBe('merry-sniffing-token');
+    expect(dir!.rows).toHaveLength(1);
+    expect(dir!.rows[0]!.session.name).toBe('git-dtc-website');
+  });
+
+  it('keeps a single-session directory flat — no branch, no extra row', () => {
+    const [git] = groupSessionsIntoRoots(
+      [session('git-dataops', '/home/alexey/git/dataops', 100)],
+      home,
+    );
+    expect(git!.directories).toHaveLength(1);
+    expect(git!.directories[0]!.rows).toHaveLength(1);
+    expect(git!.directories[0]!.path).toBe('~/git/dataops');
+  });
+
+  it('branches a directory holding more than one session, listing them by name', () => {
+    const [git] = groupSessionsIntoRoots(
+      [
+        session('git-pocketshell', '/home/alexey/git/pocketshell', 200),
+        session('git-pocketshell-quse', '/home/alexey/git/pocketshell', 100),
+        session('git-dataops', '/home/alexey/git/dataops', 50),
+      ],
+      home,
+    );
+    const branch = git!.directories.find((d) => d.label === 'pocketshell')!;
+    expect(branch.rows.map((r) => r.session.name)).toEqual([
+      'git-pocketshell',
+      'git-pocketshell-quse',
+    ]);
+    // The child label is the session name, split for middle truncation — the
+    // siblings share a derived prefix, so an end-ellipsis would merge them.
+    expect(branch.rows.map((r) => r.nameHead + r.nameTail)).toEqual([
+      'git-pocketshell',
+      'git-pocketshell-quse',
+    ]);
+    expect(branch.rows[1]!.nameTail).toBe('ell-quse');
+    expect(git!.directories.find((d) => d.label === 'dataops')!.rows).toHaveLength(1);
+  });
+
+  it('gives a branch the newest age and the aggregate dot of its sessions', () => {
+    const [git] = groupSessionsIntoRoots(
+      [
+        session('git-app-a', '/home/alexey/git/app', 100),
+        session('git-app-b', '/home/alexey/git/app', 900, true),
+      ],
+      home,
+    );
+    expect(git!.directories[0]!.mostRecentActivity).toBe(900);
+    expect(git!.directories[0]!.active).toBe(true);
+  });
+
+  it('folds the two spellings of one directory into a single node, not two rows', () => {
+    const [git] = groupSessionsIntoRoots(
+      [
+        session('git-app-a', '/home/alexey/git/app', 300),
+        session('git-app-b', '~/git/app', 200),
+      ],
+      home,
+    );
+    expect(git!.directories).toHaveLength(1);
+    expect(git!.directories[0]!.rows).toHaveLength(2);
   });
 
   it('infers home when it was not supplied, instead of dumping everything in other', () => {
@@ -286,18 +423,6 @@ describe('groupSessionsIntoRoots', () => {
       session('tmp-b', '/home/alexey/tmp/b', 200),
     ]);
     expect(roots.map((r) => r.label)).toEqual(['git', 'tmp']);
-  });
-
-  it('folds the two spellings of one directory into a single root', () => {
-    const roots = groupSessionsIntoRoots(
-      [
-        session('git-a', '/home/alexey/git/a', 300),
-        session('git-b', '~/git/b', 200),
-      ],
-      home,
-    );
-    expect(roots).toHaveLength(1);
-    expect(roots[0]!.rows).toHaveLength(2);
   });
 
   it('collects untracked and out-of-home sessions into one other bucket', () => {
@@ -311,12 +436,23 @@ describe('groupSessionsIntoRoots', () => {
     );
     expect(roots.map((r) => r.label)).toEqual(['git', OTHER_LABEL]);
     expect(roots[1]!.other).toBe(true);
-    expect(roots[1]!.rows.map((r) => r.session.name)).toEqual(['var-log', 'nowhere']);
+    expect(sessionNames(roots[1]!)).toEqual(['var-log', 'nowhere']);
+    // `/var/log` is a real directory and gets a directory row like any other.
+    expect(roots[1]!.directories[0]!.label).toBe('log');
+  });
+
+  it('names a directory that IS $HOME after home, not after the account', () => {
+    // The directory key collapses to `~`, so the leaf component is gone and
+    // `defaultLabelForPath`'s named fallback takes over. That is the better
+    // label anyway: a row reading `alexey` looks like a user, not a project.
+    const [other] = groupSessionsIntoRoots([session('home-alexey', '/home/alexey', 100)], home);
+    expect(other!.directories[0]!.label).toBe('~ (home)');
+    expect(other!.directories[0]!.path).toBe('~');
   });
 
   it('pins other last however recent it is', () => {
     const roots = groupSessionsIntoRoots(
-      [session('nowhere', null, 9_000), session('git-a', '/home/alexey/git/a', 10)],
+      [session('unplaceable', null, 9_000), session('git-a', '/home/alexey/git/a', 10)],
       home,
     );
     expect(roots.map((r) => r.label)).toEqual(['git', OTHER_LABEL]);
@@ -343,7 +479,7 @@ describe('groupSessionsIntoRoots', () => {
     expect(roots.map((r) => r.label)).toEqual(['alpha', 'Beta']);
   });
 
-  it('keeps the flat list order inside a root: attached first, then recency', () => {
+  it('orders directories attached-first, then recency, then label', () => {
     const roots = groupSessionsIntoRoots(
       [
         session('git-old', '/home/alexey/git/old', 100),
@@ -352,7 +488,21 @@ describe('groupSessionsIntoRoots', () => {
       ],
       home,
     );
-    expect(roots[0]!.rows.map((r) => r.session.name)).toEqual(['git-live', 'git-new', 'git-old']);
+    expect(roots[0]!.directories.map((d) => d.label)).toEqual(['live', 'new', 'old']);
+  });
+
+  it('keeps attached-first inside a branch too', () => {
+    const [git] = groupSessionsIntoRoots(
+      [
+        session('git-app-new', '/home/alexey/git/app', 900),
+        session('git-app-live', '/home/alexey/git/app', 10, true),
+      ],
+      home,
+    );
+    expect(git!.directories[0]!.rows.map((r) => r.session.name)).toEqual([
+      'git-app-live',
+      'git-app-new',
+    ]);
   });
 
   it('marks a root active when any session under it is attached', () => {
@@ -368,43 +518,70 @@ describe('groupSessionsIntoRoots', () => {
     expect(roots.find((r) => r.label === 'tmp')!.active).toBe(false);
   });
 
-  it('suppresses a session name that is just its folder restated', () => {
-    const [git] = groupSessionsIntoRoots(
-      [session('git-dataops', '/home/alexey/git/dataops', 100)],
-      home,
-    );
-    expect(git!.rows[0]!.label).toBe('dataops');
-    expect(git!.rows[0]!.showName).toBe(false);
+  it('renders an untracked session as its own row, under its own name', () => {
+    const [other] = groupSessionsIntoRoots([session('foreign-0', null, 100)], home);
+    const [dir] = other!.directories;
+    expect(dir!.untracked).toBe(true);
+    expect(dir!.label).toBe('foreign-0');
+    expect(dir!.rows).toHaveLength(1);
   });
 
-  it('still shows a name the folder does not account for (the worktree case)', () => {
-    const [git] = groupSessionsIntoRoots(
-      [session('git-dtc-website', '/home/alexey/git/merry-sniffing-tortoise', 100)],
+  it('never merges untracked sessions into one Untracked branch', () => {
+    const [other] = groupSessionsIntoRoots(
+      [session('foreign-0', null, 200), session('foreign-1', null, 100)],
       home,
     );
-    expect(git!.rows[0]!.label).toBe('merry-sniffing-tortoise');
-    expect(git!.rows[0]!.showName).toBe(true);
+    expect(other!.directories.map((d) => d.label)).toEqual(['foreign-0', 'foreign-1']);
+    expect(other!.directories.every((d) => d.rows.length === 1)).toBe(true);
   });
 
-  it('shows names for siblings in one folder, which a shared label cannot separate', () => {
-    const [git] = groupSessionsIntoRoots(
+  it('files a session with no reported cwd under the root its NAME names', () => {
+    const roots = groupSessionsIntoRoots(
       [
-        session('git-dataops', '/home/alexey/git/dataops', 200),
-        session('git-dataops-2', '/home/alexey/git/dataops', 100),
+        session('git-dataops', '/home/alexey/git/dataops', 300),
+        session('git-red-stamp-sound', null, 200),
       ],
       home,
     );
-    expect(git!.rows.every((r) => r.showName)).toBe(true);
+    expect(roots.map((r) => r.label)).toEqual(['git']);
+    const recovered = roots[0]!.directories.find((d) => d.untracked)!;
+    expect(recovered.label).toBe('git-red-stamp-sound');
+    expect(recovered.inferredRoot).toBe(true);
   });
 
-  it('renders an untracked row under its own name, in mono', () => {
-    const [other] = groupSessionsIntoRoots([session('foreign-0', null, 100)], home);
-    expect(other!.rows[0]!.untracked).toBe(true);
-    expect(other!.rows[0]!.label).toBe('foreign-0');
-    expect(other!.rows[0]!.showName).toBe(false);
+  it('leaves a name-recovered session as a direct child, inventing no directory', () => {
+    const roots = groupSessionsIntoRoots(
+      [
+        session('git-dataops', '/home/alexey/git/dataops', 300),
+        // Ambiguous between ~/git/dtc-website-import and ~/git/dtc-website/import.
+        session('git-dtc-website-import', null, 200),
+      ],
+      home,
+    );
+    const recovered = roots[0]!.directories.find((d) => d.untracked)!;
+    expect(recovered.path).toBe(UNTRACKED_PATH);
+    expect(recovered.label).toBe('git-dtc-website-import');
   });
 
-  it('grows colliding labels apart within a root, and leaves them alone across roots', () => {
+  it('still drops a no-cwd session into other when no root matches its name', () => {
+    const roots = groupSessionsIntoRoots(
+      [session('git-dataops', '/home/alexey/git/dataops', 300), session('weird-thing', null, 200)],
+      home,
+    );
+    expect(roots.map((r) => r.label)).toEqual(['git', OTHER_LABEL]);
+    expect(sessionNames(roots[1]!)).toEqual(['weird-thing']);
+    expect(roots[1]!.directories[0]!.inferredRoot).toBe(false);
+  });
+
+  it('does not let a name-recovered session create the root it was filed under', () => {
+    // `git` exists only in the NAME here, never in a real path, so nothing may
+    // be filed into it — otherwise the heuristic invents the structure it is
+    // supposed to be reading.
+    const roots = groupSessionsIntoRoots([session('git-ghost', null, 200)], home);
+    expect(roots.map((r) => r.label)).toEqual([OTHER_LABEL]);
+  });
+
+  it('grows colliding directory labels apart within a root, not across roots', () => {
     const roots = groupSessionsIntoRoots(
       [
         session('a', '/home/alexey/git/foo', 400),
@@ -415,9 +592,9 @@ describe('groupSessionsIntoRoots', () => {
     );
     const git = roots.find((r) => r.label === 'git')!;
     const work = roots.find((r) => r.label === 'work')!;
-    expect(git.rows.map((r) => r.label).sort()).toEqual(['git/foo', 'nested/foo']);
+    expect(git.directories.map((d) => d.label).sort()).toEqual(['git/foo', 'nested/foo']);
     // Already separated by their headers, so `work` keeps the bare basename.
-    expect(work.rows.map((r) => r.label)).toEqual(['foo']);
+    expect(work.directories.map((d) => d.label)).toEqual(['foo']);
   });
 
   it('returns nothing for an empty session list', () => {
