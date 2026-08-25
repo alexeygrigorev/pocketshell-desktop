@@ -133,6 +133,16 @@ async function onRefreshUsage(): Promise<void> {
             :size="12"
           />
         </span>
+        <!-- Its own chip, not folded into `pocketshell`: `tmuxctl` is the
+             binary the session-join command invokes, and the raw `tmux attach`
+             and `pocketshell sessions` fallbacks are gone. A host missing it
+             can open no session at all, so without this chip that host reads
+             as healthy right up until the user clicks a session and gets a
+             diagnostic in the terminal instead of a shell. -->
+        <span :class="['chip', connection.bootstrap.tmuxctl.installed ? 'ok' : 'warn']">
+          tmuxctl
+          <AppIcon :name="connection.bootstrap.tmuxctl.installed ? 'check' : 'close'" :size="12" />
+        </span>
         <span :class="['chip', connection.bootstrap.tmux.installed ? 'ok' : 'warn']">
           tmux
           <AppIcon :name="connection.bootstrap.tmux.installed ? 'check' : 'close'" :size="12" />

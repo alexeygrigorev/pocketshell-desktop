@@ -10,18 +10,19 @@
 
 import type { SshService } from '../ssh/SshService.js';
 import type { BootstrapResult, ToolState } from '../../shared/types.js';
+import { USER_BIN_PATH } from '../../shared/userBinPath.js';
 import { parseCommandV } from './parsers.js';
-
-/** The user-bin dirs prepended before probing, matching the Android app. */
-const DEFAULT_USER_BIN = '$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin';
 
 /**
  * Wrap a command so it runs under the user's full PATH: source the login
  * shell rc, prepend the standard user-bin dirs, then run the command. Mirrors
  * the Android `pathAwareCommand` wrapper.
+ *
+ * The dir list is shared with the session-join command rather than spelled out
+ * here — see src/shared/userBinPath.ts for why the two must not drift.
  */
 export function pathAwareCommand(command: string): string {
-  return `/bin/sh -lc 'export PATH="${DEFAULT_USER_BIN}:$PATH"; ${command.replace(/'/g, "'\\''")}'`;
+  return `/bin/sh -lc 'export PATH="${USER_BIN_PATH}:$PATH"; ${command.replace(/'/g, "'\\''")}'`;
 }
 
 /** Probe one tool: `command -v <binary>` under the path-aware shell. */
@@ -60,8 +61,16 @@ export async function runBootstrap(
   ssh: SshService,
   connectionId: string,
 ): Promise<BootstrapResult> {
-  const [pocketshell, tmux, installer] = await Promise.all([
+  // `tmuxctl` is probed in its own right rather than assumed to ship with
+  // `pocketshell`. It is the binary the session-join command actually invokes
+  // (src/shared/attachCommand.ts), and a host that has the helper but not the
+  // join binary used to be invisible here: bootstrap reported a green
+  // "pocketshell" chip and every click on a session failed in the terminal.
+  // Probing it makes the one binary the join depends on part of the same
+  // readiness answer the rest of the UI is already built on.
+  const [pocketshell, tmuxctl, tmux, installer] = await Promise.all([
     probeTool(ssh, connectionId, 'pocketshell'),
+    probeTool(ssh, connectionId, 'tmuxctl'),
     probeTool(ssh, connectionId, 'tmux'),
     detectInstaller(ssh, connectionId),
   ]);
@@ -87,6 +96,7 @@ export async function runBootstrap(
 
   return {
     pocketshell,
+    tmuxctl,
     tmux,
     installer,
     daemonRunning,

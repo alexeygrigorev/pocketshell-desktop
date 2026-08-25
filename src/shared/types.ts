@@ -69,6 +69,12 @@ export interface HostKeyFingerprint {
 /** Bootstrap probe result for a connected host. */
 export interface BootstrapResult {
   pocketshell: ToolState;
+  /**
+   * The binary the session-join command invokes (src/shared/attachCommand.ts).
+   * Separate from `pocketshell` because a host can have one without the other,
+   * and it is this one that decides whether clicking a session works.
+   */
+  tmuxctl: ToolState;
   tmux: ToolState;
   installer: 'uv' | 'pipx' | null;
   daemonRunning: boolean | null;
