@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { reactive, toRefs, watch } from 'vue';
+import { computed, reactive, toRefs, watch } from 'vue';
 import {
   EDITOR_FONT_SIZE_DEFAULT,
   parseFontSize,
@@ -10,6 +10,15 @@ import { normaliseRootList, normaliseRootPath, SESSION_ROOTS_MAX } from '../sess
 import { parseThemeChoice, THEME_CHOICE_DEFAULT } from '../themes';
 import { parseZoomPercent, stepZoomPercent, ZOOM_PERCENT_DEFAULT } from '../zoom';
 import { isLaunchableKind, type LaunchableKind } from '../../shared/agentLaunch';
+import {
+  type BindingRefusal,
+  type Chord,
+  chordToString,
+  parseChord,
+  resolveBindings,
+  shortcutById,
+  validateBinding,
+} from '../../shared/shortcuts';
 
 /**
  * App-level preferences — the settings screen's model.
@@ -159,6 +168,24 @@ export interface AppSettings {
    * a fresh install behaves exactly like the phone's picker does.
    */
   agentLaunchDefaults: AgentLaunchDefaults;
+  /**
+   * Keyboard chords the user has MOVED, keyed by the registry's shortcut id.
+   *
+   * Only the differences are stored, never the whole table. That is the same
+   * choice `sessionRoots` makes and it matters more here: the defaults are the
+   * thing most likely to change between builds — a chord gets a better key, a
+   * command is renamed, a binding is retired — and a stored full table would
+   * freeze whatever shipped on the day the user first opened this screen. An
+   * override map means a user who never touched a shortcut always gets the
+   * current defaults, and a user who moved one keeps exactly the one decision
+   * they made.
+   *
+   * The value is a chord in `src/shared/shortcuts.ts`'s stored spelling
+   * (`Ctrl+Shift+V`). It is deliberately NOT the platform's spelling: `Ctrl`
+   * means Ctrl-or-Command everywhere, so a settings file carried between a Mac
+   * and a Windows box keeps working.
+   */
+  shortcutOverrides: Record<string, string>;
 }
 
 /** @see AppSettings.agentLaunchDefaults */
@@ -246,6 +273,44 @@ function asAgentLaunchDefaults(raw: unknown): AgentLaunchDefaults | undefined {
   };
 }
 
+/**
+ * The keyboard overrides, degraded per ENTRY like `asRootList` and
+ * `asAgentLaunchDefaults` before it.
+ *
+ * Three ways one entry can be untrustworthy, and each costs only that entry:
+ *
+ *   - the id names a shortcut this build does not have (a rename, a retired
+ *     command, a downgrade);
+ *   - the value is not a chord this app's own spelling can express;
+ *   - the shortcut is one this build made NON-rebindable since the override was
+ *     written. That last one is the reason this check is here and not only in
+ *     the UI: locking a chord is how the app protects a key that turned out to
+ *     be load-bearing, and a stored override must not be able to reach around
+ *     the decision.
+ *
+ * A full validation — reserved chords, menu accelerators, conflicts — is NOT
+ * done here, and that is deliberate. It needs the resolved map of every other
+ * binding, which does not exist yet at parse time; `resolveBindings` runs it
+ * while building that map, and drops what it must. Doing it twice would mean
+ * two answers to the same question.
+ */
+function asShortcutOverrides(raw: unknown): Record<string, string> | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    const spec = shortcutById(id);
+    if (!spec || !spec.rebindable) continue;
+    const chord = parseChord(value);
+    if (!chord) continue;
+    // Re-spelled rather than stored verbatim, so a hand-written `shift+ctrl+v`
+    // becomes the one canonical `Ctrl+Shift+V` on the next write and the map
+    // cannot hold two spellings of one chord.
+    out[id] = chordToString(chord);
+  }
+  return out;
+}
+
 /** The registry the loader, the defaults and the validator are all generic over. */
 export const SETTING_SPECS: SettingSpecs = {
   // Both composer defaults are TRUE: typing into a terminal that fronts an
@@ -275,6 +340,10 @@ export const SETTING_SPECS: SettingSpecs = {
   // Matches the helper's own `[default: skip-permissions]` and the phone's
   // first segment, so a fresh install opens the dialog on claude / skip ON.
   agentLaunchDefaults: { default: AGENT_LAUNCH_DEFAULTS, parse: asAgentLaunchDefaults },
+  // Empty means "every chord is where the registry put it", which is what
+  // shipped before this setting existed — the same rule every other default
+  // here follows.
+  shortcutOverrides: { default: {}, parse: asShortcutOverrides },
 };
 
 const STORAGE_KEY = 'pocketshell.settings.v1';
@@ -470,9 +539,93 @@ export const useSettingsStore = defineStore('settings', () => {
     values.sessionRoots = values.sessionRoots.filter((root) => root !== path);
   }
 
+  /* --- Keyboard ----------------------------------------------------------
+   * The bindings IN FORCE, and the three moves that change them.
+   *
+   * The rules all live in `src/shared/shortcuts.ts` and none of them live here:
+   * this store owns the persisted overrides and nothing else. That split is
+   * what lets the registry be the single source of truth the whole feature was
+   * asked for — a call site asking "is this Ctrl+Shift+V?" and the Settings
+   * screen asking "may I put Ctrl+Shift+V here?" go through the same module and
+   * cannot disagree.
+   * -------------------------------------------------------------------- */
+
+  /**
+   * Every binding's chords, defaults with the user's overrides applied.
+   *
+   * A computed, so a call site can hold it and re-read it: rebinding a chord
+   * while a terminal is open must take effect on the NEXT keystroke, not on the
+   * next mount. That is the whole reason handlers are told to consult this
+   * rather than to capture a chord at setup time.
+   */
+  const shortcutBindings = computed(() => resolveBindings(values.shortcutOverrides));
+
+  /**
+   * Move a shortcut to [chord], or report why not.
+   *
+   * Returns the refusal rather than throwing, and returns `null` for success,
+   * because every caller is a click handler that wants to render the reason
+   * next to the control. The validation is the registry's, run against the
+   * bindings currently IN FORCE — so a chord freed by an earlier rebinding is
+   * genuinely free, and a conflict names the command that holds it.
+   */
+  function rebindShortcut(id: string, chord: Chord): BindingRefusal | null {
+    const refusal = validateBinding(id, chord, shortcutBindings.value);
+    if (refusal) return refusal;
+    // Replaced rather than mutated, for the same reason `sessionRoots` is: the
+    // spec's default `{}` is a shared object until `applyDefault` copies it,
+    // and an in-place write is one way to reach a copy that was never made.
+    values.shortcutOverrides = { ...values.shortcutOverrides, [id]: chordToString(chord) };
+    return null;
+  }
+
+  /**
+   * Put one shortcut back to its shipped chord.
+   *
+   * Deleting the override rather than writing the default INTO it: an override
+   * that happens to equal today's default would silently pin the old chord if a
+   * later build moved it. Absence is the only spelling of "whatever the app
+   * currently thinks is right".
+   */
+  function resetShortcut(id: string): void {
+    if (!(id in values.shortcutOverrides)) return;
+    const next = { ...values.shortcutOverrides };
+    delete next[id];
+    values.shortcutOverrides = next;
+  }
+
+  /** Put every shortcut back. One assignment, so one persist and one repaint. */
+  function resetAllShortcuts(): void {
+    values.shortcutOverrides = {};
+  }
+
+  /** Whether the user has moved anything at all — the "Reset all" button's state. */
+  const hasShortcutOverrides = computed(
+    () => Object.keys(values.shortcutOverrides).length > 0,
+  );
+
+  /** Whether THIS binding has been moved, for its own reset control. */
+  function isShortcutOverridden(id: string): boolean {
+    return id in values.shortcutOverrides;
+  }
+
   // `toRefs` is what makes step 1 of "how to add a setting" sufficient: every
   // key of AppSettings becomes a writable ref on the store automatically, so
   // consumers write `useSettingsStore().typingOpensComposer` and nothing in
   // this file enumerates the keys by hand.
-  return { ...toRefs(values), set, zoomIn, zoomOut, resetZoom, addSessionRoot, removeSessionRoot };
+  return {
+    ...toRefs(values),
+    set,
+    zoomIn,
+    zoomOut,
+    resetZoom,
+    addSessionRoot,
+    removeSessionRoot,
+    shortcutBindings,
+    hasShortcutOverrides,
+    rebindShortcut,
+    resetShortcut,
+    resetAllShortcuts,
+    isShortcutOverridden,
+  };
 });

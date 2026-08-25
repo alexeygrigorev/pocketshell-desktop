@@ -41,6 +41,14 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | `main` should read `Terminal`, so `Terminal 2` follows | `1d89bf4` |
 | ✅ | The `+` menu did nothing (clipped by the tab strip) | `c614e7e` |
 | ✅ | Clicking a tab should focus the terminal | `1d89bf4` |
+| ✅ | Tab-cycling hotkeys (`Ctrl+Tab`, `Ctrl+1`..`9`) — and the discovery that xterm DOES encode them (`docs/WORKSPACE.md` §11.2) | *this pass* |
+| ✅ | Agent marks per tab, from `@ps_agent_kind`; nothing at all for `unknown` | *this pass* |
+| ✅ | Closing a tab selects the previously active one, via a pruned MRU stack | *this pass* |
+| ✅ | Stop a session from a tab context menu — the only destructive action, confirmed | *this pass* |
+| ✅ | Drag tabs to rearrange them, plus `Ctrl+Shift+PageUp`/`PageDown` | *this pass* |
+| ✅ | Drop the folder name and its `×` from the tab strip ("no need for this part") | *this pass* |
+| ❌ | The folder's path in the workspace header | superseded — the user deleted the element it would have lived in |
+| ✅ | `docs/WORKSPACE.md` named the `main` tab label in eight places; it is `Terminal` | *this pass* |
 | ✅ | Ask for harness, permissions and profile before launching | `00eb3e7` |
 | ✅ | `pocketshell agent` was missing its required `--dir` | `00eb3e7` |
 
@@ -84,6 +92,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Cap at 100 rows with "load more" and search | `2f684dd` |
 | ✅ | Preview HTML | `384f66a` |
 | ✅ | Serve a folder over HTTP | `8d17f90` |
+| ✅ | Markdown preview | this change |
 
 ### Terminal and connection
 
@@ -106,6 +115,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Remove the tool chips; ask to install instead | `16413b6` |
 | ✅ | Remove the host topbar; host in the window title | `ca79ae2` |
 | ✅ | Merge the session bar into the tab row | `38bf971` |
+| ✅ | Escape should not suppress the typing intercept; the plain-terminal hatch moved to a press in the terminal (`docs/COMPOSER.md` §12.2) | *this pass* |
 | ✅ | Move Ports / Usage / Settings into the panel | `c614e7e` |
 | ✅ | A Settings screen | `176e92f` |
 | ✅ | A default host, connected at startup | `176e92f` |
@@ -116,6 +126,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Drop the "force a new session" checkbox | `cde5dd5` |
 | ✅ | See every shortcut, grouped by surface, in Settings | this change |
 | ✅ | Rebind a shortcut, with conflicts named and the shell protected | this change |
+| ✅ | CodeMirror's baked `dark: true` | this change |
 
 ### Housekeeping
 
@@ -130,15 +141,7 @@ is roughly the order things were asked, and that history is useful.
 
 | | Item |
 |---|---|
-| 🔄 | Tab-cycling hotkeys (`Ctrl+Tab`, `Ctrl+1`..`9`) |
-| 🔄 | Agent icon per tab, from `@ps_agent_kind` |
-| 🔄 | The folder's path in the workspace header |
-| 🔄 | Closing a tab selects the previously active one, not the first |
-| 🔄 | Stop a session from a tab context menu |
 | 🔄 | A `+` on each root row, and one for anywhere; retire "New session" |
-| 🔄 | `docs/WORKSPACE.md` still names the `main` tab label |
-| 🔄 | Markdown preview, reusing the `psview:` pipeline |
-| 🔄 | CodeMirror's baked `dark: true` — reconfigure on theme appearance |
 | 🔄 | `Ctrl+W` closes the window instead of deleting a word |
 | 🔄 | CodeMirror duplicated into the installer |
 | 🔄 | Point the chord handlers at the shortcut registry — they still spell chords inline (`docs/SHORTCUTS.md` §6) |
@@ -152,9 +155,7 @@ is roughly the order things were asked, and that history is useful.
 | ⬜ | A `serve` subcommand in the pocketshell CLI | Filed as `alexeygrigorev/pocketshell#2333`. The desktop side ships on `python3 -m http.server`; retiring that costs one function. |
 | ⬜ | A durable session→folder registry | The phone has `pocketshell tree get/upsert/reconcile`. It would replace the name-and-`test -d` heuristic that currently places sessions with no reported cwd. `docs/SESSIONLIST.md` §11 has the cost estimate. |
 | ⬜ | `Ctrl+W` closes the window | Electron's default menu binds it, and readline uses it for delete-word. A real hazard in a terminal app. |
-| ⬜ | Markdown preview | Deliberately deferred with the HTML preview: it needs a renderer dependency and its own sanitisation argument, not a reuse of the `psview:` one. |
 | ⬜ | Launch an agent from `NewSessionDialog` | It creates shell-only sessions; launching needs a pending launch carried across a route change. |
-| ⬜ | CodeMirror's baked `dark: true` | User-visible colours retint through tokens, but CM's own panel chrome stays dark-flavoured under light themes. Needs an `EditorState` reconfigure. |
 | ⬜ | CodeMirror in `dependencies` | Duplicates ~9.6 MB of already-bundled source into the installer. Wants an electron-builder `files` exclusion. |
 
 ---
@@ -194,3 +195,5 @@ Things nobody asked about that turned out to matter.
 - **`tmux -u` and plain `tmux` spell names differently**, per display column. That desynchronised the two halves of the session/cwd join for months of session names containing non-ASCII.
 - **The session list and the cwd probe can read different tmux servers.** `6fe2619` sweeps every socket rather than assuming one.
 - **`http.server` binds all interfaces when `--bind` is omitted** — the default would have published a right-clicked folder to the internet from a live box.
+- **An ESM-only dependency in main is a runtime bomb that every test passes.** `marked` ships ESM only; electron-vite emits CJS for main and Electron 33 is Node 20, which predates `require(esm)`. Left in `externalizeDepsPlugin`'s default set it would have thrown `ERR_REQUIRE_ESM` the first time anyone opened a `.md` — and nothing would have caught it, because Vitest loads the same import natively and succeeds. `electron-store` had already taught this lesson once; the config now names both. The general rule: for main, **check the package's `exports` before trusting externalisation**, and treat a green unit suite as saying nothing about it.
+- **The sanitiser that reads `obj[key]` reads the prototype too.** A palette payload of `{ __proto__: { '--bg': 'red' } }` has no own `--bg`, yet an index lookup returns `red` — found by a test written to assert unknown keys were dropped, which failed for a reason the test author had not thought of. Structured clone strips prototypes over IPC, so it was unreachable; it would have become reachable the first time main built one of these objects itself.

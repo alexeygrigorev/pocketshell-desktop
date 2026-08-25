@@ -16,6 +16,8 @@ const { useSettingsStore, coerceSettings, settingsDefaults } = await import(
   '../../src/renderer/stores/settings'
 );
 
+import { chordToString, isShortcut, parseChord } from '../../src/shared/shortcuts';
+
 const KEY = 'pocketshell.settings.v1';
 
 /** What is actually on disk, parsed. */
@@ -374,6 +376,127 @@ describe('agentLaunchDefaults', () => {
   it('keeps the rest of the blob when only this key is corrupt', () => {
     const settings = coerceSettings({ agentLaunchDefaults: 3, defaultHost: 'hetzner' });
     expect(settings.agentLaunchDefaults.kind).toBe('claude');
+    expect(settings.defaultHost).toBe('hetzner');
+  });
+});
+
+/**
+ * Keyboard overrides.
+ *
+ * The store owns exactly one thing here — the persisted differences — and every
+ * rule lives in `src/shared/shortcuts.ts`, which `tests/unit/shortcuts.test.ts`
+ * pins on its own. So these assert the SEAM: that a refusal is passed through
+ * rather than swallowed, that only differences are written, and that a blob
+ * this build cannot trust costs one entry rather than a keyboard.
+ */
+describe('shortcut overrides', () => {
+  it('starts empty, so a fresh install gets whatever the registry currently says', () => {
+    const settings = useSettingsStore();
+    expect(settings.shortcutOverrides).toEqual({});
+    expect(settings.hasShortcutOverrides).toBe(false);
+    expect(chordToString(settings.shortcutBindings.get('files.save')![0]!)).toBe('Ctrl+S');
+  });
+
+  it('stores only the difference, never the whole table', () => {
+    // A stored full table would freeze whatever shipped on the day the user
+    // first opened the screen, and a later build that moved a chord would never
+    // reach them.
+    const settings = useSettingsStore();
+    expect(settings.rebindShortcut('files.filterTree', parseChord('Ctrl+Shift+F')!)).toBeNull();
+    expect(stored()['shortcutOverrides']).toEqual({ 'files.filterTree': 'Ctrl+Shift+F' });
+  });
+
+  it('puts the new chord in force immediately, for the handlers reading it', () => {
+    const settings = useSettingsStore();
+    settings.rebindShortcut('files.filterTree', parseChord('Ctrl+Shift+F')!);
+    expect(isShortcut(settings.shortcutBindings, 'files.filterTree', { key: 'F', ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(isShortcut(settings.shortcutBindings, 'files.filterTree', { key: 'f', ctrlKey: true })).toBe(false);
+  });
+
+  it('hands the refusal back rather than throwing out of a click handler', () => {
+    const settings = useSettingsStore();
+    const refusal = settings.rebindShortcut('terminal.copySelection', parseChord('Ctrl+C')!);
+    // SIGINT. Not the menu's `copy` role, which a cancelled keydown suppresses
+    // — the shell is the reason this one can never be taken.
+    expect(refusal?.kind).toBe('reserved');
+    // And nothing was written: a refused rebinding must leave no trace.
+    expect(settings.shortcutOverrides).toEqual({});
+  });
+
+  it('names the command a conflicting chord already belongs to', () => {
+    const settings = useSettingsStore();
+    const refusal = settings.rebindShortcut('files.filterTree', parseChord('Ctrl+L')!);
+    expect(refusal).toMatchObject({ kind: 'conflict', withId: 'files.gotoPath' });
+  });
+
+  it('lets a chord be moved onto one that was vacated in the same session', () => {
+    const settings = useSettingsStore();
+    expect(settings.rebindShortcut('files.gotoPath', parseChord('Ctrl+Shift+L')!)).toBeNull();
+    expect(settings.rebindShortcut('files.filterTree', parseChord('Ctrl+L')!)).toBeNull();
+  });
+
+  it('resets one binding by DELETING the override, not by writing the default', () => {
+    // An override equal to today's default would silently pin the old chord if
+    // a later build moved it.
+    const settings = useSettingsStore();
+    settings.rebindShortcut('files.save', parseChord('Ctrl+Shift+S')!);
+    expect(settings.isShortcutOverridden('files.save')).toBe(true);
+    settings.resetShortcut('files.save');
+    expect(settings.shortcutOverrides).toEqual({});
+    expect(chordToString(settings.shortcutBindings.get('files.save')![0]!)).toBe('Ctrl+S');
+  });
+
+  it('resets everything in one write', () => {
+    const settings = useSettingsStore();
+    settings.rebindShortcut('files.save', parseChord('Ctrl+Shift+S')!);
+    settings.rebindShortcut('files.filterTree', parseChord('Ctrl+Shift+F')!);
+    settings.resetAllShortcuts();
+    expect(settings.hasShortcutOverrides).toBe(false);
+    expect(stored()['shortcutOverrides']).toEqual({});
+  });
+
+  it('survives a restart', () => {
+    const first = useSettingsStore();
+    first.rebindShortcut('composer.attach', parseChord('Ctrl+Shift+P')!);
+    setActivePinia(createPinia());
+    const second = useSettingsStore();
+    expect(chordToString(second.shortcutBindings.get('composer.attach')![0]!)).toBe('Ctrl+Shift+P');
+  });
+
+  it('degrades a hand-edited blob per ENTRY', () => {
+    const out = coerceSettings({
+      shortcutOverrides: {
+        'files.save': 'Ctrl+Shift+S',
+        // Not a chord this app's spelling can express.
+        'files.gotoPath': 'Hyper+L',
+        // Not a shortcut this build has.
+        'gone.away': 'Ctrl+Shift+G',
+        // A binding this build made fixed — a stored override must not reach
+        // around that decision.
+        'zoom.in': 'Ctrl+Shift+Y',
+        // Not a string at all.
+        'files.filterTree': 7,
+      },
+    }).shortcutOverrides;
+    expect(out).toEqual({ 'files.save': 'Ctrl+Shift+S' });
+  });
+
+  it('re-spells a hand-written chord into the one canonical form', () => {
+    // Otherwise the map could hold two spellings of one chord and the conflict
+    // check would miss the pair.
+    expect(
+      coerceSettings({ shortcutOverrides: { 'files.save': 'shift+cmd+s' } }).shortcutOverrides,
+    ).toEqual({ 'files.save': 'Ctrl+Shift+S' });
+  });
+
+  it('falls back wholesale only when the value is not an object', () => {
+    expect(coerceSettings({ shortcutOverrides: ['Ctrl+S'] }).shortcutOverrides).toEqual({});
+    expect(coerceSettings({ shortcutOverrides: 'Ctrl+S' }).shortcutOverrides).toEqual({});
+  });
+
+  it('keeps the rest of the blob when only this key is corrupt', () => {
+    const settings = coerceSettings({ shortcutOverrides: 3, defaultHost: 'hetzner' });
+    expect(settings.shortcutOverrides).toEqual({});
     expect(settings.defaultHost).toBe('hetzner');
   });
 });
