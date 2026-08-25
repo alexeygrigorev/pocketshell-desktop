@@ -79,6 +79,7 @@ import {
   type WorkspaceTab,
 } from '../../shared/workspaceTabs';
 import { groupSessionsIntoRoots, UNTRACKED_PATH } from '../sessionGrouping';
+import { parkedAgentLaunch, takeAgentLaunch } from '../pendingAgentLaunch';
 import {
   buildLaunchCommand,
   KIND_LABELS,
@@ -1056,6 +1057,46 @@ function armLaunch(session: string, choice: LaunchChoice): void {
 }
 
 onBeforeUnmount(clearLaunchTimer);
+
+/**
+ * Collect a launch the SESSION PANEL parked, and run it here.
+ *
+ * The panel can create a session but has no terminal to type into, so
+ * NewSessionDialog parks the agent choice and the navigation it was already
+ * making delivers it (docs/SESSIONLIST.md §13a). This is the other end. The
+ * launch machinery below is NOT duplicated — the slot hands over a
+ * `LaunchChoice` and `armLaunch` does exactly what it does for the `+`.
+ *
+ * Watching the SLOT rather than hooking a lifecycle, because two arrivals have
+ * to be covered and only one of them is a mount: creating a session in the
+ * folder that is already open re-uses this component instance and changes only
+ * the route query, so neither `onMounted` nor the `folderKey` watch fires. A
+ * reactive slot covers both with one watcher.
+ *
+ * Watching `tabs` with it is the guard that keeps the launch off the wrong
+ * terminal: the session must actually be on this bar before the slot is taken.
+ * A workspace the user merely passes through leaves the slot alone —
+ * `takeAgentLaunch` only clears on a match — so the launch survives the trip.
+ *
+ * `immediate` because the panel refreshes the session list BEFORE navigating,
+ * so the tab may already be present at mount and `tabs` may never change.
+ */
+watch(
+  [parkedAgentLaunch, tabs],
+  () => {
+    const parked = parkedAgentLaunch.value;
+    if (!parked) return;
+    if (!tabs.value.some((tab) => tab.kind === 'session' && tab.session === parked.session)) return;
+    const choice = takeAgentLaunch(connection.connectionId, parked.session);
+    if (!choice) return;
+    // Through the one selection path, so arriving on a launched session leaves
+    // the keyboard where a click would have — and the PTY the launch is
+    // waiting for is the pane this mounts.
+    goToTab(parked.session);
+    armLaunch(parked.session, choice);
+  },
+  { immediate: true },
+);
 
 /**
  * Create a session here, and launch [choice] in it once its PTY exists.

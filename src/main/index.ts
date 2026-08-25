@@ -211,10 +211,10 @@ function createWindow(): void {
     // and cuts the same two ways: it suppresses the page's keydown as well as
     // any accelerator, which is exactly why nothing the terminal uses may be
     // matched.
-    const window = windowCommandForInput(input);
-    if (!window) return;
+    const command = windowCommandForInput(input);
+    if (!command) return;
     event.preventDefault();
-    if (window === 'close') mainWindow?.close();
+    if (command === 'close') mainWindow?.close();
     else mainWindow?.webContents.toggleDevTools();
   });
 
@@ -257,9 +257,11 @@ if (!gotLock) {
       // together with why darwin keeps its menu. The two chords worth keeping
       // are re-provided in `before-input-event` above.
       //
-      // Must happen before the first window is shown, and after `ready` — the
-      // default menu is installed as part of app startup, so setting it to null
-      // at module scope would be overwritten.
+      // Placed here because this block is where this app's startup order is
+      // expressed, NOT because it has to be: measured on 33.3.1, setting the
+      // menu at module scope also works, because Electron skips installing its
+      // default once anything has set a menu at all. What does matter is that
+      // it happens before a window exists.
       if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
 
       // After ready and before the window: the handler must be live by the

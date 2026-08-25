@@ -103,17 +103,27 @@ In the draft textarea (`onDraftKeydown`):
 | `Ctrl+=`, `Ctrl++`, `Ctrl+Shift+=`, keypad `+` | Zoom in | `before-input-event` in main, decided in `zoomKeys.ts` |
 | `Ctrl+-`, keypad `-` | Zoom out | ditto |
 | `Ctrl+0`, keypad `0` | Reset zoom | ditto |
+| `Ctrl+Shift+W` | Close the window | `before-input-event` in main, decided in `windowKeys.ts` |
+| `Ctrl+Shift+I` | Toggle DevTools | ditto |
 | `Escape` | Close the panel in front | `OverlayPanel.vue`, `PopupMenu.vue` |
 
-### 1.7 Electron's default menu — bound, never declared
+The two `Ctrl+Shift+` chords are new, and they exist because §1.7's menu is
+gone. Both were admitted on the same test: driven against the real xterm, each
+produces **nothing** at the terminal (`onData` is empty), so claiming them costs
+the shell no key. Anything matched in `before-input-event` is taken from the
+terminal *everywhere*, because `preventDefault()` there suppresses the page's
+keydown as well as the accelerator — which is why that test is the entry
+requirement rather than a nicety.
 
-**This app builds no menu**, so every accelerator Electron's default menu
-carries is live and none of it appears anywhere in this repo. That is not a
+### 1.7 Electron's default menu — bound, never declared, now removed
+
+**This app built no menu**, so every accelerator Electron's default menu
+carried was live and none of it appeared anywhere in this repo. That is not a
 footnote: `Ctrl+=` silently did nothing for months because the default `zoomin`
 role carries `CommandOrControl+Plus` and Electron parses `Plus` as *shifted*
-`=`; and `Ctrl+W` still closes the window where readline expects delete-word.
+`=`; and `Ctrl+W` closed the window where readline expects delete-word.
 
-Read out of the shipped binary rather than remembered
+The role table, read out of the shipped binary rather than remembered
 (`node_modules/electron/dist/electron.exe`, electron 33.3.1):
 
 ```
@@ -128,9 +138,37 @@ F11                  togglefullscreen
 CommandOrControl+0 / +Plus / +-     resetZoom / zoomIn / zoomOut
 ```
 
-The zoom three are already disarmed: main's `before-input-event` calls
-`preventDefault()`, which is documented to suppress the page event *and* the
-menu shortcut. The rest are live.
+Not all of that is live on Windows, and the difference matters. Walking the
+real `Menu.getApplicationMenu()` of a running window shows the *default menu*
+carries a subset: `File > Exit` has **no** accelerator (Alt+F4 is the platform's
+job), DevTools is `Ctrl+Shift+I` only, and `cut`, `copy` and `paste` carry
+`registerAccelerator: false` — Electron draws them and registers no key,
+because Chromium's editor owns those chords already.
+
+**The whole menu is now gone on Windows and Linux** —
+`Menu.setApplicationMenu(null)` in `src/main/index.ts`, with the reasoning in
+`src/shared/windowKeys.ts`. darwin keeps its menu: there the chord is `Cmd+W`,
+which is the platform convention, and the app menu carries Quit/Hide/Services.
+
+What that changed, measured chord by chord against the real xterm:
+
+| Chord | In the terminal | Everywhere else, before | Now |
+|---|---|---|---|
+| `Ctrl+W` | `` — xterm cancelled the keydown, so the menu never saw it | **closed the window** | reaches the focused element; nothing closes |
+| `Ctrl+M` | `` | minimised the window | reaches the focused element |
+| `Ctrl+R` | `` | reload (not reproduced in a probe, but bound) | nothing |
+| `F11` | `[23~` | full-screened the window | reaches the focused element |
+| `Ctrl+Z` / `Ctrl+Y` / `Ctrl+X` / `Ctrl+A` | their C0 bytes | undo / redo / cut / select-all | unchanged — Chromium's editor, not the menu |
+| `Ctrl+C` / `Ctrl+V` / `Ctrl+Shift+V` | `` / `` / a real paste | copy / paste | unchanged, same reason |
+| `Ctrl+0` / `+Plus` / `+-` | — | zoom, behind the settings store's back | this app's own, since `31019f2` |
+
+The load-bearing row is the first one. **The terminal was never the victim**:
+xterm cancels the keydown as part of its ctrl-letter mapping, and a cancelled
+keydown never reaches an accelerator. The surfaces that lost the whole app to
+one keystroke were the ones with no delete-word to perform — the composer's
+draft, the Files path box, the tree filter, the code editor, Settings. So the
+tempting fix ("swallow `Ctrl+W` while the terminal has focus") would have
+changed nothing at all.
 
 ---
 

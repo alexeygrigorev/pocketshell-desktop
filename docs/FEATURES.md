@@ -101,14 +101,14 @@ See [PLAN.md](./PLAN.md) for which phase delivers each priority.
 
 ### F10. Files view (browse + edit + transfer)
 - `SftpService`: list/read/write/mkdir/rename/delete + upload/download
-  (streaming). UI: left = SFTP tree (lazy expand), right = Monaco editor
+  (streaming). UI: left = SFTP tree (lazy expand), right = a CodeMirror editor
   for text / image preview / hex-or-download for binary. Save writes back
   over SFTP (confirm overwrite). Drag-and-drop upload/download.
   Create/delete/rename with confirm.
 - **Acceptance:** integration tests against the `ssh` image round-trip a
   file; E2E against `helper`: browse `~`, edit a file, verify the change
   via a second `ssh exec cat`.
-- **Calls:** `ssh2-sftp-client`.
+- **Calls:** `ssh2`'s sftp channel.
 
 ---
 

@@ -27,6 +27,8 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Group git worktrees under their repository | `c614e7e` |
 | ✅ | Root rows should not collapse | `1d89bf4` |
 | ✅ | Session grouping was invisible on a 1:1 layout | `dfd8780` |
+| ✅ | Pick the agent when starting a session from the panel — chained, with the create deferred behind BOTH answers (`docs/SESSIONLIST.md` §13a supersedes §13) | *this pass* |
+| ✅ | A search box in the folder browser | *this pass* |
 
 ### The folder workspace
 
@@ -122,6 +124,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Font family and size | `2a52e8f`, `4c0f555` |
 | ✅ | `Ctrl+=` did not zoom in | `31019f2` |
 | ✅ | Zoom in Settings | `31019f2` |
+| ✅ | `Ctrl+W` closed the window | this change |
 | ✅ | Light theme, then multiple palettes | `448ad7a` |
 | ✅ | Drop the "force a new session" checkbox | `cde5dd5` |
 | ✅ | See every shortcut, grouped by surface, in Settings | this change |
@@ -134,6 +137,8 @@ is roughly the order things were asked, and that history is useful.
 |---|---|---|
 | ✅ | Remove old code and backwards compatibility | `88cc932`, `67fdcf5` |
 | ✅ | Commit regularly, in focused commits | ongoing |
+| ✅ | CodeMirror duplicated into the installer | this change |
+| ✅ | `keytar` and `ssh2-sftp-client` shipped without a single import | this change |
 
 ---
 
@@ -142,8 +147,6 @@ is roughly the order things were asked, and that history is useful.
 | | Item |
 |---|---|
 | 🔄 | A `+` on each root row, and one for anywhere; retire "New session" |
-| 🔄 | `Ctrl+W` closes the window instead of deleting a word |
-| 🔄 | CodeMirror duplicated into the installer |
 | 🔄 | Point the chord handlers at the shortcut registry — they still spell chords inline (`docs/SHORTCUTS.md` §6) |
 
 ---
@@ -154,9 +157,7 @@ is roughly the order things were asked, and that history is useful.
 |---|---|---|
 | ⬜ | A `serve` subcommand in the pocketshell CLI | Filed as `alexeygrigorev/pocketshell#2333`. The desktop side ships on `python3 -m http.server`; retiring that costs one function. |
 | ⬜ | A durable session→folder registry | The phone has `pocketshell tree get/upsert/reconcile`. It would replace the name-and-`test -d` heuristic that currently places sessions with no reported cwd. `docs/SESSIONLIST.md` §11 has the cost estimate. |
-| ⬜ | `Ctrl+W` closes the window | Electron's default menu binds it, and readline uses it for delete-word. A real hazard in a terminal app. |
-| ⬜ | Launch an agent from `NewSessionDialog` | It creates shell-only sessions; launching needs a pending launch carried across a route change. |
-| ⬜ | CodeMirror in `dependencies` | Duplicates ~9.6 MB of already-bundled source into the installer. Wants an electron-builder `files` exclusion. |
+| ⬜ | `Ctrl+W` in a text field now does nothing | Removing the menu gave the terminal its delete-word back and left every other surface with a dead key. Chromium has no delete-word-backward on Ctrl+W, so the composer's draft and the Files path box could have one — a readline habit that would now work everywhere instead of closing the app. Small, and nobody has asked. |
 
 ---
 
@@ -176,9 +177,10 @@ is roughly the order things were asked, and that history is useful.
 | | Item |
 |---|---|
 | 🔍 | **No stray `python3 -m http.server` after quitting.** The serve feature relies on a channel close hanging up the process — traced through code, never observed, and it runs on a production box. |
-| 🔍 | `electron-builder` was never run; the asar path for lazily-loaded CodeMirror chunks is reasoned about rather than executed. |
+| ✅ | ~~`electron-builder` was never run; the asar path for lazily-loaded CodeMirror chunks is reasoned about rather than executed.~~ Run, and executed: the packaged `win-unpacked` build boots from `app.asar`, and `import('./assets/toml-*.js')` inside it resolves and returns the grammar. Same run confirmed `Menu.getApplicationMenu()` is `null`, `Ctrl+W` leaves the window open and `Ctrl+Shift+W` closes it. |
 | 🔍 | Only Python was eyeballed for syntax highlighting; the other 40 grammars are covered headlessly. |
 | 🔍 | Terminal palettes were verified as colour values, not against real `ls --color` or a tmux status line in every theme. |
+| 🔍 | **The panel→agent chain is only half-wired until `FolderWorkspaceView` collects the parked launch.** The picker, the deferred commit and the handoff slot are in and unit-tested; the ~20-line collector in `FolderWorkspaceView.vue` was written but not applied (another agent held the file). Until it lands, choosing an agent from the panel creates the session and parks a launch nobody takes — a plain shell, which is what it would have been anyway. |
 
 ---
 
@@ -191,6 +193,12 @@ Things nobody asked about that turned out to matter.
 - **Four separate bugs came from geometry not reaching the far end** — the sliced status line, the font refit, the zoom refit, and stale rows below the status bar. `1b64555` gave that one owner, tracking *what the remote was last told* rather than what xterm last was.
 - **The composer's chords are live on the Files tab.** `FolderWorkspaceView` mounts it once behind a `v-show` so a tab switch cannot cost a draft, and its handler is on `window` with `capture: true` — so `Ctrl+\`` there toggles a panel nobody can see. `FilesView.vue`'s own comment asserted the opposite for months. This is what a chord chosen against a mental map rather than a table looks like, and it is why `src/shared/shortcuts.ts` exists.
 - **Electron's default menu binds fifteen accelerators this app never declared**, read out of the shipped binary rather than remembered. Two of them have already cost a bug (`Ctrl+=` doing nothing, `Ctrl+W` closing the window), and the useful distinction is that the *editing* roles yield to a cancelled keydown while the *window* roles do not. `docs/SHORTCUTS.md` §1.6.
+- **The terminal was never the victim of `Ctrl+W`; every other surface was.** Driven against the real xterm with the default menu live: on a plain page `Ctrl+W` closed the window, and on an xterm page the window survived and the shell got `\x17`. xterm cancels the keydown as part of its ctrl-letter mapping, and a cancelled keydown never reaches an accelerator — so the pane everybody worried about was already defending itself, while the composer draft, the Files path box, the tree filter and the code editor were losing the whole app to one keystroke. A fix scoped "only while the terminal has focus" would have changed nothing at all. The same measurement says `Ctrl+M` minimises and `F11` full-screens everywhere except the terminal, for the same reason.
+- **`registerAccelerator: false` is why disarming the menu is safe.** Electron's `cut`, `copy` and `paste` roles carry that flag: the item is drawn in the menu and *no key is registered for it*, because Chromium's editor owns those chords. So removing the application menu costs a text field nothing — measured, with the menu nulled: `Ctrl+V` still pastes into an `<input>`, `Ctrl+A` still selects all, and `Ctrl+Shift+V` still fires a real `paste` on xterm's textarea. It also means the menu was never a suspect in the `Ctrl+V`-to-composer report, however much it looked like one.
+- **`files: out/**/*` ships whatever is lying in `out/`.** It is a gitignored scratch directory, and by the time anyone looked it had collected `tsbuildinfo/` (incremental TypeScript state, carrying absolute paths from the build machine) and `probe-async/` — 3 MB, a whole second copy of the renderer bundle left behind by a debugging session. Both were going out to users. The `files` list now names the three directories electron-vite actually emits.
+- **The packaged app opens `node_modules` for exactly one package.** `ssh2`, and nothing else: everything the renderer imports is compiled into `out/renderer`, and `electron-store` and `marked` are bundled into main's chunk on purpose. So `dependencies` is not a description of what the app uses — it is a list of what gets copied into the installer, and the two had drifted by ~22 MB of package tree plus a native module (`keytar`) that no line of this app imports. Measured on real `electron-builder` runs, Windows nsis: **`app.asar` 42.19 MB → 4.67 MB**, `win-unpacked` 310 MiB → 273 MiB, **installer 89,250,784 B → 82,807,482 B** (−6.1 MiB; the installer moves least because NSIS was LZMA-compressing that duplicated source rather well).
+- **Two modals stacked is one Escape closing both.** `OverlayPanel` listens for Escape on `document` and paints at a fixed `z-index: 10`, so rendering a second one inside the first gives two live listeners and no stacking order — pressing Escape on the chained agent step would have dismissed the folder picker underneath it and thrown away the browse. Rendering the second one *instead of* the first costs nothing (the picker's state lives in refs on a component that stays mounted, and the browse position lives in the projects store) and it reads better besides: one modal at a time, Escape means "back one step". Any future dialog that wants to chain has the same choice to make, and the same answer.
+- **A dialog that can NAME what it is about to create can defer creating it.** `NewSessionDialog` looked as if it had to commit before it could ask a second question, because two of its three routes (mkdir, clone) produce the folder the second question is about. It did not: `targetFolder` already predicted both paths, for the session-name preview, so the second question could be asked on the prediction and the whole commit path deferred behind it. The prediction must not be *trusted* afterwards — the host's resolved folder is what gets used — but it is enough to ask with. `docs/SESSIONLIST.md` §13a; the same move is available to any wizard that ends in one create.
 - **Three bugs came from `return false` in xterm's key handler** without `preventDefault()`. It stops xterm but leaves the DOM event live, because `_keyDown` bails before calling its own `cancel()`.
 - **`tmux -u` and plain `tmux` spell names differently**, per display column. That desynchronised the two halves of the session/cwd join for months of session names containing non-ASCII.
 - **The session list and the cwd probe can read different tmux servers.** `6fe2619` sweeps every socket rather than assuming one.

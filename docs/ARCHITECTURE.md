@@ -14,7 +14,7 @@ Standard hardened Electron: three processes.
 ┌─────────────────────────────┐   contextBridge   ┌──────────────────────────┐
 │  Renderer (Vue 3, sandboxed)│ ◀──────────────▶ │  Preload (trusted)        │
 │  - views, components, Pinia  │   window.api      │  - typed IPC surface      │
-│  - xterm.js, Monaco          │                   └────────────┬─────────────┘
+│  - xterm.js, CodeMirror      │                   └────────────┬─────────────┘
 └─────────────────────────────┘                                │ ipcRenderer
                                                                │
 ┌──────────────────────────────────────────────────────────────▼──────────────┐
@@ -22,7 +22,7 @@ Standard hardened Electron: three processes.
 │  - SshService, SftpService, PortForwarder, AutoForwarderSupervisor           │
 │  - SshConfigParser, KnownHostsVerifier, PocketshellHelper client             │
 │  - ConnectionRegistry (connection id → live ssh2 Client)                      │
-│  - Store (electron-store) + Keychain (keytar for passphrases)                │
+│  - PortfwdStore (electron-store); NO keychain — see the rule below           │
 │  - ipcMain handlers                                                          │
 └─────────────────────────────────────────────────────────────┬───────────────┘
                                                               │ ssh2 (TCP/SSH)
@@ -40,8 +40,13 @@ Standard hardened Electron: three processes.
   streams.
 - All connections live in the main process, keyed by an opaque `connectionId`
   the renderer holds.
-- Passphrases live in the OS keychain (`keytar`), never on disk in
-  plaintext and never in the renderer.
+- Passphrases are **not stored at all**. One is supplied with a connect
+  call, used by `ssh2`, and forgotten; nothing writes it anywhere. This
+  paragraph used to promise the OS keychain via `keytar`, which was a
+  dependency for a year with no `import` of it anywhere in the app — the
+  package shipped in every installer, was rebuilt natively on every
+  `npm run dist`, and did nothing. It has been removed. Storing passphrases
+  is still a reasonable feature; it is simply not one this app has.
 
 ---
 
@@ -70,9 +75,7 @@ src/
 │  │  ├─ PocketshellClient.ts # runs `pocketshell <cmd>` over an SshService exec
 │  │  ├─ bootstrap.ts         # PATH detection + probe sequence + install actions
 │  │  └─ parsers.ts           # sessions-list / enrichment / usage / bootstrap parsers
-│  ├─ store/
-│  │  ├─ settings.ts          # electron-store: hosts, forwards, window state
-│  │  └─ keychain.ts          # keytar get/set passphrase
+│  ├─ portfwd/PortfwdStore.ts # electron-store: forward rules (the only store)
 │  └─ util/                   # logging, errors, shell-quote
 ├─ preload/
 │  └─ index.ts                # contextBridge.exposeInMainWorld('api', ...)
@@ -178,10 +181,13 @@ Android in-memory-only manual toggles.
 
 ## 6. Files (SFTP)
 
-`SftpService` over `ssh2-sftp-client` (which sits on `ssh2`'s sftp channel):
+`SftpService` over `ssh2`'s own sftp channel (`client.sftp()` → `SFTPWrapper`;
+`ssh2-sftp-client` was in `package.json` for a year and imported by nothing,
+and has been dropped):
 `list`, `readFile`/`stat`, `createWriteStream`/`writeFile`,
 `mkdir`, `rename`, `delete`, `fastPut`/`fastGet` (upload/download, with
-progress events). The renderer's `FileEditor` uses Monaco; save calls
+progress events). The renderer's `CodeEditor` uses CodeMirror 6 (Monaco was
+planned, never imported, and dropped in `c2fe2bb`); save calls
 `window.api.sftp.writeFile`. Binary detection by extension + stat;
 images get an `<img>` preview, other binary offers hex/download.
 

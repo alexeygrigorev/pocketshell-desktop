@@ -337,6 +337,14 @@ async function onRefresh(): Promise<void> {
  * routed to it: a session route only needed a name, and a folder route needs a
  * folder we do not have. Inventing one would put the user in a workspace for a
  * directory that does not exist.
+ *
+ * This navigation now carries a second job it does not know about, and that is
+ * the point of it not knowing: when the dialog collected an AGENT as well as a
+ * folder (docs/SESSIONLIST.md §13), the choice is parked in
+ * `renderer/pendingAgentLaunch.ts` and `FolderWorkspaceView` collects it on
+ * arrival, because typing the wrapper line needs a PTY and this panel has
+ * none. So the launch rides the route change the panel was already making,
+ * rather than the panel growing a terminal-shaped responsibility.
  */
 async function onSessionStarted(name: string): Promise<void> {
   creating.value = null;

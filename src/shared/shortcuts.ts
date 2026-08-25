@@ -457,6 +457,26 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
     rebindable: false,
   },
   {
+    id: 'window.close',
+    surface: 'global',
+    label: 'Close the window',
+    defaults: ['Ctrl+Shift+W'],
+    owner: 'main',
+    rebindable: false,
+    note:
+      'Relocated from Ctrl+W, which Electron\'s default menu held and which is readline\'s delete-word. That menu is gone on Windows and Linux; Alt+F4 and the title bar still close. Admitted because Ctrl+Shift+W produces nothing at the terminal.',
+  },
+  {
+    id: 'window.devTools',
+    surface: 'global',
+    label: 'Toggle DevTools',
+    defaults: ['Ctrl+Shift+I'],
+    owner: 'main',
+    rebindable: false,
+    note:
+      'The chord the removed default menu carried, re-provided in before-input-event. Also dead at the terminal.',
+  },
+  {
     id: 'overlay.close',
     ladders: ['escape'],
     surface: 'global',

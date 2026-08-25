@@ -710,7 +710,8 @@ defineExpose({ editPath: startEditing, focusSearch });
    standing in. `text-overflow` is left at `clip` here on purpose — an ellipsis
    on an ancestor is the second truncation this redesign removed, and a clipped
    cell that only appears on a rounding error should not advertise itself as a
-   deliberate shortening. */
+   deliberate shortening.
+
    The shrink FACTORS are the priority order, and the order is the whole point:
    ancestors 100, current 1, the `…` zero. Flex shares a deficit in proportion
    to `base x factor`, so a 100:1 ratio makes the ancestors absorb essentially

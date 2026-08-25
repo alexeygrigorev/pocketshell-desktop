@@ -4,8 +4,27 @@ copyright: Copyright © 2026 Alexey Grigorev
 directories:
   buildResources: build
   output: release
+# WHAT GOES IN, and where the real filter is.
+#
+# There is no `!node_modules/...` line here for the renderer's libraries, and
+# there deliberately never should be. electron-builder ships production
+# `dependencies` and skips `devDependencies`, so package.json is the one place
+# that decides — and after the CodeMirror mistake (~22 MB of already-bundled
+# source in every installer) that list is down to what the packaged app truly
+# require()s from disk. Restating the same decision as exclusion globs here
+# would give it two homes that can disagree; tests/unit/packagedDependencies.test.ts
+# guards the one home instead.
+# The three directories electron-vite EMITS, named one by one rather than
+# `out/**/*`. `out/` is gitignored scratch that anything may write to, and it
+# had collected two passengers by the time anyone looked: `tsbuildinfo/`
+# (incremental TypeScript state, which carries absolute paths from the build
+# machine) and `probe-async/` (3 MB — a whole second copy of the renderer
+# bundle, left behind by a debugging session). Both were shipping to users.
+# A glob over a scratch directory ships whatever is lying in it.
 files:
-  - out/**/*
+  - out/main/**/*
+  - out/preload/**/*
+  - out/renderer/**/*
   - package.json
   - '!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}'
   - '!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}'

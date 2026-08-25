@@ -40,7 +40,7 @@ helper on each dev box.
 ## Tech stack
 
 Electron · Vue 3 + TypeScript · Vite (`electron-vite`) · `ssh2` ·
-`xterm.js` · `ssh2-sftp-client` · Monaco · Pinia · electron-builder.
+`xterm.js` · CodeMirror 6 · Pinia · electron-builder.
 Tests: vitest · `testcontainers` · Playwright.
 
 ## Development

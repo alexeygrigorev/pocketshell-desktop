@@ -7,8 +7,14 @@ import { resolve } from 'node:path';
 // so only the preload may bridge to Node via contextBridge.
 export default defineConfig({
   main: {
-    // ssh2, ssh2-sftp-client and keytar are native/CJS deps consumed only in
-    // the main process, and must stay external.
+    // `externalizeDepsPlugin` externalises whatever package.json lists under
+    // `dependencies` — which is why that list is now exactly ONE package,
+    // ssh2: a native binding plus a helper .exe that Vite must not swallow,
+    // and the only thing the packaged app opens node_modules for. Everything
+    // else is a build input and lives in devDependencies, so it is bundled
+    // here and never copied into the installer. See
+    // tests/unit/packagedDependencies.test.ts for the rule and what it cost to
+    // learn it.
     //
     // electron-store MUST NOT. It is pure ESM (`"type": "module"` since v9),
     // while electron-vite emits CJS for main, so leaving it external makes the
@@ -16,15 +22,15 @@ export default defineConfig({
     // ERR_REQUIRE_ESM before a window ever opens. Excluding it from
     // externalisation lets Vite transpile it into the CJS output.
     //
-    // `marked` is here for exactly the same reason and it is not a style
-    // choice: since v5 the package ships ESM only (`exports: { '.': './lib/
-    // marked.esm.js' }`, no CJS entry), and Electron 33 is Node 20, which
-    // predates `require(esm)`. Left external, the markdown preview would throw
-    // ERR_REQUIRE_ESM the first time anyone opened a `.md` — in a code path
-    // that no unit test reaches, because unit tests run under Vitest's ESM
-    // loader where the import works fine. Bundling also keeps the installer
-    // honest: 45 KB of transpiled parser in main's chunk rather than the
-    // package's 480 KB of sources, maps and `.d.ts` copied into the asar.
+    // `marked` — the markdown preview's converter — is named here as a BELT to
+    // the rule above's braces. Today it sits in devDependencies, so it is
+    // bundled anyway and this entry changes nothing. It is written down because
+    // moving it back to `dependencies` would look like a tidy-up and would in
+    // fact be a crash: since v5 the package ships ESM only (`exports: { '.':
+    // './lib/marked.esm.js' }`, no CJS entry) and Electron 33 is Node 20, which
+    // predates `require(esm)` — so externalised it throws ERR_REQUIRE_ESM the
+    // first time anyone opens a `.md`. Nothing would catch that, because unit
+    // tests run under Vitest's ESM loader where the import works fine.
     plugins: [externalizeDepsPlugin({ exclude: ['electron-store', 'marked'] })],
     build: {
       rollupOptions: {

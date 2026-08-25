@@ -32,9 +32,11 @@
  * own surfaces, so a theme switch moves all of them together and nothing here
  * needs a per-theme value of its own — which is the property that keeps this
  * file out of the palette business entirely. The set is: the prose ground and
- * ink, two quieter inks, three structural lines, the accent, the editor's own
- * ground and ink (so a fenced code block in the preview matches the same block
- * in the editor beside it), and the two font families.
+ * ink, the quieter ink for de-emphasised headings and quotes, three structural
+ * lines, the accent, the editor's own ground and ink (so a fenced code block in
+ * the preview matches the same block in the editor beside it), and the two font
+ * families. A token nothing in the stylesheet references does not belong here:
+ * it would be a value crossing the IPC bridge for no reason.
  */
 export const PALETTE_TOKENS = [
   '--bg',
@@ -42,7 +44,6 @@ export const PALETTE_TOKENS = [
   '--surface-2',
   '--fg',
   '--fg-secondary',
-  '--fg-muted',
   '--border',
   '--border-soft',
   '--border-strong',
@@ -83,7 +84,6 @@ const FALLBACKS: Record<PaletteToken, string> = {
   '--surface-2': 'Canvas',
   '--fg': 'CanvasText',
   '--fg-secondary': 'CanvasText',
-  '--fg-muted': 'GrayText',
   '--border': 'GrayText',
   '--border-soft': 'GrayText',
   '--border-strong': 'GrayText',
@@ -201,7 +201,6 @@ th,td{border:1px solid var(--border);padding:.4em .7em;text-align:left;}
 th{background:var(--surface);font-weight:600;}
 tr:nth-child(even) td{background:var(--surface-2);}
 img{max-width:100%;height:auto;}
-figcaption,.footnote{color:var(--fg-muted);}
 /* A long path or URL in prose must wrap rather than widen the document: the
    pane is narrow, and a horizontal scrollbar on the BODY makes every other
    line unreadable. Code blocks and tables scroll inside themselves instead. */

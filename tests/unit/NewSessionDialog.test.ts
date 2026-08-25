@@ -24,6 +24,7 @@ const home = vi.fn<() => Promise<{ ok: boolean; home?: string; error?: string }>
 const realPath = vi.fn<(id: string, path: string) => Promise<string>>();
 const list = vi.fn<(id: string, path: string) => Promise<{ name: string; type: string }[]>>();
 const deriveName = vi.fn<() => Promise<string>>();
+const startSession = vi.fn<(id: string, req: unknown) => Promise<unknown>>();
 
 vi.mock('../../src/renderer/ipc', () => ({
   api: {
@@ -32,11 +33,16 @@ vi.mock('../../src/renderer/ipc', () => ({
       deriveName: () => deriveName(),
       reposList: vi.fn().mockResolvedValue({ repos: [] }),
       onCloneProgress: vi.fn(),
+      startSession: (id: string, req: unknown) => startSession(id, req),
     },
     sftp: {
       realPath: (id: string, path: string) => realPath(id, path),
       list: (id: string, path: string) => list(id, path),
     },
+    // The chained agent step mounts LaunchSessionDialog, which asks the host
+    // for its profiles on mount. An empty list is the common real answer and
+    // the one that needs no picker.
+    agent: { profiles: vi.fn().mockResolvedValue([]) },
     ssh: { onState: vi.fn(), listConfigHosts: vi.fn().mockResolvedValue([]) },
     helper: { usage: vi.fn().mockResolvedValue([]) },
   },
@@ -46,6 +52,9 @@ const NewSessionDialog = (await import('../../src/renderer/components/NewSession
   .default;
 const { useConnectionStore } = await import('../../src/renderer/stores/connection');
 const { useProjectsStore } = await import('../../src/renderer/stores/projects');
+const { clearAgentLaunch, parkedAgentLaunch } = await import(
+  '../../src/renderer/pendingAgentLaunch'
+);
 
 const HOME = '/home/alexey';
 
@@ -68,11 +77,23 @@ async function flush(wrapper: VueWrapper): Promise<void> {
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+  clearAgentLaunch();
   home.mockResolvedValue({ ok: true, home: HOME });
   deriveName.mockResolvedValue('git-dataops');
   realPath.mockImplementation(async (_id, path) => path);
   list.mockResolvedValue([{ name: 'dataops', type: 'dir' }]);
+  startSession.mockResolvedValue({
+    ok: true,
+    sessionName: 'git-dataops-2',
+    folder: `${HOME}/git`,
+    via: 'helper',
+  });
 });
+
+/** The button whose label starts with [label], out of the whole dialog. */
+function button(wrapper: VueWrapper, label: string) {
+  return wrapper.findAll('button').find((b) => b.text().startsWith(label));
+}
 
 describe('NewSessionDialog startIn', () => {
   it('lands the browser on the given folder rather than on $HOME', async () => {
@@ -113,5 +134,181 @@ describe('NewSessionDialog startIn', () => {
     projects.cwd = `${HOME}/git/dataops`;
     await open(`${HOME}/tmp`);
     expect(projects.cwd).toBe('/home/alexey/tmp');
+  });
+});
+
+/**
+ * The folder -> agent chain (docs/SESSIONLIST.md §13, superseded).
+ *
+ * §13 refused this chain on ONE load-bearing ground: `NewSessionDialog` used
+ * to create at Start, while `LaunchSessionDialog` was built so that cancelling
+ * costs nothing — so chaining agent AFTER the create would strand a session on
+ * the host. The chain now exists, and these are the tests that say the
+ * objection was answered rather than ignored: the agent step runs on a
+ * PREDICTED folder and the commit path is deferred behind it, so every abandon
+ * route leaves the host exactly as it was.
+ */
+describe('NewSessionDialog agent chain', () => {
+  it('creates NOTHING when the agent step is raised', async () => {
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start session')!.trigger('click');
+    await flush(wrapper);
+
+    // The agent step is up …
+    expect(wrapper.text()).toContain('Session type');
+    // … and the host has not been asked for anything.
+    expect(startSession).not.toHaveBeenCalled();
+    expect(parkedAgentLaunch.value).toBeNull();
+  });
+
+  it('creates NOTHING when the agent step is cancelled', async () => {
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start session')!.trigger('click');
+    await flush(wrapper);
+    await button(wrapper, 'Cancel')!.trigger('click');
+    await flush(wrapper);
+
+    expect(startSession).not.toHaveBeenCalled();
+    // And the browse survived the round trip, so cancelling is a step back
+    // rather than a restart.
+    expect(useProjectsStore().cwd).toBe(`${HOME}/git`);
+    expect(wrapper.text()).toContain('Existing folder');
+  });
+
+  it('creates once the agent is confirmed, and parks the launch', async () => {
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start session')!.trigger('click');
+    await flush(wrapper);
+    await button(wrapper, 'Create session')!.trigger('click');
+    await flush(wrapper);
+
+    expect(startSession).toHaveBeenCalledTimes(1);
+    expect(startSession.mock.calls[0]![1]).toMatchObject({
+      folder: `${HOME}/git`,
+      namePolicy: 'unique',
+    });
+    // The panel cannot type into a PTY it does not have, so the launch is
+    // parked for the workspace to collect. Against the session the HOST named.
+    expect(parkedAgentLaunch.value).toMatchObject({
+      connectionId: 'conn-1',
+      session: 'git-dataops-2',
+      choice: { kind: 'claude', dir: `${HOME}/git` },
+    });
+  });
+
+  it('parks the launch at the folder the HOST resolved, not the predicted one', async () => {
+    // The clone route predicts a leaf under the clone root; the host can hand
+    // back somewhere else entirely (a repo already on disk). `--dir` at a
+    // directory that is not there is the failure agentLaunch.ts exists to stop.
+    startSession.mockResolvedValue({
+      ok: true,
+      sessionName: 'git-dataops-2',
+      folder: '/srv/checkouts/dataops',
+      via: 'helper',
+    });
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start session')!.trigger('click');
+    await flush(wrapper);
+    await button(wrapper, 'Create session')!.trigger('click');
+    await flush(wrapper);
+
+    expect(parkedAgentLaunch.value?.choice.dir).toBe('/srv/checkouts/dataops');
+  });
+
+  it('still starts a plain shell in one click, with no launch parked', async () => {
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start shell')!.trigger('click');
+    await flush(wrapper);
+
+    expect(startSession).toHaveBeenCalledTimes(1);
+    expect(parkedAgentLaunch.value).toBeNull();
+  });
+});
+
+/**
+ * The folder search box.
+ *
+ * The property that matters is the one `fileListView.ts` was written around
+ * and the reason this reuses it rather than re-implementing `.includes()`: the
+ * filter runs over the WHOLE listing, so a folder past the render cap is
+ * findable. A filter over the rendered rows would only search what the user
+ * had already scrolled to.
+ */
+describe('NewSessionDialog folder search', () => {
+  const many = Array.from({ length: 140 }, (_, i) => ({
+    name: `proj-${String(i).padStart(3, '0')}`,
+    type: 'dir',
+  }));
+
+  async function search(wrapper: VueWrapper, text: string): Promise<void> {
+    const box = wrapper.get('input[aria-label="Search folders in this directory"]');
+    await box.setValue(text);
+    await flush(wrapper);
+  }
+
+  function rows(wrapper: VueWrapper): string[] {
+    return wrapper.findAll('.folder-name').map((n) => n.text());
+  }
+
+  it('finds a folder that sits past the render cap', async () => {
+    list.mockResolvedValue(many);
+    const wrapper = await open(`${HOME}/git`);
+    // Row 132 is not rendered before the search …
+    expect(rows(wrapper)).toHaveLength(100);
+    expect(rows(wrapper)).not.toContain('proj-132');
+
+    await search(wrapper, 'proj-132');
+    expect(rows(wrapper)).toEqual(['proj-132']);
+  });
+
+  it('says so when nothing matches, rather than looking like an empty folder', async () => {
+    list.mockResolvedValue(many);
+    const wrapper = await open(`${HOME}/git`);
+    await search(wrapper, 'nothing-like-this');
+    expect(rows(wrapper)).toEqual([]);
+    expect(wrapper.text()).toContain('nothing matches');
+  });
+
+  it('matches case-insensitively', async () => {
+    list.mockResolvedValue([{ name: 'DataOps', type: 'dir' }]);
+    const wrapper = await open(`${HOME}/git`);
+    await search(wrapper, 'dataops');
+    expect(rows(wrapper)).toEqual(['DataOps']);
+  });
+
+  it('clears the query on a `cd`, so the next folder is not rendered as empty', async () => {
+    list.mockResolvedValue(many);
+    const wrapper = await open(`${HOME}/git`);
+    await search(wrapper, 'proj-132');
+
+    list.mockResolvedValue([{ name: 'src', type: 'dir' }]);
+    await wrapper.get('.folder-row').trigger('click');
+    await flush(wrapper);
+
+    expect(rows(wrapper)).toEqual(['src']);
+    expect(
+      (wrapper.get('input[aria-label="Search folders in this directory"]').element as HTMLInputElement)
+        .value,
+    ).toBe('');
+  });
+
+  it('leaves the navigation affordances alone — they are not content', async () => {
+    list.mockResolvedValue(many);
+    const wrapper = await open(`${HOME}/git`);
+    await search(wrapper, 'nothing-like-this');
+    // Home, Up and the breadcrumbs live outside the list and survive a filter
+    // that matches no row at all.
+    expect(wrapper.find('button[title="Up one folder"]').exists()).toBe(true);
+    expect(wrapper.find('button[title="Home folder"]').exists()).toBe(true);
+    expect(wrapper.findAll('.crumb').length).toBeGreaterThan(0);
+  });
+
+  it('shows the rest on demand, filtered listing and all', async () => {
+    list.mockResolvedValue(many);
+    const wrapper = await open(`${HOME}/git`);
+    expect(rows(wrapper)).toHaveLength(100);
+    await button(wrapper, 'Show more')!.trigger('click');
+    await flush(wrapper);
+    expect(rows(wrapper)).toHaveLength(140);
   });
 });

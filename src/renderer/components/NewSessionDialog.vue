@@ -21,6 +21,35 @@
 // the root, `sftp.list()` filtered to directories) rather than a folder
 // channel of its own — see src/renderer/stores/projects.ts.
 //
+// ## The second question: which agent (docs/SESSIONLIST.md §13)
+//
+// This dialog used to answer only "which folder" and stop, on the reasoning
+// that the folder's workspace asks "which agent" one click later. The user
+// asked for the chain explicitly — "when I start a session in a folder I want
+// to select the agent" — so `Start session…` now raises the SAME
+// `LaunchSessionDialog` the workspace's `+` raises. Not a copy of its fields:
+// `src/shared/agentLaunch.ts` is the only place that knows how to spell a
+// flag, and one dialog in front of it is what keeps that true.
+//
+// **Nothing is created until BOTH questions are answered.** That is the
+// property `LaunchSessionDialog` was built around (cancel costs nothing) and
+// §13's real objection to chaining, so the chain is ordered to preserve it
+// rather than to work around it: the agent step runs on the PREDICTED folder —
+// `targetFolder`, which every route can name before it exists — and the whole
+// commit path (mkdir, clone, `start`) runs on confirm. Cancelling at the agent
+// step leaves no folder, no clone and no session, and returns to the picker
+// with the browse intact. See {@link commit}.
+//
+// **The launch itself is not run here**, because it cannot be: typing the
+// wrapper line needs a PTY and the panel has no terminal. The choice is PARKED
+// (`src/renderer/pendingAgentLaunch.ts`) and `FolderWorkspaceView` collects it
+// when the user opens the session. So "create" and "launch" are separated in
+// time, and the outcome banner below still gets read rather than preempted.
+//
+// A plain shell is untouched by all of this and stays ONE click: `Start shell`
+// beside the primary button commits with no choice at all, exactly as `Start
+// session` did before this change.
+//
 // The outcome banner does not auto-dismiss, and that is deliberate. Two of the
 // backend's honest answers cannot be read off the session row afterwards:
 // `via: 'tmux-fallback'` means the session was created WITHOUT a memory cap,
@@ -30,8 +59,12 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import OverlayPanel from './OverlayPanel.vue';
+import LaunchSessionDialog from './LaunchSessionDialog.vue';
 import { useConnectionStore } from '../stores/connection';
 import { displayPath, joinPosix, useProjectsStore } from '../stores/projects';
+import { FILE_ROW_CAP, matchesQuery, viewFileRows } from '../fileListView';
+import { parkAgentLaunch } from '../pendingAgentLaunch';
+import { KIND_LABELS, launchBlocker, type LaunchChoice } from '../../shared/agentLaunch';
 import type { RepoEntry } from '../../main/projects/repos';
 import type { StartSessionResult } from '../../main/projects/ProjectsService';
 
@@ -71,6 +104,35 @@ const route = ref<Route>('existing');
 const newFolderName = ref('');
 /** Filter over the merged repo list. */
 const repoFilter = ref('');
+
+// ---------------------------------------------------------------------------
+// Searching the folder listing
+// ---------------------------------------------------------------------------
+//
+// `~/git` on the user's host is dozens of directories in a 260px box, which is
+// a scroll-and-squint every time a session is created. The logic is NOT
+// written here: `src/renderer/fileListView.ts` already solved this problem for
+// the Files tab and its header carries the reasoning. Two of its properties
+// are the whole reason to reuse it rather than to write `.includes()` again:
+//
+//   - **filter the FULL listing, then cap.** `projects.dirs` holds the entire
+//     directory (one `sftp.readdir`, no paging), so a match past row 100 is
+//     findable. Filtering what is rendered would search only what the user had
+//     already scrolled to, which is the most confusing behaviour available.
+//   - **the cap is a RENDER cap**, so "Show more" costs no round trip.
+//
+// ALWAYS VISIBLE here, where the Files tab summons its box with a button.
+// That is not an inconsistency, it is the same rule reaching a different
+// answer: the Files tree is a drag-narrow pane whose breadcrumb strip already
+// carries three controls, so a fourth permanent one would take back the line
+// the breadcrumb had just won. This is a fixed-width modal whose ONLY job is
+// picking a folder out of that list — there is no competing content to crowd,
+// no keyboard chord to discover the box with (the dialog claims none, see
+// docs/SHORTCUTS.md), and a search you cannot see is a search nobody uses.
+/** Filter over the browsed directory. Blank means "no filter". */
+const folderQuery = ref('');
+/** Rows the browser will render. Grows by {@link FILE_ROW_CAP} per "Show more". */
+const folderCap = ref(FILE_ROW_CAP);
 /** `owner/repo` typed by hand, for a repo `gh` did not list. */
 const manualRepo = ref('');
 /** Which listed repo is selected, keyed by {@link repoKey}. */
@@ -104,6 +166,27 @@ const preparing = ref<string | null>(null);
 const stepError = ref<string | null>(null);
 /** The host's answer, kept on screen until the user acts on it. */
 const outcome = ref<StartSessionResult | null>(null);
+/**
+ * True while the AGENT step is on screen instead of the folder picker.
+ *
+ * A swap, not a stack. Two `OverlayPanel`s at once would share a z-index and,
+ * worse, would both hear the same Escape on `document` — one keypress closing
+ * two dialogs and losing the browse. Swapping also reads as what it is: a
+ * two-step wizard with one modal in front of the user at a time, where Escape
+ * means "back one step" rather than "throw the whole thing away".
+ *
+ * The folder picker's state survives the swap untouched: `route`, the typed
+ * folder name and the repo selection are refs on THIS component, which stays
+ * mounted, and the browse position lives in the projects store.
+ */
+const agentStep = ref(false);
+/**
+ * The agent parked for the session named in the banner, if any.
+ *
+ * Held only so the banner can say what will happen next. The launch itself is
+ * in `pendingAgentLaunch`; this is a label.
+ */
+const parkedKind = ref<LaunchChoice['kind'] | null>(null);
 
 const connId = computed(() => connection.connectionId);
 const busy = computed(() => preparing.value !== null || projects.starting);
@@ -122,11 +205,72 @@ const crumbs = computed(() => {
   return out;
 });
 
+/**
+ * The browsed directory, filtered then capped.
+ *
+ * `projects.dirs` entries already carry a `name`, which is the whole of
+ * `NamedEntry`, so no adapter is needed — the generalisation `viewFileRows`
+ * needed to serve a second caller was done when it was written.
+ */
+const folderView = computed(() =>
+  viewFileRows(projects.dirs, { query: folderQuery.value, cap: folderCap.value }),
+);
+
+/**
+ * A `cd` clears the filter and the cap.
+ *
+ * The filter because a query that survives navigation renders the next folder
+ * as empty and reads as a broken listing — the single most baffling state this
+ * feature can produce. The cap because otherwise it stops meaning anything
+ * after a few folders: it is "the first hundred rows of what I am looking at",
+ * not a running total.
+ */
+watch(
+  () => projects.cwd,
+  () => {
+    folderQuery.value = '';
+    folderCap.value = FILE_ROW_CAP;
+  },
+);
+
+// Typing resets the cap too, so the box shows the first hundred MATCHES rather
+// than the matches among the first hundred rows.
+watch(folderQuery, () => {
+  folderCap.value = FILE_ROW_CAP;
+});
+
+function showMoreFolders(): void {
+  folderCap.value += FILE_ROW_CAP;
+}
+
+/**
+ * Escape in the search box clears the filter — but ONLY when there is one.
+ *
+ * `OverlayPanel` closes on Escape from a `document` listener, so a box that
+ * swallowed the key unconditionally would make Escape mean nothing at all once
+ * the filter was empty: the user presses it, the dialog stays, they press it
+ * again, the dialog stays. Conditional swallowing gives the two meanings a
+ * natural order — undo the filter, then leave — which is the same ladder the
+ * composer's Escape uses (docs/COMPOSER.md §12).
+ *
+ * This is field-local and therefore NOT a registry chord: `shared/shortcuts.ts`
+ * arbitrates keys that several surfaces could claim, and Escape inside a text
+ * input that is on screen for as long as this modal is has no one to collide
+ * with. The Files tree's search box makes the same call.
+ */
+function onSearchEscape(e: KeyboardEvent): void {
+  if (folderQuery.value === '') return;
+  e.stopPropagation();
+  e.preventDefault();
+  folderQuery.value = '';
+}
+
 const filteredRepos = computed(() => {
-  const needle = repoFilter.value.trim().toLowerCase();
   const rows = [...projects.repos].sort((a, b) => repoLabel(a).localeCompare(repoLabel(b)));
-  if (!needle) return rows;
-  return rows.filter((r) => repoLabel(r).toLowerCase().includes(needle));
+  // Same matcher as the folder list and the Files tab — case-insensitive
+  // substring, blank matches everything — so the two boxes in this one dialog
+  // cannot answer "does this match" differently.
+  return rows.filter((r) => matchesQuery(repoLabel(r), repoFilter.value));
 });
 
 const selectedRepoEntry = computed(
@@ -229,14 +373,53 @@ async function onHome(): Promise<void> {
 }
 
 /**
+ * Raise the agent step, having created NOTHING.
+ *
+ * The ordering is the whole point (docs/SESSIONLIST.md §13): every route can
+ * NAME its folder before that folder exists — `targetFolder` predicts the
+ * mkdir's path and the clone's leaf — so the agent question can be asked on a
+ * prediction and the mkdir, the clone and the session can all wait behind the
+ * confirm. Cancelling here therefore costs exactly what cancelling
+ * `LaunchSessionDialog` in a folder workspace costs: nothing.
+ */
+function openAgentStep(): void {
+  if (busy.value || !targetFolder.value) return;
+  stepError.value = null;
+  agentStep.value = true;
+}
+
+/** Back to the folder picker with the browse intact. */
+function closeAgentStep(): void {
+  agentStep.value = false;
+}
+
+/**
  * The one commit path. Each route resolves a real folder on the host first,
  * then every route ends in the same `startSession` call.
+ *
+ * [choice] is the agent to launch once the session has a terminal, or null for
+ * a plain shell. It is the LAST thing collected and the first thing checked,
+ * so a launch that could not have worked stops the flow while the host is
+ * still untouched — the same rule `FolderWorkspaceView.createSession` follows,
+ * and the reason `launchBlocker` exists as a function rather than as a
+ * disabled button.
  */
-async function onStart(): Promise<void> {
+async function commit(choice: LaunchChoice | null): Promise<void> {
   const id = connId.value;
+  agentStep.value = false;
   if (!id || busy.value) return;
   stepError.value = null;
   outcome.value = null;
+  parkedKind.value = null;
+
+  // Before the mkdir, before the clone, before the session. The dialog would
+  // not have let a broken choice be confirmed, but this is the last moment at
+  // which nothing exists to clean up.
+  const blocker = choice ? launchBlocker(choice) : null;
+  if (blocker) {
+    stepError.value = blocker;
+    return;
+  }
 
   let folder: string | null = null;
 
@@ -295,6 +478,17 @@ async function onStart(): Promise<void> {
   outcome.value = result;
   if (result.ok) {
     newFolderName.value = '';
+    if (choice && result.sessionName) {
+      // Parked against the folder the HOST resolved, not the one we predicted.
+      // The clone route in particular can land somewhere else — a repo already
+      // on disk comes back at its real path, and `alreadyExists` returns the
+      // host's spelling — and `--dir` pointing at a directory that does not
+      // exist is the exact failure `agentLaunch.ts` was written to make
+      // unrepeatable.
+      const dir = result.folder ?? folder;
+      parkAgentLaunch(id, result.sessionName, { ...choice, dir });
+      parkedKind.value = choice.kind;
+    }
     // Land the browser on the folder we just used, so "start another" is
     // already pointed somewhere sensible.
     if (result.folder && route.value !== 'existing') await projects.browse(id, result.folder);
@@ -314,14 +508,37 @@ function onOpen(): void {
   if (name) emit('started', name);
 }
 
+/**
+ * Clear the banner and go round again.
+ *
+ * The parked launch is deliberately NOT cleared. The user chose an agent for
+ * that session and the session exists; it is still the right thing to run when
+ * they open it, whether they open it now or after creating a second one. The
+ * slot expires on its own (`LAUNCH_HANDOFF_TTL_MS`), and a second create with
+ * an agent simply replaces it — which is correct, because the session they are
+ * about to open is the one they just made.
+ */
 function onStartAnother(): void {
   outcome.value = null;
   stepError.value = null;
+  parkedKind.value = null;
 }
 </script>
 
 <template>
-  <OverlayPanel title="New session" size="md" @close="emit('close')">
+  <!-- Step two, INSTEAD of step one rather than on top of it. See `agentStep`.
+       It is handed the PREDICTED folder, which is what lets it be answered
+       before anything is created; `commit` re-points the choice at the folder
+       the host actually resolved before parking it. -->
+  <LaunchSessionDialog
+    v-if="agentStep"
+    :folder-path="targetFolder"
+    :folder-label="derivedName || 'this folder'"
+    @confirm="commit"
+    @close="closeAgentStep"
+  />
+
+  <OverlayPanel v-else title="New session" size="md" @close="emit('close')">
     <div class="new-session">
       <!-- ================= outcome ================= -->
       <section v-if="outcome" class="result">
@@ -354,6 +571,16 @@ function onStartAnother(): void {
             <p v-else class="result-sub muted">{{ outcome.error }}</p>
           </div>
         </div>
+
+        <!-- The agent is armed, not started. Saying so here is what keeps the
+             banner honest about a launch that happens after a navigation the
+             user has not made yet — "I picked Claude and got a shell" is not a
+             bug anyone can report usefully. -->
+        <p v-if="outcome.ok && parkedKind" class="launch-note">
+          <AppIcon name="terminal" :size="12" />
+          {{ KIND_LABELS[parkedKind] }} starts when this session's terminal opens — press
+          <strong>Open session</strong>.
+        </p>
 
         <!-- Said plainly rather than hidden: the raw-tmux path cannot apply the
              helper's systemd memory cap, so this session has no limit on it. -->
@@ -415,9 +642,29 @@ function onStartAnother(): void {
             </span>
           </div>
 
+          <!-- Permanently on screen, unlike the Files tab's summoned box —
+               the reasoning is beside `folderQuery`. It sits BELOW the crumb
+               bar and above the list, so the home/up/breadcrumb controls stay
+               where they were and are never filterable: they are navigation,
+               not content, which is the same line `viewFileRows` draws around
+               `..`. -->
+          <div class="filter">
+            <AppIcon name="search" :size="14" class="filter-mark" />
+            <input
+              v-model="folderQuery"
+              class="text-input"
+              spellcheck="false"
+              autocomplete="off"
+              :placeholder="`Search ${projects.dirs.length} folders here`"
+              aria-label="Search folders in this directory"
+              :disabled="projects.browsing"
+              @keydown.esc="onSearchEscape"
+            />
+          </div>
+
           <ul class="folder-rows">
             <li
-              v-for="d in projects.dirs"
+              v-for="d in folderView.rows"
               :key="d.name"
               class="folder-row"
               @click="onEnter(d.name)"
@@ -426,7 +673,19 @@ function onStartAnother(): void {
               <span class="folder-name">{{ d.name }}</span>
               <AppIcon name="chevron-right" :size="12" class="into" />
             </li>
-            <li v-if="!projects.dirs.length && !projects.browsing" class="empty muted">
+
+            <!-- The count is the useful half: "Show more" alone does not say
+                 whether it is four rows away or four hundred. -->
+            <li v-if="folderView.hidden > 0" class="more">
+              <button class="more-btn" @click="showMoreFolders">
+                Show more — {{ folderView.rows.length }} of {{ folderView.total }}
+              </button>
+            </li>
+
+            <li v-if="folderView.filtered && folderView.total === 0" class="empty muted">
+              nothing matches “{{ folderQuery }}”
+            </li>
+            <li v-else-if="!projects.dirs.length && !projects.browsing" class="empty muted">
               no sub-folders here
             </li>
           </ul>
@@ -441,7 +700,7 @@ function onStartAnother(): void {
               class="text-input"
               placeholder="my-project"
               :disabled="busy"
-              @keyup.enter="onStart"
+              @keyup.enter="openAgentStep"
             />
           </label>
         </section>
@@ -541,15 +800,35 @@ function onStartAnother(): void {
 
           <p v-if="stepError" class="error">{{ stepError }}</p>
 
+          <!-- TWO commits, and the split is the answer to "do not force an
+               agent choice on every session". `Start shell` is the button this
+               dialog has always had, unchanged and still one click: it commits
+               with no choice at all. `Start session…` chains to the agent step,
+               and its ellipsis is this app's usual promise that a dialog
+               follows (the workspace `+`'s "New session…" says it the same
+               way). -->
           <div class="commit-actions">
             <button class="btn-secondary" @click="emit('close')">Cancel</button>
+            <!-- The spinner is its OWN element rather than an icon inside one
+                 of the buttons. With two commits, an in-button spinner would
+                 have to pick a button, and it would sometimes pick the one the
+                 user did not press — "working" belongs to the bar. -->
+            <AppIcon v-if="busy && !preparing" name="refresh" :size="14" class="spin busy-mark" />
+            <button
+              class="btn-secondary"
+              :disabled="busy || !targetFolder"
+              title="Create the session and leave it at a plain shell"
+              @click="commit(null)"
+            >
+              Start shell
+            </button>
             <button
               class="btn-primary"
               :disabled="busy || !targetFolder"
-              @click="onStart"
+              title="Choose an agent for this session"
+              @click="openAgentStep"
             >
-              <AppIcon v-if="busy" name="refresh" :size="14" class="spin" />
-              Start session
+              Start session…
             </button>
           </div>
         </footer>
@@ -699,6 +978,29 @@ function onStartAnother(): void {
   color: var(--fg-muted);
 }
 
+/* "Show more" is a ROW in the list, not a control beside it: it belongs to the
+   scroll position the user has just reached, and a button outside the box
+   would sit still while the thing it acts on moved. Same shape as the Files
+   tab's. */
+.more {
+  padding: var(--row-pad-y) var(--row-pad-x);
+}
+.more-btn {
+  width: 100%;
+  height: var(--control-h);
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-200);
+}
+.more-btn:hover {
+  color: var(--fg);
+  background: var(--state-hover);
+}
+
 /* One badge metric across the app (docs/POLISH.md §7). */
 .tag {
   display: inline-flex;
@@ -808,8 +1110,12 @@ function onStartAnother(): void {
 .commit-actions,
 .result-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--sp-2);
+}
+.busy-mark {
+  color: var(--fg-muted);
 }
 .btn-primary,
 .btn-secondary {
@@ -921,6 +1227,22 @@ function onStartAnother(): void {
 .result-sub {
   margin: var(--sp-1) 0 0;
   font-size: var(--fs-200);
+}
+/* Accent-toned, not warning-toned: nothing has gone wrong, this is the next
+   step of what the user asked for. */
+.launch-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-200);
+}
+.launch-note .app-icon {
+  margin-top: 3px;
 }
 .fallback-note {
   display: flex;

@@ -1037,7 +1037,15 @@ told apart, because they call for different next actions.
 
 ---
 
-## 13. Why the panel's `+` does not ask which agent
+## 13. ~~Why the panel's `+` does not ask which agent~~ (superseded — it does)
+
+> **Superseded by the request, not by the argument.** The user asked for the
+> chain in as many words — *"when I start a session in a folder I want to
+> select the agent, it should show this modal as in here"*, pointing at the
+> folder workspace's `+`. The section is kept whole below because four of its
+> five points were right and are still load-bearing constraints on the thing
+> that was built; §13a records which one was overturned, which ones were
+> honoured, and how. Read them together.
 
 Two dialogs exist and they were deliberately kept apart (commit `00eb3e7`):
 
@@ -1083,3 +1091,87 @@ load-bearing:
 resolves a folder and *emits* it without starting anything, the panel then
 raises `LaunchSessionDialog`, and only the confirm creates. That is a change to
 the commit path, not a wiring change, and it is why it is not in revision 5.
+
+---
+
+## 13a. It chains — and what the four surviving objections cost
+
+The paragraph above turned out to be the specification. The chain that shipped
+is almost exactly it: **`NewSessionDialog` defers its commit behind the agent
+step, and only the confirm creates.** The one refinement is that the picker
+raises `LaunchSessionDialog` itself rather than emitting a folder up to the
+panel, because nothing between the two dialogs needed to know — and a folder
+that has travelled up to the panel and back is a folder two components can
+disagree about.
+
+Point by point, against §13's own numbering.
+
+**(1) "The second question has a better place to be asked" — wrong about the
+cost, right about the place.** It is still true that the workspace's `+` asks
+it one click away. What the argument missed is that the click is not the cost:
+by the time the user is looking at the workspace, they have a session they did
+not want, running a shell, and the `+` creates a *second* one. "Ask it later"
+is only free when the first session was disposable. It is not; it is the one
+the user just named.
+
+**(2) "The banner must not be interrupted" — honoured exactly.** The outcome
+banner still ends the flow and still does not auto-dismiss, because both of the
+things it says are still unreadable anywhere else: `via: 'tmux-fallback'` means
+no memory cap, and `code: 'folder-missing'` guards the helper trap where `-c`
+at a missing directory exits 0 in `$HOME`. The chained dialog is raised
+*before* the create, so there is nothing for it to stack on top of. The banner
+gained one line — *"Claude Code starts when this session's terminal opens"* —
+which is the honest description of a launch that has been armed but not run.
+
+**(3) "The two have incompatible orderings" — this was the real objection, and
+it is answered rather than dodged.** The trick is that every route can NAME its
+folder before that folder exists: `targetFolder` already predicted the mkdir's
+path and the clone's leaf, because the session-name preview needed it. So the
+agent question is asked on the prediction, and the mkdir, the clone and the
+`startSession` all wait behind the confirm. That preserves both properties at
+once — `LaunchSessionDialog` still creates nothing and cancelling still costs
+nothing, and `NewSessionDialog` still has exactly one commit path that all
+three routes converge on. Cancelling at the agent step leaves no folder, no
+clone and no session, and returns to the picker with the browse intact.
+
+The commit re-points the choice at the folder the **host** resolved before
+using it, rather than at the prediction. The clone route can land elsewhere — a
+repo already on disk comes back at its real path — and `--dir` at a directory
+that is not there is precisely the failure `shared/agentLaunch.ts` exists to
+make unrepeatable.
+
+**(4) "The launch mechanism is not the panel's to run" — still true, and the
+panel still does not run it.** `pendingLaunch`, `LAUNCH_TIMEOUT_MS` and the
+`api.shell.input` call stay in `FolderWorkspaceView`, next to the terminal.
+What crosses the route change is the *choice*, parked in a one-slot handoff
+(`src/renderer/pendingAgentLaunch.ts`) and collected by the workspace on
+arrival. So "create" and "launch" are separated in time, and there is still
+exactly one implementation of the trickiest part.
+
+Three properties of that slot are worth the words, because a launch is a line
+typed into somebody's shell:
+
+- **It is keyed on connection AND session name.** Session names are derived
+  from folders, so the same name exists on two hosts routinely.
+- **A miss does not consume it.** The collector runs on every tab-bar change of
+  every workspace the user passes through; eating the slot on "not mine" would
+  lose the launch on the way to the right place.
+- **It expires** (two minutes). The banner is a deliberate stop, so the TTL
+  cannot be a latency budget the user loses by reading — but an abandoned flow
+  must not fire a `claude` into a session minutes after anyone asked for it.
+  The launch's own PTY deadline is a different clock and starts only once the
+  workspace has collected the slot.
+
+**A plain shell is still one click.** The commit bar carries two buttons:
+`Start shell`, which is the old `Start session` unchanged and commits with no
+choice at all, and `Start session…` — ellipsis, this app's usual promise that a
+dialog follows — which chains. Forcing every session through an agent picker
+would have been a worse dialog than the one §13 was defending.
+
+**The two dialogs still do not drift**, and for the reason `00eb3e7` gave
+rather than a new one: both end at `shared/agentLaunch.ts`, the only place that
+knows how to spell a flag, pinned against the captured `--help`. The chain
+reuses `LaunchSessionDialog` whole — it is mounted *instead of* the picker
+rather than on top of it, because two `OverlayPanel`s share a z-index and both
+listen for Escape on `document`, so one keypress would have closed two dialogs
+and thrown away the browse.
