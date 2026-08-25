@@ -58,11 +58,23 @@ const selectedRepo = ref<string | null>(null);
 /** Clone destination root on the host. The helper's own default is `~/git`. */
 const cloneRoot = ref('~/git');
 /**
- * `unique` asks the host for a genuinely new session, walking `-2`, `-3`…
- * Off by default: re-opening the folder's existing session is the correct
- * idempotent behaviour and the one people want almost every time.
+ * This dialog ALWAYS asks the host for a genuinely new session, walking
+ * `-2`, `-3`… for the name.
+ *
+ * It used to offer "force a new session even if this folder has one" as an
+ * opt-in checkbox, defaulting to reuse, on the reasoning that re-opening a
+ * folder's existing session is the idempotent thing and what people want
+ * almost every time. That reasoning was about opening a FOLDER. It does not
+ * survive the button being called "New session": someone who has pressed that
+ * has already said which one they want, and a checkbox asking whether they
+ * meant it is a question with one sensible answer.
+ *
+ * Re-opening an existing session is not lost — it is what selecting the
+ * folder in the panel does, and every session in it already has a tab.
+ * FolderWorkspaceView's own `+` reached the same conclusion independently
+ * (see its `unique` call): once the existing sessions are all on screen,
+ * "new" can only mean new.
  */
-const forceNew = ref(false);
 
 /** Live preview of the name the host would derive. Never user-entered. */
 const derivedName = ref('');
@@ -239,7 +251,7 @@ async function onStart(): Promise<void> {
     id,
     folder,
     undefined,
-    forceNew.value ? 'unique' : 'reuse',
+    'unique',
   );
   outcome.value = result;
   if (result.ok) {
@@ -480,10 +492,6 @@ function onStartAnother(): void {
               {{ targetFolder ? displayPath(targetFolder, projects.home) : '—' }}
             </code>
           </div>
-          <label class="policy">
-            <input v-model="forceNew" type="checkbox" :disabled="busy" />
-            <span class="muted">force a new session even if this folder has one</span>
-          </label>
 
           <!-- Indeterminate by construction: the host emits started/finished
                and nothing between them, so a percentage here would be a lie. -->
@@ -757,13 +765,6 @@ function onStartAnother(): void {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-}
-.policy {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  font-size: var(--fs-200);
-  cursor: pointer;
 }
 .commit-actions,
 .result-actions {
