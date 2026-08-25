@@ -25,6 +25,19 @@ const stat =
 const readBinary =
   vi.fn<(connectionId: string, path: string, maxBytes?: number) => Promise<Uint8Array>>();
 const readFile = vi.fn<(connectionId: string, path: string) => Promise<string>>();
+const writeFile =
+  vi.fn<(connectionId: string, path: string, content: string) => Promise<boolean>>();
+const openHtml =
+  vi.fn<(connectionId: string, path: string) => Promise<{ token: string; url: string }>>();
+const releasePreview = vi.fn<(token: string) => void>();
+/** The store's own stats subscriber, captured so a test can push counts at it. */
+let statsListener: ((stats: {
+  token: string;
+  loaded: number;
+  blocked: number;
+  missing: number;
+  capped: boolean;
+}) => void) | null = null;
 
 vi.mock('../../src/renderer/ipc', () => ({
   api: {
@@ -35,6 +48,18 @@ vi.mock('../../src/renderer/ipc', () => ({
       readBinary: (connectionId: string, path: string, maxBytes?: number) =>
         readBinary(connectionId, path, maxBytes),
       readFile: (connectionId: string, path: string) => readFile(connectionId, path),
+      writeFile: (connectionId: string, path: string, content: string) =>
+        writeFile(connectionId, path, content),
+    },
+    preview: {
+      openHtml: (connectionId: string, path: string) => openHtml(connectionId, path),
+      release: (token: string) => releasePreview(token),
+      onStats: (handler: (stats: never) => void) => {
+        statsListener = handler as typeof statsListener;
+        return () => {
+          statsListener = null;
+        };
+      },
     },
   },
 }));
@@ -64,7 +89,17 @@ beforeEach(() => {
   stat.mockReset();
   readBinary.mockReset();
   readFile.mockReset();
+  writeFile.mockReset();
+  openHtml.mockReset();
+  releasePreview.mockReset();
   list.mockResolvedValue([]);
+  writeFile.mockResolvedValue(true);
+  // A fresh token per call: main mints one per preview, and a test that could
+  // not tell two apart could not tell whether a save re-minted at all.
+  let minted = 0;
+  openHtml.mockImplementation((_c, path) =>
+    Promise.resolve({ token: `tok${++minted}`, url: `psview://tok${path}` }),
+  );
   created.length = 0;
   revoked.length = 0;
 });
@@ -166,6 +201,54 @@ describe('files store remembers where each session was left', () => {
     await files.open(CONN, '~/git/app');
 
     expect(files.cwd).toBe('/home/u/git/app/src/deep');
+  });
+
+  it('is NOT pinned to a home it merely fell back to', async () => {
+    // The reported bug: "we should always open the files for that specific
+    // folder and not in ~".
+    //
+    // A workspace whose session has no working directory yet opens its Files
+    // tab with no start path, so the store resolves `.` and lands at the login
+    // home. That is correct at the time. What was not correct is that the
+    // landing was recorded as this tab's remembered position — under a key that
+    // is the TAB ID and therefore never changes — so when the session's real
+    // directory arrived and `FilesView` re-opened with it, the remembered home
+    // outranked it and the tab stayed at `~` for good.
+    //
+    // The tab id is passed explicitly here because that is what the real caller
+    // passes; keying on the start path (as an earlier version of this file did)
+    // hides the bug by changing the key exactly when the path is recovered.
+    realPath.mockImplementation((_c: unknown, p: string) =>
+      Promise.resolve(p === '.' ? '/home/u' : `/home/u/${p}`),
+    );
+    const files = useFilesStore();
+    const tab = '~/git/red-stamp::files:1';
+
+    await files.open(CONN, undefined, tab);
+    expect(files.cwd).toBe('/home/u');
+
+    // The probe recovers the session's directory and the view re-opens.
+    await files.open(CONN, '~/git/red-stamp', tab);
+
+    expect(files.cwd).toBe('/home/u/git/red-stamp');
+  });
+
+  it('still prefers a directory the user actually navigated to', async () => {
+    // The other half of the same rule: a REAL choice must still outrank the
+    // start path, or the fix above would undo the memory this file exists for.
+    realPath.mockImplementation((_c: unknown, p: string) =>
+      Promise.resolve(p === '.' ? '/home/u' : p.startsWith('/') ? p : `/home/u/${p}`),
+    );
+    const files = useFilesStore();
+    const tab = '~/git/red-stamp::files:1';
+
+    await files.open(CONN, undefined, tab);
+    await files.cd(CONN, '/home/u/notes');
+    expect(files.cwd).toBe('/home/u/notes');
+
+    await files.open(CONN, '~/git/red-stamp', tab);
+
+    expect(files.cwd).toBe('/home/u/notes');
   });
 
   it('does not leak one session\u2019s directory into another\u2019s', async () => {
@@ -320,6 +403,205 @@ describe('files store openFile() type gating', () => {
     await files.openFile(CONN, 'b.pdf');
 
     expect(revoked).toContain(first);
+  });
+});
+
+/**
+ * HTML: the one kind that is a viewer AND an editor at the same time.
+ *
+ * Two properties are pinned here, and they pull in opposite directions, which
+ * is why both need tests. The first is that a preview happens at all — an
+ * HTML file must not quietly stay in the editor the way it did before. The
+ * second is that adding the preview did not cost the editing that was already
+ * there: the buffer, the dirty flag, the save and the unsaved-edit stash all
+ * have to behave exactly as they do for a `.md`, because "we added a preview
+ * and you can no longer fix a typo" is not a feature.
+ *
+ * The third group is about the preview being a REVOCABLE capability rather
+ * than a URL. A token that outlives the file it was minted for is a live
+ * channel from a frame to the remote host, so every way out of a file has to
+ * hand it back.
+ */
+describe('files store openFile() on HTML', () => {
+  const openHtmlFile = async (name: string, source: string) => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: source.length });
+    readBinary.mockResolvedValue(new TextEncoder().encode(source));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/site');
+    await files.openFile(CONN, name);
+    return files;
+  };
+
+  it('previews a page AND keeps its source in the editor buffer', async () => {
+    const files = await openHtmlFile('index.html', '<h1>hi</h1>');
+
+    expect(files.openMode).toBe('html');
+    expect(files.openMime).toBe('text/html');
+    // Both halves are populated from ONE read: the frame needs a URL, the
+    // Source toggle needs the text, and a second SFTP round trip to get the
+    // text back would be paid on every open for a tab most users never press.
+    expect(files.openContent).toBe('<h1>hi</h1>');
+    expect(files.previewUrl).toBe('psview://tok/home/u/site/index.html');
+    expect(files.htmlView).toBe('preview');
+  });
+
+  it('mints the preview against the ABSOLUTE path, never the clicked name', async () => {
+    await openHtmlFile('index.html', '<h1>hi</h1>');
+    // The name from the tree is relative to the browsed directory; main scopes
+    // the whole preview to the file's own folder, so handing it a bare
+    // basename would scope it to wherever main happened to resolve it.
+    expect(openHtml).toHaveBeenCalledWith(CONN, '/home/u/site/index.html');
+  });
+
+  it('never sends the file bytes to the frame — the URL is all the renderer has', async () => {
+    const files = await openHtmlFile('index.html', '<h1>hi</h1>');
+    // No object URL. This is the difference from every other viewer, and the
+    // reason relative assets resolve at all: a blob has no path to resolve
+    // `href="style.css"` against.
+    expect(files.openUrl).toBeNull();
+    expect(created).toHaveLength(0);
+  });
+
+  it('says so when the page contains scripts, because they will not run', async () => {
+    const files = await openHtmlFile('app.html', '<div id="root"></div><script src="a.js"></script>');
+    expect(files.openHasScripts).toBe(true);
+  });
+
+  it('does not cry script on a page that has none', async () => {
+    const files = await openHtmlFile('page.html', '<p>plain</p>');
+    expect(files.openHasScripts).toBe(false);
+  });
+
+  it('falls back to the source view, with a reason, when the preview cannot be minted', async () => {
+    openHtml.mockRejectedValue(new Error('No such file'));
+    const files = await openHtmlFile('index.html', '<h1>hi</h1>');
+
+    // Not the binary panel: the file IS text and the editor has it. What was
+    // lost is the render, and only the render.
+    expect(files.openMode).toBe('html');
+    expect(files.htmlView).toBe('source');
+    expect(files.previewUrl).toBeNull();
+    expect(files.openNote).toContain('No such file');
+    expect(files.openContent).toBe('<h1>hi</h1>');
+  });
+
+  it('refuses an oversized page without transferring it', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: MAX_TEXT_BYTES + 1 });
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/site');
+
+    await files.openFile(CONN, 'huge.html');
+
+    expect(files.openMode).toBe('binary');
+    expect(readBinary).not.toHaveBeenCalled();
+    expect(openHtml).not.toHaveBeenCalled();
+  });
+
+  it('still edits and saves, and re-mints the preview so it shows the new bytes', async () => {
+    const files = await openHtmlFile('index.html', '<h1>hi</h1>');
+    const firstToken = files.previewToken;
+
+    files.setContent('<h1>edited</h1>');
+    expect(files.dirty).toBe(true);
+
+    expect(await files.save(CONN)).toBe(true);
+
+    expect(writeFile).toHaveBeenCalledWith(CONN, '/home/u/site/index.html', '<h1>edited</h1>');
+    expect(files.dirty).toBe(false);
+    // The old capability is handed back and a new one taken out, which is what
+    // makes the frame navigate to fresh bytes without a cache to defeat.
+    expect(releasePreview).toHaveBeenCalledWith(firstToken);
+    expect(files.previewToken).not.toBe(firstToken);
+  });
+
+  it('re-mints on an explicit reload, which is how an emptied frame is recovered', async () => {
+    // A remote link inside the page is refused by the app's CSP, and Chromium
+    // replaces the frame with its error document; with no scripts in the frame
+    // there is nothing to intercept the click. Reload is the way back.
+    const files = await openHtmlFile('index.html', '<a href="https://x/">go</a>');
+    const first = files.previewToken;
+
+    await files.reloadPreview(CONN);
+
+    expect(releasePreview).toHaveBeenCalledWith(first);
+    expect(files.previewToken).not.toBe(first);
+    expect(files.htmlView).toBe('preview');
+  });
+
+  it('does nothing on reload when the open file is not HTML', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: 5 });
+    readBinary.mockResolvedValue(new TextEncoder().encode('# hi'));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/site');
+    await files.openFile(CONN, 'notes.md');
+
+    await files.reloadPreview(CONN);
+
+    expect(openHtml).not.toHaveBeenCalled();
+  });
+
+  it('releases the preview when the file is closed', async () => {
+    const files = await openHtmlFile('index.html', '<h1>hi</h1>');
+    const token = files.previewToken;
+
+    files.closeFile();
+
+    expect(releasePreview).toHaveBeenCalledWith(token);
+    expect(files.previewUrl).toBeNull();
+    expect(files.previewToken).toBeNull();
+  });
+
+  it('releases the preview when another file replaces it', async () => {
+    const files = await openHtmlFile('index.html', '<h1>hi</h1>');
+    const token = files.previewToken;
+
+    readBinary.mockResolvedValue(new TextEncoder().encode('# notes'));
+    await files.openFile(CONN, 'notes.md');
+
+    expect(releasePreview).toHaveBeenCalledWith(token);
+    expect(files.openMode).toBe('text');
+    expect(files.previewUrl).toBeNull();
+  });
+
+  it('releases the preview on disconnect', async () => {
+    const files = await openHtmlFile('index.html', '<h1>hi</h1>');
+    const token = files.previewToken;
+
+    files.clear(CONN);
+
+    expect(releasePreview).toHaveBeenCalledWith(token);
+  });
+
+  it('restores an unsaved page as HTML on the source side, not as flat text', async () => {
+    const files = await openHtmlFile('index.html', '<h1>hi</h1>');
+    files.setContent('<h1>unsaved</h1>');
+
+    await files.open(CONN, '/home/u/other');
+    await files.open(CONN, '/home/u/site');
+
+    expect(files.openContent).toBe('<h1>unsaved</h1>');
+    expect(files.dirty).toBe(true);
+    // Still an HTML file — the Preview/Source toggle must survive a tab
+    // switch. And the SOURCE is what is showing, because the preview would
+    // render the host's copy, which is not what this buffer says.
+    expect(files.openMode).toBe('html');
+    expect(files.htmlView).toBe('source');
+  });
+
+  it('takes asset counts only for the preview currently on screen', async () => {
+    const files = await openHtmlFile('index.html', '<h1>hi</h1>');
+    const token = files.previewToken as string;
+
+    statsListener?.({ token, loaded: 3, blocked: 1, missing: 0, capped: false });
+    expect(files.previewStats).toEqual({ loaded: 3, blocked: 1, missing: 0, capped: false });
+
+    // A straggling request from a preview the user has moved on from must not
+    // write counts into the page they are looking at now.
+    statsListener?.({ token: 'someone-else', loaded: 99, blocked: 0, missing: 0, capped: true });
+    expect(files.previewStats).toEqual({ loaded: 3, blocked: 1, missing: 0, capped: false });
   });
 });
 

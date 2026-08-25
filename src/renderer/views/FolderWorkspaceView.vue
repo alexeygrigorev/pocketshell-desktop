@@ -43,7 +43,7 @@
 // so a tab switch cannot cost a draft. It follows the ACTIVE SESSION TAB — its
 // per-session record is keyed on the session name, so switching session tabs
 // swaps the draft and switching back restores it (docs/WORKSPACE.md §8).
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '../ipc';
 import { useConnectionStore } from '../stores/connection';
@@ -397,6 +397,41 @@ function selectTab(tab: WorkspaceTab): void {
     // showing there, so there is no dismissal to reconsider.
     composer.allowTypingToOpen();
   }
+  void focusActiveTab();
+}
+
+/**
+ * Put the keyboard where the user just looked.
+ *
+ * Clicking a tab left focus on the tab BUTTON, so the first keystroke went to
+ * the button and the user had to click a second time, into the pane, before
+ * typing worked. That is the same defect bc86cf7 fixed for the composer, whose
+ * comment says it plainly: without it "the feature would have looked broken
+ * from the first try". It matters more here because `typingOpensComposer`
+ * means a keystroke in a focused terminal is supposed to OPEN the composer with
+ * that character in it — a feature that simply never fires if the terminal was
+ * not focused, which is exactly the case the user hits first.
+ *
+ * `nextTick` because the pane that should take focus may not be rendered yet:
+ * a session tab visited for the first time is mounted by this very selection.
+ *
+ * A FILES tab hands focus to its own surface rather than to nothing, so arrow
+ * keys work on the tree without a second click — but only through the same
+ * ref-and-ask shape used for terminals, so there is ONE path here and the
+ * hotkeys below cannot diverge from the click. The Files pane declines the
+ * focus when an editor is open with unsaved content: moving the caret out of a
+ * dirty buffer to a tree the user did not ask for would be worse than doing
+ * nothing, and that judgement belongs to the pane that knows it is dirty.
+ */
+async function focusActiveTab(): Promise<void> {
+  await nextTick();
+  const tab = activeTab.value;
+  if (!tab) return;
+  if (tab.kind === 'session') {
+    terminalRefs.get(tab.session)?.focus();
+    return;
+  }
+  filesRef.value?.focus?.();
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +772,19 @@ function setTerminalRef(session: string, el: unknown): void {
   else terminalRefs.delete(session);
 }
 /** Same reasoning for the composer, whose `typeInto` the terminal feeds. */
-const composerRef = ref<{ typeInto: (text: string) => void } | null>(null);
+const composerRef = ref<{
+  typeInto: (text: string) => void;
+  pasteFromSystemClipboard: () => Promise<void>;
+} | null>(null);
+/**
+ * The Files pane, for {@link focusActiveTab}.
+ *
+ * Optional `focus` in the type rather than required: this is a `.vue` default
+ * export, so the instance type is `any` at the call site and a required member
+ * would be checked against nothing anyway. Written as optional so the call
+ * reads as what it is — an ask, which the pane may decline.
+ */
+const filesRef = ref<{ focus?: () => void } | null>(null);
 
 /**
  * Whether the terminal should withhold printable keystrokes instead of sending
@@ -758,6 +805,24 @@ const interceptTyping = computed(
 /** A keystroke the terminal withheld: it belongs in the draft, not the shell. */
 function onTyped(text: string): void {
   composerRef.value?.typeInto(text);
+}
+
+/**
+ * Ctrl+V at the terminal: the clipboard belongs in the composer, not the shell.
+ *
+ * The terminal has already cancelled the chord and withheld the bytes; what is
+ * on the clipboard, whether it can be staged, and whether it is worth opening
+ * the panel for are the composer's questions, because the composer is where the
+ * answer is acted on. Routing an EVENT rather than the clipboard's contents is
+ * what keeps a second clipboard-to-attachment path out of TerminalView — the
+ * composer's own `onPaste` already owns that path.
+ *
+ * Unlike `interceptTyping` this is deliberately NOT gated on the composer being
+ * closed or unsuppressed. An explicit Ctrl+V is a summons, like Ctrl+`, so it
+ * lifts a dismissal rather than deferring to one.
+ */
+function onPasteIntoComposer(): void {
+  void composerRef.value?.pasteFromSystemClipboard();
 }
 
 /** Put the keyboard back in the pane after a key or button closed the composer. */
@@ -897,11 +962,13 @@ function onFocusTerminal(): void {
               :session-key="tab.session"
               :intercept-typing="interceptTyping && tab.session === terminalSession"
               @typed="onTyped"
+              @paste-into-composer="onPasteIntoComposer"
             />
           </div>
         </div>
 
         <FilesView
+          ref="filesRef"
           v-if="activeTab?.kind === 'files' && connection.connectionId"
           :key="activeTab.id"
           :start-path="activeTab.path ?? undefined"

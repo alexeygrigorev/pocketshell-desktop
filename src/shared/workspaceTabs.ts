@@ -61,8 +61,11 @@ export type WorkspaceTab =
     }
   | { kind: 'files'; id: string; label: string; path: string | null };
 
-/** What a tab bar with no session tabs still needs a name for. */
-export const MAIN_LABEL = 'main';
+/**
+ * What a folder's default session — the one named exactly after the folder —
+ * reads as on the bar, and the stem the numbered ones are built from.
+ */
+export const TERMINAL_LABEL = 'Terminal';
 
 /** Files tabs all read `Files`; a second one becomes `Files 2` by §3.4. */
 export const FILES_LABEL = 'Files';
@@ -77,7 +80,7 @@ export const FILES_LABEL = 'Files';
  * components with `-`, so `-` is the only boundary a derived name can have.
  *
  * An exact match returns the empty string — a real remainder, distinct from
- * null, and the one the `main` label is for.
+ * null, and the one the bare `Terminal` label is for.
  */
 export function stripSessionPrefix(name: string, prefix: string): string | null {
   if (prefix.length === 0) return null;
@@ -89,10 +92,31 @@ export function stripSessionPrefix(name: string, prefix: string): string | null 
 /**
  * The label a remainder reads as, before collisions are resolved.
  *
- * Two rewrites, both from the user's own words:
+ * Two rewrites, and they are ONE family:
  *
- *   ""   -> `main`     "if there is no prefix left we can call it main"
+ *   ""   -> `Terminal`
  *   "2"  -> `Terminal 2`
+ *   "17" -> `Terminal 17`
+ *
+ * The empty remainder used to read `main`, the user's own first suggestion
+ * ("if there is no prefix left we can call it main, or just terminal"). It was
+ * the wrong half of the offer, and the bar said so: a folder's default session
+ * read `main` and the very next one read `Terminal 2`, two unrelated words for
+ * two sessions that differ only in which of them was created first. Nothing
+ * about `main` predicts `Terminal 2`, and nothing about `Terminal 2` explains
+ * `main`. Taking the other half of the offer makes the numbering legible —
+ * `Terminal`, `Terminal 2`, `Terminal 3` is one list with a first element,
+ * where the plain label reads as the unnumbered member rather than as a
+ * different kind of thing. The user asked for exactly this: "for main let's
+ * call it 'Terminal' so 'Terminal-2' makes more sense".
+ *
+ * The SPACE is deliberate, though the user typed `Terminal-2`. The hyphen is
+ * real in the NAME — `freeSessionNameCommand` builds `git-red-stamp-2` and
+ * `tmuxctl` joins that string — but this function returns a display label, and
+ * a label that mimics the name's punctuation invites the reader to type it back
+ * as one. Every other numbered label on this bar is spaced (`Files 2`, and
+ * everything {@link numberCollisions} touches), so a spaced `Terminal 2` is the
+ * bar's own convention rather than a second one.
  *
  * The digit rule is not a flourish. `freeSessionNameCommand`
  * (src/main/projects/commands.ts) walks `<base>-2`, `<base>-3` when a folder
@@ -102,11 +126,12 @@ export function stripSessionPrefix(name: string, prefix: string): string | null 
  * spelled out the condition — "if it's just a number".
  *
  * Anything else is the remainder verbatim: "if there is a clear name then we
- * have a clear name."
+ * have a clear name." A remainder that merely CONTAINS digits (`v2`, `2fa`) is
+ * a name someone chose, so it is left alone.
  */
 export function labelForRemainder(remainder: string): string {
-  if (remainder === '') return MAIN_LABEL;
-  if (/^\d+$/.test(remainder)) return `Terminal ${remainder}`;
+  if (remainder === '') return TERMINAL_LABEL;
+  if (/^\d+$/.test(remainder)) return `${TERMINAL_LABEL} ${remainder}`;
   return remainder;
 }
 
@@ -119,11 +144,23 @@ export function labelForRemainder(remainder: string): string {
  * on it. Alphabetical numbering would let a new `git-foo-aardvark` take the
  * plain label away from a tab that has had it all day.
  *
- * Note the `main` label cannot collide with itself — two sessions with an empty
- * remainder would both be named exactly `<prefix>`, and tmux permits only one
- * session per name. Collisions are real between a stripped remainder and a
- * foreign session that happens to be called the same thing, which is why the
- * rule is applied uniformly instead of special-cased per label kind.
+ * Note the bare `Terminal` label cannot collide with itself — two sessions with
+ * an empty remainder would both be named exactly `<prefix>`, and tmux permits
+ * only one session per name. Collisions are real between a stripped remainder
+ * and a foreign session that happens to be called the same thing, which is why
+ * the rule is applied uniformly instead of special-cased per label kind.
+ *
+ * What the `main` -> `Terminal` rename does add is a way for this rule and
+ * {@link labelForRemainder} to arrive at the same string from two directions: a
+ * foreign session literally named `Terminal` sitting after the folder's default
+ * is numbered to `Terminal 2`, which is also what a remainder of `2` produces.
+ * That is a pre-existing shape of this one-pass counter (the same is already
+ * true of a session named `Files 2` beside two Files tabs) — the counter reads
+ * the labels it was handed, not the ones it writes — and it needs a folder to
+ * hold a hand-made session named after the label itself before it can happen.
+ * Left alone deliberately: this pass is display-only, and the ids underneath
+ * stay distinct, so the cost is a repeated word on the bar and not an ambiguous
+ * target.
  */
 export function numberCollisions<T extends { label: string }>(tabs: T[]): T[] {
   const seen = new Map<string, number>();
@@ -205,7 +242,8 @@ export function buildWorkspaceTabs(
  *   - a tab whose label IS the session name (`remainder === null`) commits the
  *     raw typed name, because there is no prefix to re-apply;
  *   - clearing the field renames the session TO the bare prefix, which is the
- *     `main` tab — the one way to promote a session to its folder's default.
+ *     bare `Terminal` tab — the one way to promote a session to its folder's
+ *     default.
  *
  * Returns null when the input cannot become a legal session name at all, which
  * the caller must treat as "refuse", not as "use the fallback". The predicate
@@ -225,4 +263,78 @@ export function renamedSessionName(
   if (clean === '') return /[A-Za-z0-9]/.test(prefix) ? prefix : null;
   const full = `${prefix}-${clean}`;
   return /[A-Za-z0-9]/.test(full) ? full : null;
+}
+
+/**
+ * The tab a "next tab"/"previous tab" chord should land on, as a pure decision.
+ *
+ * Split out of the key handling for the reason every other chord in this repo
+ * is split out of it (`terminalPasteChord`, the composer's send rules): a
+ * keydown handler is testable only through a mounted component and a synthetic
+ * event, whereas the question this answers — given these tabs and this one,
+ * which one is next — is a table.
+ *
+ * ## Array order IS traversal order
+ *
+ * No sorting, no re-grouping, no skipping. {@link buildWorkspaceTabs} has
+ * already put the session tabs first, oldest first, then the Files tabs, and
+ * that is what the user is looking at. A cycle that visited tabs in some other
+ * order — kind first, or by recency — would be a second ordering to learn for
+ * no gain, and it would break the only property that makes a repeated chord
+ * usable: pressing it n times from the first tab must walk left to right along
+ * the bar, exactly as the eye does.
+ *
+ * Files tabs are therefore in the cycle. They are tabs; the bar shows them as
+ * tabs; a chord that stopped at the last session would strand the user one
+ * press short of the thing they can see.
+ *
+ * ## Wrapping, and the unknown active tab
+ *
+ * Both directions wrap, because a bar is a ring for this purpose: the chord's
+ * whole job is to get somewhere else with a repeated press, and a press that
+ * silently does nothing at the end reads as a dropped keystroke rather than as
+ * a boundary.
+ *
+ * When [activeId] names no tab — it is null, or it is a session that just
+ * disappeared out from under the bar — treat the cursor as sitting just OUTSIDE
+ * the bar, on the side the user is coming from: `+1` steps onto the first tab,
+ * `-1` onto the last. That is the same arithmetic as starting from index -1 and
+ * from index `length` respectively, and it means the chord always moves
+ * somewhere rather than refusing on a stale selection, which is precisely the
+ * state a user reaches for a tab chord to escape.
+ *
+ * Returns null only for an empty bar — there is no tab to name. A bar of one
+ * returns that one tab's id, not null: the cycle is honestly a cycle of one,
+ * and the caller re-selecting the tab it is already on is a no-op, whereas a
+ * null would make it write a "no such tab" branch for a case that is not an
+ * error.
+ */
+export function nextWorkspaceTabId(
+  tabs: readonly WorkspaceTab[],
+  activeId: string | null,
+  direction: 1 | -1,
+): string | null {
+  if (tabs.length === 0) return null;
+  const current = activeId === null ? -1 : tabs.findIndex((t) => t.id === activeId);
+  // An unknown or null active id starts the cursor just outside the bar, on the
+  // side the step is coming from: index -1 for `+1`, index `length` for `-1`.
+  // Both then go through the same arithmetic as a real position.
+  const from = current < 0 ? (direction === 1 ? -1 : tabs.length) : current;
+  // `+ tabs.length` before the modulo: `%` keeps the sign of the left operand
+  // in JS, so stepping back off index 0 would otherwise land on -1.
+  return tabs[(from + direction + tabs.length) % tabs.length]?.id ?? null;
+}
+
+/**
+ * The tab at a 0-based position, or null when there is none.
+ *
+ * For the `Ctrl+1..9` direct jumps, which are the same decision as
+ * {@link nextWorkspaceTabId} minus the traversal: the caller turns the digit
+ * into an index and asks whether the bar is that long. Out of range returns
+ * null rather than clamping to the last tab — `Ctrl+7` on a bar of three means
+ * "the seventh tab", and there isn't one, so the honest answer is to do nothing
+ * rather than to move the user somewhere they did not ask for.
+ */
+export function tabIdAtIndex(tabs: readonly WorkspaceTab[], index: number): string | null {
+  return tabs[index]?.id ?? null;
 }

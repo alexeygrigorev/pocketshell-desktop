@@ -76,6 +76,7 @@ import {
   type ComposerAgentKind,
 } from '../../shared/composerSend';
 import { filteredCommands, insertionTextFor, type AgentCommand } from '../../shared/agentCommands';
+import { decideClipboardPaste } from '../../shared/clipboardPaste';
 import {
   clampGeometry,
   maximizedGeometry,
@@ -331,6 +332,159 @@ async function onPaste(e: ClipboardEvent): Promise<void> {
   const files = Array.from(e.clipboardData?.files ?? []);
   if (files.length === 0) return;
   e.preventDefault();
+  await stageFiles(files);
+}
+
+// ---------------------------------------------------------------------------
+// Ctrl+V at the TERMINAL — the same paste, summoned from the other surface
+//
+// The user's request was "when I type ctrl+v in the terminal it should intercept
+// it and upload it to prompt composer". TerminalView cancels the chord and emits
+// `paste-into-composer`; everything from there is here, and deliberately so.
+//
+// The whole risk in this feature is building a SECOND clipboard-to-attachment
+// path beside `onPaste` — one that stages with slightly different rules, misses
+// the mime table `AttachmentStager` grew for PDFs and audio, or forgets the
+// single-flight guard in `composer.stage`. So nothing below stages anything: it
+// resolves the clipboard down to the two shapes this component already has an
+// entry point for, and calls them.
+//
+//    binary blobs -> `stageFiles`, the exact function `onPaste` calls
+//    text         -> `typeInto`, the exact function the typing intercept calls
+//
+// The only genuinely new work is READING the clipboard, and that is new only
+// because there is no ClipboardEvent to read it out of: a chord xterm handed us
+// is not a paste, so `clipboardData` does not exist and the asynchronous
+// `navigator.clipboard` API is the only way to ask.
+// ---------------------------------------------------------------------------
+
+/**
+ * A `ClipboardItem`, structurally.
+ *
+ * Written out rather than imported from lib.dom because src/shared compiles
+ * under BOTH TS projects (see eslint.config.js) and the node one has no DOM
+ * lib; keeping the shape here means the pure decision module never has to
+ * mention a browser type at all.
+ */
+interface ReadableClipboardItem {
+  readonly types: readonly string[];
+  getType(type: string): Promise<Blob>;
+}
+
+/**
+ * The name every clipboard blob is staged under.
+ *
+ * No extension, on purpose. `AttachmentStager` derives one from the mime type
+ * when a source arrives without its own (`sanitiseFilename(name, extensionFor
+ * MimeType(mime))`, and src/main/attachments/mimeTypes.ts exists precisely for
+ * "bytes plus a mime type and no filename"). Guessing `.png` here would be a
+ * second, worse copy of that table, and it would be the copy that goes stale
+ * the next time the real one grows a format.
+ */
+const CLIPBOARD_ATTACHMENT_NAME = 'clipboard';
+
+/**
+ * Every clipboard item, or none — never a throw.
+ *
+ * Same reasoning as `TerminalView.pasteFromClipboard`: a clipboard read needs a
+ * permission the user can refuse and an API that Electron can decline to
+ * expose, and neither is an error worth a banner. The user pressed a key and
+ * nothing happened, which is a complete and honest outcome. An unhandled
+ * rejection escaping into the void, in a handler wired to a keystroke that
+ * fires as often as Ctrl+V, is not.
+ *
+ * The `typeof` guard is not paper over `read()` being missing in some exotic
+ * browser — it is jsdom and any test double that stubs only `readText`.
+ */
+async function readClipboardItems(): Promise<ReadableClipboardItem[]> {
+  try {
+    const clipboard = navigator.clipboard as Clipboard | undefined;
+    if (typeof clipboard?.read !== 'function') return [];
+    return [...((await clipboard.read()) as unknown as Iterable<ReadableClipboardItem>)];
+  } catch {
+    return [];
+  }
+}
+
+/** The clipboard's text, or null when it could not be had. Never throws. */
+async function readClipboardText(): Promise<string | null> {
+  try {
+    const clipboard = navigator.clipboard as Clipboard | undefined;
+    if (typeof clipboard?.readText !== 'function') return null;
+    return await clipboard.readText();
+  } catch {
+    // Chromium rejects readText() outright for some non-text clipboards rather
+    // than answering with ''. That is not a failure here: the item read above
+    // has already told us whether there is anything to stage.
+    return null;
+  }
+}
+
+/**
+ * Put the system clipboard into THIS composer, whatever it happens to hold.
+ *
+ * Ordering matters in two places:
+ *
+ *  - The decision is taken BEFORE any blob is pulled. `getType()` copies the
+ *    bytes, and a screenshot is routinely several megabytes; deciding first
+ *    means a clipboard we are going to ignore costs one cheap type listing.
+ *  - `openComposer()` happens BEFORE the await on `stageFiles`, so the panel is
+ *    already up with its "Uploading…" row while the transfer runs. Opening
+ *    afterwards would leave the user staring at an unchanged terminal for the
+ *    length of an SFTP put with no sign their keystroke registered.
+ *
+ * And nothing opens the panel until there is something to put in it. An empty
+ * clipboard — or one holding only a format the attachment path cannot use — is
+ * `kind: 'none'`, and this returns having touched nothing: no mode change, no
+ * focus change, no suppression lifted. A composer that pops open empty is worse
+ * than a keystroke that did nothing, because the user has to put it away again.
+ *
+ * Both live branches lift the dismissal suppression, and neither does it by
+ * hand: `openComposer` and `typeInto` both go through the store's `setMode`,
+ * which clears `typingSuppressed` on any opening because "any opening is a
+ * summons". An explicit Ctrl+V is as much a summons as Ctrl+` is, so that is
+ * the behaviour wanted — and taking it from the one place that already decides
+ * it is what stops a second way to unsuppress existing.
+ */
+async function pasteFromSystemClipboard(): Promise<void> {
+  const items = await readClipboardItems();
+  const action = decideClipboardPaste({
+    items: items.map((item) => item.types),
+    text: await readClipboardText(),
+  });
+
+  if (action.kind === 'none') return;
+
+  if (action.kind === 'draft') {
+    // The identical route a withheld keystroke takes: insert at the remembered
+    // caret, open on the session's remembered mode, land the focus in the
+    // draft. Pasting is typing that arrived all at once.
+    typeInto(action.text);
+    return;
+  }
+
+  const files: File[] = [];
+  for (const pick of action.picks) {
+    const item = items[pick.item];
+    if (!item) continue;
+    try {
+      const blob = await item.getType(pick.type);
+      // A `File` rather than a bare `Blob` because `stageFiles` is the shared
+      // path and it takes files — it reads `.name` and `.type` off them, and
+      // `previewFor` keys the tile thumbnail off `.type`. Handing it the same
+      // shape a real paste does is what keeps the two entry points on one code
+      // path instead of two that merely look alike.
+      files.push(new File([blob], CLIPBOARD_ATTACHMENT_NAME, { type: pick.type }));
+    } catch {
+      // The clipboard changed between the listing and the read, or the
+      // platform refused this particular flavour. Skip it; a sibling pick may
+      // still be good, and the `files.length === 0` check below is what turns
+      // "all of them failed" back into "nothing visible".
+    }
+  }
+  if (files.length === 0) return;
+
+  openComposer();
   await stageFiles(files);
 }
 
@@ -940,7 +1094,7 @@ onBeforeUnmount(() => {
   onDragEnd();
 });
 
-defineExpose({ focusDraft, openComposer, typeInto });
+defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
 </script>
 
 <template>

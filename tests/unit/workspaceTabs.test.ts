@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   buildWorkspaceTabs,
   labelForRemainder,
+  nextWorkspaceTabId,
   numberCollisions,
   renamedSessionName,
   stripSessionPrefix,
+  tabIdAtIndex,
+  TERMINAL_LABEL,
 } from '../../src/shared/workspaceTabs';
 import { sanitisePart, sessionBaseName } from '../../src/shared/sessionNameParts';
 
@@ -38,8 +41,11 @@ describe('stripSessionPrefix', () => {
 });
 
 describe('labelForRemainder', () => {
-  it('labels the empty remainder `main`', () => {
-    expect(labelForRemainder('')).toBe('main');
+  it('labels the empty remainder `Terminal`', () => {
+    // The folder's default session. It used to read `main`, which shared no
+    // word with the `Terminal 2` sitting next to it.
+    expect(labelForRemainder('')).toBe('Terminal');
+    expect(TERMINAL_LABEL).toBe('Terminal');
   });
 
   it('labels a purely numeric remainder `Terminal <n>`', () => {
@@ -48,11 +54,22 @@ describe('labelForRemainder', () => {
     expect(labelForRemainder('17')).toBe('Terminal 17');
   });
 
+  it('numbers the family with a SPACE, not the name\'s hyphen', () => {
+    // The tmux names really are `git-dtc-website-2`, but this is a display
+    // label and every other numbered label on the bar is spaced (`Files 2`).
+    expect(labelForRemainder('2')).not.toBe('Terminal-2');
+    expect(labelForRemainder('')).toBe(TERMINAL_LABEL);
+    expect(labelForRemainder('2')).toBe(`${TERMINAL_LABEL} 2`);
+  });
+
   it('keeps a clear name clear', () => {
     expect(labelForRemainder('import')).toBe('import');
     // Not "just a number": a name that merely contains digits is a name.
     expect(labelForRemainder('v2')).toBe('v2');
     expect(labelForRemainder('2fa')).toBe('2fa');
+    // A remainder that IS the word keeps it verbatim too — no rewrite fires,
+    // and the collision counter (not this function) deals with the repeat.
+    expect(labelForRemainder('Terminal')).toBe('Terminal');
   });
 });
 
@@ -85,7 +102,22 @@ describe('buildWorkspaceTabs', () => {
       ],
       prefix,
     );
-    expect(tabs.map((t) => t.label)).toEqual(['main', 'import']);
+    expect(tabs.map((t) => t.label)).toEqual(['Terminal', 'import']);
+  });
+
+  it('renames the LABEL only — the id, the session and the remainder stand', () => {
+    // `Terminal` is what the tab reads. What it joins, what the route keys off
+    // and what a rename edits are all still the tmux name and the stripped
+    // remainder, so nothing downstream can be keyed off the display word.
+    const tabs = buildWorkspaceTabs([{ name: 'git-dtc-website', created: 100 }], prefix);
+    expect(tabs[0]).toEqual({
+      kind: 'session',
+      id: 'git-dtc-website',
+      session: 'git-dtc-website',
+      label: 'Terminal',
+      remainder: '',
+      created: 100,
+    });
   });
 
   it('orders session tabs oldest first, then Files tabs', () => {
@@ -105,8 +137,10 @@ describe('buildWorkspaceTabs', () => {
       'files',
       'files',
     ]);
+    // One family, in creation order: the folder's default, then its `-2` and
+    // `-3`, and the numbering reads as a list rather than as an exception.
     expect(tabs.map((t) => t.label)).toEqual([
-      'main',
+      'Terminal',
       'Terminal 2',
       'Terminal 3',
       'Files',
@@ -135,7 +169,7 @@ describe('buildWorkspaceTabs', () => {
       ],
       prefix,
     );
-    expect(tabs.map((t) => t.label)).toEqual(['main', 'nightly-build']);
+    expect(tabs.map((t) => t.label)).toEqual(['Terminal', 'nightly-build']);
     expect(tabs[1]).toMatchObject({ remainder: null });
   });
 
@@ -193,5 +227,109 @@ describe('renamedSessionName', () => {
   it('refuses a name with nothing alphanumeric left, rather than inventing one', () => {
     expect(renamedSessionName(':::', '', null, sanitisePart)).toBeNull();
     expect(renamedSessionName('', '---', 'import', sanitisePart)).toBeNull();
+  });
+});
+
+describe('nextWorkspaceTabId', () => {
+  const prefix = 'git-dtc-website';
+
+  /**
+   * A real bar, built the way the view builds it, so the traversal is pinned
+   * against the DISPLAY order rather than against a hand-written array that
+   * could drift from it: two session tabs, then two Files tabs.
+   */
+  const bar = buildWorkspaceTabs(
+    [
+      { name: 'git-dtc-website', created: 100 },
+      { name: 'git-dtc-website-2', created: 200 },
+    ],
+    prefix,
+    [{ id: 'f1' }, { id: 'f2' }],
+  );
+
+  it('is built in the order it will be traversed', () => {
+    expect(bar.map((t) => t.id)).toEqual(['git-dtc-website', 'git-dtc-website-2', 'f1', 'f2']);
+    expect(bar.map((t) => t.label)).toEqual(['Terminal', 'Terminal 2', 'Files', 'Files 2']);
+  });
+
+  it('steps forward one tab', () => {
+    expect(nextWorkspaceTabId(bar, 'git-dtc-website', 1)).toBe('git-dtc-website-2');
+  });
+
+  it('steps backward one tab', () => {
+    expect(nextWorkspaceTabId(bar, 'f2', -1)).toBe('f1');
+  });
+
+  it('crosses from the session tabs into the Files tabs, in display order', () => {
+    // Files tabs are tabs. A chord that stopped at the last session would
+    // strand the user one press short of something they can see.
+    expect(nextWorkspaceTabId(bar, 'git-dtc-website-2', 1)).toBe('f1');
+    expect(nextWorkspaceTabId(bar, 'f1', -1)).toBe('git-dtc-website-2');
+  });
+
+  it('walks the whole bar and returns to where it started', () => {
+    const walked: string[] = [];
+    let at: string | null = bar[0]?.id ?? null;
+    for (let i = 0; i < bar.length; i += 1) {
+      at = nextWorkspaceTabId(bar, at, 1);
+      walked.push(at as string);
+    }
+    expect(walked).toEqual(['git-dtc-website-2', 'f1', 'f2', 'git-dtc-website']);
+  });
+
+  it('wraps off the end forward', () => {
+    expect(nextWorkspaceTabId(bar, 'f2', 1)).toBe('git-dtc-website');
+  });
+
+  it('wraps off the start backward', () => {
+    // `%` keeps the sign of its left operand in JS, so index 0 stepping back is
+    // the one place this arithmetic can quietly produce -1.
+    expect(nextWorkspaceTabId(bar, 'git-dtc-website', -1)).toBe('f2');
+  });
+
+  it('starts from outside the bar when the active id names no tab', () => {
+    // A stale selection — a session that vanished under the bar — is exactly
+    // the state a user reaches for this chord to escape, so it must move.
+    expect(nextWorkspaceTabId(bar, 'git-dtc-website-gone', 1)).toBe('git-dtc-website');
+    expect(nextWorkspaceTabId(bar, 'git-dtc-website-gone', -1)).toBe('f2');
+  });
+
+  it('treats a null active id the same way', () => {
+    expect(nextWorkspaceTabId(bar, null, 1)).toBe('git-dtc-website');
+    expect(nextWorkspaceTabId(bar, null, -1)).toBe('f2');
+  });
+
+  it('cycles a single tab to itself rather than to null', () => {
+    const one = buildWorkspaceTabs([{ name: 'git-dtc-website', created: 100 }], prefix);
+    expect(nextWorkspaceTabId(one, 'git-dtc-website', 1)).toBe('git-dtc-website');
+    expect(nextWorkspaceTabId(one, 'git-dtc-website', -1)).toBe('git-dtc-website');
+  });
+
+  it('has nothing to name on an empty bar', () => {
+    expect(nextWorkspaceTabId([], null, 1)).toBeNull();
+    expect(nextWorkspaceTabId([], 'anything', -1)).toBeNull();
+  });
+});
+
+describe('tabIdAtIndex', () => {
+  const bar = buildWorkspaceTabs(
+    [
+      { name: 'git-dtc-website', created: 100 },
+      { name: 'git-dtc-website-2', created: 200 },
+    ],
+    'git-dtc-website',
+    [{ id: 'f1' }],
+  );
+
+  it('is 0-based, in display order', () => {
+    expect(tabIdAtIndex(bar, 0)).toBe('git-dtc-website');
+    expect(tabIdAtIndex(bar, 2)).toBe('f1');
+  });
+
+  it('does nothing rather than clamping when the bar is not that long', () => {
+    // `Ctrl+7` on a bar of three means "the seventh tab", and there isn't one.
+    expect(tabIdAtIndex(bar, 3)).toBeNull();
+    expect(tabIdAtIndex(bar, -1)).toBeNull();
+    expect(tabIdAtIndex([], 0)).toBeNull();
   });
 });

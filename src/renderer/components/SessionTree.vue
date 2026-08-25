@@ -3,11 +3,16 @@
 // FOLDER VIEW — TWO levels, root then folder, one row per folder
 // (docs/WORKSPACE.md §2, revising docs/SESSIONLIST.md revision 3):
 //
-//   v git                        12
+//   git                          12
 //     dtc-website           2       21h
 //     pocketshell           3       21h
 //     dataops                       22h
-//   > other                         3
+//   other                           3
+//
+// The root line carries no disclosure mark because it is not a node: it is a
+// grouping HEADER over the folder rows beneath it, and there is nothing under
+// it that hiding would spare the reader. See the root row in the template for
+// why that is deliberate and what a future collapse must not do.
 //
 // ## Why the session level went, and why this is not revision 2 again
 //
@@ -30,7 +35,7 @@
 // its rows, and this one no longer does.
 //
 // An untracked session (`dir.untracked` — no reported cwd) still renders as a
-// single chevron-less row in the folder slot, and it is now selectable like
+// single row in the folder slot, and it is now selectable like
 // any other folder: its workspace holds that one session. See
 // docs/WORKSPACE.md §6 for why it must stay reachable rather than merely
 // visible, and for the sibling inference that gives most of these a real
@@ -45,7 +50,7 @@
 //     stop rendering identically when the panel is narrow.
 //   - the tooltip carries the full truth: session name, full path, absolute
 //     time.
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
 import NewSessionDialog from './NewSessionDialog.vue';
 import HostActionsMenu from './HostActionsMenu.vue';
@@ -171,16 +176,6 @@ const now = ref(Date.now());
 let clock: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Nodes the user explicitly collapsed. Everything else is expanded.
- *
- * Only ROOT keys now: a folder is a leaf, so there is nothing under it to
- * disclose. The `dir:` namespacing this set used to need — a session sitting
- * directly in `~/git` produces a folder key byte-identical to its own root's —
- * went with the level it protected.
- */
-const collapsed = ref<Set<string>>(new Set());
-
-/**
  * The tree. The top level is the user's REGISTERED roots when they have any,
  * and `$HOME`'s children derived from the session paths when they do not —
  * the grouping module decides which, from whether the list is empty.
@@ -204,43 +199,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (clock !== null) clearInterval(clock);
 });
-
-function isExpanded(key: string): boolean {
-  return !collapsed.value.has(key);
-}
-
-function toggle(key: string): void {
-  // Reassigned, not mutated: a Set's contents are not deep-reactive here.
-  const next = new Set(collapsed.value);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  collapsed.value = next;
-}
-
-/**
- * Keep the open folder visible: navigating into one expands its root.
- *
- * One level to reopen now rather than two, which also retires `dirKey` — a
- * folder is a leaf here, so there is nothing under it to expand and nothing to
- * namespace its key against.
- *
- * This watches the ACTIVE FOLDER rather than the root list on purpose. Doing
- * it on every recompute would make a root impossible to collapse — the store
- * refreshes on a timer and would immediately reopen it — so a deliberate
- * collapse survives until the user navigates somewhere else.
- */
-watch(
-  () => props.activeFolder,
-  (key) => {
-    if (!key) return;
-    const roots_ = roots.value.filter((root) => root.directories.some((d) => d.key === key));
-    if (!roots_.some((root) => collapsed.value.has(root.key))) return;
-    const next = new Set(collapsed.value);
-    for (const root of roots_) next.delete(root.key);
-    collapsed.value = next;
-  },
-  { immediate: true },
-);
 
 /** `1 session` / `3 sessions` — the phrase form, which lives only in tooltips. */
 function sessionCountLabel(count: number): string {
@@ -457,32 +415,37 @@ function fmtRelative(epochSeconds: number): string {
 
     <div class="folder-list">
       <section v-for="root in roots" :key="root.key" class="folder">
-        <button
-          class="folder-header"
-          :aria-expanded="isExpanded(root.key)"
-          :title="rootTooltip(root)"
-          @click="toggle(root.key)"
-        >
-          <!-- The app's one disclosure pattern: the base
-               mark is always `chevron-right` and open is a 90 degree rotation,
-               so the two states are the same geometry. -->
-          <AppIcon
-            name="chevron-right"
-            :size="14"
-            class="disclosure"
-            :class="{ open: isExpanded(root.key) }"
-          />
-          <!-- The dot is the collapsed root's only way to say "something live
-               is in here", which is the state where that matters most. -->
+        <!-- A plain element, not a <button>, and no disclosure mark: now that
+             sessions live in workspace tabs the panel is root -> folder, and a
+             root row is a grouping HEADER over its folders rather than a node
+             with something hidden under it. A chevron here would advertise an
+             interaction that does not exist, so the row is not interactive at
+             all — the tooltip is the only thing it still offers, and it carries
+             real information (the root's path and its size).
+
+             ROOT ROWS ARE DELIBERATELY ALWAYS OPEN. If collapsing ever comes
+             back, it must NOT be driven off the root list: `roots` recomputes
+             every time the sessions store refreshes on its timer, so anything
+             that reopens roots on recompute would reopen one the instant the
+             user closed it. The state removed here dodged that by watching the
+             ACTIVE FOLDER instead, so a deliberate collapse survived until the
+             user navigated somewhere else. That is the trap, written down. -->
+        <div class="folder-header" :title="rootTooltip(root)">
+          <!-- The dot is how a root reports attachment in ONE mark: a reader
+               scanning the headers sees which roots have something live in them
+               without reading the folder rows underneath, and on a registered
+               root with nothing running it is the difference between "quiet"
+               and "not loaded". -->
           <span class="dot" :class="{ active: root.active }" />
           <span class="folder-label" :class="{ bucket: root.other }">{{ root.label }}</span>
           <span class="folder-count muted">{{ root.sessionCount }}</span>
-        </button>
+        </div>
 
-        <ul v-show="isExpanded(root.key)" class="dir-list">
+        <ul class="dir-list">
           <!-- Only a REGISTERED root can be empty; a derived one exists because
-               a session is in it. Saying so beats an expanded header with
-               nothing under it, which reads as a failed load. -->
+               a session is in it. Saying so beats a header with nothing under
+               it, which reads as a failed load — and there is no collapsed
+               state left to blame it on. -->
           <li v-if="!root.directories.length" class="empty-root muted">no sessions here yet</li>
 
           <!-- ONE ROW PER FOLDER. Not a header over a list any more: the row
@@ -611,36 +574,20 @@ function fmtRelative(epochSeconds: number): string {
 .folder {
   margin-bottom: var(--sp-1);
 }
+/* A <div>, so the button reset this used to carry — background, border, color,
+   text-align, cursor, font-family/size/line-height — is all gone: everything in
+   that list is either the element's own default or inherited from `body`. Only
+   the weight is a real decision and it stays. There is no `:hover` rule either:
+   a lift under the cursor advertises a click, and this row no longer takes
+   one. */
 .folder-header {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  width: 100%;
   height: var(--row-h);
-  background: transparent;
-  border: none;
-  color: var(--fg);
-  text-align: left;
-  padding: 0 var(--row-pad-x) 0 var(--sp-2);
-  cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: var(--fs-300);
-  line-height: var(--lh-300);
+  padding: 0 var(--row-pad-x) 0 var(--sp-3);
   font-weight: var(--fw-semibold);
   overflow: hidden;
-}
-.folder-header:hover {
-  background: var(--state-hover);
-}
-/* Rotating the <svg> box pivots around its own centre — no transform-origin
-   juggling and no baseline offset. */
-.disclosure {
-  color: var(--fg-muted);
-  flex: none;
-  transition: transform var(--dur-fast) var(--ease);
-}
-.disclosure.open {
-  transform: rotate(90deg);
 }
 .folder-label {
   flex: 0 1 auto;
@@ -671,36 +618,39 @@ function fmtRelative(epochSeconds: number): string {
   padding: 0;
 }
 /* ── The indent budget, in one place ───────────────────────────────────────
-   TWO levels now, so the budget is halved and every row gets the width back
-   that the third level was spending. The column both rows share is the DOT,
-   because it is the one element every row type has; the labels follow it at a
-   constant 16px (8px dot + an --sp-2 gap).
+   TWO levels, and no chevron column on either of them now that a root row is a
+   header rather than a node. The column both rows share is the DOT, because it
+   is the one element every row type has; the labels follow it at a constant
+   16px (8px dot + an --sp-2 gap).
 
-     level        chevron   dot    label
-     root           8-22     30      46
-     folder            -     38      54
+     level        dot    label
+     root          12      28
+     folder        20      36
 
-   At the 200px panel floor the timestamp is already gone (see the container
-   query at the bottom of this block) and a folder row has 200 - 54 - 10 =
-   136px for its label, badges and count — against the 128px the old session
-   leaf had, for a label that is a folder basename rather than a full session
-   name. Middle truncation is kept anyway: `pocketshell` and
+   The root's 12px is --sp-3 rather than the --sp-2 the chevron used to start
+   at: with the mark gone, an 8px inset put the dot hard against the panel edge
+   and the root read as unindented rather than as the outer level. The folder
+   step stays 8px — 18px of padding plus its 2px selection rail — which is the
+   whole of the nesting this panel expresses.
+
+   Dropping the chevron gives every row 18px back. At the 200px panel floor the
+   timestamp is already gone (see the container query at the bottom of this
+   block) and a folder row has 200 - 36 - 10 = 154px for its label, badges and
+   count. Middle truncation is kept anyway: `pocketshell` and
    `pocketshell-desktop` are still one root apart. */
 /* Sits in the folder slot, but is prose rather than a row: no dot, so
-   it starts where a directory LABEL starts (54) instead of where its dot
+   it starts where a directory LABEL starts (36) instead of where its dot
    does. */
 .empty-root {
   height: var(--row-h);
   display: flex;
   align-items: center;
-  padding: 0 var(--row-pad-x) 0 54px;
+  padding: 0 var(--row-pad-x) 0 36px;
   font-size: var(--fs-200);
   font-style: italic;
 }
-/* One step in from the root header. There is no chevron column to allow for
-   any more — a folder is a leaf — so the 36px inset puts the dot at 38, 8px
-   right of the root's, which is the whole of the nesting this panel now
-   expresses. */
+/* One step in from the root header: 18px of padding plus the 2px rail puts the
+   dot at 20, 8px right of the root's. */
 .dir-header {
   display: flex;
   align-items: center;
@@ -712,7 +662,7 @@ function fmtRelative(epochSeconds: number): string {
   border-left: 2px solid transparent;
   color: var(--fg);
   text-align: left;
-  padding: 0 var(--row-pad-x) 0 36px;
+  padding: 0 var(--row-pad-x) 0 18px;
   cursor: pointer;
   font-family: var(--font-ui);
   font-size: var(--fs-300);
@@ -734,11 +684,6 @@ function fmtRelative(epochSeconds: number): string {
    organised. */
 .dir-header.orphan .label {
   color: var(--fg-secondary);
-}
-/* Trims the shared 8px flex gap to the 4px the alignment above needs, without
-   giving this row its own gap value to keep in sync with everything else. */
-.dir-header .disclosure {
-  margin-right: -4px;
 }
 .dir-header:hover {
   background: var(--state-hover);

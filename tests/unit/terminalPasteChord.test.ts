@@ -54,6 +54,21 @@ import { createPinia, setActivePinia } from 'pinia';
  * a byte count: jsdom performs no default action, so it cannot produce the
  * second paste at all. What it can assert is the thing that makes the second
  * paste impossible.
+ *
+ * ## The two chords must stay two chords
+ *
+ * Plain Ctrl+V has since been claimed for the PROMPT COMPOSER: the user asked
+ * that pasting at the terminal put the clipboard in the composer — an image as
+ * a staged attachment, text as draft content — rather than into the shell. The
+ * measurement above is what made that affordable: Ctrl+V never pasted anything
+ * here, it only produced `\x16`, so nothing the user could previously do with
+ * it is being taken away except readline's literal-next (`quoted-insert`).
+ *
+ * Ctrl+SHIFT+V is untouched and must stay untouched. It is the chord that
+ * actually pastes into the shell, it is the one this component's header has
+ * always documented, and collapsing the two into one would either break shell
+ * pasting or make every composer paste land in the shell as well. Both chords
+ * are asserted separately below for that reason.
  */
 
 /** Captures the handler TerminalView hands to xterm, so a test can drive it. */
@@ -204,16 +219,18 @@ describe('paste chord — delivery', () => {
     wrapper.unmount();
   });
 
-  it('leaves plain Ctrl+V to xterm rather than adding a second paste path', async () => {
-    // Ctrl+V is xterm's ctrl-letter mapping (SYN) and it cancels the event
-    // itself, so the browser never pastes. Claiming it here as well — without
-    // cancelling — would give this chord the same doubling as Ctrl+Shift+V.
+  it('still pastes into the SHELL on Ctrl+Shift+V, now that Ctrl+V does not', async () => {
+    // The regression guard for the feature below. Ctrl+V was taken for the
+    // composer; if that branch ever stops demanding `!e.shiftKey`, or is moved
+    // ahead of this one, shell pasting disappears and every Ctrl+Shift+V opens
+    // the composer instead. Two chords, two destinations, asserted apart.
     const wrapper = mountTerminal();
-    const e = keydown('v', { ctrlKey: true });
 
-    expect(customKeyHandler!(e)).toBe(true);
+    expect(customKeyHandler!(keydown('V', { ctrlKey: true, shiftKey: true }))).toBe(false);
     await settle();
-    expect(pasted).toEqual([]);
+
+    expect(pasted).toEqual(['CLIPBOARD-TEXT']);
+    expect(wrapper.emitted('paste-into-composer')).toBeUndefined();
     wrapper.unmount();
   });
 
@@ -250,6 +267,103 @@ describe('paste chord — delivery', () => {
     await settle();
 
     expect(pasted).toEqual([]);
+    wrapper.unmount();
+  });
+});
+
+/**
+ * Plain Ctrl+V is the COMPOSER's.
+ *
+ * What this file can assert is the interception, and only the interception:
+ * this component deliberately knows nothing about what is on the clipboard or
+ * what the composer will do with it. It cancels the chord, withholds the bytes
+ * and says so. The decision that follows is pinned by clipboardPaste.test.ts
+ * and the routing by composerClipboardPaste.test.ts.
+ *
+ * "No bytes reached the shell" is asserted three ways, because in jsdom no
+ * single one of them is the real mechanism: the handler returns false (xterm's
+ * `_keyDown` bails before its ctrl-letter mapping can produce `\x16`), the DOM
+ * event is cancelled (Chromium never performs its own paste), and nothing was
+ * handed to `term.paste`. In the real runtime the first two are what stop the
+ * write; here they are simply the things that can be observed.
+ */
+describe('Ctrl+V — intercepted for the prompt composer', () => {
+  it('cancels the chord and announces it, instead of feeding the shell', async () => {
+    const wrapper = mountTerminal();
+    const e = keydown('v', { ctrlKey: true });
+
+    expect(customKeyHandler).not.toBeNull();
+    // Both halves are required, and the second is the one that regressed twice
+    // already (3628090, bc86cf7). Returning false stops xterm but leaves the
+    // DOM event live, and Chromium's default action for Ctrl+V is a paste into
+    // whatever holds focus — which, a moment later, is the composer's draft.
+    expect(customKeyHandler!(e)).toBe(false);
+    expect(e.defaultPrevented).toBe(true);
+
+    await settle();
+    expect(wrapper.emitted('paste-into-composer')).toHaveLength(1);
+    expect(pasted).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('takes the capital and the Cmd spelling too', async () => {
+    // Caps Lock spells the key 'V' with no Shift held, and macOS uses Meta.
+    // Neither is a different intention.
+    const spellings: [string, Partial<KeyboardEventInit>][] = [
+      ['V', { ctrlKey: true }],
+      ['v', { metaKey: true }],
+      ['V', { metaKey: true }],
+    ];
+    for (const [key, mods] of spellings) {
+      const wrapper = mountTerminal();
+      const e = keydown(key, mods);
+      expect(customKeyHandler!(e)).toBe(false);
+      expect(e.defaultPrevented).toBe(true);
+      expect(wrapper.emitted('paste-into-composer')).toHaveLength(1);
+      wrapper.unmount();
+    }
+    await settle();
+  });
+
+  it('announces once per keystroke, never once per key EVENT', async () => {
+    // xterm consults this handler for keyup and keypress as well. Three events
+    // would be three clipboard reads and, for an image, three staged tiles.
+    const wrapper = mountTerminal();
+
+    customKeyHandler!(keydown('v', { ctrlKey: true }));
+    customKeyHandler!(new KeyboardEvent('keypress', { key: 'v', ctrlKey: true, cancelable: true }));
+    customKeyHandler!(new KeyboardEvent('keyup', { key: 'v', ctrlKey: true, cancelable: true }));
+    await settle();
+
+    expect(wrapper.emitted('paste-into-composer')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('leaves AltGr+V alone — it is a printable character, not a chord', async () => {
+    // Ctrl+Alt is how AltGr arrives on European layouts, where V sits under a
+    // real character on several of them. Swallowing it would make the key
+    // untypeable in the terminal.
+    const wrapper = mountTerminal();
+    const e = keydown('v', { ctrlKey: true, altKey: true });
+
+    expect(customKeyHandler!(e)).toBe(true);
+    expect(e.defaultPrevented).toBe(false);
+    await settle();
+
+    expect(wrapper.emitted('paste-into-composer')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('does not fire on a bare V, with or without Shift', async () => {
+    const wrapper = mountTerminal();
+
+    for (const e of [keydown('v'), keydown('V', { shiftKey: true })]) {
+      expect(customKeyHandler!(e)).toBe(true);
+      expect(e.defaultPrevented).toBe(false);
+    }
+    await settle();
+
+    expect(wrapper.emitted('paste-into-composer')).toBeUndefined();
     wrapper.unmount();
   });
 });

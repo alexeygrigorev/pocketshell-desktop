@@ -1443,3 +1443,121 @@ it back (§26.1). This is the phone's rhythm, asked for explicitly.
   keystroke.
 - It composes with `lastOpenMode`: a maximized composer that closes on send
   re-opens maximized.
+
+## 27. The doodle / annotate surface
+
+`DoodleCanvas.vue`, reached from the composer's attach row through a source
+chooser (blank sheet, clipboard, a local file, a file on the host). Whatever the
+source, the image arrives as a `data:` URL and leaves as PNG bytes that go
+straight into the `{kind:'bytes'}` staging path the clipboard already uses — no
+new upload, remote-path, tile or send code (§17, §23.4).
+
+### 27.1 The document, and what "attached" means
+
+The sheet is a list of ITEMS — strokes, and text annotations — repainted onto
+one canvas on every change. There is exactly one canvas and one painter, and
+`commit()` encodes that same canvas, so **anything visible on the sheet is in
+the attached PNG by construction**. There is no preview layer for the exporter
+to reproduce, which is the failure this design exists to make impossible.
+
+The one thing that is NOT an item is the text tool's caret: it is a real
+`<textarea>` floating over the canvas, and `toBlob` cannot see it. So the commit
+path flushes the open editor into the document *before* it encodes. Attaching
+mid-sentence attaches the sentence. `tests/unit/DoodleCanvas.test.ts` asserts
+this against a recording 2D context rather than trusting it.
+
+### 27.2 Tools
+
+| Tool | Gesture | Notes |
+| --- | --- | --- |
+| Draw | drag | freehand, smoothed through the sample midpoints |
+| Line / Arrow | drag, tail to head | **Shift constrains to 45° steps** |
+| Rectangle / Ellipse | drag two corners | Shift does nothing here — see below |
+| Text | click to place, click existing text to edit | |
+
+- **The arrowhead scales with the mark weight**, at 4x the stroke, capped at 60%
+  of the arrow's length so a short arrow is not all head. The shaft stops at the
+  barb baseline, not at the tip, so a fat round cap cannot poke out of the point.
+- **A click with no drag commits nothing.** A zero-length arrow is invisible but
+  would still consume an Undo, and an Undo that appears to do nothing is how
+  users conclude undo is broken. Only the pen means anything by a single point
+  (it is a dot).
+- **Shift is deliberately not wired to rectangle/ellipse.** On those the same key
+  conventionally means "square"/"circle", which is a different constraint under
+  the same keycap; implementing one and leaving the other inert is worse than
+  doing neither.
+- **One colour row and one weight row serve every tool**, text included. Weight
+  drives stroke thickness and, through it, text size — they are the same idea
+  (how heavy a mark), which is why it is one control.
+
+### 27.3 Text: the keys, and the Escape collision
+
+| Key | In the annotation editor |
+| --- | --- |
+| `Enter` | **newline** — annotations wrap and are routinely two lines |
+| `Ctrl/Cmd+Enter` | commit |
+| `Escape` | commit, and **stop propagating** |
+| `Ctrl/Cmd+Z` | the textarea's own undo, not the sheet's |
+
+Enter is the opposite of the draft's Enter-sends (§20), and that is fine: the
+draft is a message being finished, this is a caption being laid out.
+
+**The Escape rung is the load-bearing part.** This canvas sits inside an
+`OverlayPanel` (Escape closes the overlay) inside `.composer-root` (Escape runs
+the §12.2 ladder and hides the whole composer), and both listen for a bubbling
+Escape. Without `stopPropagation` on the editor's own handler, one Escape while
+typing a caption would throw away the caption, the drawing and the composer, in
+that order. Handling it on the focused element makes the open editor the
+innermost rung of the same ladder — *Escape closes what you opened last* —
+without either outer handler needing to know this tool exists. Neither §12.2 nor
+`OverlayPanel` was changed.
+
+It **commits** rather than cancels, because Escape in this app never destroys
+work (§12.2). Ctrl+Z is how you take an annotation back.
+
+Committed text stays editable: click it again with the text tool and the caret
+returns, at the end of the text. Emptying an annotation deletes it — there is no
+separate delete control, and adding one would mean a selection model this
+surface does not otherwise have. Clicking a swatch while the caret is open
+retargets the annotation being typed; re-opening an old one keeps its own colour
+rather than adopting the toolbar's.
+
+### 27.4 Undo
+
+`history` is a stack of previous versions of the item ARRAY — references, tens of
+them, which is a different proposition from the per-stroke pixel snapshots the
+original design rejected. It is what lets one Ctrl+Z (or the toolbar button)
+cover every mutation the surface has:
+
+- a stroke, a shape or an arrow;
+- placing a text annotation;
+- **retyping an existing one** — a mutation in the middle of the document, which
+  a pop-the-last-item stack cannot express;
+- **Clear**, which is otherwise one misclick from losing the whole markup.
+
+Nothing that changes the document bypasses it: every mutation goes through one
+function, so "does undo cover this tool?" stays answerable by reading one place.
+
+### 27.5 Geometry lives outside the component
+
+`src/shared/doodleGeometry.ts` holds the arithmetic — arrowhead barbs and shaft
+stop, 45° snapping, greedy line breaking with hard breaks and character-level
+breaking for an unbreakable URL, block layout and hit testing. It is pure: it
+takes numbers and a `measure` callback and knows nothing of the DOM, tokens or a
+canvas context. That is what makes the parts most likely to be subtly wrong
+testable in `tests/unit/doodleGeometry.test.ts` without a canvas at all.
+
+### 27.6 Typography, and the one token deviation
+
+Family (`--font-ui`), weight (`--fw-semibold`) and leading (`--lh-300`) are
+resolved from computed style at paint time, exactly as the pens resolve their
+colour tokens — no literal enters the `.vue` file.
+
+**Size is not from `--fs-*`, and this is deliberate.** That ladder is a chrome
+density system (28px rows, 40px bars) that tops out at 20px — `fonts.ts` says so
+in as many words — while this canvas is a bitmap up to 2048px wide whose logical
+pixels are not CSS pixels. `--fs-300` text on a phone screenshot would be
+13/2048 of the image width and about four screen pixels tall on the sheet. Size
+follows the selected mark weight instead (4x, the same ratio as the arrowhead),
+so a caption and the arrow pointing at it read as one hand. The ratio is a named
+constant in the pure module and is unit-tested.
