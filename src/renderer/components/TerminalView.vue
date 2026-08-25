@@ -141,12 +141,24 @@ async function openShell(): Promise<void> {
   fitAddon?.fit();
   const cols = term.cols;
   const rows = term.rows;
-  shellId = await api.shell.open({
-    connectionId: props.connectionId,
-    command: props.command,
-    cols,
-    rows,
-  });
+  try {
+    shellId = await api.shell.open({
+      connectionId: props.connectionId,
+      command: props.command,
+      cols,
+      rows,
+    });
+  } catch (e) {
+    // A rejection here used to escape into `onMounted`'s promise, where
+    // nothing was waiting for it: the pane stayed blank and the user was told
+    // nothing at all — indistinguishable from a session that opened and simply
+    // had no output yet. The PTY is the only surface this component owns, so
+    // the failure is written INTO it. Nothing else is torn down: no shellId was
+    // registered, and the retry path (`reopen`) is still armed.
+    shellId = null;
+    term.write(`\r\n\u001b[31mCould not open a shell: ${describe(e)}\u001b[0m\r\n`);
+    return;
+  }
   // shell -> xterm
   unsubscribeData = api.shell.onData(({ shellId: id, data }) => {
     if (id === shellId && term) {
@@ -165,6 +177,13 @@ async function openShell(): Promise<void> {
   // only fires when xterm's own dimensions change, which a re-open does not do.
   void api.shell.resize(shellId, cols, rows);
   term.focus();
+}
+
+/** Message text for a thrown value, however it was thrown. */
+function describe(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  return String(err);
 }
 
 function closeShell(): void {
