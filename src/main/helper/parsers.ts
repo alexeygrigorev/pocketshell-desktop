@@ -116,11 +116,61 @@ const FIELD_SEP = '::';
  * takes the three leading scalars and the two trailing ones by position from
  * their own end, which is what makes the tail genuinely recoverable.
  */
-export const SESSION_ENRICHMENT_COMMAND =
-  'tmux -u list-panes -a -F ' +
-  `'#{session_name}${FIELD_SEP}#{window_active}${FIELD_SEP}#{pane_active}${FIELD_SEP}` +
+const ENRICHMENT_FORMAT =
+  `#{session_name}${FIELD_SEP}#{window_active}${FIELD_SEP}#{pane_active}${FIELD_SEP}` +
   `#{pane_current_path}${FIELD_SEP}#{session_path}${FIELD_SEP}#{session_attached}` +
-  `${FIELD_SEP}#{@ps_agent_kind}'`;
+  `${FIELD_SEP}#{@ps_agent_kind}`;
+
+export const SESSION_ENRICHMENT_COMMAND =
+  `tmux -u list-panes -a -F '${ENRICHMENT_FORMAT}' 2>/dev/null; ` +
+  // Every OTHER tmux server this user has, not only the default one.
+  //
+  // `list-panes -a` is per-SERVER, and that is the half of this probe the
+  // three previous attempts at the missing-directory bug never questioned. The
+  // user's log has `pocketshell sessions list` returning twelve sessions while
+  // this probe produced rows for eight, with `unmatchedProbeKeys` empty — so it
+  // was not a spelling mismatch and not a parse failure, it was four sessions
+  // this command could not see. Measured against real tmux 3.4, `list-panes -a`
+  // omits nothing on the server it reaches, so the four were not on that
+  // server. The same log says so from a second direction: raw `tmux` on that
+  // connection answered `can't find session:` for three of those exact four.
+  //
+  // The note on `sessionAttachCommand` says tmuxctl shells out to a bare `tmux`
+  // with no `-L`/`-S`, so there SHOULD be one socket. That was reasoned from a
+  // host inspection, not from this host, and it is exactly the kind of
+  // assumption that survives three fixes. Sweeping the socket directory costs
+  // one shell loop and removes the assumption instead of restating it.
+  //
+  // The default invocation above is kept and run FIRST rather than being
+  // replaced by the sweep: a host whose `TMUX_TMPDIR` points somewhere this
+  // glob does not model would otherwise go from eight rows to zero. Duplicate
+  // rows for the default socket are free — {@link parseSessionEnrichment} keys
+  // by session name, so the second reading of a session overwrites the first
+  // with itself.
+  //
+  // Stale sockets whose server has died print `no server running` to stderr and
+  // exit 1; `2>/dev/null` and the loop's own continuation absorb both.
+  'for __ps_s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*; do ' +
+  '[ -S "$__ps_s" ] || continue; ' +
+  `tmux -S "$__ps_s" -u list-panes -a -F '${ENRICHMENT_FORMAT}' 2>/dev/null; ` +
+  'done';
+
+/**
+ * A per-session `socket_path` / `pid` reading, for the log only.
+ *
+ * Run ONLY when something came back unplaced, because it answers a question
+ * nobody has on a healthy host: are these sessions on the server we think they
+ * are on? Two sessions reporting different `#{pid}` values is a second tmux
+ * server, full stop, and a session the helper lists that appears in NO row here
+ * does not exist on any socket we can see — which are the two remaining
+ * explanations for the user's report and are indistinguishable in the UI.
+ */
+export const SESSION_SOCKET_DIAGNOSTIC_COMMAND =
+  `tmux -u list-panes -a -F '#{session_name}${FIELD_SEP}#{socket_path}${FIELD_SEP}#{pid}' 2>/dev/null; ` +
+  'for __ps_s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*; do ' +
+  '[ -S "$__ps_s" ] || continue; ' +
+  `tmux -S "$__ps_s" -u list-panes -a -F '#{session_name}${FIELD_SEP}#{socket_path}${FIELD_SEP}#{pid}' 2>/dev/null; ` +
+  'done';
 
 /** What the companion probe adds to a bare `sessions list` row. */
 export interface SessionEnrichment {

@@ -1,0 +1,8 @@
+git-dtc-website::/tmp/tmux-0/default::14
+git-red-stamp::/tmp/tmux-0/default::14
+git-dtc-website::/tmp/tmux-0/default::14
+git-red-stamp::/tmp/tmux-0/default::14
+git-ai-engineering-field-guide::/tmp/tmux-0/ps::22
+git-auth::/tmp/tmux-0/ps::22
+git-dtc-website-import::/tmp/tmux-0/ps::22
+git-red-stamp-sound::/tmp/tmux-0/ps::22

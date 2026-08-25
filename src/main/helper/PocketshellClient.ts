@@ -8,7 +8,7 @@
  */
 
 import type { SshService } from '../ssh/SshService.js';
-import type { SessionSummary } from '../../shared/types.js';
+import type { ExecResult, SessionSummary } from '../../shared/types.js';
 import {
   parseSessionsList,
   parseTmuxListSessionsFallback,
@@ -17,12 +17,18 @@ import {
   diagnoseSessionPaths,
   mergeSessionEnrichment,
   SESSION_ENRICHMENT_COMMAND,
+  SESSION_SOCKET_DIAGNOSTIC_COMMAND,
   type UsageRow,
   type SessionEnrichment,
 } from './parsers.js';
 import { pathAwareCommand } from './bootstrap.js';
-import { gitRepoProbeCommand } from '../projects/commands.js';
+import { gitRepoProbeCommand, HOME_COMMAND } from '../projects/commands.js';
 import { parseWorktreeRoots } from '../projects/worktrees.js';
+import {
+  directoryExistsProbeCommand,
+  parseExistingDirectories,
+  sessionDirCandidates,
+} from '../projects/sessionDirs.js';
 import { log } from '../log.js';
 import { shellQuote, shellQuoteRemotePath } from '../../shared/shellQuote.js';
 import {
@@ -66,6 +72,41 @@ export interface CloneOutcome {
   state?: Exclude<ReposScopeState, 'ok'>;
 }
 
+/** The companion tmux probe's parsed map PLUS the bytes it came from. */
+interface SessionEnrichmentProbe {
+  enrichment: Map<string, SessionEnrichment>;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Everything the unplaced-session log line needs, carried together.
+ *
+ * Grouped into one parameter rather than passed as three, because they are one
+ * thing: the raw evidence for a single `listSessions` call. Splitting them let
+ * an earlier version log the parsed counts without the bytes that produced
+ * them, which is how the same bug survived three fixes.
+ */
+interface SessionListEvidence {
+  enrichment: Map<string, SessionEnrichment>;
+  probe: SessionEnrichmentProbe;
+  /** The command that produced the NAMES: the helper, or the tmux fallback. */
+  helper: ExecResult;
+}
+
+/**
+ * A bounded slice of host output for the log.
+ *
+ * The length is reported separately by the caller, so a clipped value is never
+ * mistaken for a short one - which matters, because "was the output truncated"
+ * is one of the questions this evidence exists to answer.
+ */
+function clip(value: string, limit = 4000): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}...[${value.length - limit} more bytes]`;
+}
+
 /**
  * One-shot helper invocations over a connected host. Stateless: pass the
  * SshService + connectionId into each call.
@@ -90,6 +131,26 @@ export class PocketshellClient {
   private readonly repoRoots = new Map<string, Map<string, string | null>>();
 
   /**
+   * Session name -> the directory the host confirmed exists for it, per
+   * connection.
+   *
+   * A `null` value is a REMEMBERED NEGATIVE, for the same reason as
+   * {@link repoRoots}: "we asked the host about every candidate directory this
+   * name could mean, and none of them exist". Without it, a session that is
+   * genuinely unrecoverable would put a `test -d` batch on the user's host on
+   * every timer tick, forever, to be told the same thing.
+   *
+   * A directory created LATER is therefore not picked up until the connection
+   * is remade. That is the same trade the worktree cache takes and it is easier
+   * here: a session is created IN a directory, so a session whose directory
+   * does not exist yet is not a case that arises in that order.
+   */
+  private readonly sessionDirs = new Map<string, Map<string, string | null>>();
+
+  /** Remote `$HOME` per connection; null means "asked, and could not tell". */
+  private readonly homes = new Map<string, string | null>();
+
+  /**
    * List live tmux sessions. Prefers `pocketshell sessions list`, falls back
    * to `tmux list-sessions` when the helper is absent. Returns [] when no
    * tmux server is running (the canonical "empty" state, not an error).
@@ -100,17 +161,20 @@ export class PocketshellClient {
     // and recorded agent kind that the three-column table simply does not
     // carry. They are independent execs on the same connection, so issuing
     // them together costs one RTT rather than two.
-    const [helper, enrichment] = await Promise.all([
+    const [helper, probe] = await Promise.all([
       this.ssh.exec(connectionId, pathAwareCommand(`pocketshell sessions list --by ${sortBy}`)),
       this.sessionEnrichment(connectionId),
     ]);
+    const { enrichment } = probe;
     if (helper.exitCode === 0) {
       const parsed = parseSessionsList(helper.stdout);
       if (parsed.length > 0 || /IDX\s+SESSION/.test(helper.stdout)) {
-        return this.withRepoRoots(
+        const merged = await this.withDerivedPaths(
           connectionId,
-          this.reportPaths(mergeSessionEnrichment(parsed, enrichment), enrichment),
+          mergeSessionEnrichment(parsed, enrichment),
+          { enrichment, probe, helper },
         );
+        return this.withRepoRoots(connectionId, merged);
       }
     }
     // Fallback: raw tmux with the same `::` shape the Android gateway uses.
@@ -123,13 +187,12 @@ export class PocketshellClient {
     if (tmux.exitCode === 0) {
       // Still merged: the fallback's `session_path` is the *session's* cwd,
       // and the probe's active-pane cwd is the better answer when both exist.
-      return this.withRepoRoots(
+      const merged = await this.withDerivedPaths(
         connectionId,
-        this.reportPaths(
-          mergeSessionEnrichment(parseTmuxListSessionsFallback(tmux.stdout), enrichment),
-          enrichment,
-        ),
+        mergeSessionEnrichment(parseTmuxListSessionsFallback(tmux.stdout), enrichment),
+        { enrichment, probe, helper: tmux },
       );
+      return this.withRepoRoots(connectionId, merged);
     }
     // "no server running" / "not found" -> empty (not an error).
     return [];
@@ -204,19 +267,199 @@ export class PocketshellClient {
     });
   }
 
-  private reportPaths(
+  /**
+   * Give a still-unplaced session the directory its NAME points at, once the
+   * host has confirmed that directory exists.
+   *
+   * ## What this is for
+   *
+   * The tmux probe is the real answer and this never overrides it: a session
+   * that reported its own working directory is returned untouched. This runs
+   * only for the rows the probe could not place at all - and on the user's host
+   * that was a third of them, four of twelve, every refresh, for a whole day.
+   * See ../projects/sessionDirs.ts for the evidence about WHY the probe cannot
+   * see them, which is that they are not on the tmux server it reaches.
+   *
+   * A session with no folder is not a cosmetic problem: the folder workspace
+   * keys everything on the folder, so an unplaced session has nowhere to live
+   * and the user cannot open it at all. That is why this is worth a host round
+   * trip on the failure path.
+   *
+   * ## It confirms, it does not guess
+   *
+   * `git-dtc-website-import` is genuinely ambiguous between
+   * `~/git/dtc-website-import` and `~/git/dtc-website/import`, and that
+   * ambiguity is the documented reason `rootFromSessionName` refuses to derive
+   * a directory from a name. It is resolved here by ASKING: every candidate
+   * goes to the host in one batched `test -d`, and only a directory that
+   * actually exists is ever adopted. The first surviving candidate wins.
+   *
+   * ## Rows that already have an INFERRED path are re-asked
+   *
+   * `inferPathsFromSiblings` files `git-red-stamp-sound` under
+   * `git-red-stamp`'s directory because the names look like a suffix pair. That
+   * is a reasonable guess and it is marked `pathInferred` precisely because it
+   * might be wrong. If the host turns out to have `~/git/red-stamp-sound`, that
+   * is the session's OWN directory and it beats the sibling's - so those rows
+   * are asked about too, and a confirmed hit clears the `pathInferred` flag.
+   *
+   * ## Cost
+   *
+   * One exec, only when something is unplaced, and only for names not already
+   * in the per-connection cache. A steady-state host with nothing unplaced
+   * makes no call at all; a host with a permanently unrecoverable session pays
+   * one exec on the first refresh and none afterwards, because the negative is
+   * remembered - the same discipline, and the same trade, as the worktree cache
+   * above.
+   */
+  private async withDerivedPaths(
+    connectionId: string,
     sessions: SessionSummary[],
-    enrichment: Map<string, SessionEnrichment>,
-  ): SessionSummary[] {
-    const report = diagnoseSessionPaths(sessions, enrichment);
-    if (report.unplaced.length > 0) {
-      log('sessions', 'sessions with no reported working directory', {
-        total: report.total,
-        probeRows: enrichment.size,
-        unplaced: report.unplaced,
-        unmatchedProbeKeys: report.unmatchedProbeKeys,
-      });
+    raw: SessionListEvidence,
+  ): Promise<SessionSummary[]> {
+    const report = diagnoseSessionPaths(sessions, raw.enrichment);
+    if (report.unplaced.length === 0) return sessions;
+
+    let known = this.sessionDirs.get(connectionId);
+    if (!known) {
+      known = new Map();
+      this.sessionDirs.set(connectionId, known);
     }
+
+    const home = await this.homeDir(connectionId);
+    // Names we have never asked about. A cached `null` is "we asked the host
+    // and none of this name's candidate directories exist" - see the field's
+    // own comment for why remembering that matters more than it looks.
+    const fresh = report.unplaced.map((u) => u.name).filter((name) => !known.has(name));
+
+    if (home !== null && fresh.length > 0) {
+      // One flat candidate list across every session, so the whole batch is a
+      // single exec. `offsets` remembers where each session's slice starts, so
+      // the first EXISTING candidate for a session is still that session's
+      // best answer rather than whichever line the host printed first.
+      const candidates: string[] = [];
+      const offsets = new Map<string, [number, number]>();
+      for (const name of fresh) {
+        const own = sessionDirCandidates(name, home);
+        offsets.set(name, [candidates.length, candidates.length + own.length]);
+        candidates.push(...own);
+      }
+      const res = await this.ssh.exec(
+        connectionId,
+        pathAwareCommand(directoryExistsProbeCommand(candidates)),
+      );
+      // Parsed regardless of exit code, like the worktree probe: the loop may
+      // have printed rows before whatever failed, and discarding them would
+      // throw away an answer we already have.
+      const exists = parseExistingDirectories(res.stdout, candidates);
+      for (const name of fresh) {
+        const [from, to] = offsets.get(name) ?? [0, 0];
+        const hit = candidates.slice(from, to).find((path) => exists.has(path));
+        known.set(name, hit ?? null);
+      }
+    }
+
+    const placed = sessions.map((session) => {
+      const derived = known.get(session.name);
+      if (derived == null) return session;
+      // The flag goes away with the guess it described: this path is the
+      // session's own, confirmed on the host, and the UI must stop marking the
+      // row as a guess.
+      return { ...session, path: derived, pathInferred: false };
+    });
+
+    this.reportPaths(connectionId, placed, raw);
+    return placed;
+  }
+
+  /**
+   * The remote `$HOME`, resolved once per connection.
+   *
+   * Its own tiny cache rather than a dependency on ProjectsService: this class
+   * is constructed with an SshService and nothing else, and threading a second
+   * service through every call site to run `printf %s "$HOME"` would be a
+   * larger change than the one line it saves. Null on any failure, which
+   * simply skips the derivation and leaves today's behaviour.
+   */
+  private async homeDir(connectionId: string): Promise<string | null> {
+    const cached = this.homes.get(connectionId);
+    if (cached !== undefined) return cached;
+    const res = await this.ssh.exec(connectionId, pathAwareCommand(HOME_COMMAND));
+    const home = res.exitCode === 0 ? res.stdout.trim() : '';
+    const value = home.startsWith('/') ? home : null;
+    this.homes.set(connectionId, value);
+    return value;
+  }
+
+  /**
+   * Write one log line for every session that still has no working directory of
+   * its own, WITH the raw host output that produced it.
+   *
+   * Silent when everything placed, which is the normal case and must stay free.
+   *
+   * ## Why the raw output is in here now
+   *
+   * The parsed counts alone sent three separate fixes down the wrong road. The
+   * decisive number in the user's log was `probeRows: 8` against `total: 12`,
+   * and `probeRows` is `enrichment.size` - the size of a map keyed by session
+   * name, i.e. rows that SURVIVED the parse and were then deduplicated. It
+   * cannot distinguish "tmux emitted four fewer rows" from "the parser
+   * discarded four rows" from "four rows arrived under a colliding name", and
+   * the previous attempts each assumed one of those and fixed it.
+   *
+   * A bounded slice of the actual bytes settles it in one reading, and the BYTE
+   * LENGTH beside it settles the one thing a slice cannot: whether the output
+   * was truncated. `stderr` and the exit code come too, because a probe that
+   * half-failed looks identical to one that found nothing.
+   *
+   * Bounded rather than complete, deliberately. This file is the user's, it is
+   * read by hand, and a probe on a busy host runs to tens of kilobytes; the cap
+   * is what keeps a diagnostic from becoming the thing that needs diagnosing.
+   *
+   * The list is returned unchanged - this observes, it never decides.
+   */
+  private reportPaths(
+    connectionId: string,
+    sessions: SessionSummary[],
+    raw: SessionListEvidence,
+  ): SessionSummary[] {
+    const report = diagnoseSessionPaths(sessions, raw.enrichment);
+    if (report.unplaced.length === 0) return sessions;
+
+    log('sessions', 'sessions with no reported working directory', {
+      total: report.total,
+      probeRows: raw.enrichment.size,
+      unplaced: report.unplaced,
+      unmatchedProbeKeys: report.unmatchedProbeKeys,
+      // Everything below is the raw evidence, so the next report does not need
+      // another round of guessing.
+      probeExit: raw.probe.exitCode,
+      probeBytes: raw.probe.stdout.length,
+      probeStdout: clip(raw.probe.stdout),
+      probeStderr: clip(raw.probe.stderr, 400),
+      listBytes: raw.helper.stdout.length,
+      listStdout: clip(raw.helper.stdout),
+      listStderr: clip(raw.helper.stderr, 400),
+    });
+
+    // A second round trip, only ever on this path, and only to answer the one
+    // question the rows above cannot: which tmux SERVER each session is on. Two
+    // distinct `#{pid}` values mean two servers; a listed session appearing in
+    // no row here exists on no socket we can reach. Fire-and-forget, because a
+    // diagnostic must never delay the list it is diagnosing.
+    void this.ssh
+      .exec(connectionId, pathAwareCommand(SESSION_SOCKET_DIAGNOSTIC_COMMAND))
+      .then((res) => {
+        log('sessions', 'which tmux server each session is on', {
+          exit: res.exitCode,
+          bytes: res.stdout.length,
+          stdout: clip(res.stdout),
+        });
+      })
+      .catch(() => {
+        // A diagnostic that fails is not an error the user should ever see.
+      });
+
     return sessions;
   }
 
@@ -227,10 +470,20 @@ export class PocketshellClient {
    * tmux too old to expand `#{@ps_agent_kind}`. Sessions must still list when
    * this probe comes back empty; only the folder-grouping metadata is lost.
    */
-  private async sessionEnrichment(connectionId: string): Promise<Map<string, SessionEnrichment>> {
+  private async sessionEnrichment(connectionId: string): Promise<SessionEnrichmentProbe> {
     const res = await this.ssh.exec(connectionId, pathAwareCommand(SESSION_ENRICHMENT_COMMAND));
-    if (res.exitCode !== 0) return new Map();
-    return parseSessionEnrichment(res.stdout);
+    // Parsed even on a non-zero exit, which is a change and a deliberate one.
+    // The probe is now a SEQUENCE - the default socket, then a loop over every
+    // other socket this user has - so its exit code is whatever the last
+    // iteration produced, and one stale socket whose server has died would
+    // otherwise throw away every row the healthy ones printed. Same reasoning
+    // the worktree probe already uses: parse what came back.
+    return {
+      enrichment: parseSessionEnrichment(res.stdout),
+      exitCode: res.exitCode,
+      stdout: res.stdout,
+      stderr: res.stderr,
+    };
   }
 
   /**

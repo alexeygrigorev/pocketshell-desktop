@@ -1,0 +1,8 @@
+git-dtc-website::1::1::/root/git/dtc-website::/root/git/dtc-website::0::
+git-red-stamp::1::1::/root/git/red-stamp::/root/git/red-stamp::0::claude
+git-dtc-website::1::1::/root/git/dtc-website::/root/git/dtc-website::0::
+git-red-stamp::1::1::/root/git/red-stamp::/root/git/red-stamp::0::claude
+git-ai-engineering-field-guide::1::1::/root/git/ai-engineering-field-guide::/root/git/ai-engineering-field-guide::0::
+git-auth::1::1::/root/git/auth::/root/git/auth::0::codex
+git-dtc-website-import::1::1::/root/git/dtc-website/import::/root/git/dtc-website/import::0::
+git-red-stamp-sound::1::1::/root/git/red-stamp-sound::/root/git/red-stamp-sound::0::

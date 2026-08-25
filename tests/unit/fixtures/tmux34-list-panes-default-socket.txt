@@ -1,0 +1,2 @@
+git-dtc-website::1::1::/root/git/dtc-website::/root/git/dtc-website::0::
+git-red-stamp::1::1::/root/git/red-stamp::/root/git/red-stamp::0::claude
