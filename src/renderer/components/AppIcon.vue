@@ -36,6 +36,7 @@ export type AppIconName =
   | 'home'
   | 'image'
   | 'minus'
+  | 'more-horizontal'
   | 'panel-left'
   | 'paperclip'
   | 'plus'
@@ -143,6 +144,20 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   // Feather's `minus`, its <line x1=5 x2=19 y=12> as a path. Two jobs: the
   // straight-line tool, and the stroke-width affordance (a rule of ink).
   minus: { paths: ['M5 12h14'] },
+  // Feather's `more-horizontal`, its three <circle r=1> as arc pairs — the
+  // same conversion `dot`, `search` and `settings` use. The overflow mark: it
+  // is the one glyph that reliably reads as "there is more here" without
+  // claiming what, which is exactly what a menu of named items needs from its
+  // trigger. Filled rather than stroked, because a 1px-radius outline circle
+  // at 14px is a smudge; `dot` is filled for the same reason.
+  'more-horizontal': {
+    paths: [
+      'M5 11a1 1 0 1 0 0 2a1 1 0 1 0 0-2',
+      'M12 11a1 1 0 1 0 0 2a1 1 0 1 0 0-2',
+      'M19 11a1 1 0 1 0 0 2a1 1 0 1 0 0-2',
+    ],
+    filled: true,
+  },
   // Feather's `sidebar`, its <rect> expressed as a path so the template stays
   // a single path loop. This is VS Code's "toggle sidebar" mark.
   'panel-left': {

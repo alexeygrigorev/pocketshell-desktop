@@ -16,9 +16,11 @@
 //
 //   - the IDENTITY is the OS window title now (the `win:setTitle` watch
 //     below) — the native title bar was already there, saying "PocketShell";
-//   - BACK and COLLAPSE moved into the session panel's own `SESSIONS` header
-//     row, which was already paying for its --topbar-h;
-//   - PORTS / USAGE / SETTINGS are a panel-foot row (`.host-actions` below);
+//   - BACK and COLLAPSE moved into the session panel's own header row, which
+//     was already paying for its --topbar-h;
+//   - PORTS / USAGE / SETTINGS were a panel-FOOT row, and are now an overflow
+//     menu in that same header (docs/DESIGN.md §5.3c) — the user asked for
+//     them at the top. The overlays did not move; only their triggers did;
 //   - DISCONNECT moved to the host picker's row for the connected host —
 //     every disconnect already navigated there, so the button now lives at
 //     its own destination, next to where the connection was opened.
@@ -36,6 +38,9 @@ import { windowTitle } from '../../shared/windowTitle';
 import AppIcon from '../components/AppIcon.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
+import HostActionsMenu from '../components/HostActionsMenu.vue';
+import { type HostPanel } from '../hostPanels';
+import type { Box } from '../../shared/popupPlacement';
 import PortPanelView from './PortPanelView.vue';
 import SettingsView from './SettingsView.vue';
 import UsageView from './UsageView.vue';
@@ -69,7 +74,34 @@ watch(
  * from the picker. One shared `SettingsView`, two callers, no navigation. See
  * the header comment in views/SettingsView.vue.
  */
-const panel = ref<'ports' | 'usage' | 'settings' | null>(null);
+const panel = ref<HostPanel | null>(null);
+
+/**
+ * The COLLAPSED RAIL's copy of the host-actions trigger.
+ *
+ * A second anchor rather than a shared one, because the two triggers are never
+ * on screen together — the rail replaces the panel — and threading one piece of
+ * state through both would mean the panel's header owning a control that is not
+ * rendered while the rail is showing.
+ */
+const railMenuAnchor = ref<Box | null>(null);
+const railMenuButton = ref<HTMLElement | null>(null);
+
+function toggleRailMenu(): void {
+  if (railMenuAnchor.value) {
+    railMenuAnchor.value = null;
+    return;
+  }
+  const box = railMenuButton.value?.getBoundingClientRect();
+  if (box) {
+    railMenuAnchor.value = { left: box.left, top: box.top, width: box.width, height: box.height };
+  }
+}
+
+function onRailPanel(name: HostPanel): void {
+  railMenuAnchor.value = null;
+  panel.value = name;
+}
 
 /** Session-panel geometry. Collapsed hides it entirely; width is drag-resized. */
 const panelCollapsed = ref(false);
@@ -199,6 +231,32 @@ async function onRefreshUsage(): Promise<void> {
         <button class="icon-btn" title="Back to hosts" @click="onBack">
           <AppIcon name="arrow-left" :size="14" />
         </button>
+        <!-- The rail exists so host controls are not stranded when the panel is
+             hidden (ca79ae2). Now that Ports/Usage/Settings live in the panel
+             HEADER rather than its foot, the rail has to carry them too, or
+             collapsing the panel would take all three off screen.
+             It carries the same OVERFLOW control the header does, not three
+             icons: a 36px rail has no room for text, and inventing a glyph
+             apiece for "ports" and "usage" is precisely the memory test
+             ca79ae2 refused. The menu opens with words either way. -->
+        <div class="rail-sep" />
+        <button
+          ref="railMenuButton"
+          class="icon-btn"
+          title="Ports, Usage, Settings"
+          aria-haspopup="menu"
+          :aria-expanded="railMenuAnchor !== null"
+          @click="toggleRailMenu"
+        >
+          <AppIcon name="more-horizontal" :size="14" />
+        </button>
+        <HostActionsMenu
+          v-if="railMenuAnchor"
+          :anchor="railMenuAnchor"
+          :trigger="railMenuButton"
+          @select="onRailPanel"
+          @close="railMenuAnchor = null"
+        />
       </aside>
 
       <!-- Persistent session panel: always mounted, never navigated away from.
@@ -209,25 +267,16 @@ async function onRefreshUsage(): Promise<void> {
         class="session-panel"
         :style="{ width: `${panelWidth}px` }"
       >
+        <!-- The host destinations moved INTO this component's header as an
+             overflow menu; it emits which overlay was asked for and this view
+             still owns them. -->
         <SessionTree
           :active-folder="activeFolder"
           @select="onSelectFolder"
           @back="onBack"
           @collapse="panelCollapsed = true"
+          @panel="panel = $event"
         />
-        <!-- Host destinations, at the panel's very foot — below even "New
-             session", because that button is scoped to the LIST above it and
-             this row is scoped to the host (the VS Code gear-at-the-bottom
-             register). Ports and Usage keep their text labels: they are the
-             two overlays, and two unlabeled glyphs here would be a memory
-             test. The gear stays icon-only, as it already is everywhere. -->
-        <div class="host-actions">
-          <button class="btn-ghost" title="Port forwarding" @click="panel = 'ports'">Ports</button>
-          <button class="btn-ghost" title="Provider usage" @click="panel = 'usage'">Usage</button>
-          <button class="icon-btn" title="Settings" @click="panel = 'settings'">
-            <AppIcon name="settings" />
-          </button>
-        </div>
       </aside>
       <div
         v-show="!panelCollapsed"
@@ -307,19 +356,14 @@ async function onRefreshUsage(): Promise<void> {
   background: var(--surface);
   border-right: 1px solid var(--border);
 }
-/* The gear takes the far corner — bottom-right of the panel is the app-level
-   slot, and pushing it away from Ports/Usage keeps the host pair reading as a
-   pair. */
-.host-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  flex: 0 0 auto;
-  padding: var(--sp-1) var(--sp-2);
-  border-top: 1px solid var(--border);
-}
-.host-actions .icon-btn {
-  margin-left: auto;
+/* Divides the NAVIGATION half of the rail (show panel, back) from the
+   HOST-OVERLAY half, so three icons in a column do not read as one list of
+   five unrelated things. */
+.rail-sep {
+  width: 16px;
+  height: 1px;
+  margin: var(--sp-1) 0;
+  background: var(--border);
 }
 /* Expand-affordance column for the collapsed state. Same surface and hairline
    as the panel it stands in for. */

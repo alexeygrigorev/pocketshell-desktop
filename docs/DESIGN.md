@@ -778,6 +778,44 @@ already documents this. The badge slot should be laid out now (fixed 72px
 trailing column) so adding the field later is a data change, not a layout
 change.
 
+### 5.3c Host actions move to the panel HEADER (revised again, implemented)
+
+The user circled the panel's foot row — Ports, Usage, the gear — and drew an
+arrow up to the header: "we can move this things there."
+
+§5.3b's placement was defensible and is kept above rather than rewritten. What
+it did not anticipate is simply that the user looked at it and wanted the
+controls at the top.
+
+**The problem is crowding, not location.** The header already holds Back, a
+label, Refresh and the collapse toggle. Adding three more makes seven controls
+in a strip whose panel drags down to a 200px floor. The options were: icon-only
+Ports and Usage (which is exactly the memory test §5.3b refused, and `AppIcon`
+has no unambiguous mark for either); a second header row (which spends the
+vertical space the topbar removal just reclaimed); or an overflow menu.
+
+**Chosen: one overflow control, plus dropping the `SESSIONS` word.**
+
+- The three move as a SINGLE `more-horizontal` button opening a menu. That
+  answers §5.3b's objection rather than overriding it — inside a menu Ports and
+  Usage keep their WORDS, and gain fuller ones ("Port forwarding", "Provider
+  usage") than the strip had room for. The strip spends one 14px mark instead
+  of ~150px.
+- `SESSIONS` goes. It is the cheapest thing in the row: a label for a panel
+  whose contents are self-evidently folders, on a window whose title already
+  carries the host identity. Its width pays for the new control outright, and
+  the net change to the strip is one icon.
+
+**The collapsed rail carries the same control.** The rail exists precisely so
+host controls are not stranded off-screen (§5.3b), and moving them from the foot
+to the header would otherwise have taken all three away when the panel is
+hidden. It gets the same overflow button — not three icons, because a 36px rail
+has no room for text and inventing a glyph apiece is the objection again.
+
+The overlays themselves do not move; only their triggers do. Settings stays
+independently reachable from the host PICKER, where a user looks for a
+startup-scoped setting.
+
 ### 5.3b Host workspace chrome — NO topbar (revised, implemented)
 
 The host topbar — back, collapse, `hetzner · alexey@135.181.114.209`,
@@ -792,7 +830,7 @@ redistributed, none deleted:
 | Host label (`name · user@hostname`) | **the OS window title** | The native title bar was already spending its row saying the static word "PocketShell". Built by the pure `src/shared/windowTitle.ts`, applied over `win:setTitle`; the renderer drives it because the title mirrors the *view*, not the connection (Back keeps the link alive while the picker shows). Also puts the host in the taskbar and Alt-Tab. |
 | Back arrow | leading slot of the session panel's `SESSIONS` header | An arrow beside `SESSIONS` reads as "leave this host's sessions". The header row was already paying `--topbar-h`. |
 | Collapse toggle (`panel-left`) | trailing slot of the same header, beside Refresh | The hide control sits on the thing it hides. |
-| Ports / Usage / Settings | a `.host-actions` row at the panel's **foot**, below "New session" | Host-scoped, so they belong to the host-scoped surface; bottom-most = most global (the VS Code gear-at-the-bottom register, gear far right). Ports and Usage keep text labels; two unlabeled overlay glyphs would be a memory test. Fits the 200px floor: ~150px of controls. |
+| Ports / Usage / Settings | **revised — see §5.3c.** Originally a `.host-actions` row at the panel's **foot**, below "New session": host-scoped controls on the host-scoped surface, bottom-most = most global (the VS Code gear-at-the-bottom register, gear far right). Ports and Usage kept text labels because two unlabeled overlay glyphs would be a memory test. ~150px of controls, fitting the 200px floor. |
 | Disconnect | the **host picker**, on the connected host's row | Every disconnect already navigated to the picker; the button now lives at its destination, labeled, beside where the connection was opened. The connected row also gets the §5.2 `--success` dot, and clicking it re-enters the workspace **without re-dialling** (a second dial would orphan the live connection). |
 | Missing-tools notice | unchanged — the workspace's top strip | Rendered only when a tool is absent, so the usual cost is zero rows. |
 

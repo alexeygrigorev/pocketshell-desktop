@@ -33,7 +33,7 @@
 // so a tab switch cannot cost a draft. It follows the ACTIVE SESSION TAB — its
 // per-session record is keyed on the session name, so switching session tabs
 // swaps the draft and switching back restores it (docs/WORKSPACE.md §8).
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '../ipc';
 import { useConnectionStore } from '../stores/connection';
@@ -47,6 +47,8 @@ import AppIcon from '../components/AppIcon.vue';
 import TerminalView from '../components/TerminalView.vue';
 import PromptComposer from '../components/PromptComposer.vue';
 import FilesView from './FilesView.vue';
+import PopupMenu from '../components/PopupMenu.vue';
+import { type Box } from '../../shared/popupPlacement';
 import { composerAgentKind } from '../../shared/composerSend';
 import { sanitisePart, sessionBaseName } from '../../shared/sessionNameParts';
 import {
@@ -81,8 +83,23 @@ const shells = useShellsStore();
  * It is never pruned: an entry is two small strings, and the alternative is a
  * teardown hook that has to guess when a workspace will not be revisited.
  */
+/**
+ * A Files tab is an id AND the directory it was opened at.
+ *
+ * The id alone was enough while every Files tab in a workspace opened at the
+ * folder. It stopped being enough with "open in a new tab" from the file tree,
+ * which opens one at an arbitrary path — and the seed has to outlive the tab's
+ * unmount, or coming back to the tab would drop it at the folder again. (The
+ * files store remembers where the user then NAVIGATED to; this is only where
+ * the tab starts, which the store has no way to know.)
+ */
+interface FilesTabState {
+  id: string;
+  path: string | null;
+}
+
 interface WorkspaceMemory {
-  filesTabs: string[];
+  filesTabs: FilesTabState[];
   activeTab: string | null;
 }
 const memory = new Map<string, WorkspaceMemory>();
@@ -98,12 +115,15 @@ function remembered(): WorkspaceMemory {
   // Exactly one Files tab to start with. The user asked for "a tab for
   // inspecting files, and we can also have multiple tabs" — one is the tab,
   // the rest are opened on purpose.
-  const fresh: WorkspaceMemory = { filesTabs: [`${folderKey.value}::files:1`], activeTab: null };
+  const fresh: WorkspaceMemory = {
+    filesTabs: [{ id: `${folderKey.value}::files:1`, path: null }],
+    activeTab: null,
+  };
   memory.set(memoryKey.value, fresh);
   return fresh;
 }
 
-const filesTabs = ref<string[]>([]);
+const filesTabs = ref<FilesTabState[]>([]);
 /** Which tab id is selected. Null means "the first one", resolved on read. */
 const selected = ref<string | null>(null);
 
@@ -165,7 +185,9 @@ const tabs = computed<WorkspaceTab[]>(() =>
       created: row.session.created,
     })),
     prefix.value,
-    filesTabs.value.map((id) => ({ id, path: folderPath.value })),
+    // `path: null` means "this tab was never given a seed", which resolves to
+    // the folder — the first Files tab of every workspace.
+    filesTabs.value.map((tab) => ({ id: tab.id, path: tab.path ?? folderPath.value })),
   ),
 );
 
@@ -179,6 +201,27 @@ const activeTab = computed<WorkspaceTab | null>(() => {
 const activeSession = computed(() =>
   activeTab.value?.kind === 'session' ? activeTab.value.session : null,
 );
+
+/**
+ * A session tab's tooltip.
+ *
+ * It names the session, and — when the session is not standing in the folder
+ * the tab is filed under — it names where it IS. That second line exists
+ * because grouping and location came apart deliberately
+ * (docs/WORKSPACE.md §6.5): a git worktree files under its repository, so a tab
+ * under `dtc-website` may be running in `~/git/merry-sniffing-token`. Without
+ * the line the user would open Files expecting the worktree and get the main
+ * checkout, with nothing on screen to explain the difference.
+ */
+function sessionTabTitle(session: string): string {
+  const row = sessions.sessions.find((s) => s.name === session);
+  const lines = [session];
+  const path = row?.path ?? null;
+  if (path && path !== folderPath.value) lines.push(`running in ${path}`);
+  if (row?.pathInferred) lines.push('folder inferred from the session name, not reported by tmux');
+  lines.push('click again to rename');
+  return lines.join('\n');
+}
 
 /** The session tab that is (or was last) showing — what the terminal holds. */
 const terminalSession = ref<string | null>(null);
@@ -235,7 +278,7 @@ function loadFolderState(): void {
  */
 function persist(): void {
   memory.set(memoryKey.value, {
-    filesTabs: [...filesTabs.value],
+    filesTabs: filesTabs.value.map((tab) => ({ ...tab })),
     activeTab: selected.value,
   });
 }
@@ -253,8 +296,12 @@ onMounted(async () => {
 
 watch(folderKey, () => {
   cancelRename();
-  addMenuOpen.value = false;
+  addAnchor.value = null;
   createError.value = null;
+  // A launch armed for the folder we are leaving must not fire a message into
+  // the folder we are arriving at.
+  pendingLaunch.value = null;
+  clearLaunchTimer();
   loadFolderState();
 });
 
@@ -377,8 +424,28 @@ const AGENT_CHOICES: { kind: SessionAgentKind | null; label: string }[] = [
   { kind: null, label: 'Shell' },
 ];
 
-const addMenuOpen = ref(false);
+/**
+ * The `+` menu's anchor box, or null when it is shut.
+ *
+ * A measured rect rather than a boolean, because the menu is teleported out of
+ * the tab strip and positioned `fixed`. It has to be: the strip scrolls
+ * horizontally, which makes it clip vertically too, and the original
+ * `position: absolute; top: 100%` dropdown was laid out exactly at that clip
+ * edge — invisible, which is why the user reported that clicking `+` did
+ * nothing. See src/shared/popupPlacement.ts for the measurement.
+ */
+const addAnchor = ref<Box | null>(null);
+const addButtonEl = ref<HTMLElement | null>(null);
 const createError = ref<string | null>(null);
+
+function toggleAddMenu(): void {
+  if (addAnchor.value) {
+    addAnchor.value = null;
+    return;
+  }
+  const box = addButtonEl.value?.getBoundingClientRect();
+  if (box) addAnchor.value = { left: box.left, top: box.top, width: box.width, height: box.height };
+}
 
 /**
  * A launch waiting for its session's PTY to exist.
@@ -391,6 +458,25 @@ const createError = ref<string | null>(null);
  * up simply gets a shell, which is what it would have been anyway.
  */
 const pendingLaunch = ref<{ session: string; kind: SessionAgentKind } | null>(null);
+/** Cleared when the launch lands; fires if it never does. See below. */
+let launchTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * How long to wait for the new session's PTY before giving up on the launch.
+ *
+ * Generous, because this is a fresh SSH channel plus a login shell plus
+ * `tmuxctl` (a Python program — ~250 ms of interpreter startup before it execs
+ * `tmux attach`, per the measurements in src/shared/attachCommand.ts), and on a
+ * real link the whole sequence has been observed at 1.5-2 s. Twelve seconds is
+ * far beyond that, so expiring means something is actually wrong rather than
+ * merely slow.
+ */
+const LAUNCH_TIMEOUT_MS = 12_000;
+
+function clearLaunchTimer(): void {
+  if (launchTimer !== null) clearTimeout(launchTimer);
+  launchTimer = null;
+}
 
 watch(
   () => (pendingLaunch.value ? shells.shellIdFor(pendingLaunch.value.session) : null),
@@ -398,6 +484,7 @@ watch(
     const pending = pendingLaunch.value;
     if (!pending || !shellId) return;
     pendingLaunch.value = null;
+    clearLaunchTimer();
     // Through the wrapper, never the bare `claude`/`codex` binary: the wrapper
     // is what records the kind, and a session started around it shows up as
     // `unknown` forever.
@@ -405,42 +492,125 @@ watch(
   },
 );
 
+/**
+ * Arm the launch, and arm a deadline with it.
+ *
+ * The deadline is the whole point of this function existing rather than one
+ * assignment. Before it, a launch whose PTY never came up did NOTHING, silently
+ * and forever: the session existed, the tab appeared, and the engine the user
+ * picked simply never started — with no message, because the only failure path
+ * was a watcher that never fired. "I asked for Claude and got a shell" is not a
+ * bug anyone can report usefully.
+ *
+ * The session itself is real either way, which is why this is a message and not
+ * a rollback: the user has a working shell in the right folder and can start
+ * the agent by hand. Telling them that is the entire remedy.
+ */
+function armLaunch(session: string, kind: SessionAgentKind): void {
+  clearLaunchTimer();
+  pendingLaunch.value = { session, kind };
+  launchTimer = setTimeout(() => {
+    if (pendingLaunch.value?.session !== session) return;
+    pendingLaunch.value = null;
+    launchTimer = null;
+    createError.value =
+      `Started "${session}", but its terminal did not come up in time, so ` +
+      `${kind} was not launched. The session is a plain shell - run ` +
+      `\`pocketshell agent ${kind}\` in it to start the agent.`;
+  }, LAUNCH_TIMEOUT_MS);
+}
+
+onBeforeUnmount(clearLaunchTimer);
+
 async function createSession(kind: SessionAgentKind | null): Promise<void> {
-  addMenuOpen.value = false;
+  addAnchor.value = null;
   createError.value = null;
   const connectionId = connection.connectionId;
   const path = folderPath.value;
   if (!connectionId || !path) {
-    createError.value = 'this folder has no known directory on the host';
+    createError.value =
+      'This folder has no known directory on the host, so a session cannot be started in it.';
     return;
   }
   // `unique` and not `reuse`: the folder's default session already has a tab,
   // so "new session" here can only mean a genuinely new one. The host walks
   // `<base>-2`, `<base>-3`, which is what makes the new tab read `Terminal 2`.
-  const result = await projects.start(connectionId, path, undefined, 'unique');
-  if (!result.ok || !result.sessionName) {
-    createError.value = result.error ?? 'could not start a session here';
+  //
+  // Wrapped, even though `projects.start` resolves a result object rather than
+  // throwing: the IPC call underneath it CAN reject (a closed window, a
+  // serialisation failure), and an unhandled rejection here would leave the
+  // user exactly where they started — a menu that closed and nothing else —
+  // which is the same "nothing happens" symptom this whole change is fixing.
+  let result;
+  try {
+    result = await projects.start(connectionId, path, undefined, 'unique');
+  } catch (e) {
+    createError.value = `Could not start a session here: ${(e as Error).message}`;
     return;
   }
-  if (kind) pendingLaunch.value = { session: result.sessionName, kind };
+  if (!result.ok || !result.sessionName) {
+    createError.value = result.error ?? 'Could not start a session here.';
+    return;
+  }
+  if (kind) armLaunch(result.sessionName, kind);
   await sessions.refresh(connectionId);
   selected.value = result.sessionName;
   persist();
 }
 
-/** Another Files tab, with its own directory memory (docs/WORKSPACE.md §3.5). */
-function addFilesTab(): void {
-  addMenuOpen.value = false;
+/**
+ * Another Files tab, with its own directory memory (docs/WORKSPACE.md §3.5).
+ *
+ * [seed] is where it opens. It defaults to the ACTIVE SESSION's own working
+ * directory when there is one, falling back to the folder. That distinction is
+ * not pedantry now that worktrees group under their repository
+ * (docs/WORKSPACE.md §6.5): a session in `~/git/dtc-website-decisions` shows up
+ * under the `dtc-website` folder, and "open a file browser" while looking at
+ * that session must mean the worktree the session is actually standing in, not
+ * the main checkout.
+ */
+function addFilesTab(seed?: string | null): void {
+  addAnchor.value = null;
   // Monotonic within the workspace, never a length-derived index: closing tab 2
   // and adding one would otherwise reuse its id and inherit its directory.
-  const next = `${folderKey.value}::files:${Date.now()}`;
+  const next = {
+    id: `${folderKey.value}::files:${Date.now()}`,
+    path: seed ?? summary.value?.path ?? folderPath.value,
+  };
   filesTabs.value = [...filesTabs.value, next];
-  selected.value = next;
+  selected.value = next.id;
   persist();
 }
 
+/**
+ * Open [path] in a NEW Files tab — the file tree's "open in a new tab" action.
+ *
+ * Routed through the workspace rather than done inside FilesView because a
+ * Files tab is a WORKSPACE-level thing: the tree can say "open this somewhere
+ * else", but only the tab bar can create the somewhere.
+ *
+ * A DIRECTORY seeds the tab and that is all. A FILE seeds the tab at its PARENT
+ * and then rides the existing reveal channel to open the file itself — the same
+ * path a clicked file link in the terminal takes, so there is one implementation
+ * of "land in a directory and open this thing" rather than two.
+ *
+ * Order matters and is the one subtle line here. `selected` is set BEFORE the
+ * reveal is requested, so that by the time the `files.reveal` watcher below
+ * runs, the active tab is already the new Files tab and the watcher declines to
+ * redirect the request at some other tab.
+ */
+function onOpenInNewTab(path: string, kind: 'dir' | 'file'): void {
+  if (kind === 'dir') {
+    addFilesTab(path);
+    return;
+  }
+  const parent = path.slice(0, path.lastIndexOf('/')) || '/';
+  addFilesTab(parent);
+  files.requestReveal(path);
+}
+
 function closeFilesTab(id: string): void {
-  filesTabs.value = filesTabs.value.filter((tab) => tab !== id);
+  filesTabs.value = filesTabs.value.filter((tab) => tab.id !== id);
   if (selected.value === id) selected.value = null;
   persist();
 }
@@ -525,11 +695,7 @@ function onFocusTerminal(): void {
           <button
             v-else
             :class="['tab', { active: tab.id === activeTab?.id, files: tab.kind === 'files' }]"
-            :title="
-              tab.kind === 'session'
-                ? `${tab.session}\nclick again to rename`
-                : 'File browser'
-            "
+            :title="tab.kind === 'session' ? sessionTabTitle(tab.session) : 'File browser'"
             @click="selectTab(tab)"
           >
             {{ tab.label }}
@@ -549,28 +715,48 @@ function onFocusTerminal(): void {
             </span>
           </button>
         </template>
+      </nav>
 
-        <div class="add-wrap">
-          <button class="tab add" title="New session or Files tab" @click="addMenuOpen = !addMenuOpen">
-            <AppIcon name="plus" :size="14" />
-          </button>
-          <!-- A menu rather than the folder-first dialog: that dialog exists to
-               CHOOSE a folder, and inside a folder workspace the folder is
-               already chosen. What is left to choose is the engine. -->
-          <ul v-if="addMenuOpen" class="add-menu">
-            <li class="add-menu-head">New session</li>
+      <!-- The `+` sits OUTSIDE the scrolling strip, which is both a fix and an
+           improvement: inside it, a folder with many tabs scrolled its own
+           "new tab" button off the end. Its menu is teleported (PopupMenu), so
+           the strip's clipping cannot reach it either way. -->
+      <div class="add-wrap">
+        <button
+          ref="addButtonEl"
+          class="tab add"
+          :class="{ active: addAnchor !== null }"
+          title="New session or Files tab"
+          aria-haspopup="menu"
+          :aria-expanded="addAnchor !== null"
+          @click="toggleAddMenu"
+        >
+          <AppIcon name="plus" :size="14" />
+        </button>
+        <!-- A menu rather than the folder-first dialog: that dialog exists to
+             CHOOSE a folder, and inside a folder workspace the folder is
+             already chosen. What is left to choose is the engine. -->
+        <PopupMenu
+          v-if="addAnchor"
+          :anchor="addAnchor"
+          :ignore="[addButtonEl]"
+          label="New session or Files tab"
+          @close="addAnchor = null"
+        >
+          <ul>
+            <li class="menu-head">New session</li>
             <li v-for="choice in AGENT_CHOICES" :key="choice.label">
-              <button class="add-menu-item" @click="createSession(choice.kind)">
+              <button class="menu-item" @click="createSession(choice.kind)">
                 {{ choice.label }}
               </button>
             </li>
-            <li class="add-menu-sep" />
+            <li class="menu-sep" />
             <li>
-              <button class="add-menu-item" @click="addFilesTab">New Files tab</button>
+              <button class="menu-item" @click="addFilesTab()">New Files tab</button>
             </li>
           </ul>
-        </div>
-      </nav>
+        </PopupMenu>
+      </div>
 
       <span class="folder-name" :title="folderTitle">{{ folder?.label ?? folderKey }}</span>
 
@@ -600,8 +786,9 @@ function onFocusTerminal(): void {
         <FilesView
           v-if="activeTab?.kind === 'files' && connection.connectionId"
           :key="activeTab.id"
-          :start-path="folderPath ?? undefined"
+          :start-path="activeTab.path ?? undefined"
           :session-key="activeTab.id"
+          @open-in-new-tab="onOpenInNewTab"
         />
 
         <!-- No tabs at all: the folder's sessions were killed while this was
@@ -774,59 +961,24 @@ function onFocusTerminal(): void {
 .rename-input.invalid {
   border-color: var(--error);
 }
+/* A sibling of the scrolling strip, not a child of it, so the `+` stays put
+   while the tabs scroll under it. `position: relative` is deliberately NOT set:
+   the menu is teleported and positioned from a measured viewport rect, so this
+   element is not a containing block for anything. */
 .add-wrap {
-  position: relative;
   display: flex;
   align-items: stretch;
+  flex: 0 0 auto;
 }
 .tab.add {
   color: var(--fg-muted);
 }
-/* Anchored to the `+` rather than centred: it is a continuation of the control
-   that opened it, and a menu that appears somewhere else has to be re-found. */
-.add-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 20;
-  list-style: none;
-  margin: var(--sp-1) 0 0;
-  padding: var(--sp-1);
-  min-width: 160px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  box-shadow: 0 8px 24px var(--scrim);
-}
-.add-menu-head {
-  padding: var(--sp-1) var(--sp-2);
-  font-size: var(--fs-100);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--fg-muted);
-}
-.add-menu-sep {
-  height: 1px;
-  margin: var(--sp-1) 0;
-  background: var(--border);
-}
-.add-menu-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: none;
-  border-radius: var(--r-sm);
+.tab.add.active {
   color: var(--fg);
-  padding: var(--sp-1) var(--sp-2);
-  cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: var(--fs-300);
-}
-.add-menu-item:hover {
   background: var(--state-hover);
 }
+/* The menu itself is PopupMenu.vue — teleported to <body>, so it has no styles
+   here and cannot be clipped by the strip. All that is left is the button. */
 /* A failed create is a sentence, not a dialog: the tab bar is still usable and
    the message is about the one action that did not happen. */
 .bar-error {

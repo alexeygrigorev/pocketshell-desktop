@@ -4,11 +4,26 @@
 // refresh, and a "new folder/file" affordance wired to the store.
 import { computed, nextTick, ref } from 'vue';
 import AppIcon, { type AppIconName } from './AppIcon.vue';
+import PopupMenu from './PopupMenu.vue';
+import { api } from '../ipc';
 import { useConnectionStore } from '../stores/connection';
 import { useFilesStore, formatBytes, normaliseTypedPath } from '../stores/files';
+import { splitLabel } from '../sessionGrouping';
+import { pointAnchor, type Box } from '../../shared/popupPlacement';
 import type { DirEntry } from '../../main/sftp/SftpService';
 
-const emit = defineEmits<{ openFile: [path: string] }>();
+const emit = defineEmits<{
+  openFile: [path: string];
+  /**
+   * Open [path] in a NEW Files tab rather than replacing this one.
+   *
+   * Emitted rather than done here because a Files TAB belongs to the folder
+   * workspace: the tree can say "somewhere else", but only the tab bar can
+   * create the somewhere. [kind] lets the workspace decide what "open" means
+   * for a file versus a directory — see the menu below.
+   */
+  openInNewTab: [path: string, kind: 'dir' | 'file'];
+}>();
 
 const connection = useConnectionStore();
 const files = useFilesStore();
@@ -46,6 +61,88 @@ const breadcrumbs = computed(() => {
   return crumbs;
 });
 
+/**
+ * The row the context menu is acting on, and where to draw the menu.
+ *
+ * `null` closes it. The ENTRY is held rather than just its path because the
+ * menu's items differ for a directory and a file, and re-deriving that from a
+ * path would mean guessing from the spelling.
+ */
+const menu = ref<{ entry: DirEntry; anchor: Box } | null>(null);
+
+/** Absolute remote path of an entry in the current directory. */
+function pathOf(entry: DirEntry): string {
+  const base = files.cwd.endsWith('/') ? files.cwd.slice(0, -1) : files.cwd;
+  return `${base}/${entry.name}`;
+}
+
+/**
+ * Right-click a row.
+ *
+ * `.prevent` on the handler stops the browser's own menu, which in a packaged
+ * Electron app is the default Chromium one and has nothing useful on it.
+ *
+ * This deliberately does NOT collide with TerminalView's `contextmenu` handler
+ * (which pastes): that listener is bound to the terminal's own container
+ * element, and the two elements are in different tabs of the workspace — they
+ * are never both on screen, and neither is an ancestor of the other, so there
+ * is no bubbling path between them.
+ */
+function onRowContextMenu(e: MouseEvent, entry: DirEntry): void {
+  menu.value = { entry, anchor: pointAnchor(e.clientX, e.clientY) };
+}
+
+function closeMenu(): void {
+  menu.value = null;
+}
+
+/**
+ * "Open in a new tab" — the user's "open in new panel".
+ *
+ * A DIRECTORY opens a Files tab standing in it. A FILE opens a Files tab in its
+ * PARENT directory with the file itself open, which is the reading that makes
+ * the phrase true: you asked for a panel showing that thing, so the panel shows
+ * it. Seeding at the file's own path instead would ask the SFTP layer to list a
+ * regular file, and landing in the parent with nothing open would make the
+ * action indistinguishable from right-clicking the folder.
+ */
+function openInNewTab(entry: DirEntry): void {
+  const path = pathOf(entry);
+  emit('openInNewTab', path, entry.type === 'dir' ? 'dir' : 'file');
+  closeMenu();
+}
+
+/**
+ * Save an entry to this machine, through the native dialog.
+ *
+ * The store's own `download()` only ever acts on the OPEN file, so it cannot
+ * serve a row the user has merely right-clicked. This calls the same channel
+ * with the row's path instead of adding a second "open it first" step to a
+ * menu whose whole point is acting on something you have not opened.
+ */
+async function downloadEntry(entry: DirEntry): Promise<void> {
+  const connectionId = connId.value;
+  closeMenu();
+  if (!connectionId) return;
+  try {
+    await api.sftp.saveAs({ connectionId, remotePath: pathOf(entry) });
+  } catch (e) {
+    files.error = (e as Error).message;
+  }
+}
+
+/** Put the absolute path on the clipboard — the thing a terminal wants next. */
+async function copyPath(entry: DirEntry): Promise<void> {
+  const path = pathOf(entry);
+  closeMenu();
+  try {
+    await navigator.clipboard.writeText(path);
+  } catch {
+    // A clipboard a user has denied is not worth an error banner over a path
+    // that is already visible in the row's tooltip.
+  }
+}
+
 async function onEntry(entry: DirEntry): Promise<void> {
   if (!connId.value) return;
   if (entry.type === 'dir') {
@@ -70,6 +167,21 @@ async function onCrumb(path: string): Promise<void> {
  */
 function icon(entry: DirEntry): AppIconName {
   return entry.type === 'dir' ? 'folder' : entry.type === 'symlink' ? 'symlink' : 'file';
+}
+
+/**
+ * Entry names middle-truncate, the same way session and folder labels do.
+ *
+ * They used to end-truncate (`text-overflow: ellipsis`), which was tolerable
+ * while the pane was content-sized and simply grew to fit. Now that the pane
+ * has a fixed width the truncation actually bites, and the END of a filename is
+ * the part that distinguishes it — `report-2026-01.csv` and
+ * `report-2026-02.csv` are one character apart, and it is the last one before
+ * the extension. `splitLabel` is reused rather than reimplemented so this is
+ * the app's ONE truncation rule and not a third variant of it.
+ */
+function nameParts(name: string): { labelHead: string; labelTail: string } {
+  return splitLabel(name);
 }
 
 // ---------------------------------------------------------------------------
@@ -186,22 +298,77 @@ defineExpose({ editPath: startEditing });
         class="entry"
         :class="{ active: files.openPath && files.openPath.endsWith('/' + e.name) }"
         @click="onEntry(e)"
+        @contextmenu.prevent="onRowContextMenu($event, e)"
       >
         <AppIcon :name="icon(e)" :class="icon(e)" />
-        <span class="nm" :title="e.name">{{ e.name }}</span>
+        <!-- Two spans, no measurement code: the head shrinks and ellipsises,
+             the tail is protected. Same pattern as the session panel. -->
+        <span class="nm" :title="e.name">
+          <span class="nm-head">{{ nameParts(e.name).labelHead }}</span>
+          <span v-if="nameParts(e.name).labelTail" class="nm-tail">
+            {{ nameParts(e.name).labelTail }}
+          </span>
+        </span>
         <span v-if="e.type === 'file'" class="sz">{{ formatBytes(e.size) }}</span>
       </li>
       <li v-if="!files.entries.length && !files.loading" class="empty muted">empty directory</li>
     </ul>
     <p v-if="files.error" class="error">{{ files.error }}</p>
+
+    <!-- Teleported, so the scrolling `.entries` list cannot clip it — the same
+         reason the workspace's `+` menu is (src/shared/popupPlacement.ts). -->
+    <PopupMenu
+      v-if="menu"
+      :anchor="menu.anchor"
+      :label="menu.entry.name"
+      @close="closeMenu"
+    >
+      <ul>
+        <li class="menu-head">{{ menu.entry.name }}</li>
+        <li>
+          <button class="menu-item" @click="openInNewTab(menu.entry)">
+            <AppIcon name="plus" :size="14" />
+            Open in a new tab
+          </button>
+        </li>
+        <li>
+          <button class="menu-item" @click="onEntry(menu.entry), closeMenu()">
+            <AppIcon :name="icon(menu.entry)" :size="14" />
+            {{ menu.entry.type === 'dir' ? 'Open here' : 'Open in this tab' }}
+          </button>
+        </li>
+        <li class="menu-sep" />
+        <li>
+          <button class="menu-item" @click="copyPath(menu.entry)">
+            <AppIcon name="edit-2" :size="14" />
+            Copy path
+          </button>
+        </li>
+        <!-- Download is a FILE action. A directory would need a recursive
+             transfer the SFTP layer does not offer, and an item that silently
+             does nothing is worse than one that is not there. -->
+        <li v-if="menu.entry.type !== 'dir'">
+          <button class="menu-item" @click="downloadEntry(menu.entry)">
+            <AppIcon name="download" :size="14" />
+            Save to this computer…
+          </button>
+        </li>
+      </ul>
+    </PopupMenu>
   </div>
 </template>
 
 <style scoped>
+/* WIDTH IS SET BY THE PARENT, as an inline `flex` basis (FilesView.vue).
+   It used to be `min-width: 260px` with an `auto` basis, which made the pane
+   CONTENT-sized: it grew to the longest filename in the directory and shrank
+   again when you left, so the editor beside it moved every time the user
+   browsed. That is the complaint this fixed basis answers; `min-width: 0` is
+   what lets the basis actually win over the content. */
 .file-tree {
   display: flex;
   flex-direction: column;
-  min-width: 260px;
+  min-width: 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
   height: 100%;
@@ -317,12 +484,30 @@ defineExpose({ editPath: startEditing });
 .entry.active .app-icon.symlink {
   color: var(--fg-secondary);
 }
+/* A flex row of [head, tail] rather than one ellipsising box — see
+   `nameParts`. `min-width: 0` is what allows the head to shrink below its
+   content width, which is the whole mechanism. */
 .nm {
+  display: flex;
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+/* The shrinkable half. */
+.nm-head {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono);
+}
+/* Protected: for a filename the distinguishing text is the tail — the counter
+   before the extension, and the extension itself. */
+.nm-tail {
+  flex: none;
+  white-space: nowrap;
 }
 .sz {
   color: var(--fg-secondary);

@@ -16,7 +16,7 @@
 // `worker-src` falls back to it), which is exactly what Monaco's language
 // services need — the dev-works/packaged-dies failure. See the header of
 // components/CodeEditor.vue for the probe output.
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useFilesStore, formatBytes } from '../stores/files';
 import FileTree from '../components/FileTree.vue';
@@ -29,6 +29,15 @@ import FileTree from '../components/FileTree.vue';
  * chunk of its own, fetched only for the language actually opened.
  */
 const CodeEditor = defineAsyncComponent(() => import('../components/CodeEditor.vue'));
+
+const emit = defineEmits<{
+  /**
+   * The tree asked for a path in a NEW Files tab. Forwarded straight to the
+   * workspace, which owns the tab bar — see FileTree's own comment for why the
+   * tree cannot do this itself.
+   */
+  openInNewTab: [path: string, kind: 'dir' | 'file'];
+}>();
 
 const props = defineProps<{
   /** Directory to open first (e.g. the selected session's cwd). Defaults to home. */
@@ -45,6 +54,91 @@ const props = defineProps<{
 const connection = useConnectionStore();
 const files = useFilesStore();
 const connId = computed(() => connection.connectionId);
+
+// ---------------------------------------------------------------------------
+// Tree pane width (docs/WORKSPACE.md §3.7)
+// ---------------------------------------------------------------------------
+/**
+ * The file tree used to be CONTENT-sized — `min-width: 260px` over an `auto`
+ * flex basis — so it grew to the longest filename in whatever directory was
+ * open and shrank again on the way back out. Browsing therefore moved the
+ * editor beside it on nearly every click, which is what the user objected to.
+ *
+ * It is a definite basis now, and drag-resizable, because a fixed width that is
+ * wrong for your filenames is a different complaint of the same shape. The
+ * mechanism is the session panel's, deliberately: same clamp, same
+ * clamp-on-READ as well as on write, same one-write-per-drag. See
+ * HostWorkspaceView.vue, which explains why the read is clamped too — a stored
+ * value can predate a change to the clamp, and a hand-edited or corrupt entry
+ * must not be able to strand the pane.
+ *
+ * ## Why localStorage and not the settings store
+ *
+ * Because it is a pixel width of a pane in this window, which is what the
+ * session panel's width is, and that one lives in localStorage. The settings
+ * store is for preferences the user sets in the Settings overlay and reasons
+ * about by name; a number you arrive at by dragging until it looks right is not
+ * one of those.
+ *
+ * ## Why it is shared by every Files tab, not stored per tab
+ *
+ * A Files TAB remembers its own DIRECTORY, because where you are browsing is a
+ * fact about that tab. How wide the pane is, is a fact about how you like to
+ * look at files — and per-tab widths would mean the pane jumping as you moved
+ * between two Files tabs, which is the original complaint wearing a hat. It is
+ * app-level for the same reason the composer's geometry is (stores/composer.ts:
+ * "PREFERENCES ABOUT THE TOOL").
+ */
+const MIN_TREE_WIDTH = 180;
+const MAX_TREE_WIDTH = 640;
+const DEFAULT_TREE_WIDTH = 260;
+const TREE_WIDTH_KEY = 'pocketshell.filesTreeWidth';
+
+function loadTreeWidth(): number {
+  const stored = Number.parseInt(window.localStorage.getItem(TREE_WIDTH_KEY) ?? '', 10);
+  if (Number.isNaN(stored)) return DEFAULT_TREE_WIDTH;
+  return Math.min(MAX_TREE_WIDTH, Math.max(MIN_TREE_WIDTH, stored));
+}
+
+const treeWidth = ref(loadTreeWidth());
+
+/**
+ * `flex: 0 0 <n>px` and not `width`, because the tree is a flex item: a `width`
+ * would still be overridden by `flex-shrink` the moment the editor beside it
+ * wanted room, and the pane would go back to moving on its own.
+ */
+const treeStyle = computed(() => ({ flex: `0 0 ${treeWidth.value}px` }));
+
+/** Left edge of the splitter, in viewport coords — the drag's origin. */
+let dragOrigin = 0;
+
+function onTreeDragStart(e: MouseEvent): void {
+  // Measured from the pane's own left edge rather than from `clientX` directly:
+  // this view is inside the workspace, which is inside the session panel's
+  // splitter, so `clientX` is not the tree's width. HostWorkspaceView can use
+  // `clientX` because its panel really does start at x=0.
+  const paneLeft = (e.currentTarget as HTMLElement).parentElement?.getBoundingClientRect().left ?? 0;
+  dragOrigin = paneLeft;
+  document.addEventListener('mousemove', onTreeDragMove);
+  document.addEventListener('mouseup', onTreeDragEnd);
+}
+
+function onTreeDragMove(e: MouseEvent): void {
+  treeWidth.value = Math.min(
+    MAX_TREE_WIDTH,
+    Math.max(MIN_TREE_WIDTH, e.clientX - dragOrigin),
+  );
+}
+
+function onTreeDragEnd(): void {
+  document.removeEventListener('mousemove', onTreeDragMove);
+  document.removeEventListener('mouseup', onTreeDragEnd);
+  // Written once per drag, not per mousemove: a localStorage write on every
+  // pointer sample is a synchronous disk touch inside the drag loop.
+  window.localStorage.setItem(TREE_WIDTH_KEY, String(treeWidth.value));
+}
+
+onBeforeUnmount(onTreeDragEnd);
 
 onMounted(async () => {
   if (connId.value) await files.open(connId.value, props.startPath, props.sessionKey);
@@ -146,7 +240,22 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
 
 <template>
   <div class="files-view" @keydown="onKeydown">
-    <FileTree ref="treeRef" @open-file="onOpenFile" />
+    <FileTree
+      ref="treeRef"
+      :style="treeStyle"
+      @open-file="onOpenFile"
+      @open-in-new-tab="(path, kind) => emit('openInNewTab', path, kind)"
+    />
+    <!-- Same sash treatment as the session panel's: transparent at rest,
+         because the tree draws its own right hairline, and highlighted only
+         when the cursor LINGERS so sweeping across never flashes a bar. -->
+    <div
+      class="tree-splitter"
+      role="separator"
+      aria-orientation="vertical"
+      title="Drag to resize"
+      @mousedown.prevent="onTreeDragStart"
+    />
     <div class="editor-area">
       <template v-if="files.openPath">
         <div class="editor-bar">
@@ -236,6 +345,17 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
 
 <style scoped>
 /* `flex: 1` because the parent `.tab-body` is a flex row. */
+.tree-splitter {
+  flex: 0 0 auto;
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease);
+}
+.tree-splitter:hover {
+  background: var(--accent-dim);
+  transition-delay: 250ms;
+}
 .files-view {
   display: flex;
   flex: 1;

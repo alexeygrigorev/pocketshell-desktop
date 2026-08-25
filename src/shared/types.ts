@@ -147,6 +147,21 @@ export interface SessionSummary {
    * inferred instead of implying certainty it does not have.
    */
   pathInferred?: boolean;
+  /**
+   * The repository this session's working directory belongs to, when that is
+   * NOT the directory itself — i.e. when the session runs in a linked git
+   * WORKTREE (docs/WORKSPACE.md §6.5).
+   *
+   * Set only for worktrees; absent for an ordinary checkout at any depth. It is
+   * what the session panel GROUPS by, so a worktree of `~/git/dtc-website`
+   * files under `dtc-website` rather than under its own directory name.
+   *
+   * `path` is deliberately left alone. Grouping is about where work belongs
+   * conceptually; `path` is where the process actually stands, and it is what
+   * the Files tab opens at — a user who opens files from a worktree session
+   * must get the worktree's contents, not the main checkout's.
+   */
+  repoRoot?: string | null;
 }
 
 /**

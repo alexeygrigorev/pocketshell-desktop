@@ -48,6 +48,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import NewSessionDialog from './NewSessionDialog.vue';
+import HostActionsMenu from './HostActionsMenu.vue';
+import { type HostPanel } from '../hostPanels';
+import { type Box } from '../../shared/popupPlacement';
 import { useConnectionStore } from '../stores/connection';
 import { useProjectsStore } from '../stores/projects';
 import { useSessionsStore } from '../stores/sessions';
@@ -80,6 +83,9 @@ const props = defineProps<{
  * component only announces the clicks.
  */
 const emit = defineEmits<{
+  /** Open a host-scoped overlay. The workspace owns the overlays; this row
+   *  only announces which one was asked for. */
+  panel: [name: HostPanel];
   /**
    * Open a folder's workspace. The optional second argument names a session
    * tab to select on arrival — used when a session was just created, where
@@ -97,6 +103,47 @@ const sessions = useSessionsStore();
 const settings = useSettingsStore();
 /** Whether the folder-first creation dialog is open. */
 const creatingSession = ref(false);
+
+/**
+ * The host-actions overflow menu — Ports, Usage and Settings
+ * (docs/DESIGN.md §5.3c).
+ *
+ * The user circled the panel's foot row and drew an arrow to this header:
+ * "we can move this things there". Moving them is easy; fitting them is not.
+ * The header already holds Back, a label, Refresh and the collapse toggle, and
+ * the panel drags down to a 200px floor — seven controls in one strip at that
+ * width is not a strip, it is a scramble.
+ *
+ * So they move as ONE control, and this is what makes the move affordable
+ * rather than merely possible. It also settles the objection ca79ae2 raised
+ * against putting them here in the first place: "two unlabelled overlay glyphs
+ * would be a memory test". Inside a menu they keep their WORDS — `Ports`,
+ * `Usage`, `Settings` — so nothing is reduced to a glyph, and the strip spends
+ * one 14px mark instead of ~150px of buttons.
+ *
+ * The `SESSIONS` label goes with them, and it is the cheapest thing in the row:
+ * it labels a panel whose contents are self-evidently folders, on a window
+ * whose title already carries the host. Its width pays for the new control
+ * outright.
+ */
+const hostMenuAnchor = ref<Box | null>(null);
+const hostMenuButton = ref<HTMLElement | null>(null);
+
+function toggleHostMenu(): void {
+  if (hostMenuAnchor.value) {
+    hostMenuAnchor.value = null;
+    return;
+  }
+  const box = hostMenuButton.value?.getBoundingClientRect();
+  if (box) {
+    hostMenuAnchor.value = { left: box.left, top: box.top, width: box.width, height: box.height };
+  }
+}
+
+function openPanel(name: HostPanel): void {
+  hostMenuAnchor.value = null;
+  emit('panel', name);
+}
 
 /**
  * The host's `$HOME`, which is what turns `/home/alexey/git/dataops` into the
@@ -371,14 +418,26 @@ function fmtRelative(epochSeconds: number): string {
 
 <template>
   <div class="tree">
+    <!-- The `SESSIONS` word is gone, and its width is what pays for the host
+         actions arriving here. See `hostMenuAnchor` in the script. -->
     <div class="tree-header">
       <button class="icon-btn" title="Back to hosts" @click="emit('back')">
         <AppIcon name="arrow-left" :size="14" />
       </button>
-      <span class="title">sessions</span>
       <div class="header-actions">
         <button class="icon-btn" :disabled="sessions.loading" title="Refresh" @click="onRefresh">
           <AppIcon name="refresh" :size="14" :class="{ spin: sessions.loading }" />
+        </button>
+        <button
+          ref="hostMenuButton"
+          class="icon-btn"
+          :class="{ on: hostMenuAnchor !== null }"
+          title="Ports, Usage, Settings"
+          aria-haspopup="menu"
+          :aria-expanded="hostMenuAnchor !== null"
+          @click="toggleHostMenu"
+        >
+          <AppIcon name="more-horizontal" :size="14" />
         </button>
         <button class="icon-btn" title="Hide session panel" @click="emit('collapse')">
           <!-- VS Code's "toggle sidebar" mark: truer to the action than a
@@ -386,6 +445,14 @@ function fmtRelative(epochSeconds: number): string {
           <AppIcon name="panel-left" :size="14" />
         </button>
       </div>
+
+      <HostActionsMenu
+        v-if="hostMenuAnchor"
+        :anchor="hostMenuAnchor"
+        :trigger="hostMenuButton"
+        @select="openPanel"
+        @close="hostMenuAnchor = null"
+      />
     </div>
 
     <div class="folder-list">
@@ -530,12 +597,11 @@ function fmtRelative(epochSeconds: number): string {
   gap: var(--sp-1);
   margin-left: auto;
 }
-.title {
-  font-size: var(--fs-100);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--fg-muted);
+/* Pressed state for the overflow trigger, so an open menu is legible as
+   belonging to this button. */
+.icon-btn.on {
+  color: var(--fg);
+  background: var(--state-hover);
 }
 .folder-list {
   flex: 1;

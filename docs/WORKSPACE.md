@@ -247,7 +247,82 @@ each other's directory. The terminal is the opposite and stays mounted
 (`v-show`) across tab switches for the reason `SessionWorkspaceView` already
 documented: unmounting it closes the SSH shell and drops the tmux attach.
 
-### 3.6 One `$HOME`, not two
+### 3.6 The file tree's width is fixed, and drag-resizable
+
+Reported after the first build: "file browser side panel keeps changing the
+width let's make it fixed."
+
+`.file-tree` was `min-width: 260px` over an `auto` flex basis, which makes a
+flex item CONTENT-sized: it grew to the longest filename in whatever directory
+was open and shrank again on the way out, so the editor beside it moved on
+nearly every click. It has a definite basis now, `flex: 0 0 <n>px`, with the
+names middle-truncating instead of pushing the pane.
+
+Three decisions worth recording:
+
+- **It is resizable, not merely fixed.** A fixed width that is wrong for your
+  filenames is the same complaint in a different form. The mechanism is the
+  session panel's, deliberately reused: same clamp, same one-write-per-drag,
+  and the same clamp-on-READ — which exists because a stored value can predate
+  a change to the clamp, and a corrupt or hand-edited entry must not be able to
+  strand the pane off screen.
+- **It is app-level, not per Files tab.** A tab remembers its own DIRECTORY,
+  because where you are browsing is a fact about that tab. How wide the pane is
+  is a fact about how you like to look at files, and a per-tab width would make
+  the pane jump as you moved between two Files tabs — the original complaint,
+  wearing a hat. Same split the composer draws between per-session state and
+  "PREFERENCES ABOUT THE TOOL".
+- **It lives in `localStorage`, not the settings store.** It is a pixel width of
+  a pane in this window, which is exactly what the session panel's width is, and
+  that one is in `localStorage`. The settings store is for preferences a user
+  sets by name in the Settings overlay; a number you reach by dragging until it
+  looks right is not one.
+
+Because the width is app-level and the truncation is `splitLabel` — the same
+function the session panel and the tab bar use — there is no third truncation
+style and no width that resets when a tab comes back.
+
+### 3.7 Right-click in the file tree
+
+The user drew an arrow from a directory row and asked for "open in new panel".
+
+**Read as a new TAB, not a split.** Their model so far has been tabs
+throughout, §3.5 already gives every Files tab its own directory memory, and a
+split view is a much larger change. If a split was meant, this is cheap to
+correct — say so and it becomes a layout change inside the Files tab rather
+than a rework of the tab model.
+
+The menu carries four items rather than one, because a context menu that opens
+for a single action is a worse trade than the right-click itself:
+
+| Item | Directory | File |
+|---|---|---|
+| Open in a new tab | tab opens standing in it | tab opens in its PARENT with the file open |
+| Open here / Open in this tab | enters it | opens it in the current tab |
+| Copy path | absolute path to the clipboard | same |
+| Save to this computer… | *not offered* | native save dialog |
+
+**What "open in a new tab" means for a FILE** is the one judgement call.
+Seeding the tab at the file's own path would ask the SFTP layer to list a
+regular file; landing in the parent with nothing open would be
+indistinguishable from right-clicking the folder. So it lands in the parent AND
+opens the file, which is the reading that makes the phrase true — you asked for
+a panel showing that thing. It rides the existing reveal channel, the same one
+a clicked path in the terminal uses, so there is one implementation of "land in
+a directory and open this" rather than two.
+
+Download is absent for a directory rather than present and inert: a recursive
+transfer is not something the SFTP layer offers, and a menu item that silently
+does nothing is worse than one that is not there.
+
+**Collisions checked.** `TerminalView` binds `contextmenu` to paste, but on its
+own container element — the two live in different tabs of the workspace, are
+never both on screen, and neither is an ancestor of the other, so there is no
+bubbling path between them. The menu takes Escape in CAPTURE and stops it, so
+one press closes the menu without also dismissing the composer or reaching the
+agent in the pane.
+
+### 3.8 One `$HOME`, not two
 
 The workspace's identity is a home-relative key, so `$HOME` is what decides
 whether a folder is `~/git/foo` or `/home/me/git/foo` — and the panel and the
@@ -506,7 +581,76 @@ filed under the root recovered from the first component of that name
 a Files tab starting at `$HOME`, and the row's tooltip says the working
 directory is unknown. It is reachable, and it is honest about what is not known.
 
-### 6.4 The worktree case is correct and stays
+### 6.5 Worktrees group under their repository
+
+> "this one should be in dtc-website actually"
+
+— about `merry-sniffing-token`, whose only session is `git-dtc-website-decisions`.
+
+§6.6 below is kept because it was WRONG and the reasoning is worth keeping
+visible. It argued that grouping by actual cwd is right and the odd-looking name
+is merely cosmetic. The user has now said plainly that it does not match how
+they think about their work, and they are right: `~/git/merry-sniffing-token` is
+a git WORKTREE of `~/git/dtc-website`, and a worktree belongs with the
+repository it is a worktree OF. That is also *why* the session carries that
+name — it was created against that repo. The name was telling us the answer all
+along and the grouping was ignoring it.
+
+**Resolved by asking git, not by parsing the name.** The name cannot answer it:
+`-` is both the component separator and a legal character inside a component, so
+`git-dtc-website-decisions` is ambiguous between several paths — the same reason
+`rootFromSessionName` refuses to invert past the first component.
+
+**Two queries, not one, and this is the load-bearing detail.**
+`--git-common-dir` alone answers "which repository is this", which would also
+map every SUBDIRECTORY of a repo to its root — collapsing
+`~/git/monorepo/pkg-a` and `~/git/monorepo/pkg-b` into one folder row. That is a
+much bigger change than was asked for and would flatten structure people
+organise on purpose. `--git-dir` is what makes it precise: for a normal checkout
+the two are EQUAL at every depth, and they differ only inside a linked worktree.
+Verified against git 2.53.
+
+**No version gate.** The suggested `--path-format=absolute` needs git 2.31+ and
+turns out to be unnecessary: both values are resolved by `cd`-ing to them from
+the directory being asked about, which handles the absolute and relative forms
+identically on any git. So there is no fallback branch and nothing to degrade.
+
+**Wire format: `<index>::<commonDir>`, worktrees only.** The first attempt
+printed `dir::gitdir::commondir` and split from both ends, on the reasoning that
+only the user-named directory could contain a `::`. That reasoning is wrong —
+the git answers are paths INSIDE that directory, so if it contains the delimiter
+then so do they, and three path fields are unparseable in principle. The host
+prints the request INDEX (digits) instead and does the equality test itself, so
+exactly one ambiguous field remains, at the end, recoverable by splitting on the
+first delimiter. The test written to prove the original claim is what disproved
+it.
+
+**Batched and cached.** One exec covering every not-yet-known directory, and a
+per-connection cache that records NEGATIVES as well as positives — without the
+negative, every ordinary checkout would be re-probed on the session store's
+refresh timer, putting a git process on the user's host every few seconds
+forever. Every failure path (no git, not a repo, non-zero exit, unparseable
+line) leaves the directory absent from the map, which leaves the session grouped
+by its own path exactly as before.
+
+**`path` is not rewritten; `repoRoot` is a second field.** Grouping answers
+"where does this work belong"; `path` answers "where is this process standing",
+and for a worktree those are genuinely different places. So:
+
+- the PANEL and the folder key use `repoRoot ?? path`;
+- the FILES tab opens at `path` — a user opening files from a worktree session
+  gets the worktree's contents, not the main checkout's;
+- the session TAB's tooltip names the worktree whenever it differs from the
+  folder, so the difference is on screen rather than a surprise.
+
+**Composition with §6.3 checked.** Sibling inference gives a path-less session
+the path of the session it is named after; that adopted path is then run through
+the same worktree resolution, so an orphan adopting a worktree path lands in the
+repository alongside its sibling. The two rules compose in that order and do not
+fight: inference answers "where is it", worktree resolution answers "where does
+that belong".
+
+### 6.6 SUPERSEDED — the original argument that the worktree case was fine
 
 `git-dtc-website-<...>-decisions` rendering under a folder called
 `merry-sniffing-token` is what you get when a session's cwd genuinely is
@@ -682,22 +826,24 @@ Everything above is implemented. `npm run test:unit`, `npm run lint` and
 | rename | `renameSessionCommand` -> `ProjectsService.renameSession` -> `projects:renameSession`, `TmuxClientPool.renamed`, `composer.rekey` |
 | orphan placement + diagnosis | `inferPathsFromSiblings` / `diagnoseSessionPaths` in `src/main/helper/parsers.ts` |
 | routing | `src/renderer/router.ts`, `src/renderer/views/SessionRedirectView.vue` |
+| popup menus (`+`, file tree, host actions) | `src/shared/popupPlacement.ts` + `tests/unit/popupPlacement.test.ts`, `components/PopupMenu.vue`, `components/HostActionsMenu.vue` |
+| worktree grouping | `gitRepoProbeCommand` -> `parseWorktreeRoots` + `tests/unit/worktrees.test.ts`; cached in `PocketshellClient.withRepoRoots` |
+| file tree width + context menu | `views/FilesView.vue`, `components/FileTree.vue` |
 
 Three things are thinner than they could be, and each is a deliberate stop
 rather than an oversight:
 
-1. **The `+` menu does not close on an outside click.** It closes on a second
-   click of `+`, on choosing an item, and on navigating to another folder. The
-   app already has a click-outside implementation for the composer
-   (`tests/unit/composerOutsideClick.test.ts`), and generalising it is a
-   separate change to a file this pass did not otherwise touch.
-2. **A session tab cannot be closed.** Closing a tab would have to mean killing
+1. **A session tab cannot be closed.** Closing a tab would have to mean killing
    a live tmux session, which is not what a tab close means anywhere else, and
    the panel has never had a kill affordance either. A second Files tab closes;
    the first does not, because it is the folder's file browser and the
    workspace would otherwise have no way to look at the folder at all.
-3. **The agent launch is fire-and-forget.** `pocketshell agent <kind>` is
-   written into the new session once its PTY exists; nothing verifies that the
-   wrapper started, and the recorded `@ps_agent_kind` shows up on the next
-   session refresh or not at all. Verifying would mean parsing the pane, which
-   is the process-sniffing the `@ps_agent_kind` design exists to avoid.
+3. **The agent launch is still fire-and-forget, but it is no longer SILENT.**
+   `pocketshell agent <kind>` is written into the new session once its PTY
+   exists, and nothing verifies that the wrapper then started — verifying would
+   mean parsing the pane, which is the process-sniffing `@ps_agent_kind` exists
+   to avoid. What was fixed is the case where the PTY never came up at all: that
+   used to do nothing, forever, with no message, so "I asked for Claude and got
+   a shell" had no explanation anywhere. There is now a bounded wait
+   (12 s — far beyond the ~2 s a join costs on a real link) and a sentence
+   naming the session and the command to run by hand.

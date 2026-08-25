@@ -21,6 +21,8 @@ import {
   type SessionEnrichment,
 } from './parsers.js';
 import { pathAwareCommand } from './bootstrap.js';
+import { gitRepoProbeCommand } from '../projects/commands.js';
+import { parseWorktreeRoots } from '../projects/worktrees.js';
 import { log } from '../log.js';
 import { shellQuote, shellQuoteRemotePath } from './shellQuote.js';
 import {
@@ -72,6 +74,22 @@ export class PocketshellClient {
   constructor(private readonly ssh: SshService) {}
 
   /**
+   * Worktree -> repository root, per connection, resolved once per directory.
+   *
+   * A `null` value is a REMEMBERED NEGATIVE: "we asked about this directory and
+   * it is not a worktree". Without it, every folder that is an ordinary
+   * checkout would be re-probed on every session refresh — and the refresh is
+   * on a timer, so that would put a git process on the user's host every few
+   * seconds, forever, to be told the same thing.
+   *
+   * Cached for the life of the connection because the answer cannot change
+   * usefully while the app is open: a directory does not stop being a worktree
+   * of the repository it was created from. A directory that appears later is
+   * simply not in the map yet and gets asked about on the next refresh.
+   */
+  private readonly repoRoots = new Map<string, Map<string, string | null>>();
+
+  /**
    * List live tmux sessions. Prefers `pocketshell sessions list`, falls back
    * to `tmux list-sessions` when the helper is absent. Returns [] when no
    * tmux server is running (the canonical "empty" state, not an error).
@@ -89,7 +107,10 @@ export class PocketshellClient {
     if (helper.exitCode === 0) {
       const parsed = parseSessionsList(helper.stdout);
       if (parsed.length > 0 || /IDX\s+SESSION/.test(helper.stdout)) {
-        return this.reportPaths(mergeSessionEnrichment(parsed, enrichment), enrichment);
+        return this.withRepoRoots(
+          connectionId,
+          this.reportPaths(mergeSessionEnrichment(parsed, enrichment), enrichment),
+        );
       }
     }
     // Fallback: raw tmux with the same `::` shape the Android gateway uses.
@@ -102,9 +123,12 @@ export class PocketshellClient {
     if (tmux.exitCode === 0) {
       // Still merged: the fallback's `session_path` is the *session's* cwd,
       // and the probe's active-pane cwd is the better answer when both exist.
-      return this.reportPaths(
-        mergeSessionEnrichment(parseTmuxListSessionsFallback(tmux.stdout), enrichment),
-        enrichment,
+      return this.withRepoRoots(
+        connectionId,
+        this.reportPaths(
+          mergeSessionEnrichment(parseTmuxListSessionsFallback(tmux.stdout), enrichment),
+          enrichment,
+        ),
       );
     }
     // "no server running" / "not found" -> empty (not an error).
@@ -124,6 +148,62 @@ export class PocketshellClient {
    *
    * The list is returned unchanged - this observes, it never decides.
    */
+  /**
+   * Fill in {@link SessionSummary.repoRoot} for sessions running in a linked
+   * git worktree (docs/WORKSPACE.md §6.5).
+   *
+   * Only DIRECTORIES NOT ALREADY KNOWN are asked about, and they are asked
+   * about in ONE exec — the same batching discipline as the session-enrichment
+   * probe. On a steady-state host that means zero git processes per refresh,
+   * because every directory is already in the cache.
+   *
+   * Degrades to today's behaviour, silently, on every failure path: no git, not
+   * a repository, a non-zero exit, an unparseable line. All of them leave the
+   * directory absent from the map, which leaves `repoRoot` unset, which leaves
+   * the session grouped by its own path.
+   */
+  private async withRepoRoots(
+    connectionId: string,
+    sessions: SessionSummary[],
+  ): Promise<SessionSummary[]> {
+    let known = this.repoRoots.get(connectionId);
+    if (!known) {
+      known = new Map();
+      this.repoRoots.set(connectionId, known);
+    }
+
+    const unknown = [
+      ...new Set(
+        sessions
+          .map((s) => s.path)
+          .filter((p): p is string => typeof p === 'string' && p.length > 0 && p.startsWith('/'))
+          .filter((p) => !known.has(p)),
+      ),
+    ];
+
+    if (unknown.length > 0) {
+      const res = await this.ssh.exec(connectionId, pathAwareCommand(gitRepoProbeCommand(unknown)));
+      // Even on a non-zero exit the loop may have printed rows before whatever
+      // failed, so parse what came back rather than discarding it.
+      const roots = parseWorktreeRoots(res.stdout, unknown);
+      // Every directory we asked about is recorded, including the ones that
+      // answered "not a worktree" — see `repoRoots` for why the negative is
+      // worth as much as the positive.
+      for (const dir of unknown) known.set(dir, roots.get(dir) ?? null);
+      const remapped = [...roots.entries()].filter(([dir]) => unknown.includes(dir));
+      if (remapped.length > 0) {
+        log('sessions', 'worktrees grouped under their repository', {
+          worktrees: remapped.map(([dir, root]) => ({ dir, root })),
+        });
+      }
+    }
+
+    return sessions.map((session) => {
+      const root = session.path ? known.get(session.path) : null;
+      return root ? { ...session, repoRoot: root } : session;
+    });
+  }
+
   private reportPaths(
     sessions: SessionSummary[],
     enrichment: Map<string, SessionEnrichment>,

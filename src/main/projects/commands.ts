@@ -222,3 +222,81 @@ export function reposCloneCommand(options: ReposCloneOptions): string {
 export function renameSessionCommand(from: string, to: string): string {
   return `tmux rename-session -t ${shellQuote(`=${from}`)} -- ${shellQuote(to)}`;
 }
+
+/**
+ * Ask git, for each of [paths], which repository it belongs to
+ * (docs/WORKSPACE.md §6.5).
+ *
+ * ## Why this exists
+ *
+ * The user selected a folder called `merry-sniffing-token`, whose only session
+ * is named `git-dtc-website-decisions`, and said: "this one should be in
+ * dtc-website actually". That directory is a git WORKTREE of
+ * `~/git/dtc-website`, and a worktree belongs with the repository it is a
+ * worktree OF — which is also why the session carries that name, since it was
+ * created against that repo. The name was telling us the answer all along and
+ * the grouping was ignoring it in favour of the raw cwd.
+ *
+ * It is resolved by ASKING GIT rather than by parsing the name, because the
+ * name cannot answer it: `-` is both the component separator and a legal
+ * character inside a component, so `git-dtc-website-decisions` is ambiguous
+ * between several paths (the same reason `rootFromSessionName` refuses to
+ * invert past the first component).
+ *
+ * ## Why two queries per directory, not one
+ *
+ * `--git-common-dir` alone would over-reach. It answers "which repository is
+ * this", so it maps a SUBDIRECTORY of a repo to the repo root too — meaning
+ * sessions in `~/git/monorepo/pkg-a` and `~/git/monorepo/pkg-b` would collapse
+ * into one folder. That is a much bigger behaviour change than the user asked
+ * for and not obviously wanted.
+ *
+ * `--git-dir` is what makes the query precise. For a normal checkout — at the
+ * root or anywhere below it — the two are EQUAL. Only in a linked worktree do
+ * they differ: `--git-dir` is `<main>/.git/worktrees/<name>` while
+ * `--git-common-dir` is `<main>/.git`. So emitting both lets the parser remap
+ * worktrees and leave every other directory exactly where it is today.
+ *
+ * ## Why no `--path-format=absolute`
+ *
+ * That flag needs git 2.31+, and it turns out to be unnecessary. Both values
+ * are resolved by `cd`-ing to them FROM the directory being asked about, which
+ * handles the absolute and relative forms identically and costs nothing — so
+ * there is no version gate, no fallback branch, and nothing to degrade.
+ * `pwd -P` then resolves symlinks, so the two can be compared as strings.
+ *
+ * ## Why the host does the comparison, and prints an INDEX
+ *
+ * The output is `<index>::<commonDir>`, emitted ONLY for a directory that is a
+ * worktree. Both halves of that are about parsing, and both were learned the
+ * hard way (see ../projects/worktrees.ts): a directory path can contain the
+ * `::` delimiter, and if it does then so do the two git answers, because they
+ * are paths inside it. Printing all three fields is therefore unparseable in
+ * principle, not merely awkward. Printing the request index — digits — plus a
+ * single trailing path leaves exactly one ambiguous field, at the end, which a
+ * split on the FIRST delimiter recovers whatever it contains.
+ *
+ * One exec for every directory, not one per directory: the same discipline the
+ * session-enrichment probe and the port scanner already follow. A directory
+ * that is not in a repository, or that git cannot read, prints nothing and is
+ * simply absent from the result.
+ */
+export function gitRepoProbeCommand(paths: readonly string[]): string {
+  const quoted = paths.map(shellQuoteRemotePath).join(' ');
+  return (
+    '__ps_i=0; ' +
+    `for __ps_d in ${quoted}; do ` +
+    '__ps_n=$__ps_i; __ps_i=$((__ps_i+1)); ' +
+    '__ps_g=$(cd "$__ps_d" 2>/dev/null && git rev-parse --git-dir 2>/dev/null) || continue; ' +
+    '[ -n "$__ps_g" ] || continue; ' +
+    '__ps_c=$(cd "$__ps_d" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null) || continue; ' +
+    '[ -n "$__ps_c" ] || continue; ' +
+    '__ps_ga=$(cd "$__ps_d" && cd "$__ps_g" 2>/dev/null && pwd -P) || continue; ' +
+    '__ps_ca=$(cd "$__ps_d" && cd "$__ps_c" 2>/dev/null && pwd -P) || continue; ' +
+    // Equal means an ordinary checkout at any depth: say nothing, so the
+    // caller leaves the session exactly where it is.
+    '[ "$__ps_ga" != "$__ps_ca" ] || continue; ' +
+    "printf '%s::%s\\n' \"$__ps_n\" \"$__ps_ca\"; " +
+    'done'
+  );
+}

@@ -252,7 +252,7 @@ export function isDerivedName(name: string, label: string): boolean {
 }
 
 /** Split a label so the distinguishing tail survives an overflow. */
-function splitLabel(label: string): { labelHead: string; labelTail: string } {
+export function splitLabel(label: string): { labelHead: string; labelTail: string } {
   if (label.length <= SPLIT_THRESHOLD) return { labelHead: label, labelTail: '' };
   return {
     labelHead: label.slice(0, label.length - TAIL_CHARS),
@@ -342,15 +342,33 @@ function disambiguateLabels<T extends PathLabelled>(items: T[], pathOf: (item: T
  * `sessionActivity` rules as {@link groupSessionsByFolder}, so every
  * projection agrees about what a folder is called.
  */
+/**
+ * The path a session GROUPS under, which is not always the path it runs in.
+ *
+ * A session in a linked git worktree groups under the repository the worktree
+ * belongs to (docs/WORKSPACE.md §6.5) — the user's "this one should be in
+ * dtc-website actually" about a session running in `~/git/merry-sniffing-token`.
+ * `repoRoot` is set by the main process only for worktrees, so for every other
+ * session this is just its own path.
+ *
+ * Note what does NOT change: `session.path` is untouched, and it is what the
+ * Files tab opens at. Grouping answers "where does this work belong"; the path
+ * answers "where is this process standing", and for a worktree those are
+ * genuinely different places.
+ */
+function groupingPath(session: SessionSummary): string {
+  return canonicalisePath(session.repoRoot ?? session.path);
+}
+
 function buildRows(sessions: SessionSummary[]): SessionRow[] {
   const counts = new Map<string, number>();
   for (const session of sessions) {
-    const path = canonicalisePath(session.path);
+    const path = groupingPath(session);
     counts.set(path, (counts.get(path) ?? 0) + 1);
   }
 
   return [...sessions].sort(compareRows).map((session) => {
-    const folderPath = canonicalisePath(session.path);
+    const folderPath = groupingPath(session);
     const untracked = folderPath === UNTRACKED_PATH;
     // An untracked session has no folder to name it after, so its own name is
     // the only label there is — and there is nothing left to show beside it.
