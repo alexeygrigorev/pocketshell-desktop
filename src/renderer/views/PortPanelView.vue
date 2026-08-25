@@ -29,6 +29,7 @@ import { useForwardsStore } from '../stores/forwards';
 import type { ForwardSpec } from '../../shared/types';
 import type { DiscoveredPort } from '../../main/portfwd/AutoForwarder';
 import type { ForwardState } from '../../main/portfwd/Forwarder';
+import type { ServedFolder } from '../../main/portfwd/ServeService';
 
 const connection = useConnectionStore();
 const forwards = useForwardsStore();
@@ -138,8 +139,38 @@ function processOf(row: PortRow): string {
   return row.fwd?.process ?? row.disco?.process ?? '';
 }
 
+/**
+ * The served folder on this row's port, if the Files tab is serving one.
+ *
+ * A served folder is not a special kind of row — the server binds the host's
+ * loopback, the scan finds it, and the tunnel is an ordinary `-L`. This only
+ * adds what the scan cannot know: which directory it is, where to open it, and
+ * that Stop has to kill a process as well as a tunnel.
+ */
+function servedOf(row: PortRow): ServedFolder | null {
+  return row.remotePort === null ? null : forwards.servedOn(row.remotePort);
+}
+
+/**
+ * The folder column.
+ *
+ * A served row prefers the SERVED directory over the scan's `/proc/<pid>/cwd`
+ * attribution, which for our server is the login shell's working directory
+ * (`$HOME`) and not the folder it is serving — true, and useless.
+ */
 function cwdOf(row: PortRow): string {
-  return row.fwd?.cwd ?? row.disco?.cwd ?? '';
+  return servedOf(row)?.dir ?? row.fwd?.cwd ?? row.disco?.cwd ?? '';
+}
+
+/** Open a served folder in the system browser (main allow-lists http(s)). */
+function openServed(row: PortRow): void {
+  const url = servedOf(row)?.url;
+  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+async function onStopServing(row: PortRow): Promise<void> {
+  if (!connId.value || row.remotePort === null) return;
+  await forwards.stopServe(connId.value, row.remotePort);
 }
 
 /**
@@ -345,6 +376,16 @@ function fmtScanTime(epochMs: number | null): string {
               <span v-if="row.fwd" :class="['kind', row.fwd.kind]">{{ row.fwd.kind }}</span>
               <span v-if="originLabel(row)" class="origin">{{ originLabel(row) }}</span>
               <span v-if="row.disco?.intent === 'force-on'" class="origin forced">forced on</span>
+              <!-- The one place a served folder is visible as such. Without it
+                   a running server is an anonymous port and the only way to
+                   stop it would be to guess which one it is. -->
+              <span
+                v-if="servedOf(row)"
+                class="origin served"
+                :title="`Serving ${servedOf(row)!.dir} on the host's loopback`"
+              >
+                served
+              </span>
             </td>
 
             <!-- Uncontrolled on purpose: bound to :value and committed on
@@ -409,13 +450,42 @@ function fmtScanTime(epochMs: number | null): string {
 
             <td class="c-actions">
               <div class="actions">
+                <!-- Served rows first: opening and stopping are the only two
+                     things anyone wants to do with one. -->
+                <template v-if="servedOf(row)">
+                  <button
+                    class="icon-btn sm"
+                    :disabled="!servedOf(row)!.url"
+                    :title="servedOf(row)!.url ?? 'no tunnel'"
+                    @click="openServed(row)"
+                  >
+                    <AppIcon name="arrow-right" :size="14" />
+                  </button>
+                  <button
+                    class="btn-auto stop"
+                    title="Stop the server on the host and close its tunnel"
+                    @click="onStopServing(row)"
+                  >
+                    stop
+                  </button>
+                </template>
                 <!-- A real two-state mark: the knob moves, so on/off differ in
                      shape and not only in colour. -->
+                <!-- Disabled on a served row, and this is not fussiness: the
+                     toggle closes the TUNNEL, which would leave the server
+                     running on the host with nothing left in the app pointing
+                     at it. "stop" is the operation that ends both. -->
                 <button
                   class="icon-btn sm"
                   :class="{ on: isForwarded(row) }"
-                  :disabled="row.remotePort === null"
-                  :title="isForwarded(row) ? 'Turn this port off' : 'Force this port on'"
+                  :disabled="row.remotePort === null || servedOf(row) !== null"
+                  :title="
+                    servedOf(row)
+                      ? 'This port is a served folder — use stop'
+                      : isForwarded(row)
+                        ? 'Turn this port off'
+                        : 'Force this port on'
+                  "
                   @click="onToggle(row)"
                 >
                   <AppIcon :name="isForwarded(row) ? 'toggle-right' : 'toggle-left'" :size="16" />
@@ -430,11 +500,13 @@ function fmtScanTime(epochMs: number | null): string {
                 </button>
                 <button
                   class="icon-btn sm"
-                  :disabled="!row.fwd || row.fwd.origin === 'ssh-config'"
+                  :disabled="!row.fwd || row.fwd.origin === 'ssh-config' || servedOf(row) !== null"
                   :title="
-                    row.fwd?.origin === 'ssh-config'
-                      ? 'Defined by ~/.ssh/config — remove it there'
-                      : 'Remove forward'
+                    servedOf(row)
+                      ? 'This port is a served folder — use stop'
+                      : row.fwd?.origin === 'ssh-config'
+                        ? 'Defined by ~/.ssh/config — remove it there'
+                        : 'Remove forward'
                   "
                   @click="row.fwd && forwards.remove(connId!, row.fwd.key)"
                 >
@@ -745,6 +817,23 @@ function fmtScanTime(epochMs: number | null): string {
   color: var(--success);
   background: var(--success-soft);
   border-color: transparent;
+}
+/* A served folder is the one row on this table with a process on the HOST
+   behind it, so it carries the accent rather than the quiet border the other
+   badges use — "there is something of mine running over there". */
+.origin.served {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* Destructive-ish: it kills a remote process. Warning, not danger — nothing is
+   lost, the folder is just no longer being served. */
+.btn-auto.stop {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.btn-auto.stop:hover {
+  color: var(--warning);
+  background: var(--warning-soft);
 }
 .status {
   font-family: var(--font-ui);

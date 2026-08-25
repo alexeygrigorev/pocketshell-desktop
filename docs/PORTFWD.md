@@ -33,7 +33,17 @@ Everything below is therefore phrased as: **what the Python does (with
 | Target: per-connection manager + IPC surface | `src/main/portfwd/ForwardService.ts` |
 | Target: reconnect FSM (currently orphaned) | `src/main/portfwd/AutoForwarderSupervisor.ts` |
 | Target: UI | `src/renderer/views/PortPanelView.vue`, `src/renderer/stores/forwards.ts` |
+| Rides on this engine: "Serve this folder" | `src/main/portfwd/ServeService.ts`, **`docs/SERVE.md`** |
 | Already-built SSH config parser (models `LocalForward`) | `src/main/ssh-config/SshConfigParser.ts` |
+
+One feature is built ON this engine rather than described by this spec:
+**"Serve this folder"** (`docs/SERVE.md`) starts a static HTTP server on the
+host's *loopback*, and then does nothing special — the scan finds the port like
+any other listener and a `force-on` intent opens the tunnel. It is worth knowing
+about here for two reasons: a `served` row in the panel has a remote process
+behind it, so its toggle and remove buttons are deliberately disabled in favour
+of `stop`; and it is the first caller that starts the engine as a *side effect*
+of an action taken in another tab.
 
 `docs/ANALYSIS.md` §4 records the lineage: the Android engine came from
 `ssh-auto-forward-android`, **local (`-L`) forwards only**; the desktop added
