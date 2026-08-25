@@ -483,3 +483,71 @@ describe('PocketshellClient.createSession — real fixture output', () => {
     expect(commands.some((c) => c.includes('tmux new-session'))).toBe(false);
   });
 });
+
+/**
+ * docs/WORKSPACE.md §4. The session name is the JOIN KEY — `sessionAttachCommand`
+ * builds `tmuxctl '<name>'` with no fallback behind it — so a rename that
+ * produces an unjoinable or duplicate name would strand a live session. These
+ * pin the two guards that make that impossible.
+ */
+describe('ProjectsService.renameSession', () => {
+  it('renames with an exact-match target and an option terminator', async () => {
+    const { projects, commands } = service([
+      noSessionResponder,
+      (c) => (c.includes('rename-session') ? ok() : null),
+    ]);
+    const out = await projects.renameSession(CONN, 'git-x', 'git-x-staging');
+    expect(out).toEqual({ ok: true, sessionName: 'git-x-staging', error: null, code: null });
+    expect(commands.map(inner)).toContain(
+      "tmux rename-session -t '=git-x' -- 'git-x-staging'",
+    );
+  });
+
+  it('sanitises to the alphabet `tmuxctl <name>` can still join', async () => {
+    const { projects, commands } = service([
+      noSessionResponder,
+      (c) => (c.includes('rename-session') ? ok() : null),
+    ]);
+    const out = await projects.renameSession(CONN, 'git-x', 'feat/my.branch');
+    expect(out.sessionName).toBe('feat-my_branch');
+    expect(commands.map(inner).join('\n')).toContain("-- 'feat-my_branch'");
+  });
+
+  it('asks the HOST whether the name is free, and refuses when it is not', async () => {
+    const { projects, commands } = service([(c) => (c.includes('has-session') ? ok() : null)]);
+    const out = await projects.renameSession(CONN, 'git-x', 'git-y');
+    expect(out).toMatchObject({ ok: false, code: 'name-taken' });
+    // The exact-match `=` is what stops `git-y` probing as taken because
+    // `git-y-2` exists.
+    expect(commands.map(inner)).toContain("tmux has-session -t '=git-y' 2>/dev/null");
+    expect(commands.some((c) => c.includes('rename-session'))).toBe(false);
+  });
+
+  it('refuses a name with nothing alphanumeric left rather than inventing one', async () => {
+    const { projects, commands } = service([]);
+    const out = await projects.renameSession(CONN, 'git-x', ':::');
+    expect(out).toMatchObject({ ok: false, code: 'illegal-name' });
+    expect(commands).toEqual([]);
+  });
+
+  it('treats an unchanged name as a success, and never probes for it', async () => {
+    // Committing an unchanged tab label is the commonest thing a rename field
+    // does; probing would find the session itself and report its own name taken.
+    const { projects, commands } = service([]);
+    expect(await projects.renameSession(CONN, 'git-x', 'git-x')).toMatchObject({
+      ok: true,
+      sessionName: 'git-x',
+    });
+    expect(commands).toEqual([]);
+  });
+
+  it("surfaces tmux's own stderr when the rename fails", async () => {
+    const { projects } = service([
+      noSessionResponder,
+      (c) => (c.includes('rename-session') ? fail(1, "can't find session: git-x") : null),
+    ]);
+    const out = await projects.renameSession(CONN, 'git-x', 'git-y');
+    expect(out).toMatchObject({ ok: false, code: 'rename-failed' });
+    expect(out.error).toContain("can't find session");
+  });
+});

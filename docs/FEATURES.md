@@ -138,26 +138,27 @@ See [PLAN.md](./PLAN.md) for which phase delivers each priority.
 
 ## P3 — Agent awareness (Phase 4, all three selected)
 
-### F13. Agent conversation view
-- `pocketshell agent-log --engine E --session S --json` → render
-  normalised conversation (user/assistant text, collapsible tool calls,
-  search within session). Per-pane detection via `tmux list-panes`
-  cwd+command → engine mapping. Reply-in-place to the agent pane.
-  Terminal ↔ Conversation tab toggle.
-- **Acceptance:** against `helper` fixtures, the conversation tab renders
-  the seeded Claude/Codex/OpenCode transcripts; reply sends to the pane.
-- **Calls:** `pocketshell agent-log`; `tmux list-panes`; `tmux send-keys`.
+### F13. Agent conversation view — **CUT** (docs/WORKSPACE.md §9)
+Built, then deleted on the user's instruction: "let's drop conversations
+completely - also remove it completely from the code". The view, the transcript
+resolver, the `agent-log` client, the `agent:log` / `agent:sessionLog` channels
+and their tests are gone, per docs/ANALYSIS.md D22 (hard cuts, no unused paths).
+The `agent-log --session` semantics that were discovered for it are kept in
+ANALYSIS.md as a finding about the HELPER, which is still true.
 
-### F14. Resumable conversation picker + agent launcher
-- `pocketshell sessions resumable` → list of recorded conversations
-  (engine, project, when, label); click → `pocketshell sessions resume
-  <id>` attaches it. Agent launcher: pick kind + dir + profile
-  (`pocketshell profiles list`) → `pocketshell agent <kind> --dir D --profile P`.
-- **Acceptance:** against `helper`, resumable list populates; resuming a
-  fixture conversation attaches a session; launching an agent opens a
-  terminal running the (stubbed) agent CLI.
-- **Calls:** `pocketshell sessions resumable/resume`, `pocketshell agent`,
-  `pocketshell profiles list`.
+### F14. Agent launcher (the resumable picker half is **CUT**)
+- The resumable half went with F13: `pocketshell sessions resumable` lists
+  *resumable conversations*, so it is the same feature entering by a different
+  door. `agent:resumable`, `parseResumableTable` and `ResumableSession` are
+  removed.
+- The launcher half survives and is built as the folder workspace's `+` menu
+  (docs/WORKSPACE.md §5): pick an engine, the folder is already chosen by the
+  workspace, and the new session runs `pocketshell agent <kind>` — through the
+  WRAPPER, because that is what records `@ps_agent_kind` and a session started
+  around it is classified `unknown` forever.
+- **Acceptance:** against `helper`, launching an agent opens a terminal running
+  the (stubbed) agent CLI in the workspace's folder.
+- **Calls:** `projects:startSession`, `pocketshell agent`.
 
 ### F15. Usage / quota dashboard
 - `pocketshell usage --json` → per-provider quota cards (percent remaining,

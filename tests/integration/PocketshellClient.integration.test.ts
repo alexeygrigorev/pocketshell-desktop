@@ -9,7 +9,7 @@ import { TEST_KEY_PATH, describeDocker } from './helpers';
  * Integration tests for the `pocketshell` helper client against the real
  * `pocketshell-test:helper` image (which installs the actual `pocketshell`
  * CLI + tmuxctl + stub agents + seeded fixtures). Exercises the real
- * `pocketshell sessions list` / `usage` / `agent-log` paths plus the
+ * `pocketshell sessions list` / `usage` paths plus the
  * bootstrap probe.
  *
  * Auto-skips when Docker is unavailable.

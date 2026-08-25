@@ -106,25 +106,24 @@ select host → session tree → click → terminal view → interact.
 
 ## Phase 4 — Agent awareness (P3 — all three selected)
 
-**Delivers:** F13 (conversation), F14 (resumable + launcher), F15 (usage),
-F16 (env editor).
+**Delivers:** F14 (agent launcher), F15 (usage), F16 (env editor).
+F13 and the resumable half of F14 were built and then **CUT** — see
+docs/WORKSPACE.md §9 and FEATURES.md.
 
-1. `ConversationView`: `pocketshell agent-log --json` → render; per-pane
-   detection (`tmux list-panes` cwd+command → engine); reply-in-place;
-   Terminal ↔ Conversation tab.
-2. Resumable picker + agent launcher (`pocketshell sessions resumable`,
-   `sessions resume`, `pocketshell agent`, `profiles list`).
+1. ~~`ConversationView`~~ — cut.
+2. ~~Resumable picker~~ — cut. Agent launcher ships as the folder
+   workspace's `+` menu: `projects:startSession` in the workspace's folder,
+   then `pocketshell agent <kind>` into the new session.
 3. `UsageView`: `pocketshell usage --json` → provider cards; foreground
    refresh.
 4. Env panel: `pocketshell env list/get/set` for folders with
    `.env`/`.envrc`.
 5. Tests:
-   - Integration (→ `helper`): parse seeded Claude/Codex/OpenCode
-     fixtures; `usage --json` parses; `sessions resume` against fixture.
-   - E2E: conversation tab renders, usage cards populate, agent launch
-     opens a terminal with the stubbed agent.
+   - Integration (→ `helper`): `usage --json` parses; `env list/get`.
+   - E2E: usage cards populate, agent launch opens a terminal with the
+     stubbed agent.
 
-**Exit criteria:** all three agent features demonstrable against seeded
+**Exit criteria:** the surviving agent features demonstrable against seeded
 fixtures.
 
 ---

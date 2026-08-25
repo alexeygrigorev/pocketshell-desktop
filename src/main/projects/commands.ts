@@ -190,3 +190,35 @@ export function reposCloneCommand(options: ReposCloneOptions): string {
   if (options.protocol) parts.push('--protocol', options.protocol);
   return parts.join(' ');
 }
+
+/**
+ * Rename tmux session [from] to [to] (docs/WORKSPACE.md §4).
+ *
+ * ## Why raw tmux and not the helper
+ *
+ * The helper has no rename verb, and it does not need one. `attachCommand.ts`
+ * establishes — with the correction at the top of that file — that tmuxctl
+ * shells out to a bare `tmux` on the DEFAULT socket, so a raw tmux command
+ * reaches the same server the helper's sessions live on. `sessionSwitchCommand`
+ * already relies on exactly that. This is the same mechanism, aimed at a name
+ * instead of at a client.
+ *
+ * ## Why both `=` prefixes matter
+ *
+ * tmux's `-t` is a prefix-then-fnmatch match unless the target begins with `=`.
+ * Without it, renaming `api` on a host that also runs `api-staging` would pick
+ * whichever tmux resolved first — so the `=` is what makes "rename THIS
+ * session" mean this session. `sessionExistsCommand` above carries the same
+ * note for the same reason.
+ *
+ * ## Why `--`
+ *
+ * The new name is the one argument here that is not option-position-safe: a
+ * name beginning with `-` would be read as a flag. `sanitisePart` strips
+ * leading `-`, so this app cannot produce such a name — but this builder is the
+ * injection boundary and it should not depend on a caller upstream having
+ * sanitised correctly.
+ */
+export function renameSessionCommand(from: string, to: string): string {
+  return `tmux rename-session -t ${shellQuote(`=${from}`)} -- ${shellQuote(to)}`;
+}

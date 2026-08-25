@@ -26,7 +26,7 @@ transforms bytes → data:
   LocalForward, RemoteForward, wildcards, `Include`).
 - `KnownHosts`: matcher accepts/rejects; TOFU path returns "unknown".
 - `parsers.ts`: `sessions list` table, `resumable` table, `usage --json`
-  NDJSON, `agent-log --json` envelope — pinned to fixture strings copied
+  NDJSON — pinned to fixture strings copied
   from the source repo so shapes stay byte-identical.
 - `AutoForwarder` port-resolution (mirror vs allocate), `PortScanner`
   output parsing (`ss`/`netstat` shapes).
@@ -65,7 +65,7 @@ Examples:
   **Rebuild the images after changing it** —
   `scripts/build-docker.sh`; the tests use the prebuilt tags.
 - `HelperIntegration`: against the `helper` image, `pocketshell sessions
-  list`, `usage --json`, `agent-log --json` parse cleanly; `sessions
+  list`, `usage --json` parse cleanly; `sessions
   create` then `sessions list` shows it.
 
 ### E2E
@@ -102,7 +102,7 @@ test runner.
 - **`Dockerfile.tmux`** — `FROM pocketshell-test:ssh` + `apk add tmux`.
 - **`Dockerfile.helper`** — Alpine + tmux + git + python3 + uv, then
   `uv tool install pocketshell` (the **real** helper, so the test exercises
-  the actual `pocketshell sessions list` / `usage` / `agent-log` code
+  the actual `pocketshell sessions list` / `usage` code
   paths). Plus `/bin/sh` stub binaries for `claude`/`codex`/`opencode`/
   `quse` (deterministic, no API keys) and seeded agent logs under
   `~/.claude/projects/`, `~/.codex/sessions/`, `~/.local/share/opencode/`.

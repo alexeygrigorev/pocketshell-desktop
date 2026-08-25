@@ -7,11 +7,11 @@ import { ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from '
 /**
  * End-to-end test for the restructured navigation and the terminal wiring.
  *
- * Nav: host picker -> host (persistent session panel on the left, no host-level
- * tab bar) -> click a session -> its workspace fills the right pane with
- * Terminal/Conversation/Files tabs while the panel stays put -> close the
- * session -> back to the host list. Ports and Usage are host header buttons
- * that open overlays.
+ * Nav: host picker -> host (persistent folder panel on the left, no host-level
+ * tab bar) -> click a FOLDER -> its workspace fills the right pane with one tab
+ * per tmux session in the folder plus a Files tab, while the panel stays put ->
+ * close the folder -> back to the host list. Ports and Usage are host header
+ * buttons that open overlays. See docs/WORKSPACE.md.
  *
  * Terminal: switching between the fixture's two sessions repeatedly used to
  * stack an extra xterm `onData`/`onResize` handler per switch, so tmux's
@@ -103,49 +103,30 @@ test.describe('session-scoped navigation + terminal wiring', () => {
     stopHelper();
   });
 
-  test('the host shows a folder session panel and no host-level tabs', async () => {
-    // The panel is `root -> directory -> session`, three levels, always
-    // (docs/SESSIONLIST.md §2). Both fixture sessions sit in $HOME ITSELF,
-    // which has no root folder to be named after, so the whole fixture lands
-    // in the `other` bucket, under one directory node.
+  test('the host shows a two-level folder panel and no host-level tabs', async () => {
+    // The panel is `root -> folder`, TWO levels, always (docs/WORKSPACE.md §2).
+    // Both fixture sessions sit in $HOME ITSELF, which has no root folder to be
+    // named after, so the whole fixture lands in the `other` bucket as ONE
+    // folder row holding two sessions.
     await expect(page.locator('.session-panel')).toBeVisible();
     await expect(page.locator('.folder-header')).toHaveCount(1);
     await expect(page.locator('.folder-header .folder-label')).toHaveText('other');
     await expect(page.locator('.folder-header .folder-count')).toHaveText('2');
     await expect(page.locator('.dir-header')).toHaveCount(1);
-    // `$HOME` itself: the directory key collapses to `~`, so the header takes
+    // `$HOME` itself: the folder key collapses to `~`, so the row takes
     // `defaultLabelForPath`'s named fallback rather than the account name.
     await expect(page.locator('.dir-header .label')).toHaveText('~ (home)');
-    await expect(page.locator('.session-row')).toHaveCount(2);
-    // EVERY session row is a leaf under a directory header — a directory never
-    // stands in for its session, however few it holds. The fixture cannot show
-    // the one-session directory (both its sessions share `~`), so this pins
-    // the invariant the counts can prove: no session row is left loose.
-    await expect(page.locator('.session-row.child')).toHaveCount(2);
-    await expect(page.locator('.session-row.orphan')).toHaveCount(0);
-    // The row is labelled by its own session name; the header already said the
-    // directory, so the row never repeats it.
-    await expect(page.locator('.session-row.child .label').first()).not.toHaveText('~ (home)');
-    await expect(page.locator('.row-name')).toHaveCount(0);
+    // THE SESSION LEVEL IS GONE. Not conditionally, not for this fixture —
+    // there is no session row in the panel at any depth, for any folder.
+    await expect(page.locator('.session-row')).toHaveCount(0);
+    // Two sessions behind one row, said once, by the count.
+    await expect(page.locator('.dir-header .folder-count')).toHaveText('2');
     // The `attached` tag stays retired — the dot, the weight and the sort say it.
-    await expect(page.locator('.session-row .tag')).toHaveCount(0);
-    // Files/Conversation are NOT host-level tabs any more.
+    await expect(page.locator('.dir-header .tag')).toHaveCount(0);
+    // Files is NOT a host-level tab.
     await expect(page.locator('.workspace > .body > nav.tabs')).toHaveCount(0);
     // Nothing selected yet -> the right pane shows the empty state.
     await expect(page.locator('.session-placeholder')).toBeVisible();
-  });
-
-  test('clicking a directory row toggles it and never opens a session', async () => {
-    // The directory row stopped being selectable in docs/SESSIONLIST.md
-    // revision 3: its session has a row of its own directly beneath it now, so
-    // a click here can only mean "expand/collapse". `v-show` keeps the rows in
-    // the DOM, hence toBeHidden rather than a count of 0.
-    await page.locator('.dir-header').first().click();
-    await expect(page.locator('.session-row').first()).toBeHidden();
-    await expect(page.locator('.session-workspace')).toHaveCount(0);
-    await expect(page.locator('.session-placeholder')).toBeVisible();
-    await page.locator('.dir-header').first().click();
-    await expect(page.locator('.session-row').first()).toBeVisible();
   });
 
   test('Ports and Usage are host header buttons that open overlays', async () => {
@@ -160,29 +141,44 @@ test.describe('session-scoped navigation + terminal wiring', () => {
     await expect(page.getByRole('dialog', { name: 'Provider usage' })).toHaveCount(0);
   });
 
-  test('selecting a session fills the right pane and keeps the panel visible', async () => {
-    await page.locator('.session-row', { hasText: 'main' }).first().click();
-    await expect(page.locator('.session-workspace')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('button', { name: 'Terminal' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Conversation' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Files' })).toBeVisible();
+  test('selecting a folder fills the right pane and keeps the panel visible', async () => {
+    await page.locator('.dir-header').first().click();
+    await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 15_000 });
+    // One tab per session in the folder, then Files. Neither fixture session is
+    // named after `$HOME` (`main`, `build` vs a derived `home-testuser`), so
+    // both keep their own names — docs/WORKSPACE.md §3.3's third rule.
+    await expect(page.getByRole('button', { name: 'main', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'build', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Files', exact: true })).toBeVisible();
+    // The Conversation tab is gone with the feature (docs/WORKSPACE.md §9).
+    await expect(page.getByRole('button', { name: 'Conversation' })).toHaveCount(0);
     await expect(page.locator('.terminal-area > .terminal')).toBeVisible({ timeout: 15_000 });
-    // The panel is persistent, and it marks the open session.
+    // The panel is persistent, and it marks the open FOLDER — one row, however
+    // many session tabs the workspace is showing.
     await expect(page.locator('.session-panel')).toBeVisible();
-    await expect(page.locator('.session-row.current')).toHaveCount(1);
-    await expect(page.locator('.session-row.current')).toContainText('main');
+    await expect(page.locator('.dir-header.current')).toHaveCount(1);
   });
 
-  test('there is a way back: close the session, then back to hosts', async () => {
-    await page.getByTitle('Close session view').click();
-    await expect(page.locator('.session-workspace')).toHaveCount(0);
+  test('the Files tab is per-folder and the terminal survives switching to it', async () => {
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
+    await expect(page.locator('.files')).toBeVisible({ timeout: 15_000 });
+    // v-show, not v-if: unmounting the terminal would close the SSH shell and
+    // drop the tmux attach.
+    await expect(page.locator('.terminal-area')).toBeHidden();
+    await page.getByRole('button', { name: 'main', exact: true }).click();
+    await expect(page.locator('.terminal-area > .terminal')).toBeVisible();
+  });
+
+  test('there is a way back: close the folder, then back to hosts', async () => {
+    await page.getByTitle('Close folder').click();
+    await expect(page.locator('.folder-workspace')).toHaveCount(0);
     await expect(page.locator('.session-placeholder')).toBeVisible();
-    await expect(page.locator('.session-row')).toHaveCount(2);
+    await expect(page.locator('.dir-header')).toHaveCount(1);
     await page.getByTitle('Back to hosts').click();
     await expect(page.getByText(E2E_HOST_NAME)).toBeVisible();
     // Return to the host for the remaining tests.
     await page.getByText(E2E_HOST_NAME).click();
-    await expect(page.locator('.session-row').first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.dir-header').first()).toBeVisible({ timeout: 15_000 });
   });
 
   test('the session panel collapses and reappears', async () => {
@@ -193,14 +189,19 @@ test.describe('session-scoped navigation + terminal wiring', () => {
   });
 
   test('repeated session switching leaves no duplicated DA2 replies', async () => {
+    // Switching is now a TAB switch rather than a panel selection, but it goes
+    // through the same `session-key` change on the same TerminalView, which is
+    // the code path this regression lives in.
+    await page.locator('.dir-header').first().click();
+    await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 15_000 });
     for (let i = 0; i < 4; i += 1) {
       const target = i % 2 === 0 ? 'main' : 'build';
-      await page.locator('.session-row', { hasText: target }).first().click();
+      await page.getByRole('button', { name: target, exact: true }).click();
       await expect(page.locator('.terminal-area > .terminal')).toBeVisible({ timeout: 15_000 });
       await page.waitForTimeout(1200);
     }
 
-    await page.locator('.session-row', { hasText: 'main' }).first().click();
+    await page.getByRole('button', { name: 'main', exact: true }).click();
     await expect(page.locator('.terminal-area > .terminal')).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(2000);
     expect(await terminalText(page)).not.toContain('0;276;0c');

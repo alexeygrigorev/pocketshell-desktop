@@ -69,7 +69,7 @@ src/
 │  ├─ helper/
 │  │  ├─ PocketshellClient.ts # runs `pocketshell <cmd>` over an SshService exec
 │  │  ├─ bootstrap.ts         # PATH detection + probe sequence + install actions
-│  │  └─ parsers.ts           # sessions-list / resumable / usage / agent-log parsers
+│  │  └─ parsers.ts           # sessions-list / enrichment / usage / bootstrap parsers
 │  ├─ store/
 │  │  ├─ settings.ts          # electron-store: hosts, forwards, window state
 │  │  └─ keychain.ts          # keytar get/set passphrase
@@ -80,21 +80,19 @@ src/
    ├─ main.ts                 # Vue app bootstrap
    ├─ App.vue
    ├─ ipc.ts                  # typed wrapper over window.api
-   ├─ router.ts               # host-picker / host-workspace (tree|terminal|files|...)
+   ├─ router.ts               # host-picker / host-workspace / folder-workspace
    ├─ stores/                 # Pinia: connection, sessions, files, agents, usage, forwards
    ├─ views/
    │  ├─ HostPickerView.vue
-   │  ├─ HostWorkspaceView.vue# shell: tree + tabbed area
-   │  ├─ TerminalPane.vue
+   │  ├─ HostWorkspaceView.vue# shell: folder panel + right pane
+   │  ├─ FolderWorkspaceView.vue # one folder: a tab per session, then Files
    │  ├─ FilesView.vue
-   │  ├─ ConversationView.vue
    │  ├─ UsageView.vue
    │  └─ PortPanelView.vue
    └─ components/
       ├─ HostList.vue, SessionTree.vue
       ├─ TerminalView.vue     # xterm.js + attach/detach + resize
-      ├─ FileTree.vue, FileEditor.vue (Monaco), ImagePreview.vue
-      ├─ ConversationList.vue, UsageCard.vue
+      ├─ FileTree.vue, CodeEditor.vue (CodeMirror), ImagePreview.vue
       └─ ForwardTable.vue
 ```
 

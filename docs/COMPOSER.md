@@ -481,6 +481,17 @@ Justification, grounded in the phone:
    "Send to composer" / "Attach to composer" action per file, not a second
    composer.
 
+> **Revised again by docs/WORKSPACE.md.** `SessionWorkspaceView` no longer
+> exists: the right pane is a FOLDER workspace whose tab bar carries one tab per
+> tmux session, then Files tabs, and the Conversation tab has been deleted
+> outright (WORKSPACE §9). Every rule below survives the move unchanged — the
+> composer is still mounted once outside the tab body, still `v-show` rather
+> than `v-if`, still hidden on a Files tab, and still keyed per session. What
+> changed is only WHICH session it is handed: the active SESSION TAB rather than
+> the route's `:session` param. Read `SessionWorkspaceView` as
+> `FolderWorkspaceView` and `.session-body` as `.workspace-body` throughout this
+> section; the file/line citations are historical.
+
 The navigation restructure has already landed and left the slot open. The mount
 point is `.session-body` in `src/renderer/views/SessionWorkspaceView.vue`, a
 column whose tab content flexes. **Revised (§21.1):** the composer does not dock

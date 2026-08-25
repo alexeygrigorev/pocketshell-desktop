@@ -12,8 +12,6 @@ import type {
   StageAttachmentsResult,
 } from '../shared/types.js';
 import type { UsageRow } from '../main/helper/parsers.js';
-import type { SessionConversation } from '../main/helper/PocketshellClient.js';
-import type { TranscriptEngine } from '../main/agents/transcripts.js';
 import type { DirEntry, FileStat, TransferProgress } from '../main/sftp/SftpService.js';
 import type { RemotePort } from '../main/portfwd/PortScanner.js';
 import type { ForwardState } from '../main/portfwd/Forwarder.js';
@@ -29,6 +27,7 @@ import type {
   ReposCloneOptions,
   ReposListRequest,
   ReposListResult,
+  RenameSessionResult,
   StartSessionRequest,
   StartSessionResult,
 } from '../main/projects/ProjectsService.js';
@@ -271,6 +270,18 @@ const api = {
     ): Promise<StartSessionResult> =>
       ipcRenderer.invoke(ipc.projects.startSession, connectionId, request),
 
+    /**
+     * Rename a live tmux session. Never throws: a refused rename comes back
+     * with `ok: false` and a `code` the UI can react to (`illegal-name`,
+     * `name-taken`, `rename-failed`).
+     */
+    renameSession: (
+      connectionId: string,
+      from: string,
+      to: string,
+    ): Promise<RenameSessionResult> =>
+      ipcRenderer.invoke(ipc.projects.renameSession, connectionId, from, to),
+
     /** Subscribe to clone lifecycle events. Returns an unsubscribe fn. */
     onCloneProgress: (handler: (progress: CloneProgress) => void): Unsubscribe => {
       const listener = (_evt: IpcRendererEvent, progress: CloneProgress) => handler(progress);
@@ -507,44 +518,6 @@ const api = {
   },
 
   agent: {
-    /** Read an agent conversation log (raw JSONL envelope). */
-    log: (
-      connectionId: string,
-      engine: 'claude' | 'codex' | 'opencode',
-      session: string,
-      cwd?: string,
-    ): Promise<{
-      count: number;
-      engine: string;
-      lines: string[];
-      path: string;
-      session: string;
-    } | null> => ipcRenderer.invoke(ipc.agent.log, connectionId, engine, session, cwd),
-
-    /**
-     * The conversation of ONE tmux session.
-     *
-     * The renderer only ever knows a session — the transcript id `agent-log`
-     * wants is resolved main-side (see main/agents/transcripts.ts). `engine`
-     * and `cwd` are what the session list already knows about the session and
-     * may both be null; the resolver then refuses rather than guesses.
-     */
-    sessionLog: (
-      connectionId: string,
-      opts: { session: string; engine: TranscriptEngine | null; cwd: string | null },
-    ): Promise<SessionConversation> => ipcRenderer.invoke(ipc.agent.sessionLog, connectionId, opts),
-
-    /** List resumable AI-CLI conversations. */
-    resumable: (connectionId: string): Promise<
-      {
-        engine: string;
-        project: string;
-        when: string;
-        label: string;
-        running: boolean;
-      }[]
-    > => ipcRenderer.invoke(ipc.agent.resumable, connectionId),
-
     /** Agent config-dir profiles. */
     profiles: (connectionId: string): Promise<unknown[]> =>
       ipcRenderer.invoke(ipc.agent.profiles, connectionId),

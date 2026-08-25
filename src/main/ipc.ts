@@ -16,7 +16,6 @@ import { runBootstrap } from './helper/bootstrap.js';
 import { readSshConfig } from './ssh-config/SshConfigParser.js';
 import { KnownHosts } from './ssh-config/KnownHosts.js';
 import type { UsageRow } from './helper/parsers.js';
-import type { TranscriptEngine } from './agents/transcripts.js';
 import { SftpService, type DirEntry, type FileStat, type TransferProgress } from './sftp/SftpService.js';
 import { ForwardService } from './portfwd/ForwardService.js';
 import type { RemotePort } from './portfwd/PortScanner.js';
@@ -34,6 +33,7 @@ import type {
   ReposCloneOptions,
   ReposListRequest,
   ReposListResult,
+  RenameSessionResult,
   StartSessionRequest,
   StartSessionResult,
 } from './projects/ProjectsService.js';
@@ -350,6 +350,27 @@ export function registerIpcHandlers(deps: {
       request: StartSessionRequest,
     ): Promise<StartSessionResult> => {
       return projects.startSession(connectionId, request);
+    },
+  );
+
+  // A rename is two operations, not one: the host renames the tmux session,
+  // and the pool's note of which session its client is showing has to move
+  // with it. Doing the second here rather than in the service keeps the
+  // service free of the pool, and there is nowhere else both facts are in
+  // scope. See TmuxClientPool.renamed for what breaks if it is skipped.
+  ipcMain.handle(
+    ipc.projects.renameSession,
+    async (
+      _evt,
+      connectionId: string,
+      from: string,
+      to: string,
+    ): Promise<RenameSessionResult> => {
+      const result = await projects.renameSession(connectionId, from, to);
+      if (result.ok && result.sessionName) {
+        tmuxClients.renamed(connectionId, from, result.sessionName);
+      }
+      return result;
     },
   );
 
@@ -691,35 +712,10 @@ export function registerIpcHandlers(deps: {
   );
 
   // --- agent:* ------------------------------------------------------------
-  // Agent-awareness: conversation logs, resumable conversations, profiles,
-  // and the env editor — all delegated to the server-side pocketshell helper.
-  ipcMain.handle(
-    ipc.agent.log,
-    async (
-      _evt,
-      connectionId: string,
-      engine: 'claude' | 'codex' | 'opencode',
-      session: string,
-      cwd?: string,
-    ) => {
-      return helper.agentLog(connectionId, engine, session, cwd);
-    },
-  );
-  // What the Conversation tab uses: it knows a tmux session, not a transcript
-  // id, and the mapping between the two is not something the helper exposes.
-  ipcMain.handle(
-    ipc.agent.sessionLog,
-    async (
-      _evt,
-      connectionId: string,
-      opts: { session: string; engine: TranscriptEngine | null; cwd: string | null },
-    ) => {
-      return helper.sessionConversation(connectionId, opts);
-    },
-  );
-  ipcMain.handle(ipc.agent.resumable, async (_evt, connectionId: string) => {
-    return helper.listResumable(connectionId, true);
-  });
+  // Agent-awareness: profiles and the env editor, delegated to the
+  // server-side pocketshell helper. The conversation-log and resumable
+  // channels that used to live here went with the Conversation feature
+  // (docs/WORKSPACE.md §9).
   ipcMain.handle(ipc.agent.profiles, async (_evt, connectionId: string) => {
     return helper.listProfiles(connectionId);
   });

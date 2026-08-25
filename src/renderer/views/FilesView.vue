@@ -117,7 +117,7 @@ async function onDownload(): Promise<void> {
 /**
  * Template ref on the tree, so the chord below can put the caret in its path
  * bar. Typed by the one method called rather than `InstanceType<typeof
- * FileTree>`, for the same reason SessionWorkspaceView types its terminal ref
+ * FileTree>`, for the same reason FolderWorkspaceView types its terminal ref
  * that way: `*.vue` is a `DefineComponent<…, any>` in env.d.ts, so the instance
  * type collapses to `any` and takes the call site with it.
  */
@@ -235,7 +235,7 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
 </template>
 
 <style scoped>
-/* `flex: 1` because the parent `.tab-body` is a flex row — see ConversationView. */
+/* `flex: 1` because the parent `.tab-body` is a flex row. */
 .files-view {
   display: flex;
   flex: 1;

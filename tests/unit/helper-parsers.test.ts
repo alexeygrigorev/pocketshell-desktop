@@ -5,14 +5,15 @@ import {
   parseSessionsList,
   parseTmuxListSessionsFallback,
   parseUsageNdjson,
-  parseResumableTable,
-  parseAgentLogJson,
   parseCommandV,
   parseSessionEnrichment,
   mergeSessionEnrichment,
   agentKindFromTmuxOption,
+  inferPathsFromSiblings,
+  diagnoseSessionPaths,
   SESSION_ENRICHMENT_COMMAND,
 } from '@main/helper/parsers';
+import type { SessionSummary } from '../../src/shared/types';
 
 const FIXTURES = resolve(__dirname, '..', '..', 'tests-docker', 'fixtures');
 const readFixture = (name: string): string => readFileSync(resolve(FIXTURES, name), 'utf8');
@@ -23,9 +24,8 @@ const readFixture = (name: string): string => readFileSync(resolve(FIXTURES, nam
  *
  * These four files stay host-captured rather than Docker-captured: the
  * fixture image cannot produce any of them. `sessions list` dies on the
- * tmuxctl `list-sessions` tab bug (tmuxctl#6), `sessions resumable` has no
- * agent history to list, and `usage --json` has no provider credentials, so
- * every row comes back `status: "error"`. The image and the host now run the
+ * tmuxctl `list-sessions` tab bug (tmuxctl#6), and `usage --json` has no
+ * provider credentials, so every row comes back `status: "error"`. The image and the host now run the
  * same pinned 0.4.44, so the two agree on wire format.
  */
 const V44 = resolve(__dirname, 'fixtures');
@@ -337,69 +337,6 @@ describe('parseUsageNdjson', () => {
   });
 });
 
-describe('parseResumableTable', () => {
-  const rows = parseResumableTable(readV44('v0.4.44-sessions-resumable.txt'));
-
-  it('parses every row of the real 0.4.44 table', () => {
-    expect(rows).toHaveLength(12);
-    expect(rows[2]).toMatchObject({ engine: 'codex', project: 'git', when: '1m', running: false });
-    expect(rows[2]!.label).toBe(
-      'I have this game idea so the idea is I work at the security check at the embass…',
-    );
-  });
-
-  it('splits `just now` from a label it directly abuts', () => {
-    // `{when:<8}` and "just now" is exactly 8 chars, so there is NO whitespace
-    // between the two columns on these rows.
-    expect(rows[0]).toMatchObject({ engine: 'codex', project: 'dtc-website', when: 'just now' });
-    expect(rows[0]!.label).toBe(
-      'https://github.com/DataTalksClub/website/issues/182 please take the last image…',
-    );
-    expect(rows[1]!.when).toBe('just now');
-    expect(rows[1]!.label.startsWith('I want to make a browser game')).toBe(true);
-  });
-
-  it('recovers a project name that overflows its 20-wide column', () => {
-    const row = rows[4]!;
-    expect(row.project).toBe('telegram-writing-assistant');
-    expect(row.when).toBe('39m');
-    expect(row.label.startsWith('articles/claw-drafts/deepseek-harness.md')).toBe(true);
-  });
-
-  it('strips the trailing (running) tag', () => {
-    const running = rows.filter((r) => r.running);
-    expect(running).toHaveLength(4);
-    expect(running.every((r) => !r.label.includes('(running)'))).toBe(true);
-    expect(rows[3]).toMatchObject({ engine: 'claude', project: 'ai-book-generator', when: '13m', running: true });
-  });
-
-  it('returns [] for a header-only table (no resumable conversations)', () => {
-    expect(parseResumableTable('IDX ENGINE    PROJECT             WHEN    LABEL\n')).toEqual([]);
-  });
-});
-
-describe('parseAgentLogJson', () => {
-  it('parses the --json envelope', () => {
-    const env = {
-      count: 2,
-      engine: 'claude',
-      lines: ['{"role":"user"}', '{"role":"assistant"}'],
-      path: '/home/test/.claude/projects/x/s.jsonl',
-      session: 's',
-    };
-    const out = parseAgentLogJson(JSON.stringify(env));
-    expect(out).not.toBeNull();
-    expect(out!.engine).toBe('claude');
-    expect(out!.count).toBe(2);
-    expect(out!.lines).toHaveLength(2);
-  });
-
-  it('returns null for non-JSON / raw JSONL', () => {
-    expect(parseAgentLogJson('{"role":"user"}\n{"role":"assistant"}')).toBeNull();
-    expect(parseAgentLogJson('')).toBeNull();
-  });
-});
-
 describe('parseCommandV', () => {
   it('returns the path on exit 0', () => {
     expect(parseCommandV('/home/test/.local/bin/pocketshell\n', 0)).toBe(
@@ -409,5 +346,130 @@ describe('parseCommandV', () => {
   it('returns null on non-zero exit', () => {
     expect(parseCommandV('', 1)).toBeNull();
     expect(parseCommandV('not found', 127)).toBeNull();
+  });
+});
+
+/**
+ * docs/WORKSPACE.md §6 — the orphan problem. Both of these exist because the
+ * folder workspace keys everything on the folder, so a session with a null
+ * path has nowhere to live and must not silently vanish.
+ */
+describe('inferPathsFromSiblings', () => {
+  const row = (name: string, path: string | null): SessionSummary => ({
+    name,
+    created: 1,
+    activity: 1,
+    attached: false,
+    path,
+    agentKind: null,
+  });
+
+  it('adopts the path of the session the orphan is named after', () => {
+    // The two pairs the user circled on the screenshot.
+    const out = inferPathsFromSiblings([
+      row('git-dtc-website', '/home/alexey/git/dtc-website'),
+      row('git-dtc-website-import', null),
+      row('git-red-stamp', '/home/alexey/git/red-stamp'),
+      row('git-red-stamp-sound', null),
+    ]);
+    expect(out[1]).toMatchObject({
+      path: '/home/alexey/git/dtc-website',
+      pathInferred: true,
+    });
+    expect(out[3]).toMatchObject({ path: '/home/alexey/git/red-stamp', pathInferred: true });
+  });
+
+  it('takes the LONGEST matching sibling', () => {
+    const out = inferPathsFromSiblings([
+      row('git-a', '/home/a'),
+      row('git-a-b', '/home/a/b'),
+      row('git-a-b-c', null),
+    ]);
+    expect(out[2]).toMatchObject({ path: '/home/a/b' });
+  });
+
+  it('requires the `-` boundary, so a longer name is not claimed', () => {
+    const out = inferPathsFromSiblings([
+      row('git-red-stamp', '/home/alexey/git/red-stamp'),
+      row('git-red-stampede', null),
+    ]);
+    expect(out[1]!.path).toBeNull();
+    expect(out[1]!.pathInferred).toBeUndefined();
+  });
+
+  it('leaves a session with no matching sibling unplaced rather than guessing', () => {
+    const out = inferPathsFromSiblings([row('git-x', '/home/x'), row('git-auth', null)]);
+    expect(out[1]!.path).toBeNull();
+  });
+
+  it('never rewrites a session that already reported a path', () => {
+    const rows = [row('git-a', '/home/a'), row('git-a-b', '/home/elsewhere')];
+    expect(inferPathsFromSiblings(rows)[1]).toBe(rows[1]);
+  });
+});
+
+describe('diagnoseSessionPaths', () => {
+  const row = (name: string, path: string | null, inferred = false): SessionSummary => ({
+    name,
+    created: 1,
+    activity: 1,
+    attached: false,
+    path,
+    agentKind: null,
+    ...(inferred ? { pathInferred: true } : {}),
+  });
+  const probeRow = (path: string | null) => ({ path, attached: false, agentKind: null });
+
+  it('says nothing when every session placed', () => {
+    const report = diagnoseSessionPaths(
+      [row('git-a', '/home/a')],
+      new Map([['git-a', probeRow('/home/a')]]),
+    );
+    expect(report.unplaced).toEqual([]);
+    expect(report.unmatchedProbeKeys).toEqual([]);
+  });
+
+  it('reports `absent` when the probe emitted no row at all', () => {
+    const report = diagnoseSessionPaths([row('git-auth', null)], new Map());
+    expect(report.unplaced).toEqual([
+      { name: 'git-auth', probe: 'absent', lenientKey: 'git-auth', inferred: false },
+    ]);
+  });
+
+  it('reports `no-path` when a row was there with both path columns empty', () => {
+    const report = diagnoseSessionPaths(
+      [row('git-auth', null)],
+      new Map([['git-auth', probeRow(null)]]),
+    );
+    expect(report.unplaced[0]).toMatchObject({ probe: 'no-path' });
+  });
+
+  it('reports `ambiguous` when the drop-on-collision rule fired', () => {
+    // Two non-ASCII names collapsing to one column-sanitised key: 3ac7abc
+    // drops the key rather than attaching one session's cwd to another.
+    const report = diagnoseSessionPaths(
+      [row('git-caf_', null)],
+      new Map([
+        ['git-café', probeRow('/home/a')],
+        ['git-cafè', probeRow('/home/b')],
+      ]),
+    );
+    expect(report.unplaced[0]).toMatchObject({ probe: 'ambiguous', lenientKey: 'git-caf_' });
+  });
+
+  it('still reports a session whose path came from a sibling', () => {
+    const report = diagnoseSessionPaths([row('git-a-b', '/home/a', true)], new Map());
+    expect(report.unplaced[0]).toMatchObject({ inferred: true, probe: 'absent' });
+  });
+
+  it('names probe rows that matched no listed session', () => {
+    const report = diagnoseSessionPaths(
+      [row('git-a', '/home/a')],
+      new Map([
+        ['git-a', probeRow('/home/a')],
+        ['ghost', probeRow('/home/g')],
+      ]),
+    );
+    expect(report.unmatchedProbeKeys).toEqual(['ghost']);
   });
 });

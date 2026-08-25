@@ -121,12 +121,21 @@ export function composerAgentKind(
   }
 }
 
-/** Android: `TmuxComposerSendRoute` (TmuxSessionScreen.kt:3159). */
-export type ComposerSendRoute = 'agent-conversation' | 'agent-payload' | 'raw';
+/**
+ * Android: `TmuxComposerSendRoute` (TmuxSessionScreen.kt:3159).
+ *
+ * The phone's third arm, `'agent-conversation'`, is GONE rather than merely
+ * unreachable. It existed for the Conversation tab, which has been deleted
+ * (docs/WORKSPACE.md §9), and it never did anything the `'raw'` arm did not:
+ * both wrote to the pane's PTY, because there was no live transcript to echo
+ * an optimistic turn into. What it DID do, unhelpfully, was short-circuit
+ * ahead of the codex arm below — so a codex pane viewed from the Conversation
+ * tab got the SHORT submit delay and could drop its Enter. Removing the arm
+ * fixes that as a side effect.
+ */
+export type ComposerSendRoute = 'agent-payload' | 'raw';
 
 export interface SendRouteInput {
-  /** The Conversation tab is selected AND an agent was detected. */
-  viewingConversation: boolean;
   /** The engine currently running in the pane, when detection knows. */
   liveAgent: ComposerAgentKind | null;
   /** The engine we believe the pane runs, from history rather than detection. */
@@ -141,13 +150,9 @@ export interface SendRouteInput {
  *
  * `liveAgent` is fed from the host-recorded `@ps_agent_kind` tmux option via
  * `composerAgentKind`, so the Codex arm is live. `presumedAgent` has no desktop
- * source yet — nothing infers an engine from history — and the
- * `'agent-conversation'` arm still delivers over the raw PTY because the
- * Conversation tab has no live transcript to echo an optimistic turn into
- * (docs/COMPOSER.md §16.3).
+ * source yet — nothing infers an engine from history.
  */
 export function sendRoute(input: SendRouteInput): ComposerSendRoute {
-  if (input.viewingConversation) return 'agent-conversation';
   if (input.withEnter && input.liveAgent === 'codex') return 'agent-payload';
   if (input.liveAgent !== null) return 'raw';
   if (input.presumedAgent !== null) return 'agent-payload';

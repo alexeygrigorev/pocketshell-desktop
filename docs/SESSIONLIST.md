@@ -1,6 +1,7 @@
 # SESSIONLIST.md — Session panel: the folder view
 
-Status: **implemented.** Originally written as "flatten the tree" against
+Status: **superseded in part by docs/WORKSPACE.md — read §0 first.**
+Originally written as "flatten the tree" against
 commit `b55ec9f`, implemented in `3d90f2b`, **revised once** when the user
 asked for the folder view back:
 
@@ -23,6 +24,65 @@ and **revised a third time — this document —** after the user reported
 requirement out:
 
 > "git -> folder -> session"
+
+## 0. Revision 4 — the session level is gone (docs/WORKSPACE.md)
+
+**What is still true:** everything this document says about a ROOT row or a
+FOLDER row. The measurement in §1, the display-label rules in §4, truncation
+(§5), the timestamp and sort (§6), the panel width (§7), and registered roots
+(§12) are all unchanged and are the reason those parts of the panel look the
+way they do.
+
+**What changed:** the panel is now `root -> folder`, TWO levels, one row per
+folder. There is no session level. Clicking a folder row opens a folder
+WORKSPACE in the right pane whose tab bar carries every session in that folder.
+§2 below ("three levels, unconditionally") is kept verbatim and is no longer
+what ships.
+
+**Why, in one sentence:** §2's argument was that a level must earn its rows and
+the folder level earned them by being the structure the user asked to see — but
+the SESSION level only ever earned its rows by being *the only way to reach a
+session*, and it is not any more.
+
+Revision 3's own load-bearing sentence is the one that gives way:
+
+> the directory row is always a header with its sessions nested beneath it, and
+> it is no longer selectable: clicking it expands.
+
+Selecting a session was a panel operation, so the panel needed a row per
+session to select. Under the folder workspace it is a tab operation. The leaf
+now spends a row on a navigation step the tab bar already performs, and §1's
+measurement — 11 folders, 11 sessions — puts a number on that: 22 rows became
+11, and the count no longer grows when a folder gains a second session.
+
+**This is NOT revision 2 returning.** Revisions 1 and 2 removed a level
+CONDITIONALLY, when a folder held one session, so the panel's shape depended on
+its contents and changed under the refresh timer — and §2's rebuttal of that
+still stands word for word. Revision 4 removes the session level for EVERY
+folder, whatever it holds. The panel is always two deep; a reader can predict
+its shape without knowing what is running. That is the property revisions 1 and
+2 destroyed and this one preserves.
+
+**Consequences inside this document, listed rather than edited away:**
+
+| Section | Status under revision 4 |
+|---|---|
+| §2 "three levels, unconditionally" | superseded — two levels, unconditionally |
+| §3 indent budget | the third step is gone; the folder row moves into the slot the directory header had, and the panel implements the two-level table now in that block |
+| §4.6 untracked sessions | still a chevron-less row in the folder slot, but SELECTABLE — it opens a workspace holding that one session (docs/WORKSPACE.md §6.3) |
+| §6 "finding the session I was just in" | answered by the attached dot on the folder row plus the workspace's tab bar; the panel no longer names sessions at all, so the folder tooltip lists them |
+| §10.2 "spend a row only where there is fan-out" | unchanged as a principle, and it is what retired the level |
+
+**And one thing revision 4 fixes that revision 3 could not.** The user reported
+four sessions rendering as orphans and expected two of them to sit with the
+folder they are named after. Under revision 3 that was an untidy panel; under
+revision 4 it is a session with no workspace at all, because everything keys on
+the folder. `inferPathsFromSiblings` (src/main/helper/parsers.ts) gives such a
+session the directory of the session whose name it extends, and
+`diagnoseSessionPaths` logs why the probe failed to place it. See
+docs/WORKSPACE.md §6.
+
+---
 
 ## Revision 3, and why revisions 1 and 2 were wrong
 
@@ -298,7 +358,7 @@ A `<button>`, so collapse is keyboard-reachable and `aria-expanded` is real.
 
 | # | Field | Spec |
 |---|-------|------|
-| 1 | Disclosure | `AppIcon name="chevron-right"` at 14px, rotated 90° when open — the app's one disclosure pattern, shared with `ConversationView`. Never a text glyph (designGates gate 2) |
+| 1 | Disclosure | `AppIcon name="chevron-right"` at 14px, rotated 90° when open — the app's one disclosure pattern. Never a text glyph (designGates gate 2) |
 | 2 | Status dot | The same 8px dot the session row uses, `--success` when **any** session under the root is attached. This is the collapsed root's only way to say "something live is in here", which is the state where it matters |
 | 3 | Root label | `--font-ui` `--fs-300` `--fw-semibold`, `flex: 0 1 auto; min-width: 0`, end-ellipsis. The `other` bucket renders `--fw-regular` `--fg-secondary` instead: it is a bucket, not a directory the user could navigate to |
 | 4 | Count | Bare integer, `--fs-100` `--fg-muted` `tabular-nums`, `margin-left: auto`. **Not** `· 3 sessions` — the number is the whole message, and the phrase form retreats to the header tooltip |

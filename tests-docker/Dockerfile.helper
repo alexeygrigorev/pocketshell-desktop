@@ -2,7 +2,7 @@
 #
 # This is the PRIMARY end-to-end test target (port 3205). It installs the real
 # server-side `pocketshell` helper (via uv) so the desktop app exercises the
-# actual `pocketshell sessions list` / `usage` / `agent-log` code paths, and
+# actual `pocketshell sessions list` / `usage` code paths, and
 # stubs the provider CLIs (claude/codex/opencode/quse) with deterministic
 # fixtures so no real credentials or network are needed.
 #
@@ -25,7 +25,7 @@ RUN apk add --no-cache python3 py3-pip git bash \
 # ran 0.4.44, so integration and E2E never exercised what users actually run,
 # and four parser bugs reached the app that way (a `{profiles: [...]}`
 # envelope, a null `percent_remaining`, a removed `--json` flag, and a
-# fixed-width resumable table whose columns overflow). Bump this deliberately
+# fixed-width table whose columns overflow). Bump this deliberately
 # and re-capture the fixtures under tests/unit/fixtures/ when you do.
 ARG POCKETSHELL_VERSION=0.4.44
 RUN su testuser -c "uv tool install 'pocketshell==${POCKETSHELL_VERSION}' && uv tool install tmuxctl" \
@@ -37,20 +37,11 @@ ENV PATH="/home/testuser/.local/bin:${PATH}"
 COPY agent-bin/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/claude /usr/local/bin/codex /usr/local/bin/opencode /usr/local/bin/quse
 
-# Seed the agent-conversation fixtures under the canonical paths the helper reads.
+# The seeded agent-conversation transcripts are gone with the Conversation
+# feature (docs/WORKSPACE.md §9) — nothing reads them any more.
 COPY fixtures/ /opt/pocketshell-fixtures/
 COPY helper-entrypoint.sh /usr/local/bin/pocketshell-helper-entrypoint
-RUN chmod +x /usr/local/bin/pocketshell-helper-entrypoint \
-    && mkdir -p /home/testuser/.claude/projects/-workspace-demo \
-                /home/testuser/.codex/sessions/2026/05/23 \
-                /home/testuser/.local/share/opencode \
-    && cp /opt/pocketshell-fixtures/claude-session.jsonl \
-          /home/testuser/.claude/projects/-workspace-demo/demo-claude.jsonl \
-    && cp /opt/pocketshell-fixtures/codex-session.jsonl \
-          /home/testuser/.codex/sessions/2026/05/23/demo-codex.jsonl \
-    && cp /opt/pocketshell-fixtures/opencode-rows.jsonl \
-          /home/testuser/.local/share/opencode/demo-opencode.jsonl \
-    && chown -R testuser:testuser /home/testuser/.claude /home/testuser/.codex /home/testuser/.local
+RUN chmod +x /usr/local/bin/pocketshell-helper-entrypoint
 
 EXPOSE 22
 

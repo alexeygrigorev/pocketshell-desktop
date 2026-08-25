@@ -8,6 +8,7 @@ import {
   freeSessionNameCommand,
   mkdirCommand,
   reposCloneCommand,
+  renameSessionCommand,
   reposListCommand,
   resolveDirectoryCommand,
   sessionExistsCommand,
@@ -287,5 +288,24 @@ describe('reposCloneCommand', () => {
     expect(reposCloneCommand({ repository: 'o/r', folder: HOSTILE })).toContain(
       "--folder 'wei'\\''rd $(touch /tmp/PWNED) `id` ; rm -rf / #'",
     );
+  });
+});
+
+describe('renameSessionCommand', () => {
+  it('forces an exact match on the source and terminates options', () => {
+    expect(renameSessionCommand('api', 'api-staging')).toBe(
+      "tmux rename-session -t '=api' -- 'api-staging'",
+    );
+  });
+
+  it('quotes both sides — a foreign session name can carry anything tmux allows', () => {
+    // Built from the same quoter rather than spelled out: the point is that
+    // BOTH arguments go through it, not what a nested single quote looks like.
+    expect(renameSessionCommand(HOSTILE, HOSTILE)).toBe(
+      `tmux rename-session -t ${shellQuote(`=${HOSTILE}`)} -- ${shellQuote(HOSTILE)}`,
+    );
+    // And that the `=` really is inside the quotes, where a hostile name
+    // cannot get in front of it.
+    expect(renameSessionCommand(HOSTILE, HOSTILE)).toContain("-t '=wei");
   });
 });

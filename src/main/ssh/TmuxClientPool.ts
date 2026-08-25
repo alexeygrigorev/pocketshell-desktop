@@ -265,6 +265,32 @@ export class TmuxClientPool {
     this.tokens.delete(connectionId);
   }
 
+  /**
+   * A session this pool may be showing has been renamed on the host.
+   *
+   * The pool remembers a session by NAME (`held.session`), and that name is
+   * what {@link isShowing} fences composer sends against and what
+   * {@link show} compares to decide a switch is unnecessary. A rename behind
+   * its back would therefore break two things quietly: the next composer send
+   * would be rejected as belonging to a stranger, and re-selecting the renamed
+   * session would look like a different session and cost a full re-join.
+   *
+   * Nothing else has to move. The tmux CLIENT is unaffected — clients follow a
+   * session by id, so a rename does not detach anything, and the tty handshake
+   * variable is keyed on a random token rather than on the session name.
+   *
+   * Returns true when a record was actually updated, which is only a
+   * diagnostic: a rename of a session this connection is not showing is a
+   * perfectly ordinary no-op.
+   */
+  renamed(connectionId: string, from: string, to: string): boolean {
+    const held = this.clients.get(connectionId);
+    if (!held || held.session !== from) return false;
+    held.session = to;
+    log('tmux', 'session renamed under a live client', { connectionId, from, to });
+    return true;
+  }
+
   /** The session a connection's client is showing, or null. Test/diagnostic. */
   currentSession(connectionId: string): string | null {
     return this.live(connectionId)?.session ?? null;

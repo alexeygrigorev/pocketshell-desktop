@@ -135,6 +135,18 @@ export interface SessionSummary {
    * probe failed) still produces valid rows.
    */
   agentKind?: SessionAgentKind | null;
+  /**
+   * True when `path` was not reported for this session and was adopted from a
+   * SIBLING session whose name is a prefix of this one — `git-dtc-website-import`
+   * taking `~/git/dtc-website` from `git-dtc-website`.
+   *
+   * It exists so the guess is legible rather than silent. The folder workspace
+   * keys everything on the folder, so a session with no path has nowhere to
+   * live at all (docs/WORKSPACE.md §6.3); adopting a sibling's path is what
+   * keeps it reachable, and this flag is what lets the UI say the placement is
+   * inferred instead of implying certainty it does not have.
+   */
+  pathInferred?: boolean;
 }
 
 /**

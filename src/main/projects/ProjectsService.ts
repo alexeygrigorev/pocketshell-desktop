@@ -29,12 +29,18 @@ import {
   directoryExistsCommand,
   freeSessionNameCommand,
   mkdirCommand,
+  renameSessionCommand,
   resolveDirectoryCommand,
   sessionExistsCommand,
   type ReposCloneOptions,
   type ReposListOptions,
 } from './commands.js';
-import { childPath, normaliseProjectFolderName, resolveSessionName } from './sessionName.js';
+import {
+  childPath,
+  normaliseProjectFolderName,
+  resolveSessionName,
+  sanitiseName,
+} from './sessionName.js';
 import {
   mergeRepos,
   type ReposListResult,
@@ -121,6 +127,18 @@ export interface StartSessionResult {
   via: CreateSessionVia | null;
   error: string | null;
   code: StartSessionFailure | null;
+}
+
+/** Why a rename was refused, for a UI that wants to react rather than print. */
+export type RenameSessionFailure = 'illegal-name' | 'name-taken' | 'rename-failed';
+
+/** Result of {@link ProjectsService.renameSession}. Never thrown. */
+export interface RenameSessionResult {
+  ok: boolean;
+  /** The name the session now has on the host. */
+  sessionName: string | null;
+  error: string | null;
+  code: RenameSessionFailure | null;
 }
 
 /** Request for {@link ProjectsService.createFolder}. */
@@ -378,6 +396,91 @@ export class ProjectsService {
       error: null,
       code: null,
     };
+  }
+
+  /**
+   * Rename a live tmux session (docs/WORKSPACE.md §4).
+   *
+   * ## Why this is a service call and not a `send-keys`
+   *
+   * The session name is the JOIN KEY. `sessionAttachCommand` builds
+   * `tmuxctl '<name>'` and there is deliberately no fallback ladder behind it,
+   * so a rename that produces a name `tmuxctl` cannot resolve makes the session
+   * unreachable from this app — a trap, not a bug, because the session is still
+   * alive on the host and the list still shows it. Two guards make that
+   * impossible, and both of them have to run somewhere the UI cannot skip:
+   *
+   *  1. **The alphabet.** `sanitiseName` is the port of tmuxctl's own
+   *     normalisation, so a name this accepts is a name `tmuxctl <name>` can
+   *     still join. A name with nothing alphanumeric left is refused outright
+   *     rather than silently replaced — the caller asked for a specific name
+   *     and deserves to be told it cannot have it. (`resolveSessionName` uses
+   *     the same predicate to decide whether a typed label is usable at all.)
+   *  2. **Uniqueness is the HOST's answer.** ./sessionName.ts explains why this
+   *     module never decides it: the Kotlin removed its client-side `-2`/`-3`
+   *     walk because a stale UI cache kept requesting names that were already
+   *     taken. So the check is `tmux has-session -t '=<to>'` against the live
+   *     server, one command before the rename, not a scan of a session list the
+   *     renderer may have fetched a minute ago.
+   *
+   * A same-name rename is a SUCCESS, not an error: committing an unchanged tab
+   * label is the commonest thing a rename field does, and making the user see a
+   * failure for it would be absurd.
+   *
+   * What this does NOT do is move anything. tmux session options — including
+   * `@ps_agent_kind`, the authoritative agent classification — are keyed to the
+   * session and not to its name, so the recorded engine survives. Attached
+   * clients follow the session by id and stay attached. The caller is
+   * responsible for the two pieces of state the DESKTOP keys by name: the
+   * composer's per-session record, and TmuxClientPool's note of which session
+   * its client is showing.
+   */
+  async renameSession(
+    connectionId: string,
+    from: string,
+    to: string,
+  ): Promise<RenameSessionResult> {
+    const target = sanitiseName(to);
+    if (!/[A-Za-z0-9]/.test(target)) {
+      return {
+        ok: false,
+        sessionName: null,
+        error: `"${to.trim()}" cannot be a session name: only letters, digits, "_" and "-" survive.`,
+        code: 'illegal-name',
+      };
+    }
+    // Idempotent, and deliberately BEFORE the has-session probe — otherwise
+    // committing an unchanged label would find the session itself and report
+    // its own name as taken.
+    if (target === from) return { ok: true, sessionName: from, error: null, code: null };
+
+    const taken = await this.ssh.exec(connectionId, pathAwareCommand(sessionExistsCommand(target)));
+    if (taken.exitCode === 0) {
+      return {
+        ok: false,
+        sessionName: null,
+        error: `A session called "${target}" is already running on this host.`,
+        code: 'name-taken',
+      };
+    }
+
+    const renamed = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(renameSessionCommand(from, target)),
+    );
+    if (renamed.exitCode !== 0) {
+      // tmux's own stderr is the useful sentence here ("can't find session"),
+      // and it is the one thing that distinguishes a stale session list from a
+      // host that cannot rename at all.
+      const detail = renamed.stderr.trim() || renamed.stdout.trim();
+      return {
+        ok: false,
+        sessionName: null,
+        error: detail || `Could not rename "${from}".`,
+        code: 'rename-failed',
+      };
+    }
+    return { ok: true, sessionName: target, error: null, code: null };
   }
 
   /**

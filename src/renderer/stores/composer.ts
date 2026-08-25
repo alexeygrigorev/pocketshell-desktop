@@ -562,6 +562,38 @@ export const useComposerStore = defineStore('composer', () => {
     schedulePersist();
   }
 
+  /**
+   * Move a session's record to a new key, because the session was RENAMED
+   * (docs/WORKSPACE.md §4, §8).
+   *
+   * Everything per-session in this store is keyed `"<connectionId>/<name>"`,
+   * and the name is the half that just changed. Without this, renaming a tab
+   * silently orphans the draft under the old key: the prompt does not appear
+   * in the renamed session, it does not appear anywhere, and it stays on disk
+   * forever because nothing will ever ask for that key again. That is the same
+   * class of bug the keyed map was built to PREVENT — "a draft never appears
+   * in a session it was not authored in" is satisfied trivially by losing it,
+   * which is not what the rule meant.
+   *
+   * A no-op when there is nothing under [from], which is the common case: most
+   * sessions have never had a composer record touched.
+   *
+   * If [to] is already occupied the incoming record WINS. That state should be
+   * unreachable — the host refuses a rename onto a live session — but it can be
+   * reached by a stale record left behind by a session that was killed and its
+   * name reused, and between a draft the user just wrote and one belonging to a
+   * session that no longer exists, the live one is the right answer.
+   */
+  function rekey(from: string, to: string): void {
+    if (from === to) return;
+    const existing = states.value[from];
+    if (!existing) return;
+    const next = { ...states.value, [to]: existing };
+    delete next[from];
+    states.value = next;
+    schedulePersist();
+  }
+
   /** Android: `setConnectionDegraded` (:850-853). Advisory only — never a block. */
   function setConnectionDegraded(key: string, degraded: boolean): void {
     ensure(key).connectionDegraded = degraded;
@@ -662,6 +694,7 @@ export const useComposerStore = defineStore('composer', () => {
     stage,
     seedAttachment,
     removeAttachment,
+    rekey,
     canSend,
     composedPayload,
     send,

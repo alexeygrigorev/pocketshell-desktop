@@ -1,39 +1,40 @@
 <script setup lang="ts">
 // SessionTree: the live tmux session list for the active connection, as a
-// FOLDER VIEW (docs/SESSIONLIST.md) — the shape the phone app has and the one
-// the user asked for, three times, in these words: `git -> folder -> session`.
-//
-// THREE levels, always, with no conditional collapsing anywhere:
+// FOLDER VIEW — TWO levels, root then folder, one row per folder
+// (docs/WORKSPACE.md §2, revising docs/SESSIONLIST.md revision 3):
 //
 //   v git                        12
-//     v dtc-website
-//         git-dtc-website               21h
-//     v pocketshell                2
-//         git-pocketshell               21h
-//         git-pocketshell-quse          20h
-//     v dataops
-//         git-dataops                   22h
+//     dtc-website           2       21h
+//     pocketshell           3       21h
+//     dataops                       22h
 //   > other                         3
 //
-// Revisions 1 and 2 of the spec both argued for making the directory level
-// CONDITIONAL — a directory holding one session collapsed into a single row,
-// on the strength of §1's measurement that a folder header at 1:1 costs a row
-// to say nothing. The measurement was real and the conclusion was wrong, for a
-// reason no row count can express: on this user's host almost every directory
-// holds exactly one session, so the conditional fired on nearly every node and
-// the panel rendered as one `git` header over a flat list of twelve rows. A
-// tree whose nodes collapse whenever they hold one child does not read as a
-// tree. The structure the user wants to SEE is the deliverable here, not the
-// row count — so the directory row is always a header with its sessions
-// nested beneath it, and it is no longer selectable: clicking it expands.
+// ## Why the session level went, and why this is not revision 2 again
 //
-// The one node type that still renders as a single row is a session with no
-// reported working directory at all (`dir.untracked`). That is not the old
-// conditional coming back through the side door: it is not "this directory
-// holds one session", it is "there is no directory". Its only available label
-// IS its session name, so a header would print that name twice on adjacent
-// rows — the doubled row the user circled in the first place. It sits in the
-// directory slot, chevron-less, as a direct child of its root (§4.6).
+// Revision 3 made this `root -> folder -> session`, and the load-bearing
+// sentence in it was "the directory row is no longer selectable: clicking it
+// expands". The session leaf existed because it was the ONLY way to reach a
+// session — selecting one was a panel operation, so the panel needed a row per
+// session to select. That is no longer true. A folder row opens a folder
+// WORKSPACE whose tab bar already carries every session in the folder, always
+// visible, one click away, so the leaf now spends a row on a navigation step
+// something else already performs.
+//
+// Revisions 1 and 2 removed the folder header CONDITIONALLY — when a folder
+// held one session — which made the panel's shape depend on its contents and
+// change under the refresh timer; a tree whose nodes collapse whenever they
+// hold one child does not read as a tree. This is the opposite: there is no
+// session level for ANY folder, whatever it holds, so the panel is always two
+// deep and a reader can predict its shape without knowing what is running.
+// SESSIONLIST §1's measurement is not overturned — it said a level must earn
+// its rows, and this one no longer does.
+//
+// An untracked session (`dir.untracked` — no reported cwd) still renders as a
+// single chevron-less row in the folder slot, and it is now selectable like
+// any other folder: its workspace holds that one session. See
+// docs/WORKSPACE.md §6 for why it must stay reachable rather than merely
+// visible, and for the sibling inference that gives most of these a real
+// folder before they ever get here.
 //
 // What survives from the flat design, unchanged:
 //   - attached sessions pin to the top of their root with a green dot and a
@@ -47,7 +48,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import NewSessionDialog from './NewSessionDialog.vue';
-import { api } from '../ipc';
 import { useConnectionStore } from '../stores/connection';
 import { useProjectsStore } from '../stores/projects';
 import { useSessionsStore } from '../stores/sessions';
@@ -56,13 +56,18 @@ import {
   groupSessionsIntoRoots,
   type SessionDirectory,
   type SessionRootFolder,
-  type SessionRow,
 } from '../sessionGrouping';
-import type { SessionAgentKind, SessionSummary } from '../../shared/types';
+import type { SessionAgentKind } from '../../shared/types';
 
 const props = defineProps<{
-  /** Name of the session currently open, so its row can be marked. */
-  activeSession?: string | null;
+  /**
+   * Key of the folder whose workspace is open, so its row can be marked.
+   *
+   * A `SessionDirectory.key`, not a session name: selection is a FOLDER fact
+   * now, and a workspace holding four session tabs still highlights exactly
+   * one row.
+   */
+  activeFolder?: string | null;
 }>();
 
 /**
@@ -74,7 +79,17 @@ const props = defineProps<{
  * workspace stays the owner of the route and of the collapsed flag — this
  * component only announces the clicks.
  */
-const emit = defineEmits<{ select: [session: SessionSummary]; back: []; collapse: [] }>();
+const emit = defineEmits<{
+  /**
+   * Open a folder's workspace. The optional second argument names a session
+   * tab to select on arrival — used when a session was just created, where
+   * "open the folder" alone would land on whichever tab sorts first rather
+   * than on the one the user asked for.
+   */
+  select: [folder: SessionDirectory, session?: string];
+  back: [];
+  collapse: [];
+}>();
 
 const connection = useConnectionStore();
 const projects = useProjectsStore();
@@ -85,13 +100,20 @@ const creatingSession = ref(false);
 
 /**
  * The host's `$HOME`, which is what turns `/home/alexey/git/dataops` into the
- * `git` root. Fetched here rather than through `projects.loadHome` because
- * that action also lands the folder BROWSER on `$HOME` — an SFTP directory
- * listing this panel has no use for. If the dialog already resolved it, reuse
- * that; if the fetch fails, grouping infers a home from the paths instead of
- * dropping every session into `other` (see `inferHome`).
+ * `git` root.
+ *
+ * Read from the projects store via `ensureHome`, which resolves the string
+ * WITHOUT landing the folder browser on it — the SFTP listing `loadHome` also
+ * does is of no use to this panel. It used to be fetched into a ref local to
+ * this component, and that was a latent bug rather than an optimisation: the
+ * folder workspace reads the same value out of the store, and `$HOME` is what
+ * decides whether a folder is keyed `~/git/foo` or `/home/me/git/foo`. Two
+ * spellings of one key is a panel row that opens a workspace with no tabs.
+ *
+ * If the fetch fails, grouping infers a home from the paths instead of dropping
+ * every session into `other` (see `inferHome`).
  */
-const home = ref<string | null>(null);
+const home = computed(() => projects.home);
 
 /**
  * Clock for the relative timestamps. The activity values only change when the
@@ -104,17 +126,12 @@ let clock: ReturnType<typeof setInterval> | null = null;
 /**
  * Nodes the user explicitly collapsed. Everything else is expanded.
  *
- * Holds both levels. Directory keys are namespaced with `dir:` because a
- * session sitting directly in `~/git` produces a DIRECTORY key of `~/git`,
- * which is byte-identical to its own root's key — without the prefix,
- * collapsing one would silently collapse the other.
+ * Only ROOT keys now: a folder is a leaf, so there is nothing under it to
+ * disclose. The `dir:` namespacing this set used to need — a session sitting
+ * directly in `~/git` produces a folder key byte-identical to its own root's —
+ * went with the level it protected.
  */
 const collapsed = ref<Set<string>>(new Set());
-
-/** Expansion key for a directory branch. See {@link collapsed}. */
-function dirKey(dir: SessionDirectory): string {
-  return `dir:${dir.key}`;
-}
 
 /**
  * The tree. The top level is the user's REGISTERED roots when they have any,
@@ -130,15 +147,11 @@ onMounted(async () => {
     now.value = Date.now();
   }, 60_000);
   if (!connection.connectionId) return;
-  home.value = projects.home;
   await sessions.refresh(connection.connectionId);
-  if (home.value === null) {
-    const result = await api.projects.home(connection.connectionId);
-    // A failure is not worth surfacing: the panel still groups, just from the
-    // shape of the paths. The dialog is where a missing `$HOME` is an error,
-    // because there it blocks creating anything.
-    if (result.ok && result.home) home.value = result.home;
-  }
+  // A failure is not worth surfacing: the panel still groups, just from the
+  // shape of the paths. The dialog is where a missing `$HOME` is an error,
+  // because there it blocks creating anything.
+  await projects.ensureHome(connection.connectionId);
 });
 
 onBeforeUnmount(() => {
@@ -158,31 +171,25 @@ function toggle(key: string): void {
 }
 
 /**
- * Keep the open session visible: navigating into a session expands every
- * ancestor holding it — its root AND its directory, which since revision 3 is
- * always a real branch rather than sometimes being the session's own row.
+ * Keep the open folder visible: navigating into one expands its root.
  *
- * This watches the ACTIVE SESSION rather than the root list on purpose, at
- * BOTH levels. Doing it on every recompute would make the containing node
- * impossible to collapse — the store refreshes on a timer and would
- * immediately reopen it — so a deliberate collapse survives until the user
- * navigates somewhere else. The directory level walks into the same trap if it
- * is wired to the list, which is why it is wired here instead.
+ * One level to reopen now rather than two, which also retires `dirKey` — a
+ * folder is a leaf here, so there is nothing under it to expand and nothing to
+ * namespace its key against.
+ *
+ * This watches the ACTIVE FOLDER rather than the root list on purpose. Doing
+ * it on every recompute would make a root impossible to collapse — the store
+ * refreshes on a timer and would immediately reopen it — so a deliberate
+ * collapse survives until the user navigates somewhere else.
  */
 watch(
-  () => props.activeSession,
-  (name) => {
-    if (!name) return;
-    const reopen: string[] = [];
-    for (const root of roots.value) {
-      for (const dir of root.directories) {
-        if (!dir.rows.some((row) => row.session.name === name)) continue;
-        reopen.push(root.key, dirKey(dir));
-      }
-    }
-    if (!reopen.some((key) => collapsed.value.has(key))) return;
+  () => props.activeFolder,
+  (key) => {
+    if (!key) return;
+    const roots_ = roots.value.filter((root) => root.directories.some((d) => d.key === key));
+    if (!roots_.some((root) => collapsed.value.has(root.key))) return;
     const next = new Set(collapsed.value);
-    for (const key of reopen) next.delete(key);
+    for (const root of roots_) next.delete(root.key);
     collapsed.value = next;
   },
   { immediate: true },
@@ -212,11 +219,42 @@ function rootTooltip(root: SessionRootFolder): string {
 }
 
 /**
- * Branch tooltip: the directory's full path and how many sessions are in it.
- * The row itself only ever shows the leaf component, which is the point.
+ * Folder tooltip: the full path, the session count, and the session NAMES.
+ *
+ * The names are here because they are no longer on screen — the workspace's
+ * tab bar carries them, which is behind a click. One hover is the cheapest
+ * place to answer "what is actually in here" without spending a row per
+ * session again, and it is capped so a folder with a dozen sessions produces a
+ * tooltip rather than a wall.
+ *
+ * An untracked folder says so instead of printing a path it does not have, and
+ * one whose path was adopted from a sibling says THAT, because a guess
+ * presented as a reported cwd is the kind of thing that wastes an hour
+ * (docs/WORKSPACE.md §6.3).
  */
+const TOOLTIP_NAME_LIMIT = 6;
+
 function dirTooltip(dir: SessionDirectory): string {
-  return `${dir.path}\n${sessionCountLabel(dir.rows.length)}`;
+  const lines: string[] = [];
+  if (dir.untracked) {
+    lines.push(
+      dir.inferredRoot
+        ? 'no reported folder — root read back from the name'
+        : 'no reported folder',
+    );
+  } else {
+    lines.push(dir.path);
+    if (dir.rows.some((row) => row.session.pathInferred)) {
+      lines.push('folder inferred from the session name, not reported by tmux');
+    }
+  }
+  lines.push(sessionCountLabel(dir.rows.length));
+  const names = dir.rows.slice(0, TOOLTIP_NAME_LIMIT).map((row) => `  ${row.session.name}`);
+  lines.push(...names);
+  if (dir.rows.length > TOOLTIP_NAME_LIMIT) {
+    lines.push(`  … and ${dir.rows.length - TOOLTIP_NAME_LIMIT} more`);
+  }
+  return lines.join('\n');
 }
 
 async function onRefresh(): Promise<void> {
@@ -224,22 +262,32 @@ async function onRefresh(): Promise<void> {
 }
 
 /**
- * A folder-first session just came up on the host. Refresh so the row exists,
- * then open it.
+ * A folder-first session just came up on the host. Refresh so its folder
+ * exists in the tree, then open that folder with the new session selected.
  *
- * The fallback synthesises a summary from the name the host returned: on a
- * host where `pocketshell sessions list` is broken the app is already on the
- * raw-tmux path, and a listing that has not caught up yet must not swallow a
- * session the host has confirmed. The route only keys on the name.
+ * The refresh is not optional and it is not merely a courtesy: the workspace
+ * is addressed by FOLDER now, and the only thing the create returns is a
+ * session name. The folder has to be looked up from a session list that
+ * includes the new row.
+ *
+ * When the lookup misses — the listing has not caught up, or
+ * `pocketshell sessions list` is broken on this host and we are on the raw-tmux
+ * path — nothing is emitted and the panel simply shows what it has. That is a
+ * deliberate downgrade from the old behaviour, which synthesised a summary and
+ * routed to it: a session route only needed a name, and a folder route needs a
+ * folder we do not have. Inventing one would put the user in a workspace for a
+ * directory that does not exist.
  */
 async function onSessionStarted(name: string): Promise<void> {
   creatingSession.value = false;
   if (connection.connectionId) await sessions.refresh(connection.connectionId);
-  const row = sessions.sessions.find((s) => s.name === name);
-  emit(
-    'select',
-    row ?? { name, created: 0, activity: 0, attached: false, path: null, agentKind: null },
-  );
+  for (const root of roots.value) {
+    const dir = root.directories.find((d) => d.rows.some((r) => r.session.name === name));
+    if (dir) {
+      emit('select', dir, name);
+      return;
+    }
+  }
 }
 
 /**
@@ -273,9 +321,34 @@ function agentBadge(kind: SessionAgentKind | null | undefined): string | null {
 }
 
 /**
+ * The distinct agent kinds running in a folder, in row order, deduped.
+ *
+ * A folder row stands in for several sessions now, so a single badge would
+ * have to pick one arbitrarily. Deduping and capping is the honest compromise:
+ * a folder running claude and codex says both, a folder running three claudes
+ * says `claude` once, and a folder running four different engines says the
+ * first two and stops rather than pushing the timestamp off the row.
+ */
+const FOLDER_BADGE_LIMIT = 2;
+
+function agentBadges(dir: SessionDirectory): string[] {
+  const out: string[] = [];
+  for (const row of dir.rows) {
+    const badge = agentBadge(row.session.agentKind);
+    if (badge !== null && !out.includes(badge)) out.push(badge);
+    if (out.length === FOLDER_BADGE_LIMIT) break;
+  }
+  return out;
+}
+
+/**
  * Compact relative age: `now`, `12m`, `3h`, `2d`, then an absolute date past a
  * week. Six characters at the very worst, against ~90px for the absolute form
  * this replaced — and that width is exactly what the label needed back.
+ *
+ * There is no absolute-form companion any more. It existed for the session
+ * row's tooltip, and the session rows are gone; a folder row's tooltip names
+ * the folder and its sessions, which is what a folder is asked about.
  */
 function fmtRelative(epochSeconds: number): string {
   if (!epochSeconds) return '';
@@ -293,37 +366,7 @@ function fmtRelative(epochSeconds: number): string {
   });
 }
 
-function fmtAbsolute(epochSeconds: number): string {
-  if (!epochSeconds) return '';
-  return new Date(epochSeconds * 1000).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
-/**
- * The row's full truth, since the row itself shows an abbreviation of it:
- * session name, folder path, absolute time.
- *
- * The leaf row is labelled by the session NAME at every depth now, so this is
- * no longer the only place a name is written — but it is still the only place
- * the name appears UNTRUNCATED, next to the directory that a leaf row does not
- * repeat because its parent header already said it.
- *
- * An untracked session has no path line because it genuinely has no path; if
- * its root was recovered from its name instead, the tooltip says so, because a
- * guess presented as a reported cwd is the kind of thing that wastes an hour.
- */
-function tooltip(row: SessionRow, dir: SessionDirectory): string {
-  const when = fmtAbsolute(row.session.activity || row.session.created);
-  const lines = [row.session.name];
-  if (!dir.untracked) lines.push(dir.path);
-  else if (dir.inferredRoot) lines.push('no reported folder — root read back from the name');
-  if (when) lines.push(when);
-  return lines.join('\n');
-}
 </script>
 
 <template>
@@ -353,7 +396,7 @@ function tooltip(row: SessionRow, dir: SessionDirectory): string {
           :title="rootTooltip(root)"
           @click="toggle(root.key)"
         >
-          <!-- One disclosure pattern, shared with ConversationView: the base
+          <!-- The app's one disclosure pattern: the base
                mark is always `chevron-right` and open is a 90 degree rotation,
                so the two states are the same geometry. -->
           <AppIcon
@@ -374,123 +417,58 @@ function tooltip(row: SessionRow, dir: SessionDirectory): string {
                a session is in it. Saying so beats an expanded header with
                nothing under it, which reads as a failed load. -->
           <li v-if="!root.directories.length" class="empty-root muted">no sessions here yet</li>
-          <template v-for="dir in root.directories" :key="dir.key">
-            <!-- No reported cwd, so there is no directory to put a level at.
-                 Its session name is its only label, and a header above a child
-                 saying the same string is the doubled row this panel exists to
-                 get rid of. Rendered in the DIRECTORY slot, chevron-less, so
-                 its dot still lands in the directory dot column. -->
-            <li
-              v-if="dir.untracked"
-              class="session-row orphan"
+
+          <!-- ONE ROW PER FOLDER. Not a header over a list any more: the row
+               IS the destination, and what used to be its children are the
+               tabs in the workspace it opens. Rendered as a <button> because
+               it is a control that navigates, and marked `current` by the
+               folder key so a workspace holding four session tabs still
+               highlights exactly one row. -->
+          <li v-for="dir in root.directories" :key="dir.key">
+            <button
+              class="dir-header"
               :class="{
-                current: dir.rows[0]!.session.name === props.activeSession,
-                attached: dir.rows[0]!.session.attached,
+                current: dir.key === props.activeFolder,
+                orphan: dir.untracked,
+                attached: dir.active,
               }"
-              :title="tooltip(dir.rows[0]!, dir)"
-              @click="emit('select', dir.rows[0]!.session)"
+              :title="dirTooltip(dir)"
+              @click="emit('select', dir)"
             >
-              <span class="dot" :class="{ active: dir.rows[0]!.session.attached }" />
-              <span class="label mono">
-                <span class="label-head">{{ dir.rows[0]!.nameHead }}</span>
-                <span v-if="dir.rows[0]!.nameTail" class="label-tail">
-                  {{ dir.rows[0]!.nameTail }}
-                </span>
+              <!-- The dot says "something live is in here". It used to be an
+                   aggregate standing in for a collapsed branch; now it is the
+                   only place the panel reports attachment at all, because the
+                   sessions it belonged to are no longer rows. -->
+              <span class="dot" :class="{ active: dir.active }" />
+              <!-- Two spans, no measurement code: the head shrinks and
+                   ellipsises, the tail is protected, so `pocketshell-desktop`
+                   degrades to `poc…-desktop` rather than to `pocketshell`.
+                   An untracked folder is labelled by its session name, which is
+                   the only label it has. -->
+              <span class="label" :class="{ mono: dir.untracked }">
+                <span class="label-head">{{ dir.labelHead }}</span>
+                <span v-if="dir.labelTail" class="label-tail">{{ dir.labelTail }}</span>
               </span>
               <span
-                v-if="agentBadge(dir.rows[0]!.session.agentKind)"
+                v-for="badge in agentBadges(dir)"
+                :key="badge"
                 class="agent-badge"
-                :class="{
-                  dim:
-                    dir.rows[0]!.session.agentKind === 'probing' ||
-                    dir.rows[0]!.session.agentKind === 'exited',
-                }"
+                :class="{ dim: badge === 'probing…' || badge === 'exited' }"
               >
-                {{ agentBadge(dir.rows[0]!.session.agentKind) }}
+                {{ badge }}
               </span>
-              <span class="row-time">
-                {{ fmtRelative(dir.rows[0]!.session.activity || dir.rows[0]!.session.created) }}
+              <!-- Counted only from 2 up. The `1` is the dead field §1 of
+                   SESSIONLIST measured: every folder row stands for at least
+                   one session, so saying so on most of them is noise. -->
+              <span v-if="dir.rows.length > 1" class="folder-count muted">
+                {{ dir.rows.length }}
               </span>
-            </li>
-
-            <!-- Every real directory, whatever it holds: a header plus its
-                 sessions. A <button>, which is also the answer to "what does
-                 clicking a directory do" — it toggles, and it can no longer
-                 select a session, because the session it used to stand in for
-                 now has a row of its own directly underneath. -->
-            <li v-else class="dir-branch">
-              <button
-                class="dir-header"
-                :aria-expanded="isExpanded(dirKey(dir))"
-                :title="dirTooltip(dir)"
-                @click="toggle(dirKey(dir))"
-              >
-                <AppIcon
-                  name="chevron-right"
-                  :size="14"
-                  class="disclosure"
-                  :class="{ open: isExpanded(dirKey(dir)) }"
-                />
-                <!-- Aggregate dot, same rule the root header uses: a collapsed
-                     branch's only way to say something live is inside it. -->
-                <span class="dot" :class="{ active: dir.active }" />
-                <!-- Two spans, no measurement code: the head shrinks and
-                     ellipsises, the tail is protected, so `pocketshell-desktop`
-                     degrades to `poc…-desktop` rather than to `pocketshell`. -->
-                <span class="label">
-                  <span class="label-head">{{ dir.labelHead }}</span>
-                  <span v-if="dir.labelTail" class="label-tail">{{ dir.labelTail }}</span>
-                </span>
-                <!-- Counted only from 2 up. This is the one thing §1's
-                     measurement is still right about: a `1` beside a header
-                     whose single child is drawn on the very next row is the
-                     dead field, and dropping it also hands the label back the
-                     width the new indent level took. -->
-                <span v-if="dir.rows.length > 1" class="folder-count muted">
-                  {{ dir.rows.length }}
-                </span>
-                <!-- The branch's age is its NEWEST session's, which is also the
-                     key it sorts on — so a branch never displays an older time
-                     than a branch sitting below it. -->
-                <span class="row-time">{{ fmtRelative(dir.mostRecentActivity) }}</span>
-              </button>
-
-              <ul v-show="isExpanded(dirKey(dir))" class="session-list">
-                <li
-                  v-for="row in dir.rows"
-                  :key="row.session.name"
-                  class="session-row child"
-                  :class="{
-                    current: row.session.name === props.activeSession,
-                    attached: row.session.attached,
-                  }"
-                  :title="tooltip(row, dir)"
-                  @click="emit('select', row.session)"
-                >
-                  <span class="dot" :class="{ active: row.session.attached }" />
-                  <!-- Middle-truncated too, and here it matters most: siblings
-                       share a derived prefix by construction. -->
-                  <span class="label mono">
-                    <span class="label-head">{{ row.nameHead }}</span>
-                    <span v-if="row.nameTail" class="label-tail">{{ row.nameTail }}</span>
-                  </span>
-                  <span
-                    v-if="agentBadge(row.session.agentKind)"
-                    class="agent-badge"
-                    :class="{
-                      dim:
-                        row.session.agentKind === 'probing' || row.session.agentKind === 'exited',
-                    }"
-                  >
-                    {{ agentBadge(row.session.agentKind) }}
-                  </span>
-                  <span class="row-time">
-                    {{ fmtRelative(row.session.activity || row.session.created) }}
-                  </span>
-                </li>
-              </ul>
-            </li>
-          </template>
+              <!-- The folder's age is its NEWEST session's, which is also the
+                   key it sorts on — so a row never displays an older time than
+                   a row sitting below it. -->
+              <span class="row-time">{{ fmtRelative(dir.mostRecentActivity) }}</span>
+            </button>
+          </li>
         </ul>
       </section>
 
@@ -621,54 +599,28 @@ function tooltip(row: SessionRow, dir: SessionDirectory): string {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.dir-list,
-.session-list {
+.dir-list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 /* ── The indent budget, in one place ───────────────────────────────────────
-   Three levels have to fit above the 200px panel floor, so the step is the
-   smallest one that still reads as nesting: 8px, VS Code's own tree step. The
-   column all three rows share is the DOT, because it is the one element every
-   row type has; the labels then follow it at a constant 16px (8px dot + an
-   --sp-2 gap) and inherit the same rhythm.
+   TWO levels now, so the budget is halved and every row gets the width back
+   that the third level was spending. The column both rows share is the DOT,
+   because it is the one element every row type has; the labels follow it at a
+   constant 16px (8px dot + an --sp-2 gap).
 
      level        chevron   dot    label
      root           8-22     30      46
-     directory     20-34     38      54
-     session          -      46      62
+     folder            -     38      54
 
-   So the leaf label starts 16px further in than the row it replaces (the old
-   single-session row put it at 46), which is the whole cost of the level. At
-   the 200px floor the timestamp is already gone (see the container query at
-   the bottom of this block) and the leaf has 200 - 62 - 10 = 128px for label
-   and badge; middle truncation is what makes that survivable, because it is
-   the tail of `git-pocketshell-quse` that separates it from its sibling. At
-   the 280px default the leaf gets 208px, which clears the longest name in the
-   real data set untruncated. */
-.session-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  height: var(--row-h);
-  /* 2px of the left inset is the selection rail's slot, so a row does not
-     shift horizontally when it becomes current. 2 + 44 puts the leaf dot at
-     46, one 8px step in from its directory header's. */
-  padding: 0 var(--row-pad-x) 0 44px;
-  border-left: 2px solid transparent;
-  cursor: pointer;
-  font-size: var(--fs-300);
-  line-height: var(--lh-300);
-  overflow: hidden;
-}
-/* A session with no directory stands IN the directory slot rather than under
-   one, so it takes the directory dot column (2 + 36 = 38) and simply leaves
-   the chevron column empty, the way any tree draws a childless node. */
-.session-row.orphan {
-  padding-left: 36px;
-}
-/* Sits in the directory slot too, but is prose rather than a row: no dot, so
+   At the 200px panel floor the timestamp is already gone (see the container
+   query at the bottom of this block) and a folder row has 200 - 54 - 10 =
+   136px for its label, badges and count — against the 128px the old session
+   leaf had, for a label that is a folder basename rather than a full session
+   name. Middle truncation is kept anyway: `pocketshell` and
+   `pocketshell-desktop` are still one root apart. */
+/* Sits in the folder slot, but is prose rather than a row: no dot, so
    it starts where a directory LABEL starts (54) instead of where its dot
    does. */
 .empty-root {
@@ -679,25 +631,10 @@ function tooltip(row: SessionRow, dir: SessionDirectory): string {
   font-size: var(--fs-200);
   font-style: italic;
 }
-.session-row:hover {
-  background: var(--state-hover);
-}
-/* Selection is accent-tinted and railed; hover is a neutral lift. The two
-   used to be the same cyan at two alphas, which read as one state. */
-.session-row.current {
-  background: var(--state-selected);
-  border-left-color: var(--accent);
-}
-.dir-branch {
-  display: block;
-}
-/* One step in from the root header: 2px rail slot + 18px puts the 14px chevron
-   box at 20-34, and a 4px gap lands the dot at 38 — 8px right of the root's.
-   Revision 2 deliberately kept this dot at 30, in the root's own column,
-   because directory HEADERS and single-session directory ROWS alternated down
-   the list and a stepped dot would have read as jitter. There is no such
-   alternation any more: every directory is a header, so the column can say
-   what it should have said all along, which is "you are one level deeper". */
+/* One step in from the root header. There is no chevron column to allow for
+   any more — a folder is a leaf — so the 36px inset puts the dot at 38, 8px
+   right of the root's, which is the whole of the nesting this panel now
+   expresses. */
 .dir-header {
   display: flex;
   align-items: center;
@@ -709,12 +646,28 @@ function tooltip(row: SessionRow, dir: SessionDirectory): string {
   border-left: 2px solid transparent;
   color: var(--fg);
   text-align: left;
-  padding: 0 var(--row-pad-x) 0 18px;
+  padding: 0 var(--row-pad-x) 0 36px;
   cursor: pointer;
   font-family: var(--font-ui);
   font-size: var(--fs-300);
   line-height: var(--lh-300);
   overflow: hidden;
+}
+.dir-header:hover {
+  background: var(--state-hover);
+}
+/* Selection is accent-tinted and railed; hover is a neutral lift. The two used
+   to be the same cyan at two alphas, which read as one state. */
+.dir-header.current {
+  background: var(--state-selected);
+  border-left-color: var(--accent);
+}
+/* A folder that is only a session — no reported cwd — is labelled by that
+   session's NAME, so it is set in the mono face the name deserves and toned
+   down, because it is a row we could not place rather than a folder the user
+   organised. */
+.dir-header.orphan .label {
+  color: var(--fg-secondary);
 }
 /* Trims the shared 8px flex gap to the 4px the alignment above needs, without
    giving this row its own gap value to keep in sync with everything else. */
@@ -745,9 +698,10 @@ function tooltip(row: SessionRow, dir: SessionDirectory): string {
 .label.mono {
   font-family: var(--font-mono);
 }
-/* Attached rows are semibold, so weight, colour (the green dot) and sort
-   position all say the same thing. This is what replaced the `attached` tag. */
-.session-row.attached .label {
+/* A folder holding an attached session is semibold, so weight, colour (the
+   green dot) and sort position all say the same thing. This is what replaced
+   the `attached` tag. */
+.dir-header.attached .label {
   font-weight: var(--fw-semibold);
 }
 .label-head {

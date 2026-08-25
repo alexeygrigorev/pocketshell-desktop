@@ -2,11 +2,11 @@
 // Host workspace: the shell for a connected host.
 //
 // Layout: a persistent left panel holding the folder-grouped session list,
-// and a right pane showing the selected session's workspace. The panel never
-// goes away — picking a session only swaps what the right pane renders:
+// and a right pane showing the selected FOLDER's workspace. The panel never
+// goes away — picking a folder only swaps what the right pane renders:
 //
-//   /host/:name                  -> SessionPlaceholderView (nothing selected)
-//   /host/:name/session/:session -> SessionWorkspaceView (Terminal/Conversation/Files)
+//   /host/:name                -> SessionPlaceholderView (nothing selected)
+//   /host/:name/folder/:folder -> FolderWorkspaceView (a tab per session, then Files)
 //
 // There is deliberately NO host topbar. The row that used to sit here —
 // back, collapse, `hetzner · alexey@135.181.114.209`, Ports/Usage/Settings,
@@ -23,9 +23,10 @@
 //     every disconnect already navigated there, so the button now lives at
 //     its own destination, next to where the connection was opened.
 //
-// Sessions are the default view of a host, and tabs belong to the selected
-// session. The two host-scoped panels — port forwarding and provider usage —
-// open as overlays, because neither is a property of a single session.
+// Folders are the default view of a host, and tabs belong to the selected
+// FOLDER (docs/WORKSPACE.md). The two host-scoped panels — port forwarding and
+// provider usage — open as overlays, because neither is a property of one
+// folder.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAgentsStore } from '../stores/agents';
@@ -38,7 +39,7 @@ import SessionTree from '../components/SessionTree.vue';
 import PortPanelView from './PortPanelView.vue';
 import SettingsView from './SettingsView.vue';
 import UsageView from './UsageView.vue';
-import type { SessionSummary } from '../../shared/types';
+import type { SessionDirectory } from '../sessionGrouping';
 
 const route = useRoute();
 const router = useRouter();
@@ -114,17 +115,26 @@ const missingToolsText = computed(() => {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 });
 
-/** Session named by the route, so the panel can highlight the current row. */
-const activeSession = computed(() => (route.params['session'] as string | undefined) ?? null);
+/** Folder named by the route, so the panel can highlight the current row. */
+const activeFolder = computed(() => (route.params['folder'] as string | undefined) ?? null);
 
-function onSelectSession(session: SessionSummary): void {
-  if (session.name === activeSession.value) return;
+/**
+ * Open a folder's workspace. [session] names a tab to arrive on, which the
+ * panel supplies only when it has a reason to — a session it just created.
+ *
+ * Re-selecting the folder that is already open is NOT a no-op when a session
+ * is named: that is the create case, where the workspace is already on screen
+ * and the point of the navigation is to move to the new tab.
+ */
+function onSelectFolder(folder: SessionDirectory, session?: string): void {
+  if (folder.key === activeFolder.value && session === undefined) return;
   // `void`: vue-router rejects the returned promise on an aborted or
   // redirected navigation, and neither is an error here. Same convention as
   // src/main/index.ts's `void mainWindow.loadURL(...)`.
   void router.push({
-    name: 'session',
-    params: { name: route.params['name'] as string, session: session.name },
+    name: 'folder',
+    params: { name: route.params['name'] as string, folder: folder.key },
+    ...(session === undefined ? {} : { query: { tab: session } }),
   });
 }
 
@@ -200,8 +210,8 @@ async function onRefreshUsage(): Promise<void> {
         :style="{ width: `${panelWidth}px` }"
       >
         <SessionTree
-          :active-session="activeSession"
-          @select="onSelectSession"
+          :active-folder="activeFolder"
+          @select="onSelectFolder"
           @back="onBack"
           @collapse="panelCollapsed = true"
         />
@@ -228,7 +238,7 @@ async function onRefreshUsage(): Promise<void> {
         @mousedown.prevent="onDragStart"
       />
 
-      <!-- Right pane: the selected session's workspace, or the empty state. -->
+      <!-- Right pane: the selected folder's workspace, or the empty state. -->
       <main class="session-pane">
         <router-view />
       </main>

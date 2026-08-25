@@ -21,13 +21,13 @@
 //
 // The card overlays the terminal instead of splitting the pane with it, and
 // that is the point: see the block comment on `.composer-dock` in
-// SessionWorkspaceView.vue. The terminal's ROW COUNT never changes when the
+// FolderWorkspaceView.vue. The terminal's ROW COUNT never changes when the
 // composer opens, closes, moves or is dragged — no SSH window-change, no
 // remote tmux reflow — because the composer contributes NOTHING to the tab
 // body's layout in any state.
 //
 // It is mounted ONCE per session workspace, outside the tab body, so the draft,
-// the caret and the staged tiles survive a Terminal/Conversation tab switch.
+// the caret and the staged tiles survive a tab switch.
 // The draft, its attachments and the dragged height live in stores/composer.ts
 // keyed by session, so switching sessions swaps records rather than destroying
 // a draft; open-vs-closed does NOT, because that is a preference about the tool
@@ -92,8 +92,6 @@ const props = defineProps<{
   connectionId: ConnectionId;
   /** Session name — the composer's identity, and the attachment scope key. */
   sessionName: string;
-  /** True while the Conversation tab is selected (send routing, §16.3). */
-  viewingConversation?: boolean;
   /** The engine running in this pane. Null until agent detection exists (§25.5). */
   agentKind?: ComposerAgentKind | null;
   /** False while the SSH connection is down — advisory only, never a block (§9). */
@@ -522,7 +520,6 @@ async function onSend(): Promise<void> {
   const k = key.value;
   const shellId = shells.shellIdFor(props.sessionName);
   const route = sendRoute({
-    viewingConversation: props.viewingConversation === true && (props.agentKind ?? null) !== null,
     liveAgent: props.agentKind ?? null,
     presumedAgent: null,
     // Inside the composer there is exactly one Send verb and it submits (§5.3).
@@ -538,10 +535,8 @@ async function onSend(): Promise<void> {
     k,
     async (payload) => {
       if (!shellId) return false;
-      // Only the 'raw'/'agent-payload' arms exist today: both write into the
-      // pane's PTY. 'agent-conversation' additionally needs an optimistic
-      // transcript echo and is deferred until the Conversation tab has a live
-      // transcript (§16.3).
+      // Both arms write into the pane's PTY; they differ only in how long
+      // they wait before Enter (codex's TUI needs the longer gap).
       return deliverPayload(payload, {
         write: (data) => api.shell.input(shellId, data),
         submitDelayMs,
@@ -1220,7 +1215,7 @@ defineExpose({ focusDraft, openComposer, typeInto });
 
 /* ---- the floating card --------------------------------------------------
  * The card is absolutely positioned inside `.composer-dock`, which is the
- * session body inset on all four sides (SessionWorkspaceView.vue). Its box —
+ * workspace body inset on all four sides (FolderWorkspaceView.vue). Its box —
  * right, bottom, width, height — is computed in JS and arrives as an inline
  * style, because the user can now drag all four of those numbers and they have
  * to be clamped against the pane by rules a unit test can check

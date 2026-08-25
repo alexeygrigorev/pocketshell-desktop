@@ -7,6 +7,7 @@ import type { RepoEntry, ReposScopeState } from '../../main/projects/repos';
 import type {
   CloneResult,
   CreateFolderResult,
+  RenameSessionResult,
   SessionNamePolicy,
   StartSessionResult,
 } from '../../main/projects/ProjectsService';
@@ -72,17 +73,43 @@ export const useProjectsStore = defineStore('projects', () => {
     () => remoteState.value === 'gh-missing' || remoteState.value === 'gh-unauthenticated',
   );
 
-  /** Resolve the remote `$HOME` and land the browser there on first open. */
-  async function loadHome(connectionId: ConnectionId): Promise<void> {
-    if (home.value !== null) return;
+  /**
+   * Resolve the remote `$HOME` and nothing else.
+   *
+   * Split out of {@link loadHome} because `$HOME` has two consumers with very
+   * different appetites. The DIALOG wants the browser landed on it. The session
+   * PANEL and the folder WORKSPACE want only the string — it is the input to
+   * `directoryKey` and to `sessionBaseName`, and an SFTP directory listing they
+   * will never render is a round trip spent for nothing.
+   *
+   * Both of them reading it from HERE is the point, and it is a fix rather than
+   * a tidy-up: the panel used to resolve `$HOME` into a ref of its own while
+   * the workspace read the store, so for one render they could hold different
+   * answers — and `$HOME` is what decides whether a folder is keyed `~/git/foo`
+   * or `/home/me/git/foo`. Two spellings of one key is a panel row that opens a
+   * workspace with no tabs in it.
+   *
+   * Cached, and a failure is not cached: the panel degrades gracefully without
+   * `$HOME` (grouping infers one from the paths), so a transient failure should
+   * be retried by the next caller rather than remembered.
+   */
+  async function ensureHome(connectionId: ConnectionId): Promise<string | null> {
+    if (home.value !== null) return home.value;
     const result = await api.projects.home(connectionId);
     if (!result.ok || !result.home) {
       homeError.value = result.error ?? 'could not resolve $HOME on the host';
-      return;
+      return null;
     }
     homeError.value = null;
     home.value = result.home;
-    if (!cwd.value) await browse(connectionId, result.home);
+    return result.home;
+  }
+
+  /** Resolve the remote `$HOME` and land the browser there on first open. */
+  async function loadHome(connectionId: ConnectionId): Promise<void> {
+    const resolved = await ensureHome(connectionId);
+    if (resolved === null) return;
+    if (!cwd.value) await browse(connectionId, resolved);
   }
 
   /**
@@ -210,6 +237,26 @@ export const useProjectsStore = defineStore('projects', () => {
     }
   }
 
+  /**
+   * Rename a live session (docs/WORKSPACE.md §4).
+   *
+   * Thin on purpose. Every guard that matters — the alphabet, the
+   * host-answered uniqueness check — runs in the main process, because a guard
+   * the renderer owns is a guard a second caller can forget. What the CALLER
+   * still owes, and this store deliberately does not do for it, is migrating
+   * the two pieces of desktop state keyed by session name: the composer's
+   * per-session record and whichever tab is selected. Doing that here would
+   * mean this store importing the composer store to fix up a key it does not
+   * own.
+   */
+  async function renameSession(
+    connectionId: ConnectionId,
+    from: string,
+    to: string,
+  ): Promise<RenameSessionResult> {
+    return api.projects.renameSession(connectionId, from, to);
+  }
+
   /** Drop everything on disconnect: none of it is valid for another host. */
   function clear(): void {
     home.value = null;
@@ -242,6 +289,7 @@ export const useProjectsStore = defineStore('projects', () => {
     cloning,
     starting,
     loadHome,
+    ensureHome,
     browse,
     enter,
     up,
@@ -250,6 +298,7 @@ export const useProjectsStore = defineStore('projects', () => {
     createFolder,
     clone,
     start,
+    renameSession,
     clear,
   };
 });

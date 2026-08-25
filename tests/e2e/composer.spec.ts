@@ -78,7 +78,11 @@ async function clearDraft(page: Page): Promise<void> {
 }
 
 async function openSession(page: Page, name: string): Promise<void> {
-  await page.locator('.session-row', { hasText: name }).first().click();
+  // A session is a TAB inside a folder workspace now (docs/WORKSPACE.md §3):
+  // open the folder, then select the session's tab.
+  await page.locator('.dir-header').first().click();
+  await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 20_000 });
+  await page.getByRole('button', { name, exact: true }).click();
   await expect(page.locator('.composer')).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('.terminal-area > .terminal')).toBeVisible({ timeout: 15_000 });
 }
@@ -102,7 +106,7 @@ test.describe('prompt composer panel', () => {
     page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
     await page.getByText(E2E_HOST_NAME).click();
-    await expect(page.locator('.session-row').first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.dir-header').first()).toBeVisible({ timeout: 20_000 });
     await openSession(page, 'main');
   });
 
@@ -411,7 +415,7 @@ test.describe('prompt composer panel', () => {
     await page.locator('.rail').click();
     await expect(page.locator('.composer')).toHaveCount(0);
 
-    await page.locator('.session-row', { hasText: 'build' }).first().click();
+    await page.getByRole('button', { name: 'build', exact: true }).click();
     await expect(page.locator('.rail')).toBeVisible();
     await expect(page.locator('.composer')).toHaveCount(0);
 

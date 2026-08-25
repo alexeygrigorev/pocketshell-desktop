@@ -64,6 +64,13 @@ export const ipc = {
     reposList: 'projects:reposList', // local clones + GitHub repos
     reposClone: 'projects:reposClone', // clone a GitHub repo, return its path
     startSession: 'projects:startSession', // folder-first session create
+    /**
+     * Rename a live tmux session (docs/WORKSPACE.md §4). It sits under
+     * `projects:` rather than `helper:` because the name it produces has to
+     * obey the SAME derivation rules a folder-derived name obeys — the
+     * sanitiser and the host-side uniqueness probe both live in that service.
+     */
+    renameSession: 'projects:renameSession',
     cloneProgress: 'projects:event:cloneProgress', // event: CloneProgress
   },
   sftp: {
@@ -106,9 +113,6 @@ export const ipc = {
     readLocal: 'attachments:readLocal', // bytes of a path pickFiles handed out THIS session
   },
   agent: {
-    log: 'agent:log', // agent-log --json for an engine+session
-    sessionLog: 'agent:sessionLog', // the conversation of ONE tmux session, id resolved for us
-    resumable: 'agent:resumable', // sessions resumable
     profiles: 'agent:profiles', // profiles list --json
     envList: 'agent:envList', // env list --dir --json
     envGet: 'agent:envGet', // env get --dir --json

@@ -1,18 +1,35 @@
 import { createRouter, createMemoryHistory, type RouteRecordRaw } from 'vue-router';
 import HostPickerView from './views/HostPickerView.vue';
 import HostWorkspaceView from './views/HostWorkspaceView.vue';
+import FolderWorkspaceView from './views/FolderWorkspaceView.vue';
 import SessionPlaceholderView from './views/SessionPlaceholderView.vue';
-import SessionWorkspaceView from './views/SessionWorkspaceView.vue';
+import SessionRedirectView from './views/SessionRedirectView.vue';
 
 // Memory history (not hash/history) — Electron loads a single file, and we
 // navigate within the window without touching a real URL bar.
 //
 // Three levels, each with a route so "back" is a real navigation:
 //   hosts          -> pick a host
-//   host-sessions  -> connected host, no session picked yet. The session panel
+//   host-sessions  -> connected host, no folder picked yet. The session panel
 //                     is part of the host shell, so this route only supplies
 //                     the right pane's empty state.
-//   session        -> one session's workspace (Terminal/Conversation/Files)
+//   folder         -> one FOLDER's workspace: a tab per tmux session in it,
+//                     plus one or more Files tabs (docs/WORKSPACE.md §10).
+//
+// `:folder` is the folder's `directoryKey` — `~/git/dtc-website`. vue-router
+// encodes route params, so the slashes and the `~` survive a round trip
+// without any escaping of our own.
+//
+// The active tab is a QUERY parameter (`?tab=<id>`) rather than a path
+// segment, for two reasons: it is a view preference within one destination
+// rather than a destination of its own, and a Files tab has no name that
+// belongs in a path. Omitting it selects the first tab.
+//
+// `session/:session` used to BE the workspace route. It is now a resolver that
+// replaces itself with the folder holding that session — see
+// views/SessionRedirectView.vue for why the old shape is honoured rather than
+// deleted, and why that is not a backwards-compatibility shim in the sense
+// docs/ANALYSIS.md D22 forbids.
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'hosts', component: HostPickerView },
   {
@@ -21,9 +38,14 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', name: 'host-sessions', component: SessionPlaceholderView },
       {
+        path: 'folder/:folder',
+        name: 'folder',
+        component: FolderWorkspaceView,
+      },
+      {
         path: 'session/:session',
         name: 'session',
-        component: SessionWorkspaceView,
+        component: SessionRedirectView,
       },
     ],
   },

@@ -5,7 +5,7 @@ A desktop (Electron) port of [PocketShell](https://github.com/alexeygrigorev/poc
 voice-first phone cockpit, the desktop app is a keyboard-first workspace:
 read your hosts from `~/.ssh/config`, browse the tmux session tree, click
 into a terminal, edit files over SFTP, forward ports, and follow your AI
-coding agents' conversations — all talking to the server-side `pocketshell`
+coding agents — all talking to the server-side `pocketshell`
 helper on each dev box.
 
 > **Status:** under active development. Phases 0–5 in
@@ -15,14 +15,16 @@ helper on each dev box.
 
 - **Host picker** reads `~/.ssh/config` (with manual-add fallback) and
   honours `~/.ssh/known_hosts`.
-- **Session tree** from `pocketshell sessions list`; click to attach a
-  tmux session in a real terminal (`xterm.js`).
-- **Files** — full SFTP: browse, edit (Monaco), upload/download,
+- **Folder panel** from `pocketshell sessions list`, grouped root ->
+  folder; click a folder to open its workspace — a tab per tmux session
+  in it, in a real terminal (`xterm.js`), plus Files tabs. See
+  [docs/WORKSPACE.md](./docs/WORKSPACE.md).
+- **Files** — full SFTP: browse, edit (CodeMirror), upload/download,
   create/rename/delete.
 - **Port forwarding** — local (`-L`), remote (`-R`), and dynamic SOCKS
   (`-D`), with auto-forward that mirrors remote listeners.
-- **Agent awareness** — conversation view (`pocketshell agent-log`),
-  resumable conversation picker, agent launcher, and a usage/quota
+- **Agent awareness** — start a session with a chosen engine
+  (`pocketshell agent <kind>`), an env editor, and a usage/quota
   dashboard (`pocketshell usage`).
 
 ## Docs

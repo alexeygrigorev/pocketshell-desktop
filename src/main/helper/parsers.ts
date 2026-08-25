@@ -301,8 +301,8 @@ export function mergeSessionEnrichment(
   sessions: SessionSummary[],
   enrichment: Map<string, SessionEnrichment>,
 ): SessionSummary[] {
-  const lenient = lenientEnrichmentIndex(enrichment);
-  return sessions.map((session) => {
+  const { index: lenient } = lenientEnrichmentIndex(enrichment);
+  const merged = sessions.map((session) => {
     const extra = enrichment.get(session.name) ?? lenient.get(asciiSanitised(session.name));
     if (!extra) return session;
     return {
@@ -314,6 +314,149 @@ export function mergeSessionEnrichment(
       agentKind: extra.agentKind,
     };
   });
+  return inferPathsFromSiblings(merged);
+}
+
+/**
+ * Give a session with no reported working directory the directory of the
+ * session it is named after (docs/WORKSPACE.md §6.3).
+ *
+ * ## Why this exists
+ *
+ * The user reported four sessions rendering as orphans - direct children of a
+ * root with no folder - and circled two pairs they expected to sit together:
+ * `git-red-stamp-sound` against `git-red-stamp`, and `git-dtc-website-import`
+ * against `git-dtc-website`. In every pair the orphan's name is the other
+ * session's name plus a `-suffix`, which is exactly what a second session in
+ * one folder is called.
+ *
+ * It matters more than it used to. The folder workspace keys EVERYTHING on the
+ * folder - one panel row per folder, one workspace per folder, tabs derived
+ * from the sessions in it - so a session with no folder has nowhere to live at
+ * all. Leaving it unplaced is not an annoyance any more; it is a live session
+ * the user can no longer reach.
+ *
+ * ## Why it matches against siblings rather than deriving a path from the name
+ *
+ * `rootFromSessionName` (src/renderer/sessionGrouping.ts) recovers only the
+ * ROOT from a name, and its comment explains the refusal to go further: `-` is
+ * both the component separator AND a legal character inside a component, so
+ * `git-dtc-website-import` is genuinely ambiguous between
+ * `~/git/dtc-website-import` and `~/git/dtc-website/import`, and inventing a
+ * folder from that guess is worse than having none.
+ *
+ * This does not guess. It only ever adopts a path that ANOTHER SESSION IS
+ * ACTUALLY REPORTING, so it can file a session into a folder that exists and
+ * can never conjure one that does not. The longest matching prefix wins, so a
+ * host running both `git-a` and `git-a-b` places `git-a-b-c` under `git-a-b`.
+ *
+ * ## When it is wrong, and why it is still worth doing
+ *
+ * If `git-red-stamp-sound` genuinely runs in `~/git/red-stamp-sound` - its own
+ * repo - this files it under `~/git/red-stamp`, and the real fix is the null
+ * path rather than the grouping. The rows are marked `pathInferred` so the
+ * guess is legible rather than silent, and {@link diagnoseSessionPaths} is what
+ * settles which case a host is in. The alternative is leaving the session in
+ * the bucket the user has just complained about.
+ *
+ * Sessions that already have a path are returned untouched, and a session with
+ * no matching sibling keeps its null.
+ */
+export function inferPathsFromSiblings(sessions: SessionSummary[]): SessionSummary[] {
+  const anchors = sessions.filter((s) => s.path != null && s.path !== '');
+  if (anchors.length === 0) return sessions;
+  return sessions.map((session) => {
+    if (session.path != null && session.path !== '') return session;
+    let best: SessionSummary | null = null;
+    for (const anchor of anchors) {
+      // The `-` boundary is required for the same reason the tab-label
+      // stripper requires it: `git-red-stamp` must not claim
+      // `git-red-stampede`, which is a different folder entirely.
+      if (!session.name.startsWith(`${anchor.name}-`)) continue;
+      if (best === null || anchor.name.length > best.name.length) best = anchor;
+    }
+    if (best === null) return session;
+    return { ...session, path: best.path, pathInferred: true };
+  });
+}
+
+/**
+ * What went wrong for every session that still has no working directory of its
+ * own.
+ *
+ * A pure function, so the diagnosis is testable; `PocketshellClient.listSessions`
+ * calls it and writes the result to `~/.pocketshell/desktop.log` (see
+ * src/main/log.ts for why a file log exists at all). The point is to replace a
+ * guess with an observation: the three candidate causes below produce an
+ * identical symptom in the UI - a session in the wrong place - and are told
+ * apart only by what the probe actually said.
+ *
+ *   absent     the probe emitted no row for this session under any spelling.
+ *              Either tmux listed no panes for it, or the probe output was cut
+ *              short.
+ *   no-path    a row was there and both path columns were empty. That is what
+ *              tmux reports for a pane whose process has exited under
+ *              `remain-on-exit`.
+ *   ambiguous  a row exists under a different spelling, but the
+ *              column-sanitised key it would have been found by was claimed by
+ *              two sessions and dropped by 3ac7abc's safety rule.
+ *
+ * `unmatchedProbeKeys` is the other half of the picture: enrichment rows that
+ * matched no listed session at all. A spelling mismatch the sanitiser does not
+ * model shows up there and nowhere else.
+ */
+export interface SessionPathDiagnosis {
+  name: string;
+  probe: 'absent' | 'no-path' | 'ambiguous';
+  /** The column-sanitised key the lenient lookup would have used. */
+  lenientKey: string;
+  /** True when the path this session ended up with came from a sibling. */
+  inferred: boolean;
+}
+
+export interface SessionPathReport {
+  total: number;
+  /** Sessions the probe failed to place - inferred ones included. */
+  unplaced: SessionPathDiagnosis[];
+  /** Probe rows that belong to no listed session. */
+  unmatchedProbeKeys: string[];
+}
+
+export function diagnoseSessionPaths(
+  sessions: SessionSummary[],
+  enrichment: Map<string, SessionEnrichment>,
+): SessionPathReport {
+  const { index: lenient, ambiguous } = lenientEnrichmentIndex(enrichment);
+  const matched = new Set<string>();
+  const unplaced: SessionPathDiagnosis[] = [];
+
+  for (const session of sessions) {
+    const lenientKey = asciiSanitised(session.name);
+    const exact = enrichment.get(session.name);
+    const loose = exact ?? lenient.get(lenientKey);
+    if (exact) matched.add(session.name);
+
+    // `pathInferred` means the path on the row is a SIBLING's, so the probe
+    // still failed to place this session - which is what this report is about.
+    // A row carrying a path of its own is simply fine.
+    const placed = session.path != null && session.path !== '' && session.pathInferred !== true;
+    if (placed) continue;
+
+    const probe: SessionPathDiagnosis['probe'] = loose
+      ? 'no-path'
+      : ambiguous.has(lenientKey)
+        ? 'ambiguous'
+        : 'absent';
+    unplaced.push({
+      name: session.name,
+      probe,
+      lenientKey,
+      inferred: session.pathInferred === true,
+    });
+  }
+
+  const unmatchedProbeKeys = [...enrichment.keys()].filter((key) => !matched.has(key));
+  return { total: sessions.length, unplaced, unmatchedProbeKeys };
 }
 
 /**
@@ -402,9 +545,11 @@ function displayColumns(cp: number): number {
  * shows up as a session in the `other` bucket, while a wrong one silently
  * opens the Files tab in someone else's project.
  */
-function lenientEnrichmentIndex(
-  enrichment: Map<string, SessionEnrichment>,
-): Map<string, SessionEnrichment> {
+function lenientEnrichmentIndex(enrichment: Map<string, SessionEnrichment>): {
+  index: Map<string, SessionEnrichment>;
+  /** Keys two sessions both claimed, and which were therefore dropped. */
+  ambiguous: Set<string>;
+} {
   const index = new Map<string, SessionEnrichment>();
   const ambiguous = new Set<string>();
   for (const [name, value] of enrichment) {
@@ -417,7 +562,7 @@ function lenientEnrichmentIndex(
     index.set(key, value);
   }
   for (const key of ambiguous) index.delete(key);
-  return index;
+  return { index, ambiguous };
 }
 
 /**
@@ -496,156 +641,6 @@ export function parseUsageNdjson(stdout: string): UsageRow[] {
     }
   }
   return out;
-}
-
-// ---------------------------------------------------------------------------
-// `pocketshell sessions resumable` — fixed-width table
-// ---------------------------------------------------------------------------
-//
-// Real 0.4.44 output (`sessions resumable --all`), reproduced byte-for-byte:
-//
-//   IDX ENGINE    PROJECT             WHEN    LABEL
-//   1   codex     dtc-website         just nowhttps://github.com/…
-//   3   codex     git                 1m      I have this game idea…
-//   5   claude    telegram-writing-assistant39m     articles/claw-drafts/…
-//
-// The helper renders it with `f"{idx:<4}{engine:<10}{project:<20}{when:<8}{label}"`
-// (sessions.py:268-277), so the columns are IDX[0:4) ENGINE[4:14)
-// PROJECT[14:34) WHEN[34:42) LABEL[42:end) — but `<` padding only pads, it
-// never truncates, so BOTH of the two rows above break naive parsing:
-//
-//   * `just now` is exactly 8 chars and fills WHEN completely, leaving ZERO
-//     whitespace before LABEL. The previous "split on the first 2+ space gap
-//     after column 34" heuristic therefore swallowed the whole label into
-//     WHEN and returned an empty label for every "just now" row.
-//   * `telegram-writing-assistant` is 26 chars and overflows PROJECT, shifting
-//     WHEN and LABEL right by 6. A hard slice at [14:34)/[34:42) then cut the
-//     project mid-word and produced garbage for WHEN and LABEL.
-//
-// So we parse the fixed IDX/ENGINE prefix by column (both always fit) and then
-// locate the WHEN/LABEL boundary by finding the WHEN token itself — the only
-// field whose vocabulary is closed.
-
-export interface ResumableSession {
-  // See UsageRow.status: `string & {}` preserves narrowing on the known
-  // engines while still round-tripping an unrecognised one.
-  engine: 'claude' | 'codex' | 'opencode' | (string & {});
-  project: string;
-  /** Relative-time label as printed (e.g. "3h", "just now"). */
-  when: string;
-  label: string;
-  running: boolean;
-}
-
-const RESUMABLE_HEADER_RE = /^\s*IDX\s+ENGINE\s+PROJECT\s+WHEN\s+LABEL/i;
-
-/** Width of the PROJECT column, measured from the start of the tail. */
-const RESUMABLE_PROJECT_WIDTH = 20;
-/** Width of the WHEN column. */
-const RESUMABLE_WHEN_WIDTH = 8;
-
-/**
- * The complete vocabulary of the WHEN column, from the helper's
- * `format_relative` (resume.py:680-698): `just now`, then `<n>m`, `<n>h`,
- * `<n>d`, `<n>mo`, `<n>y`. `mo` is listed before the single-letter units so
- * the alternation cannot stop at the `m` of `11mo`.
- *
- * The "followed by whitespace" guard applies to the numeric forms ONLY, so a
- * digit run inside an overflowing project name is not mistaken for a WHEN.
- * `just now` needs no guard and must not have one: at exactly 8 chars it
- * fills the column with no trailing pad, so the label butts straight up
- * against it.
- */
-const RESUMABLE_WHEN_RE = /^(just now|\d+(?:mo|[mhdy])(?=\s|$))/;
-
-/** Parse `pocketshell sessions resumable` table. */
-export function parseResumableTable(stdout: string): ResumableSession[] {
-  const out: ResumableSession[] = [];
-  let sawHeader = false;
-  for (const rawLine of stdout.split(/\r?\n/)) {
-    const line = rawLine.replace(/\s+$/, ''); // rstrip
-    if (!line.trim()) continue;
-    if (RESUMABLE_HEADER_RE.test(line)) {
-      sawHeader = true;
-      continue;
-    }
-    if (!sawHeader) continue;
-    if (line.length <= 14) continue;
-    // IDX[0:4) and ENGINE[4:14) always fit their columns — the index is at
-    // most three digits for any realistic `-n`, and the widest engine
-    // ("opencode", 8) still leaves two spaces.
-    const engine = line.slice(4, 14).trim();
-    if (!engine) continue;
-
-    // PROJECT + WHEN + LABEL, with WHEN starting at max(20, project.length):
-    // scan forward from the nominal column for the first WHEN token. Because
-    // an overflowing project is a directory basename (no spaces), every byte
-    // between the nominal start and the real one is non-space — so hitting
-    // whitespace first means the row is not shaped as we expect and we fall
-    // back to the nominal columns rather than dropping the row.
-    const tail = line.slice(14);
-    let whenStart = -1;
-    let when = '';
-    for (let i = RESUMABLE_PROJECT_WIDTH; i < tail.length; i++) {
-      const match = RESUMABLE_WHEN_RE.exec(tail.slice(i));
-      if (match) {
-        whenStart = i;
-        when = match[1]!;
-        break;
-      }
-      if (/\s/.test(tail[i]!)) break; // ran out of padding without a WHEN
-    }
-    if (whenStart < 0) {
-      whenStart = RESUMABLE_PROJECT_WIDTH;
-      when = tail.slice(whenStart, whenStart + RESUMABLE_WHEN_WIDTH).trim();
-    }
-    const project = tail.slice(0, whenStart).trim();
-    if (!project || !when) continue;
-    // LABEL starts exactly one WHEN-column past the WHEN token; `just now`
-    // fills that column with no separator at all, so trimming is not enough.
-    let label = tail.slice(whenStart + Math.max(RESUMABLE_WHEN_WIDTH, when.length)).trim();
-
-    let running = false;
-    const runningTag = '(running)';
-    if (label.endsWith(runningTag)) {
-      running = true;
-      label = label.slice(0, -runningTag.length).trim();
-    }
-    out.push({ engine, project, when, label, running });
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// `pocketshell agent-log --json` — envelope
-// ---------------------------------------------------------------------------
-
-export interface AgentLogEnvelope {
-  count: number;
-  engine: string;
-  /** Raw JSONL lines (each is one JSON object). */
-  lines: string[];
-  path: string;
-  session: string;
-}
-
-/** Parse `pocketshell agent-log --json` envelope. Returns null if not JSON. */
-export function parseAgentLogJson(stdout: string): AgentLogEnvelope | null {
-  const trimmed = stdout.trim();
-  if (!trimmed || !trimmed.startsWith('{')) return null;
-  try {
-    const obj = JSON.parse(trimmed) as Partial<AgentLogEnvelope>;
-    if (!obj || typeof obj !== 'object') return null;
-    return {
-      count: obj.count ?? obj.lines?.length ?? 0,
-      engine: obj.engine ?? '',
-      lines: Array.isArray(obj.lines) ? obj.lines : [],
-      path: obj.path ?? '',
-      session: obj.session ?? '',
-    };
-  } catch {
-    return null;
-  }
 }
 
 // ---------------------------------------------------------------------------

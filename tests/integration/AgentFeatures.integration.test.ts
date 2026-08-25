@@ -2,14 +2,15 @@ import { beforeAll, afterAll, expect, it } from 'vitest';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { SshService } from '@main/ssh/SshService';
 import { PocketshellClient } from '@main/helper/PocketshellClient';
-import { renderConversation } from '@main/agents/conversation';
 import { TEST_KEY_PATH, describeDocker } from './helpers';
 
 /**
  * Integration tests for the agent-awareness features against the real
- * `pocketshell-test:helper` image: agent-log reads the seeded Claude/Codex/
- * OpenCode fixtures, the conversation renderer normalizes them, usage returns
- * provider rows, and resumable lists conversations.
+ * `pocketshell-test:helper` image: usage returns provider rows, and the env
+ * editor reads a folder's `.env`.
+ *
+ * The agent-log / conversation / resumable cases that used to live here went
+ * with the Conversation feature (docs/WORKSPACE.md §9).
  *
  * Auto-skips when Docker is unavailable.
  */
@@ -41,30 +42,6 @@ describeDocker('Agent features integration', () => {
   afterAll(async () => {
     if (connectionId) ssh.close(connectionId);
     if (container) await container.stop();
-  });
-
-  it('agent-log reads the seeded Claude fixture and the renderer normalizes it', async () => {
-    const env = await helper.agentLog(connectionId!, 'claude', 'demo-claude', '/workspace/demo');
-    expect(env).not.toBeNull();
-    expect(env!.lines.length).toBeGreaterThan(0);
-    const msgs = renderConversation('claude', env!.lines);
-    expect(msgs.length).toBeGreaterThan(0);
-    expect(msgs[0]!.role).toBe('user');
-  });
-
-  it('agent-log reads the seeded Codex fixture', async () => {
-    const env = await helper.agentLog(connectionId!, 'codex', 'demo-codex');
-    expect(env).not.toBeNull();
-    expect(env!.lines.length).toBeGreaterThan(0);
-    const msgs = renderConversation('codex', env!.lines);
-    expect(msgs.length).toBeGreaterThan(0);
-  });
-
-  it('agent-log reads the seeded OpenCode fixture', async () => {
-    const env = await helper.agentLog(connectionId!, 'opencode', 'demo-opencode');
-    expect(env).not.toBeNull();
-    const msgs = renderConversation('opencode', env!.lines);
-    expect(msgs.length).toBeGreaterThan(0);
   });
 
   it('usage returns the seeded provider rows', async () => {
@@ -100,11 +77,4 @@ describeDocker('Agent features integration', () => {
     expect(await helper.envGet(connectionId!, dir, ['NOPE'])).toEqual({});
   });
 
-  it('listResumable returns conversations', async () => {
-    const sessions = await helper.listResumable(connectionId!, true);
-    // The resumable list depends on the fixtures being discoverable; it may
-    // be empty if the helper's discovery paths don't match, so we only assert
-    // it doesn't throw and returns an array.
-    expect(Array.isArray(sessions)).toBe(true);
-  });
 });

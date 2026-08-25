@@ -174,11 +174,17 @@ phone's `list-sessions` + `list-panes` pair. Verified on tmux 3.4 and 3.6b.
   **not** the tmux session name. Nothing the helper lists returns that id:
   `sessions list` is IDX/SESSION/CREATED and `sessions resumable` is
   ENGINE/PROJECT/WHEN/LABEL, neither of which carries it. A session-scoped
-  caller therefore has to recover it from the on-disk layout itself
-  (`src/main/agents/transcripts.ts`), keyed on the session's cwd and its
-  recorded `@ps_agent_kind`. Only claude's path encodes the cwd; codex and
-  opencode keep it inside the file, so for those the match is by engine plus
-  recency and the UI says so.
+  caller therefore has to recover it from the on-disk layout itself, keyed on
+  the session's cwd and its recorded `@ps_agent_kind`; only claude's path
+  encodes the cwd, so for codex and opencode the match is by engine plus
+  recency and cannot be verified.
+
+  **This finding is kept and the code that used it is gone.** The desktop's
+  conversation view was deleted (docs/WORKSPACE.md §9) and `transcripts.ts`
+  went with it. What is recorded here is a fact about the HELPER's interface,
+  not about our port of it, and it is exactly the fact anyone reimplementing
+  this would have to rediscover — the id is not derivable from anything the
+  helper prints.
 - **`agent <kind>`** strips ~71 provider API-key env vars (subscription
   billing), merges `.env`/`.envrc`, suppresses codex's update-check modal
   and claude's trust dialog (seeds `~/.claude.json`), then `exec`s the

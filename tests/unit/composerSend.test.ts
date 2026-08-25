@@ -132,14 +132,12 @@ describe('deliverPayload — the wire sequence', () => {
 });
 
 describe('sendRoute (TmuxSessionScreen.kt:3163)', () => {
-  const base = { viewingConversation: false, liveAgent: null, presumedAgent: null, withEnter: true };
+  const base = { liveAgent: null, presumedAgent: null, withEnter: true };
 
-  it('routes to the conversation when that tab is showing a detected agent', () => {
-    expect(sendRoute({ ...base, viewingConversation: true, liveAgent: 'claude' })).toBe(
-      'agent-conversation',
-    );
-  });
-
+  // The `'agent-conversation'` arm is gone with the Conversation tab
+  // (docs/WORKSPACE.md §9). Its removal is observable in exactly one place —
+  // a codex pane now reaches the codex arm instead of being short-circuited
+  // past it, which is what gives it the longer submit delay it needs.
   it('routes Codex through the agent payload path', () => {
     expect(sendRoute({ ...base, liveAgent: 'codex' })).toBe('agent-payload');
   });

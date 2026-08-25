@@ -104,7 +104,7 @@ test.describe('folder-first session creation + port panel controls', () => {
     page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
     await page.getByText(E2E_HOST_NAME).click();
-    await expect(page.locator('.session-row').first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.dir-header').first()).toBeVisible({ timeout: 20_000 });
   });
 
   test.afterAll(async () => {
@@ -212,8 +212,11 @@ test.describe('folder-first session creation + port panel controls', () => {
   test('opening the new session attaches its workspace', async () => {
     await page.getByRole('button', { name: 'Open session' }).click();
     await expect(page.getByRole('dialog', { name: 'New session' })).toHaveCount(0);
-    await expect(page.locator('.session-workspace')).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator('.session-row.current')).toContainText(previewedName);
+    // Creating from the panel now lands in the new session's FOLDER workspace,
+    // with that session's tab selected — the panel highlights the folder.
+    await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.dir-header.current')).toHaveCount(1);
+    await expect(page.locator('.tab.active')).toBeVisible();
   });
 
   test('the port panel shows discovered ports with process and folder columns', async () => {
