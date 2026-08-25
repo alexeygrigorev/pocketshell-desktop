@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { nextTick } from 'vue';
+import { createPinia, setActivePinia } from 'pinia';
 import { EditorView } from '@codemirror/view';
 import CodeEditor from '../../src/renderer/components/CodeEditor.vue';
+import { useSettingsStore } from '../../src/renderer/stores/settings';
 
 /**
  * The editor component's CONTRACT, tested directly rather than through
@@ -46,6 +48,14 @@ beforeAll(() => {
 });
 
 let wrapper: VueWrapper | null = null;
+
+beforeEach(() => {
+  // The editor now reads the applied theme's appearance out of the settings
+  // store, so every mount needs a Pinia. `localStorage` is jsdom's, and is
+  // cleared so one test's theme choice cannot leak into the next.
+  window.localStorage.clear();
+  setActivePinia(createPinia());
+});
 
 afterEach(() => {
   wrapper?.unmount();
@@ -223,6 +233,135 @@ describe('CodeEditor — large files', () => {
     const oneLine = 'x'.repeat(200_000);
     const w = mountEditor({ modelValue: oneLine, filename: 'blob.min.js' });
     expect(docOf(w)).toHaveLength(oneLine.length);
+  });
+});
+
+/**
+ * Following the theme's APPEARANCE, without disturbing anything the user owns.
+ *
+ * Every colour in this editor already retinted through `var(--code-*)` tokens.
+ * What could not follow a theme switch was CodeMirror's own `dark` boolean —
+ * `{ dark: true }` was baked into the theme extension at definition time — so
+ * its base themes kept picking dark-flavoured panel chrome, placeholder tint
+ * and selection fallbacks under a light theme (docs/DESIGN.md §8.5).
+ *
+ * The fix is a Compartment reconfigure, and the RISK in that fix is the whole
+ * subject of the cases below. A theme switch must not cost the user anything:
+ * not the document, not the cursor, not the undo stack, and above all not the
+ * dirty flag — losing an unsaved edit to a colour change would be a spectacular
+ * trade for panel chrome. A reconfigure dispatches a transaction with an effect
+ * and NO changes, which is exactly why none of that moves; rebuilding the
+ * EditorState, the obvious alternative, loses all four.
+ *
+ * `dark`/`light` is read from the theme RECORD's declared appearance, so the
+ * assertions drive `settings.theme` rather than poking a class name.
+ */
+describe('CodeEditor — theme appearance', () => {
+  /** CodeMirror's own record of "is this a dark theme", per view. */
+  const isDark = (w: VueWrapper): boolean => viewOf(w).state.facet(EditorView.darkTheme);
+
+  it('starts dark under the default theme', () => {
+    const w = mountEditor({ modelValue: 'x\n', filename: 'a.py' });
+    expect(isDark(w)).toBe(true);
+  });
+
+  it('starts light when a light theme is already applied', async () => {
+    useSettingsStore().set('theme', 'light');
+    await nextTick();
+    const w = mountEditor({ modelValue: 'x\n', filename: 'a.py' });
+    expect(isDark(w)).toBe(false);
+  });
+
+  it('follows a switch to a light theme, and back', async () => {
+    const w = mountEditor({ modelValue: 'x\n', filename: 'a.py' });
+    const settings = useSettingsStore();
+
+    settings.set('theme', 'solarized-light');
+    await nextTick();
+    expect(isDark(w)).toBe(false);
+
+    settings.set('theme', 'nord');
+    await nextTick();
+    expect(isDark(w)).toBe(true);
+  });
+
+  it('does not touch the document, and so does not mark the file dirty', async () => {
+    const w = mountEditor({ modelValue: 'first\nsecond\n', filename: 'a.py' });
+
+    useSettingsStore().set('theme', 'light');
+    await nextTick();
+
+    expect(docOf(w)).toBe('first\nsecond\n');
+    // The store raises `dirty` off this event and nothing else, so an emit
+    // here would light the Save button on a file nobody touched — and, worse,
+    // a later theme switch would do it again on a file that WAS edited.
+    expect(w.emitted('update:modelValue')).toBeUndefined();
+  });
+
+  it('leaves an unsaved edit exactly where it was', async () => {
+    const w = mountEditor({ modelValue: 'a', filename: 'a.txt' });
+    typeAtEnd(w, 'bc');
+    await nextTick();
+    const emittedBefore = w.emitted('update:modelValue')?.length;
+
+    useSettingsStore().set('theme', 'gruvbox-dark');
+    await nextTick();
+
+    expect(docOf(w)).toBe('abc');
+    expect(w.emitted('update:modelValue')?.length).toBe(emittedBefore);
+  });
+
+  it('keeps the cursor where the user left it', async () => {
+    const w = mountEditor({ modelValue: 'hello world\n', filename: 'a.py' });
+    viewOf(w).dispatch({ selection: { anchor: 4, head: 7 } });
+
+    useSettingsStore().set('theme', 'light');
+    await nextTick();
+
+    const { anchor, head } = viewOf(w).state.selection.main;
+    expect([anchor, head]).toEqual([4, 7]);
+  });
+
+  it('keeps undo history, so Ctrl+Z still reaches before the switch', async () => {
+    const w = mountEditor({ modelValue: 'base\n', filename: 'a.py' });
+    typeAtEnd(w, 'edit\n');
+    await nextTick();
+
+    useSettingsStore().set('theme', 'light');
+    await nextTick();
+
+    const view = viewOf(w);
+    // `undo` is the command the keymap binds; calling it directly is the same
+    // path Ctrl+Z takes, without needing a real key event.
+    const { undo } = await import('@codemirror/commands');
+    expect(undo({ state: view.state, dispatch: (tr) => view.dispatch(tr) })).toBe(true);
+    expect(docOf(w)).toBe('base\n');
+  });
+
+  it('keeps the same EditorView rather than rebuilding it', async () => {
+    // The cheap proxy for "scroll position survived": a rebuilt view would be
+    // a different object with a fresh scroller at the top. Actual pixels are
+    // not assertable in jsdom, where every rect is zero — that half is
+    // verified in the running app.
+    const w = mountEditor({ modelValue: 'x\n'.repeat(500), filename: 'a.py' });
+    const before = viewOf(w);
+
+    useSettingsStore().set('theme', 'light');
+    await nextTick();
+
+    expect(viewOf(w)).toBe(before);
+  });
+
+  it('survives a theme change after the editor is gone', async () => {
+    const w = mountEditor({ modelValue: 'x\n', filename: 'a.py' });
+    w.unmount();
+    wrapper = null;
+
+    // The watcher outlives nothing — but a stale one dispatching into a
+    // destroyed view would throw, and this is the arrangement where that would
+    // show up first.
+    expect(() => useSettingsStore().set('theme', 'light')).not.toThrow();
+    await nextTick();
   });
 });
 

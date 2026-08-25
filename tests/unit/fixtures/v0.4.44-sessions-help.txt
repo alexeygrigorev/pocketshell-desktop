@@ -1,0 +1,18 @@
+Usage: pocketshell sessions [OPTIONS] COMMAND [ARGS]...
+
+  Enumerate tmux sessions on the host.
+
+  Thin wrapper around the existing `tmuxctl list` CLI: subcommands delegate to
+  `tmuxctl` via subprocess and proxy stdout/stderr and exit codes verbatim.
+  The output shape stays byte-identical to `tmuxctl list` so the Android-side
+  `HostTmuxSessionListParser` keeps working when the app swaps its probe to
+  `pocketshell sessions list` (issue #231).
+
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  create     Create a memory-capped, DETACHED tmux session (delegates to...
+  list       List tmux sessions on the host (delegates to `tmuxctl list`).
+  resumable  List resumable AI-CLI conversations (claude / codex /...
+  resume     Resume a recorded AI-CLI conversation inside a memory-capped...

@@ -1,0 +1,72 @@
+# tmuxctl 0.3.4 (unpinned in Dockerfile.helper) -- kill target resolution.
+# Captured in tests-docker Dockerfile.helper (pocketshell 0.4.44 image).
+
+## A. Both alive; 'tmuxctl kill api --yes' kills only api.
+$ tmux new-session -d -s api
+[exit=0]
+
+$ tmux new-session -d -s api-staging
+[exit=0]
+
+$ tmuxctl kill api --yes
+Killed session api
+[exit=0]
+
+$ tmux ls
+api-staging: 1 windows (created Tue Aug 25 14:28:09 2026)
+[exit=0]
+
+## B. Only api-staging alive; tmuxctl does NOT prefix-match -- it refuses.
+$ tmuxctl kill api --yes
+Error: tmux session 'api' was not found
+[exit=1]
+
+$ tmux ls
+api-staging: 1 windows (created Tue Aug 25 14:28:09 2026)
+[exit=0]
+
+## C. Without --yes on a non-interactive stdin it aborts, killing nothing.
+$ tmux new-session -d -s api
+[exit=0]
+
+$ tmuxctl kill api  </dev/null
+Kill tmux session 'api'? [y/N]: Aborted.
+[exit=1]
+
+$ tmux ls
+api: 1 windows (created Tue Aug 25 14:28:10 2026)
+api-staging: 1 windows (created Tue Aug 25 14:28:09 2026)
+[exit=0]
+
+## D. A session whose NAME is numeric crashes tmuxctl's index parsing.
+$ tmux kill-server
+[exit=0]
+
+$ tmux new-session -d -s alpha
+[exit=0]
+
+$ tmux new-session -d -s 2
+[exit=0]
+
+$ tmux ls
+2: 1 windows (created Tue Aug 25 14:28:11 2026)
+alpha: 1 windows (created Tue Aug 25 14:28:11 2026)
+[exit=0]
+
+$ tmuxctl kill 2 --yes
+Error: not enough values to unpack (expected 3, got 1)
+[exit=1]
+
+$ tmux ls
+2: 1 windows (created Tue Aug 25 14:28:11 2026)
+alpha: 1 windows (created Tue Aug 25 14:28:11 2026)
+[exit=0]
+
+##    Raw tmux with an exact target handles the same session fine:
+$ tmux kill-session -t =2
+[exit=0]
+
+$ tmux ls
+alpha: 1 windows (created Tue Aug 25 14:28:11 2026)
+[exit=0]
+

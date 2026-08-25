@@ -389,3 +389,81 @@ describe('TmuxClientPool — renames', () => {
     expect(pool.renamed('c1', 'somebody-else', 'whatever')).toBe(false);
   });
 });
+
+/**
+ * A kill is the mirror image of a rename (docs/WORKSPACE.md §14.3), and the
+ * pool half matters MORE: a rename leaves a live client pointing at a live
+ * session under the wrong key, a kill leaves one pointing at nothing at all.
+ */
+describe('TmuxClientPool — kills', () => {
+  it('closes the PTY and forgets the client, so the next attach re-joins', async () => {
+    const { ssh, calls } = makeSsh();
+    const pool = new TmuxClientPool(ssh);
+    const before = await pool.attach('c1', 'git-foo', sink);
+
+    expect(pool.killed('c1', 'git-foo')).toBe(true);
+    expect(closes(calls).map((c) => c.detail)).toEqual([before.shellId]);
+
+    // The record has to go SYNCHRONOUSLY with the kill. Waiting for the far end
+    // to detach and `shell:exited` to arrive would leave a window in which
+    // `attach` hands a caller a client for a session that no longer exists.
+    const after = await pool.attach('c1', 'git-foo', sink);
+    expect(after.switched).toBe(false);
+    expect(after.shellId).not.toBe(before.shellId);
+    expect(opens(calls)).toHaveLength(2);
+  });
+
+  it('stops fencing composer sends against the dead name', async () => {
+    const { ssh } = makeSsh();
+    const pool = new TmuxClientPool(ssh);
+    const held = await pool.attach('c1', 'git-foo', sink);
+
+    pool.killed('c1', 'git-foo');
+
+    expect(pool.sessionForShell(held.shellId)).toBeNull();
+    expect(pool.liveSessions('c1')).toEqual([]);
+  });
+
+  it('DROPS the handshake token, unlike a rename which moves it', async () => {
+    // A rename keeps the same session and wants the same tmux variable. A kill
+    // ends it — and a later session that reuses the name is a DIFFERENT session,
+    // which `sessions create` produces routinely because it derives the name
+    // from the folder. It must not inherit the dead one's tty rendezvous.
+    const { ssh, calls } = makeSsh();
+    const pool = new TmuxClientPool(ssh);
+
+    await pool.attach('c1', 'git-foo', sink);
+    pool.killed('c1', 'git-foo');
+    await pool.attach('c1', 'git-foo', sink);
+
+    const varOf = (d: string): string | undefined =>
+      /PS_DESKTOP_TTY_[A-Za-z0-9_]+/.exec(d)?.[0];
+    const [a, b] = opens(calls);
+    expect(varOf(a!.detail)).not.toBe(varOf(b!.detail));
+  });
+
+  it('is an ordinary no-op for a session this connection never held', async () => {
+    const { ssh, calls } = makeSsh();
+    const pool = new TmuxClientPool(ssh);
+    await pool.attach('c1', 'alpha', sink);
+
+    expect(pool.killed('c1', 'somebody-else')).toBe(false);
+    expect(closes(calls)).toHaveLength(0);
+  });
+
+  it('forgets a client whose channel had already gone, without closing twice', async () => {
+    // Eviction, or a dropped link. `shellClose` on a stale id would be a no-op
+    // anyway; what matters is that the record still goes.
+    // `forget` is kept on the harness rather than destructured: it is declared
+    // as a METHOD on the returned type, and pulling a method off its object is
+    // what `@typescript-eslint/unbound-method` exists to catch.
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh);
+    await pool.attach('c1', 'git-foo', sink);
+    harness.forget(harness.opened[0]!);
+
+    expect(pool.killed('c1', 'git-foo')).toBe(false);
+    expect(closes(harness.calls)).toHaveLength(0);
+    expect(pool.liveSessions('c1')).toEqual([]);
+  });
+});

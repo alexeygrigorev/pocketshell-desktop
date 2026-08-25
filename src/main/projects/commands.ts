@@ -224,6 +224,71 @@ export function renameSessionCommand(from: string, to: string): string {
 }
 
 /**
+ * Kill tmux session [name] (docs/WORKSPACE.md §14).
+ *
+ * **The only destructive command in this app.** There is no undo, and the thing
+ * being destroyed is usually an agent in the middle of a task, so every clause
+ * below was checked against the pinned Docker fixture rather than reasoned
+ * about. The captures are committed beside this file's other evidence —
+ * `tests/unit/fixtures/v0.4.44-*.txt` — the way 00eb3e7 captured
+ * `pocketshell agent --help`.
+ *
+ * ## Why not the helper
+ *
+ * `pocketshell sessions` has **four** subcommands on 0.4.44 — `create`, `list`,
+ * `resumable`, `resume` — and no kill verb at any spelling. `kill`, `stop`,
+ * `rm`, `delete`, `destroy`, `remove`, `close` and `terminate` all come back
+ * `Error: No such command` with exit 2
+ * (`v0.4.44-sessions-help.txt`, `v0.4.44-sessions-no-such-command.stderr.txt`).
+ *
+ * ## Why not `tmuxctl kill`, which DOES exist
+ *
+ * `tmuxctl kill '<target>' --yes` is real, and `--yes` is not optional in
+ * practice: without it `typer.confirm` prompts, and on the non-interactive
+ * stdin an `exec` channel gives it that prompt aborts with exit 1 having killed
+ * nothing (`v0.4.44-tmuxctl-kill-no-yes.stderr.txt`). It is rejected for two
+ * measured defects rather than for taste:
+ *
+ *  1. **It cannot kill a numerically-named session.** `_resolve_session_target`
+ *     branches on `target.isdigit()` and reads the name as an index into a
+ *     recent list, so a session literally called `2` fails with
+ *     `not enough values to unpack` and stays alive
+ *     (`v0.4.44-tmuxctl-kill-numeric-name.stderr.txt`). This app can put such a
+ *     tab on the bar — any session in the folder gets one — so a Stop that
+ *     silently cannot stop THAT one is not acceptable for a destructive action.
+ *  2. **Its own kill is not exact-match.** tmuxctl guards with
+ *     `has-session -t "={name}"` and then kills with a BARE
+ *     `["kill-session", "-t", session_name]`. The guard is exact and the kill is
+ *     not, so between the two a neighbour can be hit.
+ *
+ * Raw tmux reaches the same server either way — `attachCommand.ts` records that
+ * tmuxctl 0.4.x shells out to a bare `tmux` on the default socket, which is why
+ * `sessionSwitchCommand` and {@link renameSessionCommand} are already raw.
+ *
+ * ## Why the `=` is the whole safety of this line
+ *
+ * tmux's `-t` is prefix-then-fnmatch unless the target begins with `=`, and the
+ * dangerous case is NOT the obvious one. With `api` and `api-staging` both
+ * alive, a bare `-t api` correctly kills `api` — exact match wins, so the bug
+ * hides. The failure appears once `api` is already gone, which is exactly the
+ * state a stale tab bar is in:
+ *
+ *   | alive                | command                        | outcome                        |
+ *   |----------------------|--------------------------------|--------------------------------|
+ *   | `api`, `api-staging` | `kill-session -t '=api'`       | exit 0, `api-staging` survives |
+ *   | `api-staging` only   | `kill-session -t api`          | **exit 0, kills `api-staging`**|
+ *   | `api-staging` only   | `kill-session -t '=api'`       | exit 1, `can't find session`   |
+ *
+ * A bare `-t` fails OPEN: it destroys the wrong session and reports success.
+ * `=` fails CLOSED, with a message the caller can show. For a command with no
+ * undo that is the only acceptable direction to fail in.
+ * (`v0.4.44-tmux-kill-session-exact-match.txt`.)
+ */
+export function killSessionCommand(name: string): string {
+  return `tmux kill-session -t ${shellQuote(`=${name}`)}`;
+}
+
+/**
  * Ask git, for each of [paths], which repository it belongs to
  * (docs/WORKSPACE.md §6.5).
  *

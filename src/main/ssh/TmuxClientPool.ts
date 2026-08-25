@@ -309,6 +309,55 @@ export class TmuxClientPool {
   }
 
   /**
+   * A session this pool may hold a client for has been KILLED on the host
+   * (docs/WORKSPACE.md §14.3).
+   *
+   * The mirror image of {@link renamed}, and the reason both exist: this pool
+   * keys clients by session NAME, so anything that changes what that name means
+   * — or stops it meaning anything — has to be told, or the map keeps a record
+   * of a session that is not there.
+   *
+   * The PTY is closed here rather than left to expire. It WOULD expire: the
+   * tmux client on the far end detaches when its session dies and the login
+   * shell exits, so `shell:exited` reaches the renderer on its own within a
+   * round trip. But "on its own within a round trip" is not a guarantee — a
+   * wedged link leaves the channel open against a `MaxSessions` budget of ten —
+   * and, more to the point, the record has to go SYNCHRONOUSLY with the kill.
+   * Otherwise {@link attach} can hand a caller a client for a session that no
+   * longer exists, and {@link isShowing} keeps fencing composer sends against a
+   * name nothing answers to.
+   *
+   * The handshake token goes too, unlike in a rename where it merely moves. A
+   * rename keeps the same session and so wants the same tmux variable; a kill
+   * ends the session, and a later session that happens to reuse the name — which
+   * `sessions create` produces routinely, since it derives the name from the
+   * folder — is a DIFFERENT session that must not inherit the dead one's tty
+   * rendezvous.
+   *
+   * Returns whether a live client was actually closed, which is diagnostic
+   * only: killing a session no tab was showing is perfectly ordinary.
+   */
+  killed(connectionId: string, session: string): boolean {
+    const byName = this.clients.get(connectionId);
+    const held = byName?.get(session);
+    this.tokens.get(connectionId)?.delete(session);
+    if (!held || !byName) return false;
+    byName.delete(session);
+    // The tracker is consulted rather than trusted: the channel may already have
+    // gone (an eviction, a drop), and `shellClose` on a stale id is a no-op we
+    // would rather not log as a close that happened.
+    const live = this.ssh.shellTracker.get(held.shellId) != null;
+    if (live) this.ssh.shellClose(held.shellId);
+    log('tmux', 'session killed under a live client', {
+      connectionId,
+      session,
+      shellId: held.shellId,
+      closed: live,
+    });
+    return live;
+  }
+
+  /**
    * The session a shell is attached to, or null. Test/diagnostic.
    *
    * Keyed on the SHELL rather than on the connection, because a connection no

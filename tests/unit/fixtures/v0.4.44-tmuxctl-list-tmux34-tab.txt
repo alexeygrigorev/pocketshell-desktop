@@ -1,0 +1,35 @@
+# tmux 3.4 rewrites a literal TAB (and NL) inside a -F format string to '_'.
+# tmuxctl 0.3.4 tmux_api.list_session_info() splits that output on '\t',
+# so every index-based tmuxctl path dies on this host.
+# Captured in tests-docker Dockerfile.helper (pocketshell 0.4.44 image).
+
+$ tmux -V
+tmux 3.4
+[exit=0]
+
+$ tmux list-sessions -F "$(printf 'A\tB')" | od -c
+0000000   A   _   B  \n
+0000004
+
+$ tmux list-sessions -F A|B
+A|B
+[exit=0]
+
+## Fallout:
+$ tmuxctl list
+Error: not enough values to unpack (expected 3, got 1)
+[exit=1]
+
+$ tmuxctl recent
+Error: not enough values to unpack (expected 3, got 1)
+[exit=1]
+
+$ pocketshell sessions list
+Error: not enough values to unpack (expected 3, got 1)
+[exit=1]
+
+## But name-based kill still works, because it never calls list_session_info:
+$ tmuxctl kill api --yes
+Killed session api
+[exit=0]
+

@@ -185,3 +185,42 @@ export function parentDirOf(path: string): string {
   const cut = path.replace(/\/[^/]+$/, '');
   return cut === '' ? '/' : cut;
 }
+
+/**
+ * Extensions the Files tab previews as markdown.
+ *
+ * This set lives HERE, in the dependency-free half of the preview code, rather
+ * than beside the converter — and the reason is a real one rather than tidiness.
+ * The renderer's classifier (src/renderer/fileKind.ts) has to agree with the
+ * request handler about which files are markdown, or the tab offers a Preview
+ * tab for a file the handler then serves as plain text. So the two share one
+ * list. But `markdownDocument.ts` imports `marked`, and importing that list
+ * from there would drag a 45 KB parser into the renderer bundle to answer a
+ * question about a filename — which is precisely the cost this feature avoids
+ * by converting in main. This module imports nothing at all, so the renderer
+ * can share it for free, exactly as it already shares `mimeTypes.ts`.
+ *
+ * `.mdx` is deliberately absent for the reason `.jsp` and `.erb` are absent
+ * from the HTML set: it is JSX embedded in markdown, so it is SOURCE for a page
+ * rather than a page, and rendering it would show a document full of
+ * unevaluated components. `.rst`, `.adoc` and `.org` are absent because they
+ * are different formats that a markdown parser would mangle into
+ * plausible-looking nonsense — they stay plain text, which is honest.
+ */
+export const MARKDOWN_EXTENSIONS: ReadonlySet<string> = new Set([
+  'md', 'markdown', 'mdown', 'mkd', 'mkdn', 'mdtext',
+]);
+
+/**
+ * Does this path name a file the markdown converter should render?
+ *
+ * A leading dot is not an extension (`.markdown` is a dotfile named
+ * `markdown`), which is the same rule `classifyByName` applies and the reason
+ * the index test is `> 0` rather than `>= 0`.
+ */
+export function isMarkdownPath(path: string): boolean {
+  const base = path.split('/').pop() ?? '';
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return false;
+  return MARKDOWN_EXTENSIONS.has(base.slice(dot + 1).toLowerCase());
+}

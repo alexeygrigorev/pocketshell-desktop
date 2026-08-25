@@ -50,7 +50,7 @@
  * a read-only highlighter to keep that working is strictly more work than
  * using an editor.
  */
-import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { Compartment, EditorState } from '@codemirror/state';
 import {
   EditorView,
@@ -66,9 +66,11 @@ import {
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { bracketMatching, indentOnInput } from '@codemirror/language';
-import { pocketshellCodeTheme } from '../codeEditorTheme';
+import { codeThemeFor } from '../codeEditorTheme';
 import { loadLanguage } from '../codeEditorLanguages';
 import { PLAIN_TEXT, languageIdForFilename, shouldHighlight } from '../codeLanguage';
+import { resolveTheme } from '../themes';
+import { useSettingsStore } from '../stores/settings';
 
 const props = withDefaults(
   defineProps<{
@@ -100,6 +102,47 @@ const view = shallowRef<EditorView | null>(null);
  * file changed type.
  */
 const language = new Compartment();
+
+/**
+ * The appearance slot, for the same mechanism and a smaller reason.
+ *
+ * Every colour the user reads in this editor comes from a `--code-*` or
+ * `--term-*` token and retints on the next paint with nothing to do here
+ * (codeEditorTheme.ts). What could NOT follow was CodeMirror's own `dark`
+ * boolean, which its base themes branch on for panel chrome, the placeholder
+ * tint and a handful of selection fallbacks — CSS of CodeMirror's own that no
+ * custom property of ours reaches.
+ *
+ * The mechanism matters more than the payoff. What a reconfigure must not do is
+ * disturb anything the user owns, and a Compartment is the reason it does not:
+ * `compartment.reconfigure()` dispatches a transaction carrying an EFFECT and
+ * no changes, so
+ *
+ *   - the document is untouched — `docChanged` is false on that transaction,
+ *     which is also what keeps the update listener below from emitting and
+ *     therefore what keeps the store's dirty flag exactly as it was. Losing an
+ *     unsaved edit to a theme switch would be a bad trade for panel chrome;
+ *   - the selection is untouched, so the cursor and any multi-cursor state stay
+ *     where they were;
+ *   - undo history survives, because the history extension is in a different
+ *     part of the configuration and is not rebuilt;
+ *   - the scroll position survives, because the view is not recreated — it
+ *     re-measures against the same scroller.
+ *
+ * Rebuilding the EditorState, the obvious alternative, loses all four.
+ */
+const appearance = new Compartment();
+
+const settings = useSettingsStore();
+
+/**
+ * `dark` or `light`, DECLARED by the applied theme record rather than guessed
+ * from a background colour — the same distinction themes.ts insists on. It is
+ * derived through `resolveTheme` so that `system` works: that choice is a rule
+ * resolved against the OS preference, and flipping Windows' light/dark mode has
+ * to move this too.
+ */
+const themeAppearance = computed(() => resolveTheme(settings.theme).appearance);
 
 /**
  * Guards against a stale grammar landing on the wrong file. Grammar chunks are
@@ -137,7 +180,6 @@ const baseExtensions = [
   // escape hatch is kept intact: `defaultKeymap` binds Ctrl-m (Shift-Alt-m on
   // macOS) to tab-focus mode, after which Tab leaves the editor again.
   keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-  pocketshellCodeTheme,
   // No fold gutter, on purpose: CodeMirror draws its fold arrows as text
   // glyphs, and docs/POLISH.md §2.3 (enforced by tests/unit/designGates.test.ts)
   // says every glyph doing an icon's job in this app is a real SVG.
@@ -169,7 +211,11 @@ onMounted(() => {
     parent: host.value,
     state: EditorState.create({
       doc: props.modelValue,
-      extensions: [...baseExtensions, language.of([])],
+      extensions: [
+        ...baseExtensions,
+        language.of([]),
+        appearance.of(codeThemeFor(themeAppearance.value)),
+      ],
     }),
   });
   void syncLanguage();
@@ -213,6 +259,17 @@ watch(
 );
 
 watch(() => props.filename, () => void syncLanguage());
+
+/**
+ * Follow the theme's appearance.
+ *
+ * One dispatch, carrying one effect and no changes — see the `appearance`
+ * Compartment above for what that buys and what a state rebuild would have
+ * cost. `flush: 'post'` is not needed: nothing here reads layout.
+ */
+watch(themeAppearance, (next) => {
+  view.value?.dispatch({ effects: appearance.reconfigure(codeThemeFor(next)) });
+});
 </script>
 
 <template>

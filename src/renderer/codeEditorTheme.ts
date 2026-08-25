@@ -16,108 +16,126 @@
  * own `--code-*` values — which is why this file keeps working unchanged: the
  * rules below re-resolve against whatever the applied theme wrote onto
  * `<html>`, on the next paint, with no editor rebuild.
+ *
+ * ## The one thing tokens could not carry: `dark`
+ *
+ * CodeMirror keeps a BOOLEAN alongside a theme's rules — `EditorView.darkTheme`
+ * — and its own base themes branch on it in CSS that no custom property of ours
+ * reaches. That flag used to be baked here as `{ dark: true }`, stating the
+ * shipped appearance forever, and it was the single piece of this file that did
+ * not follow a theme switch (docs/DESIGN.md §8.5 recorded it as a known limit).
+ *
+ * It is fixed the way the limit's own note said to fix it: the chrome is built
+ * ONCE PER APPEARANCE, {@link codeThemeFor} hands back the right one, and
+ * CodeEditor.vue holds it in a Compartment so a theme change reconfigures the
+ * live EditorState instead of rebuilding it. Both variants share one spec
+ * object below — the CSS is genuinely identical, because every value in it is a
+ * token — so the pair cannot drift, and the only difference between them is the
+ * boolean CodeMirror needed all along.
  */
 import { EditorView } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import type { Extension } from '@codemirror/state';
+import type { ThemeAppearance } from './themes';
 
 /**
  * Editor chrome: surface, gutter, cursor, selection.
  *
- * `{ dark: true }` is not cosmetic — it tells CodeMirror to register this as a
- * dark theme, which is what makes the built-in `dropCursor`, panel and
- * placeholder styles pick their dark variants.
- *
- * KNOWN LIMIT: the flag is baked into the extension at definition time, so it
- * states the SHIPPED theme's appearance and does not follow a light theme
- * switch. Every colour a user actually reads here comes from the `--code-*`
- * and `--term-*` tokens and retints correctly; what stays dark-flavoured under
- * a light theme is CodeMirror's own base-theme details (panel chrome, the
- * placeholder tint) — surfaces this editor does not currently show. Making it
- * follow would mean exporting a per-appearance extension and having FilesView
- * reconfigure the EditorState on theme change; do that if CM panels ever
- * become visible here.
+ * Not one colour literal, for the reason the file header gives. This is the
+ * SPEC rather than the extension: `EditorView.theme` is called on it twice
+ * below, once per appearance.
  */
-const chrome = EditorView.theme(
-  {
-    '&': {
-      color: 'var(--term-fg)',
-      backgroundColor: 'var(--term-bg)',
-      height: '100%',
-      // The editor's type is the terminal's type. Line height matches the
-      // textarea this replaces so swapping the two does not reflow the pane.
-      fontFamily: 'var(--font-mono)',
-      // `--code-font-size`, not `--fs-300`: both default to 13px, but the
-      // former is the user's editor size setting and the latter is the UI
-      // density scale. They were the same value and the same token until the
-      // first of them became settable. See src/renderer/fonts.ts.
-      fontSize: 'var(--code-font-size)',
-    },
-    '&.cm-focused': {
-      // CodeMirror draws a focus outline on the editor box by default. This
-      // pane is the primary surface of the tab and is focused by simply
-      // clicking into the file, so an outline around the whole thing reads as
-      // a rendering artefact rather than as focus. The cursor is the affordance.
-      outline: 'none',
-    },
-    '.cm-scroller': {
-      fontFamily: 'inherit',
-      lineHeight: '1.5',
-      overflow: 'auto',
-    },
-    '.cm-content': {
-      caretColor: 'var(--code-cursor)',
-      padding: 'var(--sp-3) 0',
-    },
-    '.cm-line': {
-      padding: '0 var(--sp-4)',
-    },
-    '.cm-cursor, .cm-dropCursor': {
-      // Windows Terminal's cursorShape is "bar" (DESIGN.md §3.4); a 2px bar is
-      // the same shape one line-height taller.
-      borderLeftColor: 'var(--code-cursor)',
-      borderLeftWidth: '2px',
-    },
-    '.cm-selectionBackground, .cm-content ::selection': {
-      backgroundColor: 'var(--code-selection-inactive)',
-    },
-    '&.cm-focused .cm-selectionBackground, &.cm-focused .cm-content ::selection': {
-      backgroundColor: 'var(--code-selection)',
-    },
-    '.cm-activeLine': {
-      backgroundColor: 'var(--code-active-line)',
-    },
-    '.cm-gutters': {
-      backgroundColor: 'var(--term-bg)',
-      color: 'var(--code-gutter-fg)',
-      // A hairline in the app's own border token rather than a filled gutter:
-      // the file is one surface, and a differently-shaded gutter would split it.
-      borderRight: '1px solid var(--border-soft)',
-      fontFamily: 'inherit',
-      fontSize: 'var(--fs-200)',
-    },
-    '.cm-lineNumbers .cm-gutterElement': {
-      padding: '0 var(--sp-2) 0 var(--sp-3)',
-      minWidth: '2.5ch',
-    },
-    '.cm-activeLineGutter': {
-      backgroundColor: 'var(--code-active-line)',
-      color: 'var(--code-gutter-fg-active)',
-    },
-    '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
-      backgroundColor: 'var(--code-bracket-match)',
-      outline: 'none',
-    },
-    '.cm-nonmatchingBracket, &.cm-focused .cm-nonmatchingBracket': {
-      color: 'var(--code-invalid)',
-    },
-    '.cm-specialChar': {
-      color: 'var(--code-invalid)',
-    },
+const chromeSpec = {
+  '&': {
+    color: 'var(--term-fg)',
+    backgroundColor: 'var(--term-bg)',
+    height: '100%',
+    // The editor's type is the terminal's type. Line height matches the
+    // textarea this replaces so swapping the two does not reflow the pane.
+    fontFamily: 'var(--font-mono)',
+    // `--code-font-size`, not `--fs-300`: both default to 13px, but the
+    // former is the user's editor size setting and the latter is the UI
+    // density scale. They were the same value and the same token until the
+    // first of them became settable. See src/renderer/fonts.ts.
+    fontSize: 'var(--code-font-size)',
   },
-  { dark: true },
-);
+  '&.cm-focused': {
+    // CodeMirror draws a focus outline on the editor box by default. This
+    // pane is the primary surface of the tab and is focused by simply
+    // clicking into the file, so an outline around the whole thing reads as
+    // a rendering artefact rather than as focus. The cursor is the affordance.
+    outline: 'none',
+  },
+  '.cm-scroller': {
+    fontFamily: 'inherit',
+    lineHeight: '1.5',
+    overflow: 'auto',
+  },
+  '.cm-content': {
+    caretColor: 'var(--code-cursor)',
+    padding: 'var(--sp-3) 0',
+  },
+  '.cm-line': {
+    padding: '0 var(--sp-4)',
+  },
+  '.cm-cursor, .cm-dropCursor': {
+    // Windows Terminal's cursorShape is "bar" (DESIGN.md §3.4); a 2px bar is
+    // the same shape one line-height taller.
+    borderLeftColor: 'var(--code-cursor)',
+    borderLeftWidth: '2px',
+  },
+  '.cm-selectionBackground, .cm-content ::selection': {
+    backgroundColor: 'var(--code-selection-inactive)',
+  },
+  '&.cm-focused .cm-selectionBackground, &.cm-focused .cm-content ::selection': {
+    backgroundColor: 'var(--code-selection)',
+  },
+  '.cm-activeLine': {
+    backgroundColor: 'var(--code-active-line)',
+  },
+  '.cm-gutters': {
+    backgroundColor: 'var(--term-bg)',
+    color: 'var(--code-gutter-fg)',
+    // A hairline in the app's own border token rather than a filled gutter:
+    // the file is one surface, and a differently-shaded gutter would split it.
+    borderRight: '1px solid var(--border-soft)',
+    fontFamily: 'inherit',
+    fontSize: 'var(--fs-200)',
+  },
+  '.cm-lineNumbers .cm-gutterElement': {
+    padding: '0 var(--sp-2) 0 var(--sp-3)',
+    minWidth: '2.5ch',
+  },
+  '.cm-activeLineGutter': {
+    backgroundColor: 'var(--code-active-line)',
+    color: 'var(--code-gutter-fg-active)',
+  },
+  '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
+    backgroundColor: 'var(--code-bracket-match)',
+    outline: 'none',
+  },
+  '.cm-nonmatchingBracket, &.cm-focused .cm-nonmatchingBracket': {
+    color: 'var(--code-invalid)',
+  },
+  '.cm-specialChar': {
+    color: 'var(--code-invalid)',
+  },
+};
+
+/**
+ * The two chrome extensions, built at module load and never rebuilt.
+ *
+ * `EditorView.theme` compiles its spec into a StyleModule and mints generated
+ * class names, so calling it per reconfigure would leak a fresh stylesheet into
+ * the document on every theme switch — a slow accumulation in a window that
+ * stays open for days, and one nobody would ever notice. Two constants cost two
+ * style modules for the life of the app, which is what a theme is.
+ */
+const CHROME: Record<ThemeAppearance, Extension> = {
+  dark: EditorView.theme(chromeSpec, { dark: true }),
+  light: EditorView.theme(chromeSpec, { dark: false }),
+};
 
 /**
  * Token colours.
@@ -187,8 +205,19 @@ const highlight = HighlightStyle.define([
   { tag: [t.invalid], color: 'var(--code-invalid)' },
 ]);
 
-/** Chrome + token colours, ready to drop into an EditorState's extensions. */
-export const pocketshellCodeTheme: Extension = [chrome, syntaxHighlighting(highlight)];
+/**
+ * Chrome + token colours for one appearance, ready to drop into an
+ * EditorState's extensions — or into a Compartment, which is what
+ * CodeEditor.vue does so that a theme switch reconfigures rather than rebuilds.
+ *
+ * The highlight style is shared between the two, deliberately: every colour in
+ * it is a `var(--code-*)` that the applied theme has already redefined on
+ * `<html>`, so there is nothing appearance-specific left in it to split. Only
+ * the chrome differs, and only by the boolean.
+ */
+export function codeThemeFor(appearance: ThemeAppearance): Extension {
+  return [CHROME[appearance], syntaxHighlighting(highlight)];
+}
 
 /** Exported for tests, which assert the token table covers the common tags. */
 export const pocketshellHighlightStyle = highlight;

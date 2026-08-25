@@ -36,6 +36,7 @@
  */
 
 import { extensionOfPath, mimeTypeForExtension } from '../main/attachments/mimeTypes';
+import { isMarkdownPath } from '../main/preview/previewPaths';
 
 /** What the Files tab will do with a file. */
 export type FileKind =
@@ -62,6 +63,19 @@ export type FileKind =
    * may not do.
    */
   | 'html'
+  /**
+   * A markdown document: the same two presentations `html` gets, for the same
+   * reason and through the same pipeline.
+   *
+   * Markdown is source AND a document, which is exactly the shape that earned
+   * HTML its toggle. It is a separate kind rather than a flag on `html`
+   * because the two are converted differently — an HTML file is served to the
+   * frame byte-for-byte, a markdown file is rendered in main first (see
+   * src/main/preview/markdownDocument.ts) — and because a `.md` must keep
+   * opening in the editor with markdown highlighting when the user picks
+   * Source, which a mode called `html` would have quietly broken.
+   */
+  | 'markdown'
   /** Opaque bytes: the binary panel, with a download button. */
   | 'binary'
   /** Not placeable from the name alone — sniff the bytes. */
@@ -88,12 +102,17 @@ export interface FileClass {
  * not the definition of text.
  */
 const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
-  'txt', 'text', 'md', 'markdown', 'rst', 'adoc', 'org',
+  'txt', 'text', 'rst', 'adoc', 'org',
   'log', 'out', 'err', 'diff', 'patch',
   'json', 'jsonl', 'ndjson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'properties', 'env',
   'csv', 'tsv',
   'xml', 'css', 'scss', 'sass', 'less', 'svg',
   'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte',
+  // `.mdx` is JSX inside markdown — source for a page, the way `.vue` beside
+  // it is, so it edits rather than previews. Listed explicitly now that
+  // `md`/`markdown` have moved out of this set: without it an `.mdx` would
+  // fall to `unknown` and pay a sniff to reach the answer this line gives.
+  'mdx',
   'py', 'pyi', 'rb', 'php', 'pl', 'pm', 'lua', 'r',
   'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'rs', 'go', 'java', 'kt', 'kts', 'scala', 'swift',
   'cs', 'fs', 'ex', 'exs', 'erl', 'hrl', 'clj', 'cljs', 'hs', 'ml', 'zig', 'dart',
@@ -148,6 +167,17 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
  */
 const HTML_EXTENSIONS: ReadonlySet<string> = new Set(['html', 'htm', 'xhtml']);
 
+/**
+ * Markdown is decided by {@link isMarkdownPath}, imported rather than restated.
+ *
+ * The request handler in main decides which served paths it renders as
+ * markdown; a second list here that drifted by one extension would mean a file
+ * the tab opens with a Preview tab that main then serves as plain text. One
+ * list, one owner — the same argument HTML_EXTENSIONS makes one paragraph up,
+ * applied across the process boundary. `md` and `markdown` are removed from
+ * {@link TEXT_EXTENSIONS} above for exactly that reason.
+ */
+
 /** Image extensions a `<img>` on a blob URL can actually paint. */
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif',
@@ -180,6 +210,7 @@ export function classifyByName(path: string): FileClass {
   const mime = mimeTypeForExtension(ext);
   if (ext === 'pdf') return { kind: 'pdf', mime: mime ?? 'application/pdf' };
   if (HTML_EXTENSIONS.has(ext)) return { kind: 'html', mime: mime ?? 'text/html' };
+  if (isMarkdownPath(path)) return { kind: 'markdown', mime: mime ?? 'text/markdown' };
   if (AUDIO_EXTENSIONS.has(ext)) return { kind: 'audio', mime: mime ?? 'audio/mpeg' };
   if (IMAGE_EXTENSIONS.has(ext)) return { kind: 'image', mime: mime ?? 'image/png' };
   if (TEXT_EXTENSIONS.has(ext)) return { kind: 'text', mime: mime ?? 'text/plain' };

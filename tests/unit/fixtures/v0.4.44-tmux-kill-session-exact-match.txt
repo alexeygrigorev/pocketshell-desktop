@@ -1,0 +1,63 @@
+# tmux 3.4 -- kill-session target resolution, exact (=name) vs bare name.
+# Captured in tests-docker Dockerfile.helper (pocketshell 0.4.44 image).
+
+## A. Both sessions alive; '=api' is exact -- api-staging survives.
+$ tmux new-session -d -s api
+[exit=0]
+
+$ tmux new-session -d -s api-staging
+[exit=0]
+
+$ tmux ls
+api: 1 windows (created Tue Aug 25 14:27:40 2026)
+api-staging: 1 windows (created Tue Aug 25 14:27:40 2026)
+[exit=0]
+
+$ tmux kill-session -t =api
+[exit=0]
+
+$ tmux ls
+api-staging: 1 windows (created Tue Aug 25 14:27:40 2026)
+[exit=0]
+
+## B. Only api-staging alive; bare '-t api' PREFIX-MATCHES and kills it.
+$ tmux kill-session -t api
+[exit=0]
+
+$ tmux ls
+no server running on /tmp/tmux-1000/default
+[exit=1]
+
+## C. Only api-staging alive; '-t =api' refuses instead of guessing.
+$ tmux kill-server
+no server running on /tmp/tmux-1000/default
+[exit=1]
+
+$ tmux new-session -d -s api-staging
+[exit=0]
+
+$ tmux kill-session -t =api
+can't find session: api
+[exit=1]
+
+$ tmux ls
+api-staging: 1 windows (created Tue Aug 25 14:27:40 2026)
+[exit=0]
+
+## D. Both alive; bare '-t api' prefers the exact name (B only bites
+##    once the exact session is gone -- i.e. the racy double-kill).
+$ tmux new-session -d -s api
+[exit=0]
+
+$ tmux ls
+api: 1 windows (created Tue Aug 25 14:27:40 2026)
+api-staging: 1 windows (created Tue Aug 25 14:27:40 2026)
+[exit=0]
+
+$ tmux kill-session -t api
+[exit=0]
+
+$ tmux ls
+api-staging: 1 windows (created Tue Aug 25 14:27:40 2026)
+[exit=0]
+

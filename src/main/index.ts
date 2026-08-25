@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, Menu, shell } from 'electron';
 import { HtmlPreviewService, registerPreviewScheme } from './preview/HtmlPreviewService.js';
 import { PREVIEW_SCHEME } from './preview/previewPaths.js';
 import { join, dirname } from 'node:path';
@@ -14,6 +14,7 @@ import { registerIpcHandlers } from './ipc.js';
 import { APP_TITLE } from '../shared/windowTitle.js';
 import { ipc } from '../shared/channels.js';
 import { zoomCommandForInput } from '../shared/zoomKeys.js';
+import { windowCommandForInput } from '../shared/windowKeys.js';
 
 // Electron + ESM: __dirname is not defined for the bundled output under some
 // loaders; electron-vite emits CJS for main, so __dirname is available. We
@@ -193,10 +194,28 @@ function createWindow(): void {
   // settings store steps its own value, persists it, and applies it — one
   // value, one writer, no way for the two to disagree.
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    const command = zoomCommandForInput(input);
-    if (!command) return;
+    const zoom = zoomCommandForInput(input);
+    if (zoom) {
+      event.preventDefault();
+      mainWindow?.webContents.send(ipc.win.zoomCommand, zoom);
+      return;
+    }
+
+    // Window chords, and unlike zoom these are DECIDED here: closing a window
+    // and opening DevTools are main's own business, with no renderer state to
+    // keep in step. See src/shared/windowKeys.ts for the whole argument —
+    // in short, the default menu that used to carry them is gone on Windows
+    // and Linux (it had Ctrl+W on Close, which cost the app to a keystroke
+    // meant for a text field), and these two are the only entries worth
+    // bringing back. `preventDefault()` here is the same instrument as above
+    // and cuts the same two ways: it suppresses the page's keydown as well as
+    // any accelerator, which is exactly why nothing the terminal uses may be
+    // matched.
+    const window = windowCommandForInput(input);
+    if (!window) return;
     event.preventDefault();
-    mainWindow?.webContents.send(ipc.win.zoomCommand, command);
+    if (window === 'close') mainWindow?.close();
+    else mainWindow?.webContents.toggleDevTools();
   });
 
   // electron-vite: dev server URL in dev, built file in prod.
@@ -224,6 +243,25 @@ if (!gotLock) {
   // app would just look dead on launch. Log it and exit non-zero instead.
   app.whenReady().then(
     () => {
+      // NO APPLICATION MENU on Windows and Linux, which also means no default
+      // accelerator table. This app has never built a menu and never shown a
+      // menu bar, but Electron installs one anyway, and it was quietly holding
+      // Ctrl+W (close the window), Ctrl+M (minimize), Ctrl+R (reload) and F11
+      // — four chords a terminal app has real uses for, none of them chosen
+      // here. Ctrl+W was the one a user hit: it closes the app, and closing the
+      // app is closing every session.
+      //
+      // The full role table, what each chord does at the terminal and what
+      // nulling this costs (measured: nothing for cut/copy/paste/select-all,
+      // which Chromium's editor owns) is written up in shared/windowKeys.ts,
+      // together with why darwin keeps its menu. The two chords worth keeping
+      // are re-provided in `before-input-event` above.
+      //
+      // Must happen before the first window is shown, and after `ready` — the
+      // default menu is installed as part of app startup, so setting it to null
+      // at module scope would be overwritten.
+      if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
+
       // After ready and before the window: the handler must be live by the
       // time anything can frame a `psview:` URL.
       preview.install();

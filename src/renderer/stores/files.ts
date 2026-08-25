@@ -3,6 +3,10 @@ import { ref } from 'vue';
 import { api } from '../ipc';
 import type { ConnectionId } from '../../shared/types';
 import type { DirEntry } from '../../main/sftp/SftpService';
+// The token NAMES only. previewStyle.ts imports nothing, so this costs the
+// renderer bundle an array of fourteen strings rather than a markdown parser —
+// see that file's header for why the list lives there.
+import { PALETTE_TOKENS } from '../../main/preview/previewStyle';
 import {
   classifyByName,
   classifyBytes,
@@ -26,8 +30,8 @@ import {
  *
  *   text            -> `openContent`, editable, savable
  *   image/audio/pdf -> `openUrl`, an object URL over a Blob with a real mime
- *   html            -> BOTH: `openContent` for the editor and `previewUrl`
- *                      for a sandboxed frame, with `htmlView` saying which
+ *   html/markdown   -> BOTH: `openContent` for the editor and `previewUrl`
+ *                      for a sandboxed frame, with `docView` saying which
  *                      one is on screen
  *   binary          -> `openNote`, a sentence and a download button
  *
@@ -95,7 +99,20 @@ export const MAX_DOCUMENT_BYTES = 32 * 1024 * 1024;
  * half-regression the brief warned about.
  */
 export function isEditable(mode: OpenMode | null): boolean {
-  return mode === 'text' || mode === 'html';
+  return mode === 'text' || mode === 'html' || mode === 'markdown';
+}
+
+/**
+ * Kinds shown as BOTH a render and their source.
+ *
+ * The pair `html` and `markdown` is not a coincidence and is not likely to
+ * grow: these are the two formats whose whole point is what they look like
+ * when something renders them, and which are still ordinary text files that a
+ * person opens a file browser to fix a typo in. Everything else is one or the
+ * other.
+ */
+export function hasPreview(mode: OpenMode | null): boolean {
+  return mode === 'html' || mode === 'markdown';
 }
 
 /** Everything a remembered session keeps while its tab is unmounted. */
@@ -164,7 +181,7 @@ export const useFilesStore = defineStore('files', () => {
   const previewToken = ref<string | null>(null);
 
   /**
-   * Which half of an HTML file is on screen.
+   * Which half of a previewable document — HTML or markdown — is on screen.
    *
    * PREVIEW is the default, and it is a deliberate reversal of what the tab
    * does for every other text file. The reasoning is that the source is
@@ -174,8 +191,13 @@ export const useFilesStore = defineStore('files', () => {
    * exception is a file restored DIRTY (see `open()`): the preview shows what
    * is on the host, which by definition is not what the unsaved buffer says,
    * so an edit in progress opens on the editor that holds it.
+   *
+   * Named `docView` rather than `htmlView` since markdown joined: one flag for
+   * both, because it is one piece of state — which half of the open document
+   * the user is looking at — and two would have meant two ways to be on the
+   * source tab.
    */
-  const htmlView = ref<'preview' | 'source'>('preview');
+  const docView = ref<'preview' | 'source'>('preview');
 
   /**
    * True when the source contains a `<script>` tag.
@@ -210,11 +232,28 @@ export const useFilesStore = defineStore('files', () => {
    */
   const openHasRemoteRefs = ref(false);
 
-  /** Does this source pull a sub-resource off a remote origin? */
+  /**
+   * Does this source pull a sub-resource off a remote origin?
+   *
+   * Three patterns, because markdown has a syntax of its own for the same
+   * fact. The third — `![alt](https://…)` — is not an edge case in this repo's
+   * world: a README's first three lines are usually shields.io badges, every
+   * one of them a remote image, and without this the preview would paint a row
+   * of broken-image icons under a toolbar reporting nothing wrong.
+   *
+   * The markdown pattern matches IMAGES only (`![…]`), never links (`[…]`),
+   * which is the same line the HTML patterns already draw and for the same
+   * reason: an `<a href="https://…">` or a `[spec](https://…)` is a citation,
+   * nothing about it fails to load, and saying "remote resources are not
+   * loaded" because a document cites a source would be its own small lie. A
+   * reference-style image is therefore missed, deliberately — its definition
+   * line is indistinguishable from a link's.
+   */
   function referencesRemote(source: string): boolean {
     return (
       /\bsrc\s*=\s*["']?https?:/i.test(source) ||
-      /<link\b[^>]*\bhref\s*=\s*["']?https?:/i.test(source)
+      /<link\b[^>]*\bhref\s*=\s*["']?https?:/i.test(source) ||
+      /!\[[^\]]*\]\(\s*<?https?:/i.test(source)
     );
   }
 
@@ -384,10 +423,17 @@ export const useFilesStore = defineStore('files', () => {
    * A failure here is never fatal and never silent: the file is still text and
    * the editor still holds it, so the honest outcome is "you get the source,
    * and here is why you did not get the render" rather than a blank frame.
+   *
+   * The mode is taken from the open file's kind rather than passed in, so
+   * there is exactly one place that decides which converter a preview gets and
+   * every caller — open, save, reload, a theme switch — agrees by construction.
    */
   async function mintPreview(connectionId: ConnectionId, path: string): Promise<void> {
     try {
-      const { token, url } = await api.preview.openHtml(connectionId, path);
+      const { token, url } =
+        openMode.value === 'markdown'
+          ? await api.preview.openMarkdown(connectionId, path, currentPreviewStyle())
+          : await api.preview.openHtml(connectionId, path);
       previewToken.value = token;
       previewUrl.value = url;
       previewStats.value = { loaded: 0, blocked: 0, missing: 0, capped: false };
@@ -395,9 +441,69 @@ export const useFilesStore = defineStore('files', () => {
       previewToken.value = null;
       previewUrl.value = null;
       previewStats.value = null;
-      htmlView.value = 'source';
+      docView.value = 'source';
       openNote.value = `Preview unavailable: ${(e as Error).message}`;
     }
+  }
+
+  /**
+   * The applied theme, read out of the LIVE document rather than out of the
+   * theme registry.
+   *
+   * `getComputedStyle` is the same trick DoodleCanvas uses for its pens, and it
+   * is the right one here for two reasons. It needs no import of `themes.ts`,
+   * so this store keeps knowing nothing about which themes exist; and it
+   * resolves whatever is actually on `<html>` at this instant — which is what
+   * the app is painted in, including the `system` case where the choice is an
+   * OS preference rather than a stored id.
+   *
+   * The values go to main and end up inside the preview document's `<style>`.
+   * They are re-validated there (previewStyle.ts) rather than trusted, and the
+   * comment on VALUE_ALLOWED says why a value from this side of the bridge is
+   * still checked on that side.
+   */
+  function currentPreviewStyle(): {
+    palette: Record<string, string>;
+    appearance: 'dark' | 'light';
+  } {
+    const computed = getComputedStyle(document.documentElement);
+    const palette: Record<string, string> = {};
+    for (const token of PALETTE_TOKENS) {
+      palette[token] = computed.getPropertyValue(token).trim();
+    }
+    // App.vue sets `color-scheme` from the theme record's DECLARED appearance,
+    // so this reads a stated fact rather than guessing one from a background
+    // colour — which is the same thing themes.ts refuses to do.
+    //
+    // `getPropertyValue`, not the `.colorScheme` accessor: the accessor is
+    // undefined in jsdom, and a `.includes` on it throws — which `mintPreview`
+    // would then catch and turn into "Preview unavailable", i.e. the feature
+    // silently off under test with no failing assertion pointing at the cause.
+    const scheme = computed.getPropertyValue('color-scheme');
+    return { palette, appearance: scheme.includes('light') ? 'light' : 'dark' };
+  }
+
+  /**
+   * Re-render the open markdown preview in the theme that is applied now.
+   *
+   * A preview is a snapshot: the frame has already navigated, it runs no
+   * scripts, and its document has its own `:root` that the app's tokens do not
+   * cascade into — so there is no way to re-tint one in place. Re-minting is
+   * the only mechanism available, and it is cheap enough to be the right one:
+   * one SFTP read of a file the user is looking at, on an event (changing the
+   * theme) that happens by hand.
+   *
+   * Only markdown, because only markdown is painted in our palette. An HTML
+   * file brings its own styling and must not follow the app's theme — a page
+   * that looks different here from how it looks in a browser would be a lie
+   * about the file.
+   */
+  async function restylePreview(connectionId: ConnectionId): Promise<void> {
+    if (openMode.value !== 'markdown' || openPath.value == null) return;
+    if (previewToken.value == null) return;
+    const path = openPath.value;
+    releasePreview();
+    await mintPreview(connectionId, path);
   }
 
   /**
@@ -465,23 +571,24 @@ export const useFilesStore = defineStore('files', () => {
       openPath.value = remembered.buffer.path;
       openContent.value = remembered.buffer.content;
       // Re-derive the kind from the NAME rather than pinning it to 'text'.
-      // The buffer only ever holds an editable file, so this is 'text' or
-      // 'html', and an HTML file that comes back as plain text would lose its
-      // preview toggle for the rest of the session — a tab switch quietly
-      // downgrading a file is exactly the kind of thing nobody reports.
+      // The buffer only ever holds an editable file, so this is 'text',
+      // 'html' or 'markdown', and a previewable file that comes back as plain
+      // text would lose its preview toggle for the rest of the session — a tab
+      // switch quietly downgrading a file is exactly the kind of thing nobody
+      // reports.
       const restored = classifyByName(remembered.buffer.path);
-      openMode.value = restored.kind === 'html' ? 'html' : 'text';
+      openMode.value = hasPreview(restored.kind) ? restored.kind : 'text';
       openMime.value = restored.mime ?? 'text/plain';
       openNote.value = null;
       dirty.value = true;
       // No preview is minted for a restored buffer, and the view opens on the
       // SOURCE: what the preview would render is the host's copy, which is by
       // definition not what this unsaved buffer says. Saving mints one.
-      htmlView.value = 'source';
+      docView.value = 'source';
       openHasScripts.value =
-        openMode.value === 'html' && /<script[\s>]/i.test(openContent.value);
+        hasPreview(openMode.value) && /<script[\s>]/i.test(openContent.value);
       openHasRemoteRefs.value =
-        openMode.value === 'html' && referencesRemote(openContent.value);
+        hasPreview(openMode.value) && referencesRemote(openContent.value);
     } else {
       resetOpenFile();
     }
@@ -606,23 +713,30 @@ export const useFilesStore = defineStore('files', () => {
 
       const cls = classifyBytes(named, bytes);
       openMime.value = cls.mime;
-      if (cls.kind === 'html') {
+      if (hasPreview(cls.kind)) {
         // Decoded here for the SAME reason plain text is, and from the same
-        // bytes: the editor half of the HTML view has to work without a second
+        // bytes: the editor half of the view has to work without a second
         // read, and the preview half is not fed from this buffer at all — main
         // re-reads the file over the preview scheme, because that is the only
-        // way the page's relative references can resolve. So this is one read
-        // for the source and one for the render, and they can briefly disagree
-        // only if the file changes on the host between them.
+        // way the document's relative references can resolve. So this is one
+        // read for the source and one for the render, and they can briefly
+        // disagree only if the file changes on the host between them.
         if (bytes.length > MAX_TEXT_BYTES) {
-          showBinary(cls, `HTML file is ${formatBytes(bytes.length)}, too large to open here.`);
+          showBinary(
+            cls,
+            `${cls.kind === 'html' ? 'HTML' : 'Markdown'} file is ` +
+              `${formatBytes(bytes.length)}, too large to open here.`,
+          );
           return;
         }
         openContent.value = new TextDecoder('utf-8').decode(bytes);
+        // Both notes apply to markdown as much as to HTML: raw `<script>` in a
+        // README does not run either (markdownDocument.ts explains why raw HTML
+        // is passed through at all), and a badge row is remote images.
         openHasScripts.value = /<script[\s>]/i.test(openContent.value);
         openHasRemoteRefs.value = referencesRemote(openContent.value);
-        openMode.value = 'html';
-        htmlView.value = 'preview';
+        openMode.value = cls.kind;
+        docView.value = 'preview';
         dirty.value = false;
         await mintPreview(connectionId, abs);
         return;
@@ -664,12 +778,12 @@ export const useFilesStore = defineStore('files', () => {
   function capFor(kind: FileKind): number {
     if (kind === 'audio') return MAX_MEDIA_BYTES;
     if (kind === 'image' || kind === 'pdf') return MAX_DOCUMENT_BYTES;
-    // `html` shares the EDITOR's ceiling, not a viewer's, and that is the
-    // conservative choice on purpose: an HTML file always ends up decoded into
-    // the editor buffer as well as framed, because the source toggle has to
-    // work without a second read. So the number that has to hold is the one
-    // that bounds a string the editor can lay out.
-    if (kind === 'html') return MAX_TEXT_BYTES;
+    // `html` and `markdown` share the EDITOR's ceiling, not a viewer's, and
+    // that is the conservative choice on purpose: a previewable document always
+    // ends up decoded into the editor buffer as well as framed, because the
+    // source toggle has to work without a second read. So the number that has
+    // to hold is the one that bounds a string the editor can lay out.
+    if (hasPreview(kind)) return MAX_TEXT_BYTES;
     // `text` and `unknown` share the editor's ceiling: an unknown file is
     // only read at all so its bytes can be sniffed, and if it turns out to be
     // text it goes straight into the editor, so it must not be bigger than
@@ -678,8 +792,8 @@ export const useFilesStore = defineStore('files', () => {
   }
 
   /**
-   * Save the open file back to the host. Text and HTML — the two kinds that
-   * have an editor behind them; nothing else is editable.
+   * Save the open file back to the host. Text, HTML and markdown — the kinds
+   * that have an editor behind them; nothing else is editable.
    */
   async function save(connectionId: ConnectionId): Promise<boolean> {
     if (!openPath.value || !isEditable(openMode.value)) return false;
@@ -690,7 +804,7 @@ export const useFilesStore = defineStore('files', () => {
       openHasScripts.value = /<script[\s>]/i.test(openContent.value);
       openHasRemoteRefs.value = referencesRemote(openContent.value);
       rememberHere();
-      // A saved HTML file gets a FRESH preview rather than a reloaded one.
+      // A saved document gets a FRESH preview rather than a reloaded one.
       //
       // Re-minting is what makes the frame show the new bytes — the URL
       // changes, so the frame navigates, with no cache to defeat and no
@@ -698,7 +812,7 @@ export const useFilesStore = defineStore('files', () => {
       // accept one anyway. It also resets the request and byte budgets, which
       // is correct: the user saving a file is a new act of intent, not a
       // continuation of the last render's allowance.
-      if (openMode.value === 'html') {
+      if (hasPreview(openMode.value)) {
         releasePreview();
         await mintPreview(connectionId, openPath.value);
       }
@@ -739,14 +853,14 @@ export const useFilesStore = defineStore('files', () => {
     openNote.value = null;
     openSize.value = 0;
     dirty.value = false;
-    htmlView.value = 'preview';
+    docView.value = 'preview';
     openHasScripts.value = false;
     openHasRemoteRefs.value = false;
   }
 
-  /** Show the source of the open HTML file, or its render. */
-  function setHtmlView(view: 'preview' | 'source'): void {
-    htmlView.value = view;
+  /** Show the source of the open document, or its render. */
+  function setDocView(view: 'preview' | 'source'): void {
+    docView.value = view;
   }
 
   /**
@@ -772,11 +886,11 @@ export const useFilesStore = defineStore('files', () => {
    * do.
    */
   async function reloadPreview(connectionId: ConnectionId): Promise<void> {
-    if (openMode.value !== 'html' || openPath.value == null) return;
+    if (!hasPreview(openMode.value) || openPath.value == null) return;
     const path = openPath.value;
     releasePreview();
     openNote.value = null;
-    htmlView.value = 'preview';
+    docView.value = 'preview';
     await mintPreview(connectionId, path);
   }
 
@@ -900,15 +1014,16 @@ export const useFilesStore = defineStore('files', () => {
     previewUrl,
     previewToken,
     previewStats,
-    htmlView,
+    docView,
     openHasScripts,
     openHasRemoteRefs,
     dirty,
     saving,
     opening,
     reveal,
-    setHtmlView,
+    setDocView,
     reloadPreview,
+    restylePreview,
     open,
     refresh,
     cd,

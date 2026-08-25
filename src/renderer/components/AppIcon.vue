@@ -26,6 +26,7 @@ export type AppIconName =
   | 'chevron-up'
   | 'circle'
   | 'close'
+  | 'code'
   | 'download'
   | 'dot'
   | 'edit-2'
@@ -33,6 +34,7 @@ export type AppIconName =
   | 'folder'
   | 'folder-plus'
   | 'git-branch'
+  | 'hexagon'
   | 'home'
   | 'image'
   | 'minus'
@@ -48,11 +50,13 @@ export type AppIconName =
   | 'star'
   | 'star-filled'
   | 'symlink'
+  | 'terminal'
   | 'toggle-left'
   | 'toggle-right'
   | 'tool'
   | 'trash-2'
-  | 'type';
+  | 'type'
+  | 'zap';
 
 /**
  * Feather 4.29 path data (MIT), verbatim. One entry per icon.
@@ -100,6 +104,11 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   // not filled: it is an outline shape, and the fill is the canvas's business.
   circle: { paths: ['M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20'] },
   close: { paths: ['M18 6L6 18', 'M6 6l12 12'] },
+  // Feather's `code` — two <polyline>s as relative paths. The CODEX tab mark
+  // (src/shared/agentBadge.ts). Symmetric chevrons pointing outward, which is
+  // what tells it apart from `terminal` below at 12px: the mass sits at both
+  // edges rather than on the left.
+  code: { paths: ['M16 18l6-6-6-6', 'M8 6l-6 6 6 6'] },
   // A circle expressed as two semicircular arcs, so the template stays one
   // path loop. Painted, not stroked: this is a pip, not an outline.
   dot: { paths: ['M12 7a5 5 0 1 0 0 10a5 5 0 1 0 0-10'], filled: true },
@@ -128,6 +137,14 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
       'M18 3a3 3 0 1 0 0 6a3 3 0 1 0 0-6',
       'M6 15a3 3 0 1 0 0 6a3 3 0 1 0 0-6',
       'M18 9a9 9 0 0 1-9 9',
+    ],
+  },
+  // Feather's `hexagon`, verbatim. The CLAUDE tab mark (src/shared/agentBadge.ts).
+  // A closed angular outline: at 12px it is a silhouette rather than a figure,
+  // which is exactly what makes it survive the size the other three are read at.
+  hexagon: {
+    paths: [
+      'M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z',
     ],
   },
   // Feather's `home` — "back to $HOME" in the project browser's breadcrumb.
@@ -202,6 +219,10 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   star: { paths: [STAR_PATH] },
   'star-filled': { paths: [STAR_PATH], filled: true },
   symlink: { paths: ['M4 4v7a4 4 0 0 0 4 4h12', 'M15 10l5 5-5 5'] },
+  // Feather's `terminal` — its <polyline> prompt and its <line> rule. The
+  // OPENCODE tab mark (src/shared/agentBadge.ts). Deliberately asymmetric
+  // against `code` above: one chevron on the left, one rule on the right.
+  terminal: { paths: ['M4 17l6-6-6-6', 'M12 19h8'] },
   // Feather's `toggle-left` / `toggle-right`: the port panel's per-row on/off.
   // A real two-state mark, so "forwarded" and "silenced" differ in SHAPE and
   // not only in colour (the knob moves), which a checkbox tick cannot do.
@@ -239,6 +260,11 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   // in the UI font at the button's font size and inherit none of the stroke
   // weight the rest of the toolbar shares.
   type: { paths: ['M4 7V4h16v3', 'M9 20h6', 'M12 4v16'] },
+  // Feather's `zap`, its <polygon> closed with `z`. The GROK tab mark
+  // (src/shared/agentBadge.ts). Stroked, not filled, so it stays in the same
+  // outline register as the other three — a solid bolt beside three outlines
+  // would read as a different KIND of badge rather than a different agent.
+  zap: { paths: ['M13 2L3 14h9l-1 8 10-12h-9z'] },
 };
 
 const props = withDefaults(

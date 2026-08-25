@@ -1,0 +1,3 @@
+kill-session [-aC] [-t target-session]
+command kill-session: unknown flag -Z
+command kill-session: -t expects an argument

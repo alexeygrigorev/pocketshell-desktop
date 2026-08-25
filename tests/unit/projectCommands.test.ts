@@ -6,6 +6,7 @@ import {
   directoryExistsCommand,
   fallbackCreateSessionCommand,
   freeSessionNameCommand,
+  killSessionCommand,
   mkdirCommand,
   reposCloneCommand,
   renameSessionCommand,
@@ -307,5 +308,51 @@ describe('renameSessionCommand', () => {
     // And that the `=` really is inside the quotes, where a hostile name
     // cannot get in front of it.
     expect(renameSessionCommand(HOSTILE, HOSTILE)).toContain("-t '=wei");
+  });
+});
+
+/**
+ * docs/WORKSPACE.md §14 — the ONLY destructive command this app issues, and the
+ * only one with no undo.
+ *
+ * The option list was captured from the pinned 0.4.44 Docker fixture the way
+ * 00eb3e7 captured `pocketshell agent --help`, and the captures are committed
+ * at `tests/unit/fixtures/v0.4.44-*.txt`. Two findings decided this builder:
+ *
+ *  - `pocketshell sessions` has NO kill verb (create/list/resumable/resume, and
+ *    eight kill-ish spellings all answer `No such command`);
+ *  - `tmuxctl kill <t> --yes` exists but cannot kill a numerically-named
+ *    session (`_resolve_session_target` reads a digit target as a recent-list
+ *    index) and issues its own kill with a BARE `-t`.
+ */
+describe('killSessionCommand', () => {
+  it('forces the EXACT match, which is the whole safety of the line', () => {
+    expect(killSessionCommand('api')).toBe("tmux kill-session -t '=api'");
+  });
+
+  it('cannot be made to prefix-match a neighbour', () => {
+    // The dangerous case is NOT "both alive" — there, exact match wins and the
+    // bug hides. It is a target that is ALREADY GONE, which is the state a tab
+    // bar refreshed on a timer is routinely in: measured on the fixture, a bare
+    // `-t api` with only `api-staging` alive exits 0 having killed
+    // `api-staging`. `=` fails closed with exit 1 instead.
+    const built = killSessionCommand('api');
+    expect(built).toContain("'=api'");
+    expect(built).not.toContain("-t 'api'");
+  });
+
+  it('renders a hostile name as one inert quoted word', () => {
+    // `PWNED` is the file-wide canary: it must never appear outside a quoted
+    // region. The `=` rides INSIDE the quotes with the name, so a name that
+    // opens with a quote cannot break the target apart either.
+    expect(killSessionCommand(HOSTILE)).toBe(
+      `tmux kill-session -t ${shellQuote(`=${HOSTILE}`)}`,
+    );
+    expect(killSessionCommand(HOSTILE)).toContain("'=wei'\\''rd");
+  });
+
+  it('does not reach for `tmuxctl kill`, whose own kill is not exact-match', () => {
+    expect(killSessionCommand('api')).not.toContain('tmuxctl');
+    expect(killSessionCommand('api')).not.toContain('--yes');
   });
 });

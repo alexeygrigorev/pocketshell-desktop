@@ -7,6 +7,7 @@ import type { RepoEntry, ReposScopeState } from '../../main/projects/repos';
 import type {
   CloneResult,
   CreateFolderResult,
+  KillSessionResult,
   RenameSessionResult,
   SessionNamePolicy,
   StartSessionResult,
@@ -257,6 +258,28 @@ export const useProjectsStore = defineStore('projects', () => {
     return api.projects.renameSession(connectionId, from, to);
   }
 
+  /**
+   * Stop a live session — kill its tmux session on the host
+   * (docs/WORKSPACE.md §14).
+   *
+   * Thin for the same reason `renameSession` is, and the debt the caller owes is
+   * LARGER here: a rename moves the three pieces of desktop state keyed by
+   * session name, a kill has to drop them. The pool's client is dropped
+   * main-side by the ipc handler; the mounted pane and the composer's record
+   * belong to the workspace, which is the only place that knows about either.
+   *
+   * **This store does not confirm.** The confirmation is a UI question and it
+   * has to be asked where the session's NAME is on screen — a modal raised from
+   * a store could only name it by string, and this is the one action in the app
+   * that cannot be undone.
+   */
+  async function killSession(
+    connectionId: ConnectionId,
+    name: string,
+  ): Promise<KillSessionResult> {
+    return api.projects.killSession(connectionId, name);
+  }
+
   /** Drop everything on disconnect: none of it is valid for another host. */
   function clear(): void {
     home.value = null;
@@ -299,6 +322,7 @@ export const useProjectsStore = defineStore('projects', () => {
     clone,
     start,
     renameSession,
+    killSession,
     clear,
   };
 });

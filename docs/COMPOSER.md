@@ -638,29 +638,82 @@ in mind when adding any future dismissal:
 
 It does not move focus either: the click already decided where focus goes.
 
-#### Closed is two states, not one
+#### SUPERSEDED — "closed is two states, not one"
 
-The crux, and the reason there is a flag rather than an inference from
-`mode === 'hidden'`:
+This section said that closing the composer YOURSELF suppressed the typing
+intercept, so the next keystroke reached the shell, while a send-close did not.
+The user reported the consequence:
+
+> "I start typing, prompt composer opens, I click esc, continue typing and now
+> the input goes to the terminal"
+
+That was the design working exactly as written, and the report is a rejection of
+the design rather than of the code. It is right to reject. Escape's job is to
+put the panel away; reading a second, durable instruction into it — "and also
+do not come back when I type" — is the old rung 3 returning in disguise, where
+Escape did something other than close because the intercept needed a hatch. The
+hatch was moved rather than the key overloaded again.
+
+The superseded table is kept because the DISTINCTION it drew is still real; only
+the right-hand column changed:
 
 | Closed by | Means | Next keystroke |
 |---|---|---|
-| **the user** — Escape, `Ctrl+\``, `Ctrl+Shift+K`, `Ctrl+Shift+↓`, the toggle, the card's close | "leave me alone" | goes to the **shell**. This is the plain-terminal hatch |
+| **the user** — Escape, `Ctrl+\``, `Ctrl+Shift+K`, `Ctrl+Shift+↓`, the toggle, the card's close | "put it away" | **re-opens** the composer, carrying that character |
 | **a delivered send** (`closeComposerOnSend`, §26.2) | "that one's away, next?" | **re-opens** the composer, carrying that character |
 
-Sharing one boolean between those would make the two features cancel each other
-out, so `typingSuppressed` is set only by `dismiss()` and never by the send
-path. It is not persisted — it is a statement about this moment, not a
-preference.
+All four user-close routes behave identically, which is the point: a user who
+dismisses three different ways must not get three different results.
+
+**The two paths stay distinct in the model even though they now agree.**
+`dismiss()` still exists as its own action — it is where the user-close path can
+be given behaviour again without hunting down four call sites, and the two
+closes are different facts about the world even when they produce the same
+state. Collapsing them into one boolean is precisely what the earlier design was
+avoiding, and what would make them cancel each other out again the next time one
+of them needs to differ.
+
+#### The plain-terminal hatch is now a PRESS IN THE TERMINAL
+
+`typingSuppressed` survives, and now means what its name says: the user is
+typing at the shell, so withhold the intercept. It is armed by a `mousedown`
+inside a terminal pane and by nothing else.
+
+The model is that **the intent follows the pointer** — you type where you last
+pointed. That is a better home for the meaning than Escape, and not only because
+the user asked: pressing Escape is a statement about the PANEL, whereas pointing
+at the terminal is a statement about where you intend to type. It is also the
+gesture a user performs before typing at a shell anyway, so the hatch costs
+nothing to reach and needs no chord in an already-full map.
+
+It composes with the close, and the composition is the reason the hatch works:
+click into the terminal, then press Escape, and typing still goes to the shell —
+because Escape no longer re-arms anything. Escape ALSO hands focus back to the
+pane, so every non-printable key (Ctrl-C, the arrows, Enter, tmux's prefix)
+reaches the shell immediately whatever the flag says; only a printable one is at
+stake.
+
+The rule the previous revision drew still holds, with its second half rewritten:
+
+> **A click dismisses the view. A click INTO THE TERMINAL dismisses the intent.**
+
+`TerminalView` reports the press as a fact (`pressed`) and the workspace decides
+what it means — the same division `typed` and `paste-into-composer` already use,
+so the pane goes on knowing nothing about the composer.
 
 **What lifts the suppression:**
 
-- **`Ctrl+\``**, the summons the user explicitly endorsed (*"ctrl + ` is
-  okay"*), and any other opening: the toggle, `Ctrl+Shift+K`, `Ctrl+Shift+↑`, a
-  seed action. `setMode` clears the flag whenever it opens the panel, so no
-  caller has to remember to.
-- **A session switch.** A dismissal spoke for the pane the user was in; another
-  session is a different job and very often a different intent.
+- **any opening.** `Ctrl+\`` (the summons the user explicitly endorsed —
+  *"ctrl + ` is okay"*), the toggle, `Ctrl+Shift+K`, `Ctrl+Shift+↑`, a seed
+  action, an explicit Ctrl+V. `setMode` clears the flag whenever it opens the
+  panel, so no caller has to remember to.
+- **a press INSIDE the composer**, the exact counterpart of the press that armed
+  it. The pointer moved, so the intent moved.
+- **A session switch.** A decision about where you are typing spoke for the pane
+  you were in; another session is a different job and very often a different
+  intent.
+
+It is not persisted — it is a statement about this moment, not a preference.
 
 Enter is deliberately **not** bound to open the composer. It was asked for and
 retracted in the same breath (*"enter should open" — "okay let's not do
@@ -1410,17 +1463,29 @@ is latched on the keydown and spent on the keypress.
 **How to get a plain terminal**, which is the question this feature has to have
 an answer to:
 
-1. **Escape** (or `Ctrl+\``, or the toggle). Closing the composer YOURSELF
-   suppresses the intercept until an explicit summons, so typing goes to the
-   shell (§12.2). This is the hatch, and it is deliberately the same gesture a
-   user would already reach for.
+1. **Click in the terminal**, then type. A press inside a pane says you are
+   working at the shell, and the intercept stands down until you point somewhere
+   else or summon the composer (§12.2). This is the hatch, and it is the gesture
+   a user performs before typing at a shell anyway.
 2. **The setting**, for turning the behaviour off entirely.
 
-An earlier revision had no explicit hatch: Escape's third rung blurred the draft
-and left the composer OPEN, and since the intercept only fires while it is
-closed, that bought a plain terminal for free. It was neat, but it depended on
-Escape not doing what Escape does everywhere else, and the user asked for the
-plain meaning of the key. The hatch is now stated rather than emergent.
+This has been in three places. First there was no explicit hatch: Escape's third
+rung blurred the draft and left the composer OPEN, and since the intercept only
+fires while it is closed, that bought a plain terminal for free. It was neat and
+it depended on Escape not doing what Escape does everywhere else, so the user
+asked for the plain meaning of the key. The hatch then moved ONTO Escape — a
+dismissal suppressed the intercept — and that is what the user hit and reported:
+"I click esc, continue typing and now the input goes to the terminal". Escape
+had stopped meaning "close" and started meaning "close, and speak for my next
+keystroke".
+
+So it moved off the keyboard entirely. The reason it works there is that a press
+in the terminal is the ONLY gesture in this window that is unambiguously about
+the shell: Escape is about the panel, and a click elsewhere — the tab strip, the
+session panel — is about neither. **Note what this costs**: with the setting on
+and nothing suppressing, every printable keystroke reaches the composer, so the
+hatch is load-bearing rather than a convenience. Losing it entirely would leave
+the Settings toggle as the only way to type at a shell.
 
 ### 26.2 `closeComposerOnSend`
 

@@ -15,7 +15,17 @@ export default defineConfig({
     // bundle `require()` an ES module and Electron dies at startup with
     // ERR_REQUIRE_ESM before a window ever opens. Excluding it from
     // externalisation lets Vite transpile it into the CJS output.
-    plugins: [externalizeDepsPlugin({ exclude: ['electron-store'] })],
+    //
+    // `marked` is here for exactly the same reason and it is not a style
+    // choice: since v5 the package ships ESM only (`exports: { '.': './lib/
+    // marked.esm.js' }`, no CJS entry), and Electron 33 is Node 20, which
+    // predates `require(esm)`. Left external, the markdown preview would throw
+    // ERR_REQUIRE_ESM the first time anyone opened a `.md` — in a code path
+    // that no unit test reaches, because unit tests run under Vitest's ESM
+    // loader where the import works fine. Bundling also keeps the installer
+    // honest: 45 KB of transpiled parser in main's chunk rather than the
+    // package's 480 KB of sources, maps and `.d.ts` copied into the asar.
+    plugins: [externalizeDepsPlugin({ exclude: ['electron-store', 'marked'] })],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },

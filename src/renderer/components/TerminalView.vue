@@ -103,6 +103,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'typed', text: string): void;
   (e: 'paste-into-composer'): void;
+  (e: 'pressed'): void;
 }>();
 
 /** The tmux session this pane should be showing, or '' for a bare shell. */
@@ -504,6 +505,16 @@ async function pasteFromClipboard(): Promise<void> {
 
 function onTerminalMouseDown(e: MouseEvent): void {
   if (e.button === 0) selecting = true;
+  // Pressing in here is the user saying they are working at the SHELL, which is
+  // what arms the composer's typing suppression (docs/COMPOSER.md §12.2). It is
+  // emitted for EVERY button, not only the drag-select one: a right-click here
+  // pastes into the shell, which is as much a statement about where the user is
+  // working as a left-click is.
+  //
+  // A statement, not an instruction — the same shape as `typed` and
+  // `paste-into-composer`. This component knows nothing about the composer; it
+  // reports that its pane was pressed and the workspace decides what that means.
+  emit('pressed');
 }
 
 /**
@@ -532,6 +543,48 @@ function onTerminalContextMenu(e: MouseEvent): void {
  */
 function onCustomKey(e: KeyboardEvent): boolean {
   if (e.type !== 'keydown') return true;
+
+  // THE WORKSPACE'S TAB CHORDS. `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle the tab
+  // strip and `Ctrl+1`..`Ctrl+9` jump to one (docs/WORKSPACE.md §11). They are
+  // handled by a window-level capture listener in FolderWorkspaceView, which
+  // stops the event before it can descend this far — so in the folder workspace
+  // this branch never runs.
+  //
+  // It is here anyway, and it is NOT belt-and-braces: it is the answer to what
+  // xterm would do with these keys, which is not nothing. Measured against
+  // @xterm/xterm 6's `evaluateKeyboardEvent`, the function this handler is
+  // consulted from:
+  //
+  //   Ctrl+Tab        -> C0.HT (`\t`).  `case 9` is reached before the ctrl
+  //                      branch and is gated only on Shift, so the modifier is
+  //                      simply ignored. At a shell prompt that is completion.
+  //   Ctrl+Shift+Tab  -> ESC [ Z (back-tab).
+  //   Ctrl+3..Ctrl+7  -> ESC, FS, GS, RS, US — keyCodes 51-55 map to
+  //                      `keyCode - 51 + 27` in the ctrl branch.
+  //   Ctrl+8          -> DEL.
+  //   Ctrl+1/2/9      -> nothing.
+  //
+  // So a pane mounted outside a folder workspace — a future caller, a test —
+  // would otherwise turn a tab chord into shell input. Declining it here means
+  // the chord's meaning does not depend on who mounted the terminal.
+  //
+  // `preventDefault()` AND `return false`, both, for the third time in this
+  // function and for the reason the two branches below spell out: returning
+  // false stops xterm (`_keyDown` bails at the custom handler and never calls
+  // its own `cancel()`) but leaves the DOM event LIVE, and Chromium still has
+  // its own default action for `Ctrl+Tab`. One keystroke, two paths, is
+  // bc86cf7 and 3628090.
+  //
+  // `!e.altKey`: Ctrl+Alt is AltGr on European layouts, where the digit row
+  // carries printable characters on several of them.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'Tab' || /^[1-9]$/.test(e.key))) {
+    // Digits only without Shift — Ctrl+Shift+<digit> is a different chord and
+    // is nobody's here — while Tab takes Shift as its direction.
+    if (e.key === 'Tab' || !e.shiftKey) {
+      e.preventDefault();
+      return false;
+    }
+  }
 
   // Typing opens the composer instead of reaching the shell. Everything
   // `isTypingKey` rejects — every chord, every named key, a bare space —

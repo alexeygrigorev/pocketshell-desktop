@@ -96,6 +96,27 @@ describe('classifyByName', () => {
     expect(classifyByName('/x/index.html').mime).toBe('text/html');
   });
 
+  it('routes markdown to the preview view rather than to the plain editor', () => {
+    for (const name of ['/x/README.md', '/x/notes.MARKDOWN', '/x/doc.mkd']) {
+      expect(classifyByName(name).kind, name).toBe('markdown');
+    }
+    expect(classifyByName('/x/README.md').mime).toBe('text/markdown');
+  });
+
+  it('leaves the other prose formats as plain text', () => {
+    // A markdown parser would render these into plausible-looking nonsense —
+    // an `.rst` directive block silently becoming a paragraph is worse than
+    // showing the source. `.mdx` is JSX in markdown: source for a page.
+    for (const name of ['/x/index.rst', '/x/doc.adoc', '/x/notes.org', '/x/page.mdx']) {
+      expect(classifyByName(name).kind, name).toBe('text');
+    }
+  });
+
+  it('treats a dotfile named like markdown as a dotfile, not a document', () => {
+    // A leading dot is not an extension anywhere else in this module either.
+    expect(classifyByName('/x/.markdown').kind).toBe('text');
+  });
+
   it('leaves page TEMPLATES as plain text, not as pages', () => {
     // A `.php` or a `.vue` contains markup but is source for a page rather
     // than a page: previewing one renders a broken document full of

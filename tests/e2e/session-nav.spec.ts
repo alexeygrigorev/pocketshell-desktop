@@ -169,11 +169,14 @@ test.describe('session-scoped navigation + terminal wiring', () => {
     await expect(page.locator('.terminal-area > .terminal')).toBeVisible();
   });
 
-  test('there is a way back: close the folder, then back to hosts', async () => {
-    await page.getByTitle('Close folder').click();
-    await expect(page.locator('.folder-workspace')).toHaveCount(0);
-    await expect(page.locator('.session-placeholder')).toBeVisible();
-    await expect(page.locator('.dir-header')).toHaveCount(1);
+  test('there is a way back to hosts', async () => {
+    // The tab strip's "Close folder" `×` is gone — the user asked for that whole
+    // end of the strip to go (docs/WORKSPACE.md §3). Nothing is lost: the
+    // session panel is persistent, so another folder row switches workspace
+    // directly and its back arrow leaves the host, which is what this asserts.
+    // The only state no longer reachable is the placeholder pane once a folder
+    // has been picked, and nobody navigates to that on purpose.
+    await expect(page.locator('.folder-workspace')).toBeVisible();
     await page.getByTitle('Back to hosts').click();
     await expect(page.getByText(E2E_HOST_NAME)).toBeVisible();
     // Return to the host for the remaining tests.

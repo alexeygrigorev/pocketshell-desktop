@@ -1,0 +1,16 @@
+                                                                                
+ Usage: tmuxctl kill [OPTIONS] {target}                                         
+                                                                                
+ Kill a tmux session by name or recent-session index.                           
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    target      <str>  [required]                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --by          <created|activity>  Interpret numeric IDs using session        │
+│                                   creation time or last activity.            │
+│                                   [default: created]                         │
+│ --yes                             Skip the confirmation prompt.              │
+│ --help                            Show this message and exit.                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

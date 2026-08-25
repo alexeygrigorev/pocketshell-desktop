@@ -305,3 +305,180 @@ describe('HtmlPreviewService request handling', () => {
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
   });
 });
+
+/**
+ * Markdown, through the SAME pipeline.
+ *
+ * The point of these cases is what they do NOT have to re-establish. Traversal,
+ * symlinks, revocation, budgets, the CSP — all of it is the machinery above,
+ * unchanged, and converting in main rather than in the renderer is what makes
+ * that true. What is genuinely new is only:
+ *
+ *   - the entry document arrives as HTML rather than as its source bytes;
+ *   - so does every OTHER `.md` inside the root, which is what makes a relative
+ *     link between two documents work;
+ *   - and none of that happens under an HTML preview, where a `.md` is a file
+ *     the page referenced rather than a document the user chose to read.
+ */
+const DOCS = {
+  '/home/u/docs/README.md': '# Title\n\nSee [design](DESIGN.md) and ![shot](img/shot.png).\n',
+  '/home/u/docs/DESIGN.md': '## The design\n',
+  '/home/u/docs/img/shot.png': 'PNGDATA',
+  '/home/u/docs/notes.txt': 'plain',
+  '/home/u/other/secret.md': '# not yours',
+  '/etc/passwd': 'root:x:0:0',
+};
+const DOC_DIRS = ['/home/u/docs', '/home/u/docs/img', '/home/u/other', '/home/u', '/etc'];
+
+const PALETTE = { '--bg': '#101010', '--fg': '#f0f0f0' };
+
+describe('HtmlPreviewService.openMarkdown', () => {
+  it('serves the document as rendered HTML, not as its source', async () => {
+    const service = makeService(fakeSftp({ files: DOCS, dirs: DOC_DIRS }));
+    const { url } = await service.openMarkdown('c1', '/home/u/docs/README.md', {
+      palette: PALETTE,
+      appearance: 'dark',
+    });
+
+    const res = await handle(url);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+    const html = await res.text();
+    expect(html).toContain('<h1 id="title">Title</h1>');
+    // The source markers must be gone — a preview showing `# Title` would mean
+    // the conversion silently did not happen.
+    expect(html).not.toContain('# Title');
+  });
+
+  it('paints the document in the palette it was minted with', async () => {
+    const service = makeService(fakeSftp({ files: DOCS, dirs: DOC_DIRS }));
+    const { url } = await service.openMarkdown('c1', '/home/u/docs/README.md', {
+      palette: PALETTE,
+      appearance: 'light',
+    });
+
+    const html = await (await handle(url)).text();
+
+    expect(html).toContain('--bg:#101010;');
+    expect(html).toContain('color-scheme:light;');
+  });
+
+  it('refuses a palette value that would escape the style block', async () => {
+    const service = makeService(fakeSftp({ files: DOCS, dirs: DOC_DIRS }));
+    const { url } = await service.openMarkdown('c1', '/home/u/docs/README.md', {
+      palette: { '--bg': 'red</style><script>fetch("https://evil")</script>' },
+      appearance: 'dark',
+    });
+
+    const html = await (await handle(url)).text();
+
+    expect(html).not.toContain('</style><script>');
+    expect(html).toContain('--bg:Canvas;');
+  });
+
+  /**
+   * The rule that makes a folder of docs browsable: a relative link between two
+   * markdown files navigates, because the linked file is rendered too. Without
+   * it, `[design](DESIGN.md)` would hand the frame a `text/markdown` response
+   * and dead-end.
+   */
+  it('renders every markdown file inside the root, not only the entry', async () => {
+    const service = makeService(fakeSftp({ files: DOCS, dirs: DOC_DIRS }));
+    const { url } = await service.openMarkdown('c1', '/home/u/docs/README.md', {
+      palette: PALETTE,
+      appearance: 'dark',
+    });
+
+    const res = await handle(new URL('DESIGN.md', url).href);
+
+    expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+    expect(await res.text()).toContain('<h2 id="the-design">The design</h2>');
+  });
+
+  it('still refuses a markdown file outside the root', async () => {
+    const service = makeService(fakeSftp({ files: DOCS, dirs: DOC_DIRS }));
+    const { token } = await service.openMarkdown('c1', '/home/u/docs/README.md', {
+      palette: PALETTE,
+      appearance: 'dark',
+    });
+
+    const res = await handle(`psview://${token}/home/u/other/secret.md`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('leaves the assets a rendered document names exactly as they were', async () => {
+    const service = makeService(fakeSftp({ files: DOCS, dirs: DOC_DIRS }));
+    const { url } = await service.openMarkdown('c1', '/home/u/docs/README.md', {
+      palette: PALETTE,
+      appearance: 'dark',
+    });
+
+    // A relative image in a README resolves exactly as one in a real page does
+    // — which is the entire reuse argument, in one assertion.
+    const png = await handle(new URL('img/shot.png', url).href);
+    expect(png.status).toBe(200);
+    expect(png.headers.get('Content-Type')).toBe('image/png');
+
+    const txt = await handle(new URL('notes.txt', url).href);
+    expect(txt.headers.get('Content-Type')).toBe('text/plain; charset=utf-8');
+    expect(await txt.text()).toBe('plain');
+  });
+
+  it('carries the same no-network, no-script policy the HTML preview does', async () => {
+    const service = makeService(fakeSftp({ files: DOCS, dirs: DOC_DIRS }));
+    const { url } = await service.openMarkdown('c1', '/home/u/docs/README.md', {
+      palette: PALETTE,
+      appearance: 'dark',
+    });
+
+    const csp = (await handle(url)).headers.get('Content-Security-Policy') ?? '';
+
+    // The whole reason raw HTML may be passed through by the converter. If this
+    // assertion is ever relaxed, markdownDocument.ts's decision has to be
+    // revisited with it — the two are one argument.
+    expect(csp).toContain("script-src 'none'");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain('sandbox');
+    expect(csp).not.toMatch(/https?:/);
+  });
+
+  it('does not render markdown that an HTML page merely referenced', async () => {
+    // An ordinary HTML preview in the same folder as the docs.
+    const page = { ...DOCS, '/home/u/docs/index.html': '<h1>page</h1>' };
+    const html = makeService(fakeSftp({ files: page, dirs: DOC_DIRS }));
+    const { url } = await html.open('c1', '/home/u/docs/index.html');
+
+    const res = await handle(new URL('README.md', url).href);
+
+    // Mode is a property of the PREVIEW: the user opened a page, not a
+    // document, so a `.md` it names is a file rather than something to render.
+    expect(res.headers.get('Content-Type')).toBe('text/markdown; charset=utf-8');
+    expect(await res.text()).toContain('# Title');
+  });
+
+  it('counts a rendered sub-document as a loaded asset like any other', async () => {
+    const service = makeService(fakeSftp({ files: DOCS, dirs: DOC_DIRS }));
+    const seen: { loaded: number; blocked: number }[] = [];
+    service.setStatsListener((s) => seen.push({ loaded: s.loaded, blocked: s.blocked }));
+    const { url, token } = await service.openMarkdown('c1', '/home/u/docs/README.md', {
+      palette: PALETTE,
+      appearance: 'dark',
+    });
+
+    await handle(url);
+    await handle(new URL('img/shot.png', url).href);
+    await handle(`psview://${token}/etc/passwd`);
+
+    expect(seen.at(-1)).toEqual({ loaded: 1, blocked: 1 });
+  });
+
+  it('refuses to preview a directory, exactly as the HTML verb does', async () => {
+    const service = makeService(fakeSftp({ files: DOCS, dirs: DOC_DIRS }));
+    await expect(
+      service.openMarkdown('c1', '/home/u/docs', { palette: PALETTE, appearance: 'dark' }),
+    ).rejects.toThrow(/Not a regular file/);
+  });
+});
+

@@ -18,7 +18,9 @@
 // components/CodeEditor.vue for the probe output.
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useConnectionStore } from '../stores/connection';
-import { useFilesStore, formatBytes, isEditable } from '../stores/files';
+import { useFilesStore, formatBytes, hasPreview, isEditable } from '../stores/files';
+import { useSettingsStore } from '../stores/settings';
+import { resolveTheme } from '../themes';
 import FileTree from '../components/FileTree.vue';
 
 /**
@@ -53,6 +55,7 @@ const props = defineProps<{
 
 const connection = useConnectionStore();
 const files = useFilesStore();
+const settings = useSettingsStore();
 const connId = computed(() => connection.connectionId);
 
 // ---------------------------------------------------------------------------
@@ -214,6 +217,30 @@ async function onReloadPreview(): Promise<void> {
 }
 
 /**
+ * Re-render an open markdown preview when the theme changes.
+ *
+ * The frame is a separate document on a separate origin, so the app's tokens
+ * do not cascade into it and nothing inside it can be told about a repaint —
+ * the palette is baked in at mint time (see the store's `restylePreview`). A
+ * markdown preview left over from the previous theme would sit there in the
+ * old colours next to a repainted app, which is the sort of thing that reads
+ * as a rendering bug rather than as a limitation.
+ *
+ * Watched on the RESOLVED record's id rather than on `settings.theme`, because
+ * `system` is a rule rather than a theme: flipping Windows between light and
+ * dark changes what is painted without changing the stored setting, and the
+ * preview has to follow that too. Only markdown reacts — an HTML file brings
+ * its own styling and is deliberately not themed by us.
+ */
+watch(
+  () => resolveTheme(settings.theme).id,
+  async () => {
+    if (!connId.value) return;
+    await files.restylePreview(connId.value);
+  },
+);
+
+/**
  * Template ref on the tree, so the chord below can put the caret in its path
  * bar. Typed by the one method called rather than `InstanceType<typeof
  * FileTree>`, for the same reason FolderWorkspaceView types its terminal ref
@@ -284,6 +311,9 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
 const previewNote = computed(() => {
   const parts: string[] = [];
   if (files.dirty) parts.push('showing the saved copy — unsaved edits are not rendered');
+  // Raw HTML in a markdown file is passed through by the converter and is
+  // subject to exactly the same refusals as an HTML file's own markup, so a
+  // README containing a `<script>` gets the same sentence for the same reason.
   if (files.openHasScripts) parts.push('scripts are not run');
   if (files.openHasRemoteRefs) parts.push('remote resources are not loaded');
   const stats = files.previewStats;
@@ -354,8 +384,17 @@ const previewNote = computed(() => {
           @update:model-value="files.setContent"
         />
 
-        <!-- HTML: the one file kind with two presentations.
+        <!-- HTML and markdown: the two kinds with two presentations.
              ==================================================================
+             MARKDOWN GOES THROUGH THE SAME PIPELINE, converted to HTML in main
+             before a byte is served (src/main/preview/markdownDocument.ts).
+             That is the whole of its security argument and it is a reuse
+             rather than a new one: every guarantee below is a property of how
+             the bytes are SERVED and framed, not of where they came from. The
+             one genuinely new decision — that the converter passes raw HTML
+             through instead of escaping it — is argued in that file, and it
+             rests on exactly the two mechanisms named here.
+
              The `sandbox` attribute below is EMPTY on purpose and must stay
              that way. An empty sandbox is the maximally restrictive one: the
              document lands on an opaque origin (so it is cross-origin to this
@@ -401,21 +440,21 @@ const previewNote = computed(() => {
              permitted there is nothing to send a referrer to, but if that ever
              changes, the previewed page's own path — which names a directory
              on the user's server — should not be the thing that leaks first. -->
-        <div v-else-if="files.openMode === 'html'" class="html-view">
+        <div v-else-if="hasPreview(files.openMode)" class="html-view">
           <div class="html-bar">
-            <div class="seg" role="group" aria-label="HTML view">
+            <div class="seg" role="group" aria-label="Document view">
               <button
                 type="button"
-                :class="{ active: files.htmlView === 'preview' }"
+                :class="{ active: files.docView === 'preview' }"
                 :disabled="!files.previewUrl"
-                @click="files.setHtmlView('preview')"
+                @click="files.setDocView('preview')"
               >
                 Preview
               </button>
               <button
                 type="button"
-                :class="{ active: files.htmlView === 'source' }"
-                @click="files.setHtmlView('source')"
+                :class="{ active: files.docView === 'source' }"
+                @click="files.setDocView('source')"
               >
                 Source
               </button>
@@ -427,7 +466,7 @@ const previewNote = computed(() => {
                  no scripts in the frame there is nothing to intercept the
                  click before Chromium paints its error page. -->
             <button
-              v-if="files.htmlView === 'preview'"
+              v-if="files.docView === 'preview'"
               type="button"
               class="reload-btn"
               title="Render again from the host"
@@ -435,14 +474,20 @@ const previewNote = computed(() => {
             >
               Reload
             </button>
-            <span v-if="files.htmlView === 'preview' && previewNote" class="html-note muted">
+            <span v-if="files.docView === 'preview' && previewNote" class="html-note muted">
               {{ previewNote }}
             </span>
           </div>
 
+          <!-- `.md-frame` only changes what shows THROUGH the document while it
+               loads: a markdown preview paints its own themed ground, so a
+               white frame would flash white on a dark theme for exactly as long
+               as the SFTP read takes. An HTML page is left on white — see the
+               rule below for why that is not a token. -->
           <iframe
-            v-if="files.htmlView === 'preview' && files.previewUrl"
+            v-if="files.docView === 'preview' && files.previewUrl"
             class="html-frame"
+            :class="{ 'md-frame': files.openMode === 'markdown' }"
             sandbox=""
             referrerpolicy="no-referrer"
             :src="files.previewUrl"
@@ -452,17 +497,20 @@ const previewNote = computed(() => {
                connection went away). The source is still right there, so this
                says why rather than showing an empty frame. -->
           <div
-            v-else-if="files.htmlView === 'preview'"
+            v-else-if="files.docView === 'preview'"
             class="viewer binary-panel"
           >
             <p class="binary-title">{{ openName }}</p>
             <p class="muted">{{ files.openNote ?? 'Preview unavailable.' }}</p>
-            <button class="save-btn" @click="files.setHtmlView('source')">View source</button>
+            <button class="save-btn" @click="files.setDocView('source')">View source</button>
           </div>
           <!-- Same binding contract as the plain-text arm: `:model-value` plus
                `@update:model-value`, so edits go through `setContent` and the
-               dirty flag and Ctrl+S keep working on an HTML file exactly as
-               they do on any other source file. -->
+               dirty flag and Ctrl+S keep working on an HTML or markdown file
+               exactly as they do on any other source file. Highlighting comes
+               from the filename as always — `@codemirror/lang-markdown` was
+               already bundled and mapped in codeLanguage.ts long before there
+               was a preview to toggle away from. -->
           <CodeEditor
             v-else
             :model-value="files.openContent"
@@ -736,6 +784,15 @@ const previewNote = computed(() => {
   min-height: 0;
   border: none;
   background: #fff;
+}
+/* A markdown preview is OUR document, painted in the app's tokens, so the
+   reasoning above inverts: white here would flash white on a dark theme for
+   the length of the SFTP read, and would show as a white margin if the
+   document ever failed to paint. `--bg` and not `--term-bg` because the
+   rendered document is prose on the app's ground, not a terminal surface —
+   the same token the generated stylesheet uses for its own body. */
+.md-frame {
+  background: var(--bg);
 }
 /* The PDF plugin fills the pane; it brings its own chrome and scrolling. */
 .pdf {

@@ -1,0 +1,4 @@
+Usage: pocketshell sessions [OPTIONS] COMMAND [ARGS]...
+Try 'pocketshell sessions --help' for help.
+
+Error: No such command 'kill'.

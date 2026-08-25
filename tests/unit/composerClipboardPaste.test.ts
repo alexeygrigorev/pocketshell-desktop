@@ -90,9 +90,15 @@ beforeEach(async () => {
     props: { connectionId: 'conn-1' as never, sessionName: 'main' },
   });
   key = composer.targetKey('conn-1', 'main');
-  // Start from the hard case: the user pressed Escape, so the panel is away AND
-  // typing has been suppressed. An explicit Ctrl+V has to get through both.
+  // Start from the hard case: the panel is away AND typing is suppressed. An
+  // explicit Ctrl+V has to get through both.
+  //
+  // Two calls rather than one, since Escape stopped suppressing: `dismiss` is
+  // the panel going away, `suppressTyping` is the user having pressed inside
+  // the terminal (docs/COMPOSER.md §12.2). This is exactly the state a user is
+  // in when they click into the shell, work there, and then hit Ctrl+V.
   composer.dismiss();
+  composer.suppressTyping();
   await nextTick();
 });
 

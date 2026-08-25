@@ -1,3 +1,12 @@
+// @vitest-environment jsdom
+//
+// The suite's default is `node` and this file used to take it, because a store
+// is state rather than DOM. Markdown changed that: minting a preview resolves
+// the app's design tokens out of `getComputedStyle(document.documentElement)`
+// — the only way a palette can reach a frame that the cascade does not enter —
+// and under `node` that call throws, `mintPreview` catches it, and the whole
+// feature is silently off with nothing pointing at the cause. A DOM here is
+// cheaper than a store that has to pretend it might not have one.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 
@@ -29,6 +38,14 @@ const writeFile =
   vi.fn<(connectionId: string, path: string, content: string) => Promise<boolean>>();
 const openHtml =
   vi.fn<(connectionId: string, path: string) => Promise<{ token: string; url: string }>>();
+const openMarkdown =
+  vi.fn<
+    (
+      connectionId: string,
+      path: string,
+      style: { palette: Record<string, string>; appearance: string },
+    ) => Promise<{ token: string; url: string }>
+  >();
 const releasePreview = vi.fn<(token: string) => void>();
 /** The store's own stats subscriber, captured so a test can push counts at it. */
 let statsListener: ((stats: {
@@ -53,6 +70,11 @@ vi.mock('../../src/renderer/ipc', () => ({
     },
     preview: {
       openHtml: (connectionId: string, path: string) => openHtml(connectionId, path),
+      openMarkdown: (
+        connectionId: string,
+        path: string,
+        style: { palette: Record<string, string>; appearance: string },
+      ) => openMarkdown(connectionId, path, style),
       release: (token: string) => releasePreview(token),
       onStats: (handler: (stats: never) => void) => {
         statsListener = handler as typeof statsListener;
@@ -91,14 +113,19 @@ beforeEach(() => {
   readFile.mockReset();
   writeFile.mockReset();
   openHtml.mockReset();
+  openMarkdown.mockReset();
   releasePreview.mockReset();
   list.mockResolvedValue([]);
   writeFile.mockResolvedValue(true);
   // A fresh token per call: main mints one per preview, and a test that could
-  // not tell two apart could not tell whether a save re-minted at all.
+  // not tell two apart could not tell whether a save re-minted at all. Both
+  // verbs share the counter so a test can assert which one was reached.
   let minted = 0;
   openHtml.mockImplementation((_c, path) =>
     Promise.resolve({ token: `tok${++minted}`, url: `psview://tok${path}` }),
+  );
+  openMarkdown.mockImplementation((_c, path) =>
+    Promise.resolve({ token: `md${++minted}`, url: `psview://md${path}` }),
   );
   created.length = 0;
   revoked.length = 0;
@@ -359,7 +386,9 @@ describe('files store openFile() type gating', () => {
   });
 
   it('opens ordinary text in the editor', async () => {
-    const files = await openIn('notes.md', new TextEncoder().encode('# hi\n'));
+    // Deliberately NOT a `.md` any more: markdown grew a preview, so it is no
+    // longer the example of a file that goes straight to the editor.
+    const files = await openIn('notes.txt', new TextEncoder().encode('# hi\n'));
 
     expect(files.openMode).toBe('text');
     expect(files.openContent).toBe('# hi\n');
@@ -443,7 +472,7 @@ describe('files store openFile() on HTML', () => {
     // text back would be paid on every open for a tab most users never press.
     expect(files.openContent).toBe('<h1>hi</h1>');
     expect(files.previewUrl).toBe('psview://tok/home/u/site/index.html');
-    expect(files.htmlView).toBe('preview');
+    expect(files.docView).toBe('preview');
   });
 
   it('mints the preview against the ABSOLUTE path, never the clicked name', async () => {
@@ -501,7 +530,7 @@ describe('files store openFile() on HTML', () => {
     // Not the binary panel: the file IS text and the editor has it. What was
     // lost is the render, and only the render.
     expect(files.openMode).toBe('html');
-    expect(files.htmlView).toBe('source');
+    expect(files.docView).toBe('source');
     expect(files.previewUrl).toBeNull();
     expect(files.openNote).toContain('No such file');
     expect(files.openContent).toBe('<h1>hi</h1>');
@@ -548,20 +577,21 @@ describe('files store openFile() on HTML', () => {
 
     expect(releasePreview).toHaveBeenCalledWith(first);
     expect(files.previewToken).not.toBe(first);
-    expect(files.htmlView).toBe('preview');
+    expect(files.docView).toBe('preview');
   });
 
-  it('does nothing on reload when the open file is not HTML', async () => {
+  it('does nothing on reload when the open file has no preview at all', async () => {
     realPath.mockImplementation((_c, p) => Promise.resolve(p));
     stat.mockResolvedValue({ size: 5 });
-    readBinary.mockResolvedValue(new TextEncoder().encode('# hi'));
+    readBinary.mockResolvedValue(new TextEncoder().encode('x = 1'));
     const files = useFilesStore();
     await files.open(CONN, '/home/u/site');
-    await files.openFile(CONN, 'notes.md');
+    await files.openFile(CONN, 'script.py');
 
     await files.reloadPreview(CONN);
 
     expect(openHtml).not.toHaveBeenCalled();
+    expect(openMarkdown).not.toHaveBeenCalled();
   });
 
   it('releases the preview when the file is closed', async () => {
@@ -579,8 +609,8 @@ describe('files store openFile() on HTML', () => {
     const files = await openHtmlFile('index.html', '<h1>hi</h1>');
     const token = files.previewToken;
 
-    readBinary.mockResolvedValue(new TextEncoder().encode('# notes'));
-    await files.openFile(CONN, 'notes.md');
+    readBinary.mockResolvedValue(new TextEncoder().encode('x = 1'));
+    await files.openFile(CONN, 'script.py');
 
     expect(releasePreview).toHaveBeenCalledWith(token);
     expect(files.openMode).toBe('text');
@@ -609,7 +639,7 @@ describe('files store openFile() on HTML', () => {
     // switch. And the SOURCE is what is showing, because the preview would
     // render the host's copy, which is not what this buffer says.
     expect(files.openMode).toBe('html');
-    expect(files.htmlView).toBe('source');
+    expect(files.docView).toBe('source');
   });
 
   it('takes asset counts only for the preview currently on screen', async () => {
@@ -623,6 +653,133 @@ describe('files store openFile() on HTML', () => {
     // write counts into the page they are looking at now.
     statsListener?.({ token: 'someone-else', loaded: 99, blocked: 0, missing: 0, capped: true });
     expect(files.previewStats).toEqual({ loaded: 3, blocked: 1, missing: 0, capped: false });
+  });
+});
+
+/**
+ * Markdown: the second kind with two presentations.
+ *
+ * These cases exist to pin the ONE thing the store decides differently — which
+ * open verb a preview goes through, and therefore whether the palette travels.
+ * Everything else (the buffer, the dirty flag, the save, the revocation, the
+ * stash) is the same code the HTML cases above already exercise, because the
+ * store treats both through `hasPreview`; a markdown-shaped copy of all of it
+ * would assert the same branches twice and rot at half the rate.
+ */
+describe('files store openFile() on markdown', () => {
+  const openMd = async (name: string, source: string) => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: source.length });
+    readBinary.mockResolvedValue(new TextEncoder().encode(source));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/docs');
+    await files.openFile(CONN, name);
+    return files;
+  };
+
+  it('previews a document AND keeps its source in the editor buffer', async () => {
+    const files = await openMd('README.md', '# Title\n');
+
+    expect(files.openMode).toBe('markdown');
+    expect(files.openMime).toBe('text/markdown');
+    expect(files.openContent).toBe('# Title\n');
+    expect(files.previewUrl).toBe('psview://md/home/u/docs/README.md');
+    expect(files.docView).toBe('preview');
+  });
+
+  it('mints through the markdown verb, carrying the app’s palette', async () => {
+    await openMd('README.md', '# Title\n');
+
+    expect(openHtml).not.toHaveBeenCalled();
+    const [, path, style] = openMarkdown.mock.calls[0]!;
+    expect(path).toBe('/home/u/docs/README.md');
+    // The tokens cannot cascade into the frame, so their VALUES have to
+    // travel. What they are is jsdom's business; that the set is complete and
+    // the appearance is stated is ours.
+    expect(Object.keys(style.palette)).toContain('--bg');
+    expect(Object.keys(style.palette)).toContain('--font-mono');
+    expect(['dark', 'light']).toContain(style.appearance);
+  });
+
+  it('flags a remote badge row, which is what a README usually opens with', async () => {
+    const files = await openMd('README.md', '![build](https://img.shields.io/x.svg)\n');
+    expect(files.openHasRemoteRefs).toBe(true);
+  });
+
+  it('does not call a markdown hyperlink a remote resource', async () => {
+    // `[spec](https://…)` loads nothing. Same line the HTML patterns draw.
+    const files = await openMd('README.md', 'see [the spec](https://example.com/s)\n');
+    expect(files.openHasRemoteRefs).toBe(false);
+  });
+
+  it('reports raw script markup, which the converter passes through inert', async () => {
+    const files = await openMd('README.md', 'text\n\n<script>x</script>\n');
+    expect(files.openHasScripts).toBe(true);
+  });
+
+  it('edits, saves and re-mints, exactly as an HTML file does', async () => {
+    const files = await openMd('README.md', '# Title\n');
+    const first = files.previewToken;
+
+    files.setContent('# Edited\n');
+    expect(files.dirty).toBe(true);
+    expect(await files.save(CONN)).toBe(true);
+
+    expect(writeFile).toHaveBeenCalledWith(CONN, '/home/u/docs/README.md', '# Edited\n');
+    expect(releasePreview).toHaveBeenCalledWith(first);
+    expect(files.previewToken).not.toBe(first);
+  });
+
+  it('restores an unsaved document as markdown on the source side', async () => {
+    const files = await openMd('README.md', '# Title\n');
+    files.setContent('# Unsaved\n');
+
+    await files.open(CONN, '/home/u/elsewhere');
+    await files.open(CONN, '/home/u/docs');
+
+    expect(files.openMode).toBe('markdown');
+    expect(files.docView).toBe('source');
+    expect(files.openContent).toBe('# Unsaved\n');
+    expect(files.dirty).toBe(true);
+  });
+
+  /**
+   * The preview is a snapshot with the palette baked in: the frame is a
+   * separate document on a separate origin, runs no scripts, and cannot be
+   * told about a repaint. Re-minting is the only mechanism there is.
+   */
+  it('re-mints on a theme change so the render follows the app', async () => {
+    const files = await openMd('README.md', '# Title\n');
+    const first = files.previewToken;
+
+    await files.restylePreview(CONN);
+
+    expect(releasePreview).toHaveBeenCalledWith(first);
+    expect(files.previewToken).not.toBe(first);
+    expect(openMarkdown).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-mint an HTML preview on a theme change', async () => {
+    // A page brings its own styling. Repainting it in the app's colours would
+    // be a lie about what the file looks like.
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: 11 });
+    readBinary.mockResolvedValue(new TextEncoder().encode('<h1>hi</h1>'));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/site');
+    await files.openFile(CONN, 'index.html');
+    const token = files.previewToken;
+
+    await files.restylePreview(CONN);
+
+    expect(files.previewToken).toBe(token);
+    expect(openHtml).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing on a theme change with no file open', async () => {
+    const files = useFilesStore();
+    await files.restylePreview(CONN);
+    expect(openMarkdown).not.toHaveBeenCalled();
   });
 });
 

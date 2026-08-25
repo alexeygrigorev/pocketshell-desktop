@@ -28,6 +28,7 @@ import {
   HOME_COMMAND,
   directoryExistsCommand,
   freeSessionNameCommand,
+  killSessionCommand,
   mkdirCommand,
   renameSessionCommand,
   resolveDirectoryCommand,
@@ -139,6 +140,16 @@ export interface RenameSessionResult {
   sessionName: string | null;
   error: string | null;
   code: RenameSessionFailure | null;
+}
+
+/** Why a kill was refused. `not-found` is the one a stale tab bar produces. */
+export type KillSessionFailure = 'not-found' | 'kill-failed';
+
+/** Result of {@link ProjectsService.killSession}. Never thrown. */
+export interface KillSessionResult {
+  ok: boolean;
+  error: string | null;
+  code: KillSessionFailure | null;
 }
 
 /** Request for {@link ProjectsService.createFolder}. */
@@ -481,6 +492,57 @@ export class ProjectsService {
       };
     }
     return { ok: true, sessionName: target, error: null, code: null };
+  }
+
+  /**
+   * Kill a live tmux session (docs/WORKSPACE.md §14).
+   *
+   * **The only destructive operation this app performs**, and the only one with
+   * no undo: a tmux session is usually an agent in the middle of a task, and
+   * killing it takes its scrollback, its shell and its process tree with it.
+   * The confirmation belongs to the UI — a service is the wrong place to ask a
+   * question — but everything that makes the command safe to issue lives here
+   * and in {@link killSessionCommand}, which carries the fixture evidence for
+   * why it is raw tmux with an `=` and not `tmuxctl kill`.
+   *
+   * ## Why the caller is told the session was already gone
+   *
+   * `not-found` is not an edge case, it is the ordinary race: the tab bar is
+   * refreshed on a timer, so the session behind a tab can have been killed from
+   * the phone, from the user's own terminal, or by the agent exiting, at any
+   * moment before the menu item is clicked. Reporting it as a distinct outcome
+   * lets the UI say "it was already gone" and simply refresh, rather than
+   * showing a failure for something that produced the state the user asked for.
+   *
+   * It is separated by PROBING FIRST rather than by parsing tmux's stderr,
+   * because "can't find session" is a message and messages are not an API. The
+   * probe is `sessionExistsCommand`'s exact `has-session -t '=<name>'`, the same
+   * one the rename path uses.
+   *
+   * ## What this does NOT clean up
+   *
+   * Everything the DESKTOP keys by session name: the pool's live client and its
+   * PTY, the mounted terminal pane, and the composer's per-session record. All
+   * three are the caller's, exactly as they are for a rename — see the ipc
+   * handler and docs/WORKSPACE.md §14.3. The service reaches the host and stops
+   * there.
+   */
+  async killSession(connectionId: string, name: string): Promise<KillSessionResult> {
+    const alive = await this.ssh.exec(connectionId, pathAwareCommand(sessionExistsCommand(name)));
+    if (alive.exitCode !== 0) {
+      return {
+        ok: false,
+        error: `"${name}" is not running on this host any more.`,
+        code: 'not-found',
+      };
+    }
+
+    const killed = await this.ssh.exec(connectionId, pathAwareCommand(killSessionCommand(name)));
+    if (killed.exitCode !== 0) {
+      const detail = killed.stderr.trim() || killed.stdout.trim();
+      return { ok: false, error: detail || `Could not stop "${name}".`, code: 'kill-failed' };
+    }
+    return { ok: true, error: null, code: null };
   }
 
   /**

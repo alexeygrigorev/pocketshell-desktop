@@ -101,6 +101,14 @@ const BY_EXTENSION: Readonly<Record<string, LanguageId>> = {
   md: 'markdown',
   markdown: 'markdown',
   mdx: 'markdown',
+  // The rarer spellings, added when markdown gained a preview: every extension
+  // MARKDOWN_EXTENSIONS (src/main/preview/previewPaths.ts) offers a Preview tab
+  // for has to highlight on the Source tab beside it, or the toggle reads as
+  // half-implemented on exactly the files that are unusual enough to notice.
+  mdown: 'markdown',
+  mkd: 'markdown',
+  mkdn: 'markdown',
+  mdtext: 'markdown',
   yaml: 'yaml',
   yml: 'yaml',
   toml: 'toml',

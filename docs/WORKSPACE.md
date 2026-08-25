@@ -1,7 +1,7 @@
 # WORKSPACE.md — the folder workspace
 
 Status: **specified and implemented in the same pass.** Everything in this
-document is in `src/`; §11 lists what is deliberately still thin.
+document is in `src/`; §16 lists what is deliberately still thin.
 
 Written against commit `bfbc98b`, from a dictated brief. The user's words, in
 full, because every decision below is a reading of them and a reader should be
@@ -48,7 +48,8 @@ A session tab **is** a terminal — there is no sub-navigation inside it, becaus
 the Conversation view that used to compete for that space has been deleted
 outright (§9). Tab labels are the session name with the folder's derived prefix
 stripped. Clicking the active tab renames it, and renames the tmux session
-underneath.
+underneath; right-clicking one opens a menu that can also STOP it (§14).
+Sections §11-§15 are later additions to this design and are listed at the end.
 
 ---
 
@@ -110,13 +111,30 @@ folder growing a fourth session costs zero extra rows in the panel.
 
 ```
 +-- session panel ----+  +-- folder workspace ------------------------------+
-|  v git         11   |  | [ main ] [ import ] [ Terminal 2 ] [ Files ] [+] |
+|  v git         11   |  | [ Terminal ] [ import ] [ Terminal 2 ] [ Files ] |
 |    dtc-website   2  |  +--------------------------------------------------+
 |    pocketshell   3  |  |                                                  |
 |    dataops       1  |  |  the active tab's pane                           |
 |  > other         3  |  |                                                  |
 +---------------------+  +--------------------------------------------------+
 ```
+
+**The bar holds tabs and the `+`, and nothing else.** It used to trail the
+folder's name and a `x` that deselected it; the user circled that end of the
+strip and said "no need for this part". The name was the same fact three times
+over — the selected folder is already the highlighted row in the session panel
+beside it, and the window title already carries the host — which is the
+redundancy this app has removed twice before, from session rows in `b841362`
+and from the merged identity header in `38bf971`. An earlier request to expand
+the leaf into a full `~/git/red-stamp` path is superseded rather than reversed:
+it was an attempt to make that element earn its space, and the user has since
+decided it has none to earn.
+
+No way out goes with the `x`. The session panel is persistent, so another
+folder row switches workspace directly and its back arrow leaves the host. What
+is no longer reachable is the PLACEHOLDER state once a folder has been picked —
+a pane reading "select a folder" while a folder is selected, which is not a
+destination anyone navigates to on purpose.
 
 One workspace per FOLDER, not per session. The workspace's identity is the
 folder's `directoryKey` — the home-relative path (`~/git/dtc-website`) that
@@ -180,15 +198,22 @@ So the rule, applied per session, given the folder's base name `B`:
 
 | Session name | Remainder | Label |
 |---|---|---|
-| `B` exactly | `""` | `main` |
+| `B` exactly | `""` | `Terminal` |
 | `B-<rest>` | `<rest>` | `<rest>` |
 | anything else | — | the session name, unchanged |
 
 Then two rewrites over the remainder:
 
-- **empty -> `main`.** The user offered `main` or `terminal`; `main` is picked
-  because it is what tmux itself calls a first window and what the phone app's
-  own screenshots show.
+- **empty -> `Terminal`.** The user offered `main` or `terminal`, and this
+  document originally picked `main` — "it is what tmux itself calls a first
+  window and what the phone app's own screenshots show". That was the wrong half
+  of the offer and the bar said so: a folder's default session read `main` and
+  the very next one read `Terminal 2`, two unrelated words for two sessions that
+  differ only in which was created first. Nothing about `main` predicts
+  `Terminal 2`, and nothing about `Terminal 2` explains `main`. The user asked
+  for the fix by name — "for main let's call it 'Terminal' so 'Terminal-2' makes
+  more sense" — and `Terminal`, `Terminal 2`, `Terminal 3` is one list with a
+  first element rather than a special case beside a series.
 - **all digits -> `Terminal <n>`.** This is the user's "if we add another one it
   can be `Terminal 2` or something like that, **if it's just a number**", and it
   is not a stylistic flourish — it falls straight out of
@@ -217,7 +242,7 @@ already on it.
 
 Note the empty-remainder case **cannot** collide with itself: two sessions with
 an empty remainder would both be named exactly `B`, and tmux does not permit two
-sessions with one name. So `main 2` is unreachable in practice and exists only
+sessions with one name. So a numbered bare `Terminal` is unreachable in practice and exists only
 because the numbering is applied uniformly rather than special-cased. The user's
 phrasing ("if more than one would be empty… `Terminal 2`") reads as if it could
 happen; it cannot, and the `Terminal <n>` rule covers what they were actually
@@ -425,7 +450,7 @@ with "if I click on the tab I switch to it".
 The field shows the LABEL and commits the **full session name**: the folder's
 prefix is re-applied to whatever the user types, so editing `import` to
 `staging` renames `git-dtc-website-import` to `git-dtc-website-staging` and the
-session stays grouped with its folder. Typing over a `main` label gives
+session stays grouped with its folder. Typing over a `Terminal` label gives
 `<prefix>-<typed>`. This is the whole reason the label is a projection rather
 than the name: the user edits the part that is theirs and cannot accidentally
 detach the session from its folder.
@@ -435,7 +460,7 @@ Two escapes from that:
 - a tab whose label IS the session name (the non-derived case, §3.3) commits the
   raw name, because there is no prefix to re-apply;
 - clearing the field entirely and committing renames the session TO the bare
-  prefix (`main`), when that name is free.
+  prefix — the bare `Terminal` tab — when that name is free.
 
 Illegal characters are stripped as you type, by the same `sanitisePart` the host
 will apply — so what is on screen is what the session will be called, and a
@@ -866,14 +891,459 @@ of any kind when there are none.
 
 ---
 
-## 11. What is built, and what is deliberately thin
+---
+
+# Later additions
+
+Everything from here on was asked for after the design above shipped. Each
+section says what was requested, in the user's words where they are on record,
+and — where a request contradicts an earlier one — which way the conflict was
+resolved and why.
+
+---
+
+## 11. Tab chords
+
+> `Ctrl+Tab` / `Ctrl+Shift+Tab` to cycle, `Ctrl+1`..`Ctrl+9` to jump.
+
+Cycling wraps, follows DISPLAYED order (so §15's manual arrangement is what it
+walks), and includes Files tabs — they are tabs, the bar shows them as tabs, and
+a chord that stopped at the last session would strand the user one press short
+of something they can see. `Ctrl+7` on a bar of three does nothing rather than
+clamping to the last tab. After a chord, focus lands in the new tab's surface
+through the SAME `focusActiveTab` a click uses, so the two cannot drift.
+
+The decisions are `nextWorkspaceTabId` and `tabIdAtIndex` in
+`src/shared/workspaceTabs.ts`, as tables with unit tests; the key handling is a
+window-level `keydown` listener in capture, in `FolderWorkspaceView`.
+
+### 11.1 One window listener, not three key handlers
+
+The chords must work with focus in the terminal, the Files tree or the composer,
+and those are three different keyboard owners: xterm consults its own custom
+handler, CodeMirror runs a keymap, and the composer's draft is an ordinary
+textarea. Routing the chord through each would be three implementations of one
+gesture, and the third one added later would be the one that forgot to cancel.
+
+A `keydown` in CAPTURE on `window` runs before all of them, because capture
+descends from the window to the target — so there is one handler and nothing can
+reach around it. It is the same shape the composer's own Ctrl+backtick uses.
+
+The composer intercepts printable typing, and a chord is not swallowed by it:
+`isTypingKey` rejects anything with Ctrl, Meta or Alt held, and the composer's
+own global handler returns early for both families.
+
+### 11.2 The premise was wrong: the terminal DOES encode these
+
+The brief chose both families "because terminals cannot encode them". Measured
+against the xterm this app ships (`@xterm/xterm` 6, `evaluateKeyboardEvent` —
+the function the custom handler is consulted from), that is false for most of
+the family:
+
+| chord | what xterm sends |
+|---|---|
+| `Ctrl+Tab` | `C0.HT` — a literal TAB. `case 9` is reached before any ctrl branch and is gated only on Shift, so the modifier is ignored |
+| `Ctrl+Shift+Tab` | `ESC [ Z` (back-tab) |
+| `Ctrl+3` .. `Ctrl+7` | `ESC`, `FS`, `GS`, `RS`, `US` — keyCodes 51-55 map to `keyCode - 51 + 27` |
+| `Ctrl+8` | `C0.DEL` |
+| `Ctrl+1`, `Ctrl+2`, `Ctrl+9` | nothing |
+
+So the chords are **not free**. `Ctrl+Tab` at a shell prompt is completion, and
+`Ctrl+3` is a widely used stand-in for Escape. The family still ships — the user
+asked for it, and a family with two holes in it would be worse than the cost —
+but the cost is recorded rather than assumed, and two things follow:
+
+1. the interception has to be **airtight**, so both `preventDefault()` and
+   `stopPropagation()` are called. The first stops Chromium (Electron still has
+   a browser underneath, and `Ctrl+Tab` is a real browser gesture); the second
+   stops the event ever reaching xterm. Leaving either off is the defect that
+   has landed three times in this app already — bc86cf7's doubled first letter,
+   3628090's doubled paste, and the `Ctrl+V` route after them;
+2. `TerminalView`'s `onCustomKey` declines the chords **as well**, and that is
+   not belt-and-braces: a pane mounted outside a folder workspace has no window
+   listener above it, and without the branch the chord would become shell input
+   there. `tests/unit/terminalTabChord.test.ts` pins it.
+
+`Ctrl+0` is deliberately untouched — it belongs to zoom, and there is no zeroth
+tab. `Ctrl+Alt` is untouched everywhere: that is how AltGr arrives on European
+layouts, where the digit row carries printable characters.
+
+---
+
+## 12. Closing a tab selects the previously active one
+
+> not the first.
+
+A per-workspace MRU stack, most-recent last, and entries are POPPED as tabs
+close. `tabAfterClose` in `src/shared/workspaceTabs.ts` is the decision:
+
+1. **the closed tab was not the active one -> nothing changes.** Middle-clicking
+   a background tab, or stopping a session from another tab's menu, is not a
+   request to go anywhere;
+2. otherwise walk the stack from the top, skipping the closing tab and anything
+   not on the bar;
+3. **empty stack -> the tab on the RIGHT**, falling back to the left when the
+   closed tab was last.
+
+**Right, and why.** It keeps the selection INDEX where it was, so closing a run
+of tabs from one position walks forward through the bar rather than retreating
+to the start. That is what browsers and VS Code do, and it is the direction
+`Ctrl+Tab` travels, so the two gestures do not disagree about which way the bar
+runs. The left fallback is not a second rule — it is the same rule finding
+nothing on the right.
+
+### 12.1 The stack may never name a dead tab
+
+The brief's condition, and the sharpest reason for it: a session tab's id IS its
+tmux session name, and `sessions create` derives that name from the folder. So a
+killed session's name comes back attached to a DIFFERENT session routinely, and
+a stale entry would not point at nothing — it would resurrect as a live-looking
+target.
+
+Two mechanisms, deliberately overlapping. `pruneTabIds` runs from a watch on the
+tab list, so every way a tab can vanish is covered by one rule rather than by an
+enumeration — a session killed from the phone, from the user's own terminal, or
+lost to a host restart runs no close handler here. And `tabAfterClose` filters
+against the live bar itself, so it cannot name a dead tab whatever it is handed.
+
+The stack is fed from the RESOLVED active tab rather than from the six routes
+that change the selection, because there is a seventh that changes it with
+nobody asking: `activeTab` falls back to the first tab whenever the selection
+names a tab that is not on the bar. Watching the answer covers every route by
+construction and records what the user is actually looking at, which is the only
+thing "most recently used" can honestly mean.
+
+It is written to hold for either kind of tab, and §14 is what makes that matter:
+a killed session tab and a closed Files tab go through the same function.
+
+---
+
+## 13. Agent marks on session tabs
+
+A small mark per session tab showing which engine runs there. The
+classification is already host-side and already reaching the renderer:
+`@ps_agent_kind` arrives as `SessionSummary.agentKind`. This is presentation
+only — `src/shared/agentBadge.ts`.
+
+### 13.1 What the phone does, and why none of it came across
+
+Checked before designing. The Android app renders a **two-letter monogram in a
+tinted pill** — `CL`, `CX`, `OC`, `GK`, `SH`, `?` (`sessionBadgeMonogram` in
+`app/.../projects/FolderListTreeChrome.kt`, drawn by
+`shared/ui-kit/.../components/AgentKindBadge.kt`). Its tint is **binary**, not
+per-kind: agent means one purple, non-agent means grey, so Claude, Codex,
+OpenCode and Grok are told apart by their letters alone. `res/drawable/` holds
+only the launcher, the quick-settings tile and the two notification marks —
+there is no per-agent asset anywhere to port.
+
+So there was nothing to take, and the one mechanism it has cannot come across: a
+letter standing in for a graphic affordance is exactly what `docs/POLISH.md` §2
+forbids and what `tests/unit/designGates.test.ts` executes. A monogram would
+also inherit the UI font at the tab's size rather than the stroke weight the
+rest of the bar shares — the same reason `type` is a drawn "T" in `AppIcon.vue`
+and not a typed one.
+
+### 13.2 The marks are arbitrary, and say so
+
+| kind | mark | tooltip |
+|---|---|---|
+| `claude` | `hexagon` | Claude Code |
+| `codex` | `code` | Codex |
+| `opencode` | `terminal` | OpenCode |
+| `grok` | `zap` | Grok |
+| everything else | *nothing* | — |
+
+Vendor logos at 12-14px are a licensing and fidelity trap: half of them are
+trademarks, all are drawn for a different stroke weight, and none survives being
+flattened to one `currentColor` outline. These are four ordinary Feather 4.29
+marks whose only job is to be TOLD APART — a closed angular outline, a symmetric
+pair of chevrons, an asymmetric chevron-plus-rule, and a jagged bolt. Nothing
+claims a hexagon means Claude in the world; it means Claude on this bar, the
+tooltip says so on the first hover, and that is the same contract a colour
+swatch has.
+
+They are named by SHAPE in `AppIcon.vue` and mapped to kinds in `agentBadge.ts`,
+so the icon registry stays a registry of marks and one file knows which product
+wears which. Following 3d96eca, all four are Feather marks taken verbatim rather
+than invented — that commit's own note ("Feather has no eraser mark and none was
+invented") is the policy. `AppIcon`'s `size` prop is the union `12 | 14 | 16`;
+the tab mark is `12`.
+
+**No per-kind tint.** Four hues on a 12px outline is a palette nobody can learn,
+and `designGates.test.ts` keeps raw colour out of components regardless. The
+mark is muted by default and takes the accent when its tab is active, so it
+reads as part of the label rather than as a status light competing with the
+underline.
+
+### 13.3 Nothing at all for `unknown`
+
+The unknown case is common and legitimate: a session started outside the
+`pocketshell agent` wrapper reads as `unknown` forever, because the wrapper is
+what records the option, and a plain `shell` tab is not a failure of detection.
+Marking either would put a glyph on most of the bar meaning "we do not know" —
+same 12px, trains the eye to skip the slot, and takes away the only useful
+property a sparse badge has, which is that its PRESENCE is information.
+
+`grok` is badged even though `LAUNCHABLE_KINDS` excludes it. 0.4.44's
+`pocketshell agent` has no `grok` subcommand so this app cannot START one, but a
+session can BE one — the phone launches it through its own engine registry, and
+the tmux option is on the session either way. Refusing to badge it would be
+reading our own capability out of the host's record.
+
+---
+
+## 14. Stopping a session
+
+> Right-click a session tab -> a menu including an action that kills that tmux
+> session.
+
+**The only destructive action in this app.** The file tree's menu (c614e7e)
+deliberately omitted delete as "destructive-adjacent with no undo"; this was
+asked for explicitly, so it ships — and it is the only thing in its menu that
+can lose work, so it looks like it: separated, tinted with `--error`, and behind
+a confirmation.
+
+The menu reuses `PopupMenu.vue`, which exists precisely for this shape: the tab
+strip is `overflow-x: auto`, which per CSS makes `overflow-y` compute to `auto`
+as well, so an `absolute` menu inside it is laid out at the clip edge and is
+invisible — the bug the `+` menu shipped with. PopupMenu teleports to `<body>`
+and positions from a measured rect.
+
+**Rename is surfaced there too.** Click-to-rename (§4.3) is real and completely
+undiscoverable, and a context menu that opens for a single action is a worse
+trade than the right-click itself.
+
+A right-click does NOT select the tab. The items name the tab they came from, so
+acting on a background tab is unambiguous — and selecting first would mean a
+right-click the user then dismisses had already moved them, and moved the
+composer's key with it.
+
+### 14.1 The confirmation
+
+Named, because "Stop" undersells it: a tmux session is usually an agent in the
+middle of a task, and its scrollback and process tree go with it. The dialog
+names the **session**, not the tab label — the label is a projection that strips
+the folder prefix (§3.3), so two folders can both show a tab reading `Terminal`,
+and the one moment a user must be certain which thing is being destroyed is the
+moment they are asked to confirm destroying it. Cancel is the quiet button and
+Stop carries the error fill, so the dangerous half is the half that must be
+aimed at.
+
+### 14.2 Finding the lever, against the fixture
+
+Captured from the pinned 0.4.44 Docker image the way 00eb3e7 captured
+`pocketshell agent --help`; the transcripts are committed at
+`tests/unit/fixtures/v0.4.44-*.txt`.
+
+**`pocketshell sessions` has no kill verb.** Four subcommands — `create`,
+`list`, `resumable`, `resume` — and eight kill-ish spellings (`kill`, `stop`,
+`rm`, `delete`, `destroy`, `remove`, `close`, `terminate`) all answer
+`Error: No such command` with exit 2.
+
+**`tmuxctl kill` exists and is rejected anyway.** `tmuxctl kill '<target>'
+--yes` is real, and `--yes` is not optional in practice: without it `typer`
+prompts, and on the non-interactive stdin an `exec` channel provides it aborts
+with exit 1 having killed nothing. Two measured defects rule it out:
+
+1. **it cannot kill a numerically-named session.** `_resolve_session_target`
+   branches on `target.isdigit()` and reads the name as an index into a recent
+   list, so a session called `2` fails with `not enough values to unpack` and
+   survives. This app can put such a tab on the bar, and a destructive action
+   that silently cannot act on one of its own targets is not acceptable;
+2. **its own kill is not exact-match.** It guards with
+   `has-session -t "={name}"` and then kills with a bare
+   `["kill-session", "-t", session_name]`.
+
+So: raw `tmux kill-session -t '=<name>'`. Raw tmux reaches the same server —
+`attachCommand.ts` records that tmuxctl 0.4.x shells out to a bare `tmux` on the
+default socket, which is why `sessionSwitchCommand` and `renameSessionCommand`
+are already raw.
+
+**The `=` is the whole safety of the line**, and the dangerous case is not the
+obvious one:
+
+| alive | command | outcome |
+|---|---|---|
+| `api`, `api-staging` | `kill-session -t '=api'` | exit 0, `api-staging` survives |
+| `api`, `api-staging` | `kill-session -t api` | exit 0, kills `api` — the bug HIDES |
+| `api-staging` only | `kill-session -t api` | **exit 0, kills `api-staging`** |
+| `api-staging` only | `kill-session -t '=api'` | exit 1, `can't find session` |
+
+With both alive, exact match wins and a bare `-t` looks correct. The failure
+appears once the target is already gone — which is exactly the state a tab bar
+refreshed on a timer is routinely in. A bare `-t` fails OPEN: it destroys the
+wrong session and reports success. `=` fails CLOSED with a message. For a
+command with no undo that is the only acceptable direction to fail in.
+
+A session the host reports as already gone comes back as its own outcome
+(`not-found`) rather than as a failure, separated by PROBING first rather than
+by parsing tmux's prose — "can't find session" is a message, and messages are
+not an API. The UI treats it as success: the state the user asked for is the
+state that exists.
+
+### 14.3 Cleaning up our side
+
+Three pieces of desktop state are keyed by session name, and they are the same
+three a rename has to MOVE (61753d7). A kill is the only other operation that
+invalidates a name, so the two lists stay in step:
+
+| what | who drops it | why it cannot wait |
+|---|---|---|
+| the pool's tmux client + its PTY | `TmuxClientPool.killed`, from the ipc handler | the record must go SYNCHRONOUSLY, or `attach` hands out a client for a session that no longer exists and `isShowing` fences sends against a name nothing answers to |
+| the mounted terminal pane | the workspace, from `openedSessions` | `sessionPanes` already filters against live tabs, but the entry must go too, or a new session reusing the name inherits a pane that was never torn down |
+| the composer's per-session record | `composer.forget` | the kill's counterpart to the rename's `composer.rekey`. A draft under a key nothing will ask for again persists to `localStorage` forever — and would be handed to the next session of that name |
+
+The handshake token is DROPPED here, where a rename merely moves it: a rename
+keeps the same session and wants the same tmux variable, a kill ends it, and a
+later session reusing the name is a different session that must not inherit the
+dead one's tty rendezvous.
+
+Selection then goes through §12's `tabAfterClose` — the same path a closed Files
+tab takes — and focus lands in the newly selected tab's surface.
+
+---
+
+## 15. Rearranging tabs
+
+> "I also want to be able to rearrange tabs like drag and drop them around."
+
+### 15.1 The conflict, and how it was resolved
+
+This contradicts an explicit earlier instruction: "the tabs are always ordered:
+first agent sessions, then files" (§3.2), which `buildWorkspaceTabs` enforces. A
+manual order overrides a derived one by definition, so both cannot be obeyed in
+full. The resolution:
+
+- **the derived order becomes the DEFAULT.** A tab nobody has dragged sits where
+  §3.2 puts it — sessions by creation time oldest first, then Files tabs in the
+  order they were opened. Nothing changes for a user who never drags;
+- **a manual position wins once set**, for the tabs that have one;
+- **the two GROUPS stay separate.** A Files tab may not be dragged among the
+  session tabs, and a session tab may not be dragged past the first Files tab.
+
+The last is the judgement call, and the freest reading of "drag them around"
+says the opposite. It is kept because the grouping does work that the ordering
+WITHIN a group does not: it is what makes the bar's shape predictable —
+everything before the first Files tab is a live process on another machine,
+everything after it is a file browser — and the tab styling leans on it, since
+`.tab.files` is toned down so the eye can find the session half without reading
+labels. Interleaving would take that away and give back the ability to put a
+file browser in the middle of a row of terminals.
+
+It is cheap to relax if that reading is wrong: delete the clamp in
+`reorderTabs`. What must not happen meanwhile is a drag that appears to cross
+the boundary and then snaps back, which reads as a bug rather than as a rule —
+so `canDropTabAt` lets the UI **refuse visibly**, with no drop indicator and a
+`no-drop` cursor, while the drag is still in the air.
+
+### 15.2 The stored value is a RANKING, not a list of tabs
+
+The tab set is not static: sessions arrive on the refresh timer, are created
+from `+`, and vanish when they are killed here, from the phone or from the
+user's own terminal. So the stored order has to be a preference ABOUT tabs
+rather than a list OF them — as a list it would need reconciling on every
+refresh, and every reconciliation is a chance to invent a tab or lose one.
+
+As a ranking (`applyTabOrder`), the three awkward cases fall out with no special
+handling:
+
+- **a new tab** has no rank, sorts after everything that does, and lands at the
+  end of its own group — which is where a new session belongs anyway;
+- **a removed tab** is simply absent and leaves no hole, because nothing is
+  positioned by index;
+- **an unknown id** ranks nothing and is inert.
+
+The sort is stable and the comparator only compares ranks, so two unranked tabs
+keep their derived relative order. The groups are re-established after the sort
+rather than trusted through it, so an order written by an older build — or
+hand-edited in `localStorage` — cannot interleave the kinds.
+
+A drag stores the WHOLE bar's ids, not a delta: with only the moved tab ranked,
+every other tab would be unranked and one drag would have moved everything.
+
+**Pruned by the same function as the MRU stack** (`pruneTabIds`, §12.1), because
+they have the same shape and the same hazard, and one definition of "this id has
+died" is what stops them developing two. The prune is skipped while the bar is
+empty — a deep link or a reload has no tabs for a moment, and pruning against
+that would throw the arrangement away before the tabs it describes appeared.
+
+### 15.3 Where the order lives
+
+`localStorage`, keyed `ps.tabOrder.<host alias>.<folder key>`.
+
+`localStorage` rather than the settings store, following the precedent the
+session panel's width and the file tree's width set (§3.6): the settings store
+is for preferences a user sets BY NAME in the Settings overlay, and an
+arrangement reached by dragging until it looks right is not one.
+
+Keyed on the **host alias**, never on the connection id. The workspace's
+in-memory tab map keys on `connectionId`, which is right for something that
+lives as long as the window — but a connection id is an opaque handle minted per
+connect, so a key built from it would be fresh on every launch and the order
+would never survive a restart. The route's `:name` is the `~/.ssh/config` alias,
+exactly as stable as the folder path beside it.
+
+An empty order is REMOVED rather than stored as `[]`: "the user arranged
+nothing" and "there is no entry" are the same state, and one spelling of it
+means a workspace whose tabs were all closed leaves no key behind.
+
+### 15.4 The interaction
+
+Native HTML5 drag-and-drop, the same family the composer uses for attachments.
+
+- **The two drags cannot be confused.** A tab drag advertises
+  `application/x-pocketshell-tab`, and the composer's `dragover` now requires
+  `Files` in `dataTransfer.types` before it lights up. It used to accept any
+  drag at all — harmless while nothing else in the window was draggable, and
+  wrong the moment tabs were, because the strip sits directly above the card and
+  a passing tab made it promise a drop it cannot accept.
+- **The drag does not fight the click.** Native DnD suppresses the `click` that
+  would otherwise follow, so select-on-click, click-again-to-rename and the
+  right-click menu are all untouched. A drag is refused outright while a rename
+  field is open — dragging it would be a drag of a text selection wearing a
+  tab's clothes.
+- **The dragged tab fades but stays in place.** Removing it from the flow would
+  reflow every tab after it the instant the drag began, so the target would move
+  under the cursor at exactly the wrong moment — and on a scrolling strip it can
+  change which tabs are visible.
+- **The landing place is drawn**, as a 2px accent rule in the gap, flipping at
+  the midpoint of the hovered tab. Without an indicator a reorder is "let go and
+  find out", and both rules the drag obeys — the midpoint flip and the group
+  boundary — are invisible unless something draws them. A refused drop draws
+  nothing, and that absence IS the refusal.
+
+### 15.5 Keyboard reordering
+
+`Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` move the ACTIVE tab one place.
+
+VS Code's own binding for this action, which is the best reason to pick it: a
+user reaching for the keyboard will try it first. It collides with nothing this
+app claims — the composer's size ladder is `Ctrl+Shift+ArrowUp/Down`, and taking
+`Ctrl+Shift+ArrowLeft/Right` would have put a second arrow family beside it for
+a different job.
+
+The cost at the terminal, stated as §11.2 states the others: xterm's `case 33` /
+`case 34` check Shift before any ctrl branch, so `Ctrl+Shift+PageUp` would
+otherwise scroll the pane's buffer. Plain `Shift+PageUp` — the gesture people
+actually use for scrollback — is untouched, because the branch requires Ctrl.
+
+A move that would leave the group does nothing at all, which is the right feel
+for a key: the tab stops at the edge rather than jumping the boundary. It is
+written on top of `reorderTabs` so the group clamp is decided in one place.
+
+---
+
+## 16. What is built, and what is deliberately thin
 
 Everything above is implemented. `npm run test:unit`, `npm run lint` and
 `npm run typecheck` are green, and `npm run build` packages.
 
 | Area | Where |
 |---|---|
-| tab labels, ordering, collisions, rename target | `src/shared/workspaceTabs.ts` + `tests/unit/workspaceTabs.test.ts` (23 cases) |
+| tab labels, ordering, collisions, rename target | `src/shared/workspaceTabs.ts` + `tests/unit/workspaceTabs.test.ts` |
+| tab chords, MRU close, manual order | same file: `nextWorkspaceTabId`, `tabIdAtIndex`, `pushMru`/`pruneTabIds`/`tabAfterClose`, `applyTabOrder`/`canDropTabAt`/`reorderTabs`/`nudgeTabOrder`. Key handling in `FolderWorkspaceView`; the terminal's refusal in `TerminalView` + `tests/unit/terminalTabChord.test.ts` |
+| agent marks | `src/shared/agentBadge.ts` + `tests/unit/agentBadge.test.ts`; the four Feather marks in `components/AppIcon.vue` |
+| stop a session | `killSessionCommand` -> `ProjectsService.killSession` -> `projects:killSession`, `TmuxClientPool.killed`, `composer.forget`; fixtures at `tests/unit/fixtures/v0.4.44-*` |
 | the derivation the prefix comes from | `src/shared/sessionNameParts.ts` (moved out of `main/projects/sessionName.ts`, which re-exports it) |
 | two-level panel | `src/renderer/components/SessionTree.vue` |
 | the workspace | `src/renderer/views/FolderWorkspaceView.vue` |
@@ -884,14 +1354,19 @@ Everything above is implemented. `npm run test:unit`, `npm run lint` and
 | worktree grouping | `gitRepoProbeCommand` -> `parseWorktreeRoots` + `tests/unit/worktrees.test.ts`; cached in `PocketshellClient.withRepoRoots` |
 | file tree width + context menu | `views/FilesView.vue`, `components/FileTree.vue` |
 
-Three things are thinner than they could be, and each is a deliberate stop
+Two things are thinner than they could be, and each is a deliberate stop
 rather than an oversight:
 
-1. **A session tab cannot be closed.** Closing a tab would have to mean killing
-   a live tmux session, which is not what a tab close means anywhere else, and
-   the panel has never had a kill affordance either. A second Files tab closes;
-   the first does not, because it is the folder's file browser and the
-   workspace would otherwise have no way to look at the folder at all.
+1. **SUPERSEDED — "a session tab cannot be closed".** This said that closing a
+   tab would have to mean killing a live tmux session, which is not what a tab
+   close means anywhere else. The first half of that reasoning survives and is
+   why a session tab still has no `x`: §14 puts the kill in a context menu,
+   named and confirmed, rather than under a control that means "close this
+   view" everywhere else it appears. The second half — that the app should not
+   offer a kill at all — was overtaken by the user asking for one explicitly.
+   The Files-tab rule is unchanged: a second one closes, the first does not,
+   because it is the folder's file browser and the workspace would otherwise
+   have no way to look at the folder at all.
 3. **The agent launch is still fire-and-forget, but it is no longer SILENT.**
    `pocketshell agent <kind>` is written into the new session once its PTY
    exists, and nothing verifies that the wrapper then started — verifying would

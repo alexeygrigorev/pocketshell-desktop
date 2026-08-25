@@ -1209,6 +1209,41 @@ and [overflow content](https://carbondesignsystem.com/patterns/overflow-content/
 GNOME Nautilus `src/nautilus-pathbar.c`; VS Code
 `src/vs/base/browser/ui/breadcrumbs/breadcrumbsWidget.ts`.
 
+### 5.7b Document preview — HTML and markdown, one pipeline
+
+The Files tab shows two kinds as BOTH a render and their source, behind one
+segmented control (`docView`, `Preview` / `Source`). The render is an
+`<iframe sandbox="">` on the `psview:` scheme main serves; the source is the
+same CodeEditor every other text file gets, with the same buffer, dirty flag
+and Ctrl+S.
+
+**Markdown reuses the HTML preview's argument rather than making a second
+one.** Every guarantee that preview rests on is a property of how bytes are
+SERVED, not of where they came from: the empty sandbox, a per-response CSP
+naming no remote scheme, and containment checked twice (folded on the string,
+then re-resolved with `realpath` on the host). Converting markdown to HTML in
+main and handing it to that same handler inherits all three unchanged, and
+relative images resolve exactly as a real page's do — because they become a
+real page's. What is genuinely new is only *what the converter may emit*, which
+is argued in `src/main/preview/markdownDocument.ts`.
+
+| Decision | What it is, and why |
+|---|---|
+| Converter | `marked`, pinned. Zero runtime dependencies, ~56 KB in main's bundle |
+| Where | **In main**, so the served bytes are plain HTML, the renderer never grows the dependency, and a relative link to another `.md` can be rendered too |
+| Raw HTML in markdown | **Passed through**, not escaped or stripped. Under `sandbox=""` and this CSP nothing it can spell is live, and escaping would cost every README that uses `<details>`, `<img width>` or `<p align>` while removing no threat the pipeline does not already accept for `.html` files |
+| Styling | A small inline stylesheet in the app's tokens (`previewStyle.ts`), values passed from the renderer and re-validated in main against a strict character allowlist — no `;`, `}`, `<`, `>`, `:`, `/` or `\`, so a value cannot end the rule, close the element or spell a URL |
+| Markdown links | A `.md` **inside the preview's root** is rendered too, so `[design](DESIGN.md)` navigates and a `docs/` folder browses as a small site. Outside the root it is refused, exactly as an image would be |
+| Heading anchors | Slugged from heading text, deduplicated per document, so a table of contents works — a fragment link needs no script and no network |
+| Code blocks | Styled in `--term-bg`/`--term-fg` so a fence matches the editor beside it. **Not** syntax-highlighted: the editor is one click away |
+
+**Known limits, both shared with the HTML preview.** Clicking an *external*
+link empties the frame — the CSP refuses the navigation, which is correct, and
+Chromium paints its own error page with no scripts available to intercept the
+click first; the Reload button restores it. And the preview always renders the
+HOST's copy, so unsaved edits are not shown; the toolbar says so, alongside
+counts of assets loaded, refused as outside the folder, and missing.
+
 ### 5.8 Iconography — no character ever does an icon's job
 
 **The rule: no character-as-icon anywhere in the app.** Not emoji, not
@@ -1480,13 +1515,35 @@ surface it is read on, which is why several sit at ~4.5 there while reading
 - **Shadows became tokens** (`--shadow-overlay`, `--shadow-card`) because the
   light themes cannot use `rgba(0,0,0,.5)` — black at half opacity on white
   reads as a hole, not a lift. Light themes carry soft ink shadows instead.
-- **CodeMirror's `{ dark: true }` flag** (codeEditorTheme.ts) is baked at
-  definition time and states the shipped appearance. Every colour a user
-  reads follows the theme via tokens; what stays dark-flavoured under a light
-  theme is CM base-theme details on surfaces the editor does not currently
-  show (panels, placeholder). Documented in the file; the fix is a
-  per-appearance extension plus an EditorState reconfigure if CM panels ever
-  appear.
+- **CodeMirror's `dark` flag follows the theme** (revised — was a known
+  limit). It used to be baked as `{ dark: true }` at definition time, so CM's
+  own base themes kept picking dark-flavoured panel chrome, placeholder tint
+  and selection fallbacks under a light theme. `codeEditorTheme.ts` now builds
+  the chrome once per appearance from ONE shared spec — the CSS is identical,
+  because every value in it is a token, so the two cannot drift — and
+  `codeThemeFor(appearance)` hands back the right one. `CodeEditor.vue` holds
+  it in a `Compartment` and reconfigures on a theme change.
+
+  The mechanism is the point. `compartment.reconfigure()` dispatches a
+  transaction carrying an **effect and no changes**, so the document, the
+  selection, the undo history and the scroll position all survive — and
+  because `docChanged` is false, the update listener does not fire and the
+  files store's **dirty flag is untouched**. Rebuilding the `EditorState`, the
+  obvious alternative, loses all five. The appearance is read from the theme
+  record's DECLARED `appearance` (through `resolveTheme`, so `system` follows
+  the OS), never guessed from a background colour. Pinned by
+  `tests/unit/CodeEditor.test.ts`.
+
+- **A markdown preview is themed; an HTML preview is not.** The rendered
+  markdown document is ours, so it is painted in the app's tokens
+  (`src/main/preview/previewStyle.ts`). An HTML file brings its own styling and
+  is deliberately left alone — a page that looked different here from how it
+  looks in a browser would be a lie about the file. Because CSS custom
+  properties do not cascade across a frame boundary, the token VALUES travel:
+  the renderer resolves them out of computed style and main writes them into
+  the generated document's own `:root`, re-validating every one. A theme switch
+  re-mints, because a sandboxed frame with no scripts cannot be re-tinted in
+  place. See §5.7b.
 - **Terminal contents are the remote's.** A theme changes the 16 ANSI slots;
   a remote program that hardcodes 256-colour or truecolor output (many TUIs
   do) will look however it looks. That is every terminal emulator's contract.

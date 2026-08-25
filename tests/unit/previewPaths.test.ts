@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PREVIEW_SCHEME,
   containedIn,
+  isMarkdownPath,
   normalisePosixPath,
   parentDirOf,
   previewUrlFor,
@@ -236,6 +237,51 @@ describe('previewUrlFor', () => {
       ok: true,
       path: '/home/u/site/отчёт.html',
     });
+  });
+});
+
+/**
+ * The one list that decides what the markdown preview renders.
+ *
+ * It lives in this module rather than beside the converter so BOTH processes
+ * can read it — the renderer's classifier decides whether a file gets a Preview
+ * tab at all, and the request handler decides whether a served path is
+ * converted. If those two ever disagreed the tab would offer a preview that the
+ * handler then answered with plain source, so they share one predicate.
+ */
+describe('isMarkdownPath', () => {
+  it('accepts the spellings people actually use', () => {
+    for (const path of [
+      '/a/README.md',
+      '/a/README.MD',
+      '/a/notes.markdown',
+      '/a/doc.mdown',
+      '/a/doc.mkd',
+      '/a/doc.mkdn',
+      '/a/doc.mdtext',
+    ]) {
+      expect(isMarkdownPath(path), path).toBe(true);
+    }
+  });
+
+  it('refuses formats a markdown parser would mangle', () => {
+    // `.mdx` is JSX embedded in markdown — source for a page, not a page. The
+    // rest are different formats entirely.
+    for (const path of ['/a/page.mdx', '/a/index.rst', '/a/doc.adoc', '/a/notes.org']) {
+      expect(isMarkdownPath(path), path).toBe(false);
+    }
+  });
+
+  it('refuses a name with no extension, and a dotfile that looks like one', () => {
+    expect(isMarkdownPath('/a/README')).toBe(false);
+    expect(isMarkdownPath('/a/.md')).toBe(false);
+    expect(isMarkdownPath('/a/.markdown')).toBe(false);
+  });
+
+  it('reads the basename, not the path', () => {
+    // A DIRECTORY called `docs.md` must not make every file under it markdown.
+    expect(isMarkdownPath('/a/docs.md/style.css')).toBe(false);
+    expect(isMarkdownPath('/a/docs.md/inner.md')).toBe(true);
   });
 });
 

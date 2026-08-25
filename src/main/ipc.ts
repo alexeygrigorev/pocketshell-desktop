@@ -35,6 +35,7 @@ import type {
   ReposCloneOptions,
   ReposListRequest,
   ReposListResult,
+  KillSessionResult,
   RenameSessionResult,
   StartSessionRequest,
   StartSessionResult,
@@ -388,6 +389,24 @@ export function registerIpcHandlers(deps: {
     },
   );
 
+  // A kill is two operations for the same reason a rename is, and the pool half
+  // matters MORE here: a rename leaves a live client pointing at a live session
+  // under the wrong key, whereas a kill leaves one pointing at nothing at all.
+  // Done here rather than in the service so the service stays free of the pool.
+  //
+  // The pool is told even when the host says the session was already gone. That
+  // is the ordinary race — the tab bar refreshes on a timer — and our record of
+  // a session that has been dead for some seconds is exactly the record that
+  // needs dropping. See TmuxClientPool.killed.
+  ipcMain.handle(
+    ipc.projects.killSession,
+    async (_evt, connectionId: string, name: string): Promise<KillSessionResult> => {
+      const result = await projects.killSession(connectionId, name);
+      if (result.ok || result.code === 'not-found') tmuxClients.killed(connectionId, name);
+      return result;
+    },
+  );
+
   // --- sftp:* --------------------------------------------------------------
   // File operations over SFTP on the existing connection. Upload/download
   // stream progress back over `sftp:event:progress` keyed by a transferId the
@@ -707,6 +726,23 @@ export function registerIpcHandlers(deps: {
     ipc.preview.openHtml,
     async (_evt, connectionId: string, path: string): Promise<{ token: string; url: string }> => {
       return preview.open(connectionId, path);
+    },
+  );
+  // Markdown takes the app's palette as well as the path, because the document
+  // is BUILT here (src/main/preview/markdownDocument.ts) rather than read off
+  // the host, and only the renderer knows which theme is applied. The payload
+  // is typed `unknown` on the way in and validated in the service — a preload
+  // is not a trust boundary, and a value from this bridge ends up inside a
+  // `<style>` block.
+  ipcMain.handle(
+    ipc.preview.openMarkdown,
+    async (
+      _evt,
+      connectionId: string,
+      path: string,
+      style: { palette?: unknown; appearance?: unknown } | null,
+    ): Promise<{ token: string; url: string }> => {
+      return preview.openMarkdown(connectionId, path, style ?? {});
     },
   );
   // `send`, not `invoke`, on the renderer side: releasing is fire-and-forget

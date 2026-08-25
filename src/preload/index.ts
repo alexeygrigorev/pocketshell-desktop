@@ -29,6 +29,7 @@ import type {
   ReposCloneOptions,
   ReposListRequest,
   ReposListResult,
+  KillSessionResult,
   RenameSessionResult,
   StartSessionRequest,
   StartSessionResult,
@@ -326,6 +327,18 @@ const api = {
     ): Promise<RenameSessionResult> =>
       ipcRenderer.invoke(ipc.projects.renameSession, connectionId, from, to),
 
+    /**
+     * Kill a live tmux session. Never throws: `ok: false` with
+     * `code: 'not-found'` means the session was already gone, which is the
+     * ordinary outcome of a tab bar that refreshes on a timer, and
+     * `code: 'kill-failed'` carries tmux's own sentence.
+     *
+     * The only destructive call on this surface — confirm before reaching for
+     * it (docs/WORKSPACE.md §14).
+     */
+    killSession: (connectionId: string, name: string): Promise<KillSessionResult> =>
+      ipcRenderer.invoke(ipc.projects.killSession, connectionId, name),
+
     /** Subscribe to clone lifecycle events. Returns an unsubscribe fn. */
     onCloneProgress: (handler: (progress: CloneProgress) => void): Unsubscribe => {
       const listener = (_evt: IpcRendererEvent, progress: CloneProgress) => handler(progress);
@@ -476,7 +489,8 @@ const api = {
   },
 
   /**
-   * The Files tab's HTML preview.
+   * The Files tab's document preview — HTML files, and markdown rendered to
+   * HTML in main.
    *
    * Note what is NOT here: no way to read a preview's bytes, list its
    * directory, or change its root. The renderer receives a URL and puts it in
@@ -492,6 +506,22 @@ const api = {
      */
     openHtml: (connectionId: string, path: string): Promise<{ token: string; url: string }> =>
       ipcRenderer.invoke(ipc.preview.openHtml, connectionId, path),
+
+    /**
+     * Mint a preview of one remote markdown file, rendered in main.
+     *
+     * [style] is the app's own design tokens, read out of computed style by the
+     * caller — the palette cannot cross into the frame any other way, because a
+     * custom property does not cascade through an iframe boundary and the
+     * document is on a different origin. Main re-validates every value before
+     * it reaches a stylesheet; see markdownDocument.ts.
+     */
+    openMarkdown: (
+      connectionId: string,
+      path: string,
+      style: { palette: Record<string, string>; appearance: 'dark' | 'light' },
+    ): Promise<{ token: string; url: string }> =>
+      ipcRenderer.invoke(ipc.preview.openMarkdown, connectionId, path, style),
 
     /**
      * Revoke a preview. Fire-and-forget: it runs on the way out of a file,

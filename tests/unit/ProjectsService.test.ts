@@ -551,3 +551,70 @@ describe('ProjectsService.renameSession', () => {
     expect(out.error).toContain("can't find session");
   });
 });
+
+/**
+ * docs/WORKSPACE.md §14. The only destructive operation in this app, and the
+ * only one with no undo — a tmux session is usually an agent mid-task.
+ *
+ * The lever was chosen against the pinned 0.4.44 fixture rather than picked:
+ * `pocketshell sessions` has no kill verb at all, and `tmuxctl kill` cannot
+ * kill a numerically-named session and issues its own kill with a bare `-t`.
+ * See killSessionCommand for the captures.
+ */
+describe('ProjectsService.killSession', () => {
+  /** The session is alive: `has-session` exits 0. */
+  const aliveResponder: Responder = (c) => (c.includes('has-session') ? ok() : null);
+
+  it('probes first, then kills with an exact-match target', async () => {
+    const { projects, commands } = service([
+      aliveResponder,
+      (c) => (c.includes('kill-session') ? ok() : null),
+    ]);
+    expect(await projects.killSession(CONN, 'git-x')).toEqual({
+      ok: true,
+      error: null,
+      code: null,
+    });
+    // Both `=`s matter. On the probe it stops `git-x` reading as taken because
+    // `git-x-2` exists; on the kill it stops a bare `-t` prefix-matching a
+    // neighbour once `git-x` is gone — which exits 0 having killed the wrong
+    // session.
+    expect(commands.map(inner)).toContain("tmux has-session -t '=git-x' 2>/dev/null");
+    expect(commands.map(inner)).toContain("tmux kill-session -t '=git-x'");
+  });
+
+  it('reports a session that is ALREADY GONE as its own outcome, and kills nothing', async () => {
+    // Not an edge case: the tab bar refreshes on a timer, so the session behind
+    // a tab can be killed from the phone or from the user's own terminal at any
+    // moment before the menu item is clicked. A distinct code lets the UI say
+    // "already gone" and refresh, rather than showing a failure for a state the
+    // user asked for.
+    const { projects, commands } = service([noSessionResponder]);
+    const out = await projects.killSession(CONN, 'git-x');
+    expect(out).toMatchObject({ ok: false, code: 'not-found' });
+    expect(out.error).toContain('git-x');
+    expect(commands.some((c) => c.includes('kill-session'))).toBe(false);
+  });
+
+  it('separates the two outcomes by PROBING, never by parsing tmux prose', async () => {
+    // "can't find session" is a message, and messages are not an API.
+    const { projects } = service([
+      aliveResponder,
+      (c) => (c.includes('kill-session') ? fail(1, "can't find session: git-x") : null),
+    ]);
+    const out = await projects.killSession(CONN, 'git-x');
+    expect(out).toMatchObject({ ok: false, code: 'kill-failed' });
+    expect(out.error).toContain("can't find session");
+  });
+
+  it('never falls back to a bare -t when the exact target fails', async () => {
+    const { projects, commands } = service([
+      aliveResponder,
+      (c) => (c.includes('kill-session') ? fail(1, 'nope') : null),
+    ]);
+    await projects.killSession(CONN, 'git-x');
+    // One attempt only. A retry without the `=` would be the fail-open path
+    // this design exists to avoid.
+    expect(commands.map(inner).filter((c) => c.includes('kill-session'))).toHaveLength(1);
+  });
+});

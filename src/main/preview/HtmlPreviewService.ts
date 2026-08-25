@@ -5,15 +5,23 @@ import { mimeTypeForExtension, extensionOfPath } from '../attachments/mimeTypes.
 import {
   PREVIEW_SCHEME,
   containedIn,
+  isMarkdownPath,
   parentDirOf,
   previewUrlFor,
   resolveRequestPath,
   tokenOfUrl,
 } from './previewPaths.js';
+import { markdownToHtml } from './markdownDocument.js';
+import { sanitiseAppearance, sanitisePalette, type PreviewStyle } from './previewStyle.js';
 
 /**
  * Serves a remote HTML file — and the assets it asks for — to a sandboxed
  * iframe in the Files tab, over a custom `psview:` scheme.
+ *
+ * Markdown goes through the same door, converted to HTML on the way out (see
+ * markdownDocument.ts, and {@link openMarkdown} below). The class keeps its
+ * name because what it serves is still HTML: markdown is an INPUT format that
+ * has become HTML by the time any of the reasoning below applies to it.
  *
  * ## Why a scheme and not a blob URL
  *
@@ -72,10 +80,37 @@ import {
  * `corsEnabled` IS on, and is explained at {@link SCHEME_PRIVILEGES}.
  */
 
+/**
+ * What the previewed document IS, before it is served.
+ *
+ *   html      the bytes on the host are already a document; they are served
+ *             untouched, which is what makes `<link href="style.css">` and
+ *             every indirection under it resolve on their own.
+ *   markdown  the bytes are source for a document, and are converted here.
+ *
+ * The mode is a property of the PREVIEW rather than of each request, and that
+ * is the load-bearing part: it is what decides whether a `.md` file the frame
+ * asks for next is a document to render or a file to hand over as-is.
+ */
+export type PreviewMode = 'html' | 'markdown';
+
 /** Everything one live preview knows about itself. */
 interface Preview {
   token: string;
   connectionId: string;
+  mode: PreviewMode;
+  /**
+   * Theme values baked into a markdown render, or null for an HTML preview,
+   * which is styled entirely by the remote document itself.
+   *
+   * Baked at mint time rather than read per request because a preview is a
+   * SNAPSHOT: the frame has already navigated, nothing in it can be told about
+   * a later theme change, and re-styling half the assets of a page that is
+   * still loading would be worse than consistent. The renderer re-mints on a
+   * theme switch instead, which is one SFTP read of a file the user is looking
+   * at, on an event that happens by hand.
+   */
+  style: PreviewStyle | null;
   /** Symlink-resolved directory that bounds every read. */
   root: string;
   /** Symlink-resolved path of the document itself. */
@@ -283,8 +318,38 @@ export class HtmlPreviewService {
     protocol.handle(PREVIEW_SCHEME, (request) => this.respond(request));
   }
 
+  /** Mint a preview for one remote HTML file and return the URL to frame. */
+  async open(connectionId: string, path: string): Promise<{ token: string; url: string }> {
+    return this.mint(connectionId, path, 'html', null);
+  }
+
   /**
-   * Mint a preview for one remote HTML file and return the URL to frame.
+   * Mint a preview for one remote markdown file.
+   *
+   * A separate verb rather than a `mode` argument on {@link open}, because the
+   * two do not take the same inputs: a markdown preview needs the app's current
+   * palette, which only the renderer knows and which an HTML preview has no use
+   * for (a real page brings its own styling, and imposing ours on it would be a
+   * lie about what the file looks like).
+   *
+   * [style] arrives across the IPC bridge and is validated by
+   * `sanitisePalette` before it can reach a `<style>` block — see the note on
+   * VALUE_ALLOWED in markdownDocument.ts for why main does not simply trust the
+   * renderer here.
+   */
+  async openMarkdown(
+    connectionId: string,
+    path: string,
+    style: { palette?: unknown; appearance?: unknown },
+  ): Promise<{ token: string; url: string }> {
+    return this.mint(connectionId, path, 'markdown', {
+      palette: sanitisePalette(style?.palette),
+      appearance: sanitiseAppearance(style?.appearance),
+    });
+  }
+
+  /**
+   * The shared body of both verbs: resolve, bound, and hand back a capability.
    *
    * The root is resolved with `realpath` HERE rather than being taken as
    * given, because it is the fixed point every later containment check is
@@ -293,7 +358,12 @@ export class HtmlPreviewService {
    * unequal to the logical root and be refused for no reason. Resolving both
    * ends the same way makes the comparison meaningful.
    */
-  async open(connectionId: string, path: string): Promise<{ token: string; url: string }> {
+  private async mint(
+    connectionId: string,
+    path: string,
+    mode: PreviewMode,
+    style: PreviewStyle | null,
+  ): Promise<{ token: string; url: string }> {
     const entry = await this.sftp.realPath(connectionId, path);
     const info = await this.sftp.stat(connectionId, entry);
     if (info.type !== 'file') throw new Error(`Not a regular file: ${path}`);
@@ -306,6 +376,8 @@ export class HtmlPreviewService {
     this.previews.set(token, {
       token,
       connectionId,
+      mode,
+      style,
       root,
       entry,
       requests: 0,
@@ -406,10 +478,24 @@ export class HtmlPreviewService {
     if (real !== preview.entry) preview.stats.loaded++;
     this.emitStats(preview);
 
-    return new Response(toBody(bytes), {
+    // Under a markdown preview, EVERY `.md` inside the root is rendered — not
+    // only the entry document.
+    //
+    // That single rule is what makes `[the design doc](DESIGN.md)` a link that
+    // works rather than a link that dead-ends, and it costs nothing extra: the
+    // frame resolves the relative href by itself, the request arrives here like
+    // any other, and it is already bounded by the same containment checks as an
+    // image would be. A `docs/` folder therefore browses as a small site.
+    //
+    // What it does NOT do is render markdown found under an HTML preview: there
+    // the user opened a real page, and a `.md` it happens to reference is a
+    // file that page asked for, not a document the user chose to read.
+    const rendered = renderIfMarkdown(preview, real, bytes);
+
+    return new Response(rendered.bytes, {
       status: 200,
       headers: {
-        'Content-Type': contentTypeFor(real),
+        'Content-Type': rendered.contentType,
         'Content-Security-Policy': FRAME_CSP,
         // Without this, Chromium may sniff an unlabelled response into
         // something more capable than we meant to serve. Everything here is
@@ -461,6 +547,33 @@ function refuse(status: number, message: string): GlobalResponse {
       'Cache-Control': 'no-store',
     },
   });
+}
+
+/**
+ * Convert a markdown response into an HTML one, or pass the bytes through.
+ *
+ * The decode is deliberately NON-fatal: a README with one bad byte in a code
+ * fence should still render, with a replacement character where the bad byte
+ * was, rather than failing the whole preview — that is the same call the Files
+ * tab's text path makes, and for the same reason.
+ */
+function renderIfMarkdown(
+  preview: Preview,
+  path: string,
+  bytes: Buffer,
+): { bytes: Uint8Array; contentType: string } {
+  if (preview.mode !== 'markdown' || preview.style == null || !isMarkdownPath(path)) {
+    return { bytes: toBody(bytes), contentType: contentTypeFor(path) };
+  }
+  const source = new TextDecoder('utf-8').decode(bytes);
+  const html = markdownToHtml(source, {
+    title: path.split('/').pop() ?? 'Preview',
+    style: preview.style,
+  });
+  return {
+    bytes: new TextEncoder().encode(html),
+    contentType: 'text/html; charset=utf-8',
+  };
 }
 
 /**

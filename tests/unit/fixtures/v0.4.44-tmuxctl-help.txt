@@ -1,0 +1,35 @@
+                                                                                
+ Usage: tmuxctl [OPTIONS] COMMAND [ARGS]...                                     
+                                                                                
+ Control tmux sessions and recurring messages.                                  
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --install-completion          Install completion for the current shell.      │
+│ --show-completion             Show completion for the current shell, to copy │
+│                               it or customize the installation.              │
+│ --help                        Show this message and exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ list              List tmux sessions sorted by creation time or activity.    │
+│ recent            Show the most recent tmux sessions.                        │
+│ send              Send a message to a tmux session.                          │
+│ attach            Attach to an existing tmux session.                        │
+│ create-or-attach  Create a tmux session if needed, then attach to it.        │
+│ create-detached   Create a memory-capped detached session without attaching. │
+│ kill              Kill a tmux session by name or recent-session index.       │
+│ limit             Change memory/swap/high limits for an already-running      │
+│                   tmuxctl session.                                           │
+│ rename            Rename a tmux session and retarget its scheduled jobs.     │
+│ attach-last       Attach to the newest tmux session.                         │
+│ attach-recent     Attach to a tmux session from the recent-session list.     │
+│ doctor            Diagnose OOM risk: RAM, cgroup OOM kills, and robust       │
+│                   session scopes.                                            │
+│ describe          Describe a session: process, working directory, cgroup,    │
+│                   RAM, and CPU.                                              │
+│ strays            Scan ALL tmux sockets for stray sessions, dead sockets,    │
+│                   orphan servers.                                            │
+│ reap              Kill detached idle servers and remove dead socket files    │
+│                   (guarded).                                                 │
+│ jobs              Manage recurring jobs.                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

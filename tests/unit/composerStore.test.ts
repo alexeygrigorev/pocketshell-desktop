@@ -503,15 +503,27 @@ describe('close on send', () => {
 });
 
 /**
- * Closed is TWO states, not one (docs/COMPOSER.md §12.2). Which one it is
- * decides what the next keystroke does, so the distinction is modelled rather
- * than inferred.
+ * Closing the composer does NOT decide what the next keystroke does
+ * (docs/COMPOSER.md §12.2, revised).
+ *
+ * The user reported the old behaviour as a bug — "I start typing, prompt
+ * composer opens, I click esc, continue typing and now the input goes to the
+ * terminal" — and it was the design working as written: `dismiss()` suppressed
+ * the typing intercept, so Escape carried a second, durable instruction beyond
+ * "put the panel away".
+ *
+ * Every closing route now behaves the same, and typing brings the panel back
+ * from all of them. What suppresses is a press inside the TERMINAL, which is
+ * the only gesture that is unambiguously about the shell.
  */
-describe('dismissal vs a send-close', () => {
-  it('a user dismissal suppresses typing — this IS the plain-terminal hatch', () => {
+describe('closing, and what the next keystroke does', () => {
+  it('a dismissal does NOT suppress typing — this is the reported bug', () => {
     composer.dismiss();
     expect(composer.mode).toBe('hidden');
-    expect(composer.typingSuppressed).toBe(true);
+    // The regression. Escape closes; it does not also speak for the next
+    // keystroke, so continuing to type re-opens the composer carrying the
+    // character, exactly as it does from any other closed state.
+    expect(composer.typingSuppressed).toBe(false);
   });
 
   it('a delivered send closes WITHOUT suppressing, so typing brings it back', async () => {
@@ -521,35 +533,37 @@ describe('dismissal vs a send-close', () => {
     expect(composer.typingSuppressed).toBe(false);
   });
 
-  it('any opening lifts the suppression, whatever set it', () => {
+  it('the two close paths agree, and are still two paths', async () => {
+    // They produce the same state, which is the point of the change — and they
+    // stay distinct actions, which is the point of NOT collapsing them into one
+    // boolean. `dismiss` still records the mode to come back to; the send path
+    // goes through `setMode` and does not.
+    composer.setMode('expanded');
     composer.dismiss();
-    composer.setMode('docked');
-    expect(composer.typingSuppressed).toBe(false);
+    const afterDismiss = composer.typingSuppressed;
+
+    composer.setMode('expanded');
+    composer.setDraft(KEY, 'ship it');
+    await composer.send(KEY, async () => true, { closeOnDelivery: true });
+
+    expect(afterDismiss).toBe(composer.typingSuppressed);
+    expect(composer.mode).toBe('hidden');
+    expect(composer.lastOpenMode).toBe('expanded');
   });
 
-  it('the toggle chord dismisses on the way down and summons on the way up', () => {
+  it('the toggle and the size ladder close the same way Escape does', () => {
+    // A user who dismisses three different ways must not get three different
+    // results. All of these route through `dismiss`.
     composer.toggleHidden();
     expect(composer.mode).toBe('hidden');
-    expect(composer.typingSuppressed).toBe(true);
-    composer.toggleHidden();
-    expect(composer.mode).toBe('docked');
     expect(composer.typingSuppressed).toBe(false);
-  });
 
-  it('shrinking past docked is a dismissal too', () => {
     composer.setMode('expanded');
     composer.shrink();
-    expect(composer.typingSuppressed).toBe(false);
+    expect(composer.mode).toBe('docked');
     composer.shrink();
     expect(composer.mode).toBe('hidden');
-    expect(composer.typingSuppressed).toBe(true);
-  });
-
-  it('allowTypingToOpen arms it again without opening it', () => {
-    composer.dismiss();
-    composer.allowTypingToOpen();
     expect(composer.typingSuppressed).toBe(false);
-    expect(composer.mode).toBe('hidden');
   });
 
   it('a dismissal still remembers docked-vs-maximized for the next summons', () => {
@@ -563,5 +577,90 @@ describe('dismissal vs a send-close', () => {
     composer.setDraft(KEY, 'survivor');
     composer.dismiss();
     expect(composer.states[KEY]?.draft).toBe('survivor');
+  });
+});
+
+/**
+ * The plain-terminal hatch, which moved off Escape and onto the pointer
+ * (docs/COMPOSER.md §12.2, §26.1).
+ *
+ * It has to exist: with `typingOpensComposer` on and nothing suppressing, every
+ * printable keystroke reaches the composer and the shell becomes untypeable
+ * without a trip to Settings. The gesture is a press inside the terminal pane —
+ * which is what a user does before typing at a shell anyway.
+ */
+describe('the plain-terminal hatch', () => {
+  it('a press in the terminal suppresses typing without touching the panel', () => {
+    composer.setMode('docked');
+    composer.suppressTyping();
+    expect(composer.typingSuppressed).toBe(true);
+    // It says where the user is TYPING, not what the panel should do. Closing
+    // the panel is Escape's job and this is not Escape.
+    expect(composer.mode).toBe('docked');
+  });
+
+  it('any summons lifts it, whatever set it', () => {
+    composer.suppressTyping();
+    composer.setMode('docked');
+    expect(composer.typingSuppressed).toBe(false);
+  });
+
+  it('allowTypingToOpen lifts it without opening — a press inside the composer', () => {
+    composer.dismiss();
+    composer.suppressTyping();
+    composer.allowTypingToOpen();
+    expect(composer.typingSuppressed).toBe(false);
+    expect(composer.mode).toBe('hidden');
+  });
+
+  it('survives a close, so working at the shell is not undone by Escape', () => {
+    // The sequence that makes the hatch usable: click into the terminal, then
+    // put the panel away. Escape must not RE-ARM typing here — the user has
+    // already said where they are working.
+    composer.setMode('docked');
+    composer.suppressTyping();
+    composer.dismiss();
+    expect(composer.mode).toBe('hidden');
+    expect(composer.typingSuppressed).toBe(true);
+  });
+});
+
+/**
+ * `forget` — the kill's counterpart to a rename's `rekey`
+ * (docs/WORKSPACE.md §14.3).
+ *
+ * A rename moves a record to the name its session now has; a kill leaves a
+ * record no session will ever claim again. They must not be the same call, and
+ * neither of them is `discard`, which is the user throwing away a draft in a
+ * session that still exists.
+ */
+describe('forget', () => {
+  it('removes the record entirely, not just its contents', () => {
+    composer.setDraft(KEY, 'half a prompt');
+    composer.forget(KEY);
+    // `discard` would leave a blank record behind. That is right when the
+    // session is still there and the composer has to go on rendering it, and
+    // wrong here: the entry would persist to localStorage forever.
+    expect(composer.states[KEY]).toBeUndefined();
+  });
+
+  it('leaves every other session alone', () => {
+    composer.setDraft(KEY, 'mine');
+    composer.setDraft(OTHER, 'theirs');
+    composer.forget(KEY);
+    expect(composer.states[OTHER]?.draft).toBe('theirs');
+  });
+
+  it('does not hand a killed session’s draft to the next one of that name', () => {
+    // Not hypothetical: `sessions create` derives the name from the folder, so
+    // a folder's session comes back under the same name routinely.
+    composer.setDraft(KEY, 'from the dead session');
+    composer.forget(KEY);
+    expect(composer.ensure(KEY).draft).toBe('');
+  });
+
+  it('is a no-op for a key that was never touched', () => {
+    expect(() => composer.forget('conn-1/never-existed')).not.toThrow();
+    expect(composer.states['conn-1/never-existed']).toBeUndefined();
   });
 });

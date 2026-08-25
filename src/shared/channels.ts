@@ -90,6 +90,14 @@ export const ipc = {
      * sanitiser and the host-side uniqueness probe both live in that service.
      */
     renameSession: 'projects:renameSession',
+    /**
+     * Kill a live tmux session (docs/WORKSPACE.md §14) — the ONLY destructive
+     * channel in this list. Beside `renameSession` for the same reason: both
+     * address a session by the exact name the folder-first derivation produced,
+     * and the `=`-anchored tmux target that makes that safe lives in
+     * `main/projects/commands.ts` next to the rest of the session lifecycle.
+     */
+    killSession: 'projects:killSession',
     cloneProgress: 'projects:event:cloneProgress', // event: CloneProgress
   },
   sftp: {
@@ -139,13 +147,19 @@ export const ipc = {
     changed: 'serve:event:changed', // event: { connectionId, served[] }
   },
   /**
-   * The Files tab's HTML preview. `open` mints a capability — a one-off token
-   * plus the `psview://` URL to frame — and `release` revokes it, so a closed
-   * file's frame cannot go on reading the host. See
-   * src/main/preview/HtmlPreviewService.ts.
+   * The Files tab's document preview. `openHtml` / `openMarkdown` mint a
+   * capability — a one-off token plus the `psview://` URL to frame — and
+   * `release` revokes it, so a closed file's frame cannot go on reading the
+   * host. See src/main/preview/HtmlPreviewService.ts.
+   *
+   * Two open verbs rather than one with a flag, because they do not take the
+   * same arguments: markdown is converted in main and therefore needs the
+   * app's palette, while an HTML file brings its own styling and must not be
+   * given ours.
    */
   preview: {
     openHtml: 'preview:openHtml',
+    openMarkdown: 'preview:openMarkdown',
     release: 'preview:release',
     /**
      * Main -> renderer: how many assets that preview has loaded, refused as

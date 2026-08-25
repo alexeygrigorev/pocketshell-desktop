@@ -149,24 +149,54 @@ export const useComposerStore = defineStore('composer', () => {
   const geometry = ref<ComposerGeometry>(restoredLayout.geometry);
 
   /**
-   * The user dismissed the composer and MEANT it: typing must not bring it back
-   * (docs/COMPOSER.md §12.2).
+   * The user is working IN THE TERMINAL: typing must reach the shell rather
+   * than open the composer (docs/COMPOSER.md §12.2).
    *
-   * Deliberately a separate flag from `mode === 'hidden'`, because closed is not
-   * one state — it is two, and they want opposite things from the next
+   * ## What this used to mean, and why it changed
+   *
+   * It used to mean "the user dismissed the composer and MEANT it", and it was
+   * set by {@link dismiss} — so Escape, `Ctrl+\``, the toggle and the card's
+   * close all armed it. The user reported the consequence as a bug:
+   *
+   *   > "I start typing, prompt composer opens, I click esc, continue typing
+   *   > and now the input goes to the terminal"
+   *
+   * That was the designed behaviour working exactly as specified, and the
+   * report is a rejection of the specification rather than of the code. It is
+   * right to reject: Escape means "put this panel away", and the panel going
+   * away is the whole of what it should do. Reading a second, durable
+   * instruction into it — "and also do not come back when I type" — is the
+   * ladder's old rung 3 returning in disguise, where Escape did something other
+   * than close because the intercept needed a hatch.
+   *
+   * ## What it means now
+   *
+   * A press INSIDE THE TERMINAL arms it; a press inside the composer, and any
+   * explicit summons, clears it. The flag now says what its name says, and the
+   * model is simply that **the intent follows the pointer**: you type where you
+   * last pointed. That is also the only gesture in this app that is
+   * unambiguously about the shell — Escape is about the panel, and a click
+   * elsewhere in the window (the tab strip, the session panel) is about
+   * neither.
+   *
+   * ## Still a separate flag from `mode === 'hidden'`, and still not the
+   * send-close path
+   *
+   * Closed is still two states, even though they now agree about the next
    * keystroke:
    *
-   *   closed by the USER (Escape, the chord, the toggle, the card's —)
-   *       "leave me alone." This is the escape hatch: it is the only way to get
-   *       a plain terminal while `typingOpensComposer` is on, so typing MUST go
-   *       to the shell until an explicit summons.
+   *   closed by the USER (Escape, the chord, the toggle, the card's close)
+   *       "put it away." Typing brings it back, carrying the character.
    *   closed by a SEND (`closeComposerOnSend`)
-   *       "that one's away, next?" Typing is precisely how the composer is
-   *       meant to come back, so this must NOT suppress.
+   *       "that one's away, next?" Typing brings it back, carrying the character.
    *
-   * Sharing one boolean between those two would make the two features cancel
-   * each other out. Not persisted: it is a statement about this moment, not a
-   * preference.
+   * They are different FACTS and the two paths stay distinct in the model —
+   * {@link dismiss} still exists and still records `lastOpenMode` — because
+   * collapsing them into one boolean is what the earlier design was avoiding
+   * and what would make them cancel each other out again the next time one of
+   * them needs to differ.
+   *
+   * Not persisted: it is a statement about this moment, not a preference.
    */
   const typingSuppressed = ref(false);
 
@@ -594,6 +624,37 @@ export const useComposerStore = defineStore('composer', () => {
     schedulePersist();
   }
 
+  /**
+   * Drop a session's record entirely — the session it belonged to is GONE
+   * (docs/WORKSPACE.md §14.3).
+   *
+   * The counterpart of {@link rekey}, and the distinction between the two is
+   * the distinction between a rename and a kill: a rename moves a record to the
+   * name its session now has, a kill leaves a record no session will ever claim
+   * again.
+   *
+   * Deliberately NOT {@link discard}, which is the user throwing away a draft
+   * in a session that still exists: it blanks the fields and leaves the record,
+   * so the composer can go on rendering it. Here there is nothing to render,
+   * and leaving the entry behind would persist an orphan into `localStorage`
+   * forever — and, worse, hand its draft to the NEXT session that takes the same
+   * name, which `sessions create` produces routinely because it derives the name
+   * from the folder.
+   *
+   * An in-flight upload batch is cancelled on the way out. Its `remotePath`s
+   * were staged into a session that no longer exists, so nothing is waiting for
+   * them.
+   */
+  function forget(key: string): void {
+    const batch = batches.get(key);
+    if (batch) batch.cancel = 'discard';
+    if (!(key in states.value)) return;
+    const next = { ...states.value };
+    delete next[key];
+    states.value = next;
+    schedulePersist();
+  }
+
   /** Android: `setConnectionDegraded` (:850-853). Advisory only — never a block. */
   function setConnectionDegraded(key: string, degraded: boolean): void {
     ensure(key).connectionDegraded = degraded;
@@ -620,19 +681,50 @@ export const useComposerStore = defineStore('composer', () => {
   }
 
   /**
-   * Close it BECAUSE THE USER SAID SO. The only difference from `setMode
-   * ('hidden')` is the suppression, and that difference is the whole point.
+   * Close it BECAUSE THE USER SAID SO — Escape, `Ctrl+\``, the toggle, the
+   * card's close.
+   *
+   * It no longer suppresses the typing intercept, and after that change it does
+   * exactly what `setMode('hidden')` does. **It is kept as its own action
+   * anyway**, for two reasons that are not stylistic. It is the one place the
+   * user-close path can be given behaviour again without hunting down four call
+   * sites — and the two ways the composer closes are different facts about the
+   * world even when they produce the same state, which is precisely what the
+   * flag's own comment says went wrong when they last shared a boolean.
+   *
+   * See {@link typingSuppressed} for what the user reported and why Escape
+   * stopped speaking for the next keystroke.
    */
   function dismiss(): void {
     setMode('hidden');
+  }
+
+  /**
+   * The user is typing at the SHELL, not at the composer: withhold the intercept
+   * until they say otherwise.
+   *
+   * Called on a press inside the terminal pane, which is the only gesture in the
+   * window that unambiguously means the shell. It is the replacement for the
+   * hatch Escape used to provide, and it is a better place for the meaning to
+   * live: pressing Escape is a statement about the PANEL, whereas pointing at
+   * the terminal is a statement about where you intend to type.
+   *
+   * Cleared by any opening ({@link setMode}) and by
+   * {@link allowTypingToOpen}, which the composer calls when a press lands
+   * inside it. So the flag tracks the last surface the user pointed at rather
+   * than accumulating.
+   */
+  function suppressTyping(): void {
     typingSuppressed.value = true;
   }
 
   /**
-   * Let typing open it again without opening it now. For contexts that are new
-   * enough that a previous "leave me alone" no longer speaks for the user — a
-   * session switch, which is a different pane, a different job and very often a
-   * different intent.
+   * Let typing open it again without opening it now.
+   *
+   * Two callers, and they are the same statement from two directions: a press
+   * inside the composer ("I am working here"), and a session switch — a
+   * different pane, a different job, and very often a different intent, so a
+   * decision made about the last one does not carry over.
    */
   function allowTypingToOpen(): void {
     typingSuppressed.value = false;
@@ -695,6 +787,7 @@ export const useComposerStore = defineStore('composer', () => {
     seedAttachment,
     removeAttachment,
     rekey,
+    forget,
     canSend,
     composedPayload,
     send,
@@ -703,6 +796,7 @@ export const useComposerStore = defineStore('composer', () => {
     setConnectionDegraded,
     setMode,
     dismiss,
+    suppressTyping,
     allowTypingToOpen,
     toggleHidden,
     grow,
