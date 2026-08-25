@@ -24,8 +24,42 @@ export const useFilesStore = defineStore('files', () => {
   async function open(connectionId: ConnectionId, startPath?: string): Promise<void> {
     // Default to the login home; sftp realPath('.') resolves it. Callers with
     // a better starting point (e.g. a session's working directory) pass one.
-    cwd.value = await api.sftp.realPath(connectionId, startPath || '.');
+    //
+    // The resolve runs INSIDE the guard, and that is the whole point of this
+    // shape. `startPath` is a session's cwd as tmux reported it, which is not
+    // guaranteed to be a path SFTP can resolve: helper/parsers.ts notes that
+    // `session_path` "can even be a literal unexpanded `~/git`", and an SFTP
+    // channel has no tilde expansion (the same fact AttachmentStager resolves
+    // `realpath(".")` for). A rejection here used to escape `open` entirely,
+    // which left `cwd` empty — and `refresh` early-returns on an empty cwd,
+    // so nothing ever set `error`. The pane rendered zero entries and no
+    // message: a silently empty Files tab that reads as an empty home
+    // directory rather than as the failure it is.
+    error.value = null;
+    let note: string | null = null;
+    let resolved: string;
+    try {
+      resolved = await api.sftp.realPath(connectionId, stripTilde(startPath));
+    } catch (e) {
+      // The session's cwd is a convenience, not the point of the tab. When it
+      // will not resolve, fall back to the login home so the user still gets a
+      // browser, and say why the requested directory was not the one opened.
+      try {
+        resolved = await api.sftp.realPath(connectionId, '.');
+        note = `Could not open ${startPath}: ${(e as Error).message}`;
+      } catch (homeErr) {
+        // Home itself is unreachable — the connection is not usable for SFTP
+        // at all, and there is nothing to fall back to.
+        error.value = (homeErr as Error).message;
+        return;
+      }
+    }
+    cwd.value = resolved;
     await refresh(connectionId);
+    // `refresh` clears `error` on entry, so a fallback note is re-applied
+    // after it — and only when the listing itself did not fail with something
+    // more immediate.
+    if (note != null && error.value == null) error.value = note;
   }
 
   async function refresh(connectionId: ConnectionId): Promise<void> {
@@ -119,6 +153,33 @@ export const useFilesStore = defineStore('files', () => {
 });
 
 /** POSIX join (the remote is always unix, even on a Windows client). */
+/**
+ * Turn a possibly-tilde-prefixed path into one an SFTP channel can resolve.
+ *
+ * A session's cwd comes from tmux and can be a literal, unexpanded `~/git`
+ * (helper/parsers.ts says so explicitly, and canonicalisation there
+ * deliberately never expands it). SFTP has no shell to do the expanding, so
+ * `realpath("~/git")` looks for a DIRECTORY NAMED `~` and fails.
+ *
+ * No home lookup is needed to fix it: an SFTP session's relative root is the
+ * login home — that is why `realpath(".")` is how the home is found in the
+ * first place — so dropping the `~/` leaves a relative path that resolves to
+ * exactly the same place, in the same single round trip.
+ *
+ * Only a leading `~` that refers to OUR home is handled. `~other/x` is left
+ * alone: it means another user's home, which relative resolution would get
+ * wrong, and failing honestly beats opening the wrong directory.
+ */
+export function stripTilde(path: string | undefined): string {
+  if (path == null || path === '') return '.';
+  if (path === '~') return '.';
+  if (path.startsWith('~/')) {
+    const rest = path.slice(2);
+    return rest === '' ? '.' : rest;
+  }
+  return path;
+}
+
 function joinPosix(base: string, rel: string): string {
   if (rel === '.') return base;
   if (rel === '..') return base.replace(/\/[^/]+$/, '') || '/';
