@@ -18,6 +18,8 @@ import { KnownHosts } from './ssh-config/KnownHosts.js';
 import type { UsageRow } from './helper/parsers.js';
 import { SftpService, type DirEntry, type FileStat, type TransferProgress } from './sftp/SftpService.js';
 import { ForwardService } from './portfwd/ForwardService.js';
+import { ServeService, type ServedFolder } from './portfwd/ServeService.js';
+import type { HtmlPreviewService } from './preview/HtmlPreviewService.js';
 import type { RemotePort } from './portfwd/PortScanner.js';
 import type { AutoForwarderStatus, DiscoveredPort } from './portfwd/AutoForwarder.js';
 import type { PortIntent } from './portfwd/PortfwdStore.js';
@@ -68,9 +70,10 @@ export function registerIpcHandlers(deps: {
   sftp: SftpService;
   forwards: ForwardService;
   projects: ProjectsService;
+  preview: HtmlPreviewService;
   getWindows: () => BrowserWindow[];
 }): void {
-  const { registry, ssh, helper, sftp, forwards, projects, getWindows } = deps;
+  const { registry, ssh, helper, sftp, forwards, projects, preview, getWindows } = deps;
 
   // Prompt attachments ride the SSH/SFTP services that are already here —
   // no second connection, no shelling out to scp.
@@ -250,6 +253,13 @@ export function registerIpcHandlers(deps: {
   );
   ipcMain.handle(ipc.shell.resize, async (_evt, shellId: string, cols: number, rows: number) =>
     ssh.shellResize(shellId, cols, rows),
+  );
+  // A repaint, not a resize. The renderer asks for this after it has made the
+  // far end's idea of our geometry true again — see TerminalView's
+  // `pushGeometry`, and TmuxClientPool.redraw for why tmux will not do it on
+  // its own. False means "nothing to refresh", never an error.
+  ipcMain.handle(ipc.shell.redraw, async (_evt, shellId: string) =>
+    tmuxClients.redraw(shellId),
   );
   ipcMain.handle(ipc.shell.close, async (_evt, shellId: string) => {
     ssh.shellClose(shellId);
@@ -656,6 +666,56 @@ export function registerIpcHandlers(deps: {
       return forwards.isAutoEnabled(connectionId);
     },
   );
+
+  // --- serve:* -------------------------------------------------------------
+  // "Serve this folder". Built on `ssh` and `forwards` — which are already
+  // here — so it is CONSTRUCTED here rather than in index.ts: it subscribes to
+  // `onCloseConnection` itself (exactly like ForwardService), so there is
+  // nothing for the entry point to remember to wire, and no second owner of
+  // the tunnel machinery.
+  const serve = new ServeService(ssh, forwards);
+  serve.onChanged((connectionId, served) => {
+    broadcast(ipc.serve.changed, { connectionId, served });
+  });
+  // Rejects with a message written to be shown verbatim (ServeError). Nothing
+  // here resolves for a server that is not listening or a tunnel that is not
+  // open — both are waited for in the service.
+  ipcMain.handle(
+    ipc.serve.start,
+    async (_evt, connectionId: string, dir: string): Promise<ServedFolder> => {
+      return serve.start(connectionId, dir);
+    },
+  );
+  ipcMain.handle(
+    ipc.serve.stop,
+    async (_evt, connectionId: string, remotePort: number): Promise<boolean> => {
+      await serve.stop(connectionId, remotePort);
+      return true;
+    },
+  );
+  ipcMain.handle(ipc.serve.list, async (_evt, connectionId: string): Promise<ServedFolder[]> => {
+    return serve.list(connectionId);
+  });
+
+  // --- preview:* -----------------------------------------------------------
+  // The Files tab's HTML preview. `openHtml` hands the renderer a URL on the
+  // `psview:` scheme and nothing else — no bytes, no directory listing, no way
+  // to widen the root — and `release` takes it back. Everything the URL can
+  // reach is bounded in HtmlPreviewService, which is where the reasoning about
+  // an untrusted remote document naming paths for us to read lives.
+  ipcMain.handle(
+    ipc.preview.openHtml,
+    async (_evt, connectionId: string, path: string): Promise<{ token: string; url: string }> => {
+      return preview.open(connectionId, path);
+    },
+  );
+  // `send`, not `invoke`, on the renderer side: releasing is fire-and-forget
+  // and happens on the way out of a file, where awaiting an IPC round trip
+  // would put a hop inside a close handler for no observable benefit.
+  ipcMain.on(ipc.preview.release, (_evt, token: unknown) => {
+    if (typeof token === 'string') preview.release(token);
+  });
+  preview.setStatsListener((stats) => broadcast(ipc.preview.stats, stats));
 
   // --- attachments:* ------------------------------------------------------
   // Prompt attachments: upload pasted bytes / picked files into

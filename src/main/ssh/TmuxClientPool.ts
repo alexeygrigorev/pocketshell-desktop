@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { ShellId } from '../../shared/types.js';
 import { clientTtyVar, sessionAttachCommand } from '../../shared/attachCommand.js';
 import type { SshService } from './SshService.js';
+import { pathAwareCommand } from '../helper/bootstrap.js';
 import { log } from '../log.js';
 
 /**
@@ -207,6 +208,62 @@ export class TmuxClientPool {
     return this.join(connectionId, sessionName, opts);
   }
 
+  /**
+   * Ask the tmux client behind [shellId] to repaint every cell it owns.
+   *
+   * ## Why a resize is not enough
+   *
+   * A PTY resize is how the far end learns our geometry, and tmux repaints
+   * when that number changes. It does NOT repaint when the number is the same,
+   * and it never repaints rows it does not believe exist. Both cases are the
+   * user's bug report: tmux had been drawing to a screen shorter than the
+   * pane, so the band below its status line held cells nobody had written
+   * since — and re-sending the size it already had cleared nothing, because
+   * from tmux's side nothing moved.
+   *
+   * `refresh-client` is the command for exactly that: redraw, without changing
+   * anything. It is targeted at OUR client rather than run bare, because a
+   * bare `refresh-client` picks whatever client tmux considers current, which
+   * on a host where the user also has a terminal attached is somebody else's
+   * screen.
+   *
+   * ## How our client is named
+   *
+   * By the tty the joining PTY published into the tmux server's global
+   * environment (see {@link sessionAttachCommand}). That handshake was built
+   * for `switch-client` and kept afterwards purely as a diagnostic; this is
+   * its second real use, and it is the only way to say "this client" from an
+   * exec channel that is not itself a tmux client.
+   *
+   * ## Failure is silent, deliberately
+   *
+   * Every arm degrades to a no-op: no record for the shell, the variable never
+   * published (the join raced, or tmux was too old for `set-environment`), the
+   * client since detached. A redraw that does not happen costs a stale band on
+   * screen until the next one; a redraw that throws would break a tab switch.
+   * Returns whether the refresh was actually issued, for the tests and for the
+   * log.
+   */
+  async redraw(shellId: ShellId): Promise<boolean> {
+    const held = this.clientForShell(shellId);
+    if (!held) return false;
+    const connectionId = this.connectionForShell(shellId);
+    if (!connectionId) return false;
+    // One exec, one round trip: read the tty back out of the tmux global
+    // environment and refresh that client in the same shell. Splitting it in
+    // two would double the latency of every tab switch for no gain.
+    const command =
+      `tty=$(tmux show-environment -g ${held.ttyVar} 2>/dev/null | ` +
+      `sed -n 's/^${held.ttyVar}=//p'); ` +
+      `[ -n "$tty" ] && tmux refresh-client -t "$tty"`;
+    try {
+      const res = await this.ssh.exec(connectionId, pathAwareCommand(command));
+      return res.exitCode === 0;
+    } catch {
+      return false;
+    }
+  }
+
   /** Forget a connection's clients. Called when the connection goes away. */
   release(connectionId: string): void {
     this.clients.delete(connectionId);
@@ -261,6 +318,33 @@ export class TmuxClientPool {
     for (const byName of this.clients.values()) {
       for (const held of byName.values()) {
         if (held.shellId === shellId) return held.session;
+      }
+    }
+    return null;
+  }
+
+  /** The pool's record for a shell, or undefined. */
+  private clientForShell(shellId: ShellId): SessionClient | undefined {
+    for (const byName of this.clients.values()) {
+      for (const held of byName.values()) {
+        if (held.shellId === shellId) return held;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * The connection a shell belongs to.
+   *
+   * Recovered by walking the map rather than stored on the record, because the
+   * record is keyed inside its connection's map already and a second copy of
+   * the same fact is a second thing to keep in step across `renamed` and
+   * eviction.
+   */
+  private connectionForShell(shellId: ShellId): string | null {
+    for (const [connectionId, byName] of this.clients) {
+      for (const held of byName.values()) {
+        if (held.shellId === shellId) return connectionId;
       }
     }
     return null;

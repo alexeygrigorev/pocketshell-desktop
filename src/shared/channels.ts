@@ -45,6 +45,17 @@ export const ipc = {
     attachSession: 'shell:attachSession',
     input: 'shell:input', // write bytes to a shell's stdin
     resize: 'shell:resize', // setWindow(cols, rows)
+    /**
+     * Ask the tmux client on the far end of a shell to repaint every cell.
+     *
+     * Separate from `resize` because the two answer different halves of one
+     * question. A resize tells tmux how big we are; it only repaints when that
+     * number CHANGED. Rows tmux has never owned — the band below its status
+     * line after it had been drawing to a shorter screen — hold whatever the
+     * renderer last put there, and no resize will ever clear them because from
+     * tmux's point of view nothing moved. See TerminalView's `pushGeometry`.
+     */
+    redraw: 'shell:redraw',
     close: 'shell:close', // close a shell
     data: 'shell:event:data', // event: { shellId, data: Uint8Array }
     exited: 'shell:event:exited', // event: { shellId, exitCode }
@@ -114,6 +125,35 @@ export const ipc = {
     togglePort: 'forwards:togglePort', // flip a remote port forwarded <-> silenced
     isAutoEnabled: 'forwards:isAutoEnabled', // was auto left enabled for this host?
     states: 'forwards:event:states', // event: { connectionId, states[] }
+  },
+  /**
+   * "Serve this folder": run a static HTTP server on the host for a directory
+   * and reach it through the SAME tunnel machinery `forwards:*` owns — a
+   * served folder is an ordinary Ports-panel row, which is what makes it
+   * visible and stoppable. See src/main/portfwd/ServeService.ts.
+   */
+  serve: {
+    start: 'serve:start', // serve a remote dir; resolves the local URL
+    stop: 'serve:stop', // kill the server AND its tunnel
+    list: 'serve:list', // what is served on a connection
+    changed: 'serve:event:changed', // event: { connectionId, served[] }
+  },
+  /**
+   * The Files tab's HTML preview. `open` mints a capability — a one-off token
+   * plus the `psview://` URL to frame — and `release` revokes it, so a closed
+   * file's frame cannot go on reading the host. See
+   * src/main/preview/HtmlPreviewService.ts.
+   */
+  preview: {
+    openHtml: 'preview:openHtml',
+    release: 'preview:release',
+    /**
+     * Main -> renderer: how many assets that preview has loaded, refused as
+     * outside its folder, or failed to find. The toolbar shows it, which is
+     * what stops "this page has no stylesheet" being indistinguishable from
+     * "this page looks like this".
+     */
+    stats: 'preview:event:stats',
   },
   attachments: {
     stage: 'attachments:stage', // upload pasted bytes / picked files, return ~/ display paths

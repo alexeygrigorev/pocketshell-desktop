@@ -30,7 +30,9 @@
 // is what stops a re-attach closing a PTY main was about to hand back.
 //
 // Clipboard: selecting with the mouse copies on mouse-up (see onDocumentMouseUp);
-// Ctrl/Cmd-Shift-V and right-click paste.
+// Ctrl/Cmd-Shift-V and right-click paste INTO THE SHELL. Plain Ctrl/Cmd-V does
+// not: it is claimed for the prompt composer and leaves as `paste-into-composer`
+// (see onCustomKey).
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Terminal, type IDisposable, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -85,8 +87,22 @@ const props = defineProps<{
  * `typed` carries the character that was withheld from the shell, so whoever
  * opens the composer can plant it in the draft. Losing it would mean retyping
  * the first letter of every prompt, which is the whole point of the feature.
+ *
+ * `paste-into-composer` carries NOTHING, and that emptiness is the design. The
+ * user pressed Ctrl+V at the terminal and meant it for the composer; what is on
+ * the clipboard, whether it is stageable, and whether it is worth opening the
+ * panel for are all questions the COMPOSER answers, because the composer is
+ * where the answer is acted on. Reading the clipboard here and shipping files
+ * or text across would put a second clipboard-to-attachment path in this
+ * component, which is exactly what this feature was asked not to grow — the
+ * composer's `onPaste` already owns that path. So this stays the same shape as
+ * `typed`: a statement that a keystroke was withheld, not an instruction about
+ * what to do with it.
  */
-const emit = defineEmits<{ (e: 'typed', text: string): void }>();
+const emit = defineEmits<{
+  (e: 'typed', text: string): void;
+  (e: 'paste-into-composer'): void;
+}>();
 
 /** The tmux session this pane should be showing, or '' for a bare shell. */
 const targetSession = computed(() => props.sessionName ?? props.sessionKey ?? '');
@@ -211,6 +227,21 @@ let termDisposables: IDisposable[] = [];
 let resizeObserver: ResizeObserver | null = null;
 /** Coalesces a burst of resize callbacks into one fit per frame. */
 let fitFrame = 0;
+/**
+ * The geometry the far end was last TOLD, or null when it has been told
+ * nothing — a PTY we have just adopted knows only the size it was opened with,
+ * and a PTY we do not hold knows nothing at all.
+ *
+ * This exists because "has the far end been told our size" is a fact about the
+ * REMOTE, and until now nothing in this component held it. Every route into a
+ * size change had to remember, on its own, to send one: the font watcher
+ * (4c0f555), `showTarget` after a switch, the container observer. Three of
+ * today's bugs are one of those routes forgetting, and the fourth is the far
+ * end being told correctly and simply not repainting. So the fact is stored
+ * once, {@link pushGeometry} is the only thing that writes it, and every route
+ * calls that instead of reasoning about whether a send is needed.
+ */
+let sent: { cols: number; rows: number } | null = null;
 /** True between mousedown inside the terminal and the mouse-up that ends it. */
 let selecting = false;
 
@@ -240,6 +271,80 @@ async function requestShell(
     rows,
   });
   return { shellId: id, switched: false };
+}
+
+/**
+ * Make the far end's idea of our geometry true, and repaint if it was not.
+ *
+ * ## The bug this is the answer to
+ *
+ * The user saw a tmux status line sitting eighteen rows above the bottom of
+ * the pane, with the same stale line repeated underneath it to the edge. That
+ * picture has exactly one cause: xterm has more rows than the PTY was told
+ * about, so tmux drew its status line at what it believed was the last row and
+ * never touched anything below. The rows below are not corrupt — they are
+ * cells nobody has written since the pane was last bigger.
+ *
+ * ## Why the previous wiring let that happen
+ *
+ * Geometry reached the far end through `term.onResize`, which fires only when
+ * xterm's OWN dimensions change. Two holes follow from that, and both are live
+ * now that every opened tab stays mounted:
+ *
+ *  1. **A resize with no shell to send it to.** A tab joins by opening an SSH
+ *     channel, a login shell and `tmuxctl` — 1.5-2 s on this user's host. The
+ *     pane is laid out during that window (the tab strip settles, the composer
+ *     docks), so `fit()` runs and `onResize` fires while `shellId` is still
+ *     null, and the handler drops it. `showTarget` then sent the cols/rows it
+ *     had captured BEFORE the await, which are the pre-layout numbers. The far
+ *     end is told a size the pane no longer has, and nothing ever corrects it,
+ *     because from xterm's side the dimensions are not going to change again.
+ *
+ *  2. **A size that is right on our side and stale on theirs.** A pane that
+ *     comes back into view at the size it had when it was hidden produces no
+ *     `onResize` at all, so a client that has meanwhile been resized by
+ *     anything else — another client on the same session, a re-join — is never
+ *     put back.
+ *
+ * Recording what was sent closes both: the comparison is against the REMOTE's
+ * last known state rather than against our own previous dimensions, so a route
+ * that changes nothing locally still sends when the remote is behind, and a
+ * route that fires twice sends once.
+ *
+ * ## Why a repaint follows
+ *
+ * A resize tmux considers a no-op repaints nothing, and the stale band is
+ * exactly the region tmux does not think it owns. `refresh-client` targeted at
+ * our own client is the clean way to say "draw all of it" without changing
+ * anything else; sending `C-l` into the PTY would be interpreted by whatever
+ * is running instead. It is asked for only when we actually pushed something,
+ * so an idle tab costs no host work.
+ */
+function pushGeometry(opts: { redraw?: boolean } = {}): void {
+  if (!term || !shellId) return;
+  const { cols, rows } = term;
+  // A pane behind a `v-show` measures 0 and xterm keeps whatever grid it last
+  // had; pushing that would tell tmux the tab is its old size while it is not
+  // on screen at all. The hidden -> visible edge in `scheduleFit` is what
+  // brings it back.
+  if (!containerEl.value?.clientHeight || !containerEl.value.clientWidth) return;
+  const id = shellId;
+  if (!sent || sent.cols !== cols || sent.rows !== rows) {
+    sent = { cols, rows };
+    void api.shell.resize(id, cols, rows);
+  }
+  // The redraw is NOT conditional on the size having moved, and that is the
+  // whole point of asking for one. The case it exists for is precisely the
+  // case where nothing moved: a tab coming back into view at the size it was
+  // hidden at, whose tmux client may have been resized by something else
+  // meanwhile, or which simply stopped owning the rows below its status line.
+  // A resize tmux considers a no-op repaints nothing at all.
+  //
+  // It stays opt-in per call site rather than automatic because an ordinary
+  // drag-resize produces a run of pushes and tmux repaints itself on each one;
+  // asking again would be an SSH exec per frame for no visible difference. It
+  // is the EDGES that need it — hidden to visible, and a freshly adopted PTY.
+  if (opts.redraw === true) void api.shell.redraw(id);
 }
 
 /** Bind the main->renderer byte and exit streams for the current `shellId`. */
@@ -306,7 +411,19 @@ async function showTarget(): Promise<void> {
     // change still re-arms the whole path.
     unbindShellStream();
     shellId = null;
+    sent = null;
     term.write(`\r\n\u001b[31mCould not open a shell: ${describe(e)}\u001b[0m\r\n`);
+    return;
+  }
+
+  // A join is seconds long on a real host, and the tab can be closed inside
+  // that window — the workspace unmounts the pane, `onBeforeUnmount` disposes
+  // the terminal, and everything below would then be operating on a corpse.
+  // Handing the shell straight back to main is the honest exit: we asked for
+  // it, we are not going to use it, and leaving it open would leak an SSH
+  // channel against a `MaxSessions` budget of ten.
+  if (!term) {
+    void api.shell.close(result.shellId);
     return;
   }
 
@@ -328,6 +445,10 @@ async function showTarget(): Promise<void> {
     if (previousId) term.reset();
     shellId = result.shellId;
     shellGone = false;
+    // A PTY we have just been handed knows only the size it was OPENED with,
+    // which is the pre-await capture above. Forgetting what we told the old
+    // one is what makes the unconditional push below actually send.
+    sent = null;
     bindShellStream();
   }
   // Otherwise the same PTY came back and tmux redrew every row of it itself.
@@ -337,9 +458,19 @@ async function showTarget(): Promise<void> {
   // Publish it before the first byte can be typed at it.
   registeredKey = props.sessionKey ?? '';
   shells.register(registeredKey, result.shellId);
-  // Push the current geometry at the shell: the bound onResize only fires when
-  // xterm's own dimensions change, which neither a re-open nor a switch does.
-  void api.shell.resize(result.shellId, cols, rows);
+  // Re-fit and push the geometry the pane has NOW, not the `cols`/`rows`
+  // captured before the await. A join is an SSH channel, a login shell and
+  // `tmuxctl` — seconds on a real host — and the pane is laid out during it,
+  // so the captured pair is routinely stale by the time we get here. Sending
+  // it was how a tab ended up permanently taller than the screen tmux was
+  // drawing to. `fit()` first, because a layout that settled during the await
+  // has not been measured yet.
+  //
+  // `redraw` because this is an edge where the size may legitimately not have
+  // moved — the same PTY handed back for a tab that is already up — and tmux
+  // repaints nothing in that case, including any band it had stopped owning.
+  fitAddon?.fit();
+  pushGeometry({ redraw: true });
   term.focus();
 }
 
@@ -365,6 +496,7 @@ function closeShell(): void {
     void api.shell.close(shellId);
     shellId = null;
   }
+  sent = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +589,39 @@ function onCustomKey(e: KeyboardEvent): boolean {
     void pasteFromClipboard();
     return false;
   }
+  // PLAIN Ctrl/Cmd+V goes to the PROMPT COMPOSER, not to the shell.
+  //
+  // This chord is affordable, which is the only reason it can be taken. It was
+  // measured on this exact xterm during the double-paste investigation
+  // (3628090): Ctrl+V produces a single `\x16` through xterm's own ctrl-letter
+  // mapping and pastes NOTHING. Every paste the user has ever got out of this
+  // pane came from Ctrl+SHIFT+V or the right-click above, and both keep working
+  // unchanged — the branch above is matched first and this one demands
+  // `!e.shiftKey`, so the two chords cannot collapse into one.
+  //
+  // What it does cost is readline's literal-next (`quoted-insert`, bound to
+  // `\x16`), the thing that lets you type a raw control character at a bash
+  // prompt. That is a real key some people use and it is gone from this pane;
+  // `Ctrl+Q` is bound to the same command in vi mode and nothing else here
+  // claims it.
+  //
+  // `!e.altKey` because Ctrl+Alt is how AltGr arrives on European layouts, and
+  // AltGr+V is a printable character on several of them. A user typing `@` or
+  // `~` must not have it swallowed by the composer.
+  //
+  // preventDefault IS THE FEATURE here for the third time in this function, and
+  // for the third identical reason: returning false stops xterm but leaves the
+  // DOM event live, and Chromium's own default action for Ctrl+V is a paste
+  // into whatever holds focus. Focus is about to be the composer's draft, so
+  // without this line the clipboard would land there TWICE — once through the
+  // composer's staging path and once natively, on top of it. That is bc86cf7's
+  // doubled first letter and 3628090's doubled paste, arriving by a third
+  // route.
+  if (mod && !e.shiftKey && !e.altKey && (e.key === 'V' || e.key === 'v')) {
+    e.preventDefault();
+    emit('paste-into-composer');
+    return false;
+  }
   if (mod && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
     if (term?.hasSelection()) {
       void copyToClipboard(term.getSelection());
@@ -498,8 +663,13 @@ onMounted(async () => {
     term.onData((data) => {
       if (shellId) void api.shell.input(shellId, data);
     }),
-    term.onResize(({ cols, rows }) => {
-      if (shellId) void api.shell.resize(shellId, cols, rows);
+    // Through `pushGeometry` rather than straight to `api.shell.resize`, so a
+    // resize that fires before a PTY exists is not simply LOST: it records
+    // nothing, and the unconditional push at the end of `showTarget` then
+    // sends whatever the pane has become. That is the hole a tab fell into
+    // while its join was in flight — seconds, on this user's host.
+    term.onResize(() => {
+      pushGeometry();
     }),
     // Path links, registered AFTER WebLinksAddon above, deliberately: xterm
     // gives an EARLIER provider priority over a later one for the same cells
@@ -566,7 +736,16 @@ function scheduleFit(): void {
     if (wasHidden && shellGone) {
       shellGone = false;
       void showTarget();
+      return;
     }
+    // Everything else routes through the one place that knows what the far end
+    // has been told. `fit()` above may have changed nothing — a tab that comes
+    // back at the size it was hidden at is the normal case — and that is
+    // precisely when the old wiring sent nothing, because it only ever reacted
+    // to xterm's own dimensions moving. On the hidden -> visible edge the
+    // redraw is asked for too: tmux will not repaint a screen it thinks is
+    // unchanged, and the stale band the user reported is exactly that.
+    pushGeometry(wasHidden ? { redraw: true } : {});
   });
 }
 

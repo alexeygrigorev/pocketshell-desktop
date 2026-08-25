@@ -92,6 +92,7 @@ vi.mock('../../src/renderer/ipc', () => ({
       attachSession: vi.fn(async () => ({ shellId: 'shell-1', switched: false })),
       input: vi.fn(async () => true),
       resize: vi.fn(async () => true),
+      redraw: vi.fn(async () => true),
       close: vi.fn(async () => true),
       onData: vi.fn(() => () => {}),
       onExited: vi.fn(() => () => {}),
@@ -136,9 +137,11 @@ async function mountTerminal(): Promise<VueWrapper> {
     attachTo: document.body,
   });
   setPaneSize(wrapper, 800, 600);
-  // onMounted awaits showTarget(); let its microtasks drain.
-  await nextTick();
-  await nextTick();
+  // onMounted awaits showTarget(); let its microtasks drain. Ten ticks rather
+  // than two because the join is three async frames deep — and because
+  // `showTarget` now measures again on the far side of it, so a count taken
+  // too early leaves that fit to land in the middle of the test it precedes.
+  for (let i = 0; i < 10; i++) await nextTick();
   fits = 0;
   frames = [];
   return wrapper;

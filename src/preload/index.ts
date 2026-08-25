@@ -18,6 +18,7 @@ import type { RemotePort } from '../main/portfwd/PortScanner.js';
 import type { ForwardState } from '../main/portfwd/Forwarder.js';
 import type { AutoForwarderStatus, DiscoveredPort } from '../main/portfwd/AutoForwarder.js';
 import type { PortIntent } from '../main/portfwd/PortfwdStore.js';
+import type { ServedFolder } from '../main/portfwd/ServeService.js';
 import type { ForwardSpec } from '../shared/types.js';
 import type {
   CloneProgress,
@@ -187,6 +188,18 @@ const api = {
     /** Resize a shell's PTY. */
     resize: (shellId: ShellId, cols: number, rows: number): Promise<boolean> =>
       ipcRenderer.invoke(ipc.shell.resize, shellId, cols, rows),
+
+    /**
+     * Ask the tmux client on the far end to repaint every cell.
+     *
+     * A resize only makes tmux repaint when the size CHANGED, and it never
+     * repaints rows it does not believe it owns — which is precisely the band
+     * of stale text below the status line this exists to clear. Resolves false
+     * when there is no tmux client to refresh (a bare shell, an evicted tab);
+     * that is a normal answer, not a failure.
+     */
+    redraw: (shellId: ShellId): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.shell.redraw, shellId),
 
     /** Close a shell. */
     close: (shellId: ShellId): Promise<boolean> => ipcRenderer.invoke(ipc.shell.close, shellId),
@@ -410,6 +423,113 @@ const api = {
       ) => handler(payload);
       ipcRenderer.on(ipc.sftp.progress, listener);
       return () => ipcRenderer.removeListener(ipc.sftp.progress, listener);
+    },
+  },
+
+  /**
+   * "Serve this folder": a real static HTTP server on the host, reached
+   * through the SAME tunnel the Ports panel manages.
+   *
+   * Distinct from `preview`, which renders ONE remote HTML file by pulling its
+   * assets over SFTP. This runs the actual site — relative URLs, `fetch`,
+   * routing and all — because a real origin is serving it.
+   *
+   * Note what is NOT here: no bind address. The server is always on the host's
+   * loopback (src/main/portfwd/serveCommand.ts, `SERVE_BIND_ADDRESS`) and the
+   * renderer has no way to widen that.
+   */
+  serve: {
+    /**
+     * Serve a remote directory and resolve once its tunnel is open.
+     *
+     * Rejects with a message written to be shown to the user: no python on the
+     * host, an unreadable folder, every candidate port busy, or a server that
+     * did not come up. It never resolves for a server that is not listening.
+     */
+    start: (connectionId: string, dir: string): Promise<ServedFolder> =>
+      ipcRenderer.invoke(ipc.serve.start, connectionId, dir),
+
+    /** Stop a served folder: kills the remote server AND closes its tunnel. */
+    stop: (connectionId: string, remotePort: number): Promise<boolean> =>
+      ipcRenderer.invoke(ipc.serve.stop, connectionId, remotePort),
+
+    /** What is currently served on a connection. */
+    list: (connectionId: string): Promise<ServedFolder[]> =>
+      ipcRenderer.invoke(ipc.serve.list, connectionId),
+
+    /**
+     * Subscribe to served-folder snapshots. Returns an unsubscribe fn.
+     *
+     * This is how the panel learns that a server DIED — the case that would
+     * otherwise leave a URL on screen that quietly answers nothing.
+     */
+    onChanged: (
+      handler: (payload: { connectionId: string; served: ServedFolder[] }) => void,
+    ): Unsubscribe => {
+      const listener = (
+        _evt: IpcRendererEvent,
+        payload: { connectionId: string; served: ServedFolder[] },
+      ) => handler(payload);
+      ipcRenderer.on(ipc.serve.changed, listener);
+      return () => ipcRenderer.removeListener(ipc.serve.changed, listener);
+    },
+  },
+
+  /**
+   * The Files tab's HTML preview.
+   *
+   * Note what is NOT here: no way to read a preview's bytes, list its
+   * directory, or change its root. The renderer receives a URL and puts it in
+   * a sandboxed iframe; everything the frame is then allowed to reach is
+   * decided in main by HtmlPreviewService, which is the only place that ever
+   * sees the paths the previewed document names.
+   */
+  preview: {
+    /**
+     * Mint a preview of one remote HTML file. Rejects if the path is not a
+     * regular file. The returned URL is on the `psview:` scheme and is only
+     * usable while the token lives.
+     */
+    openHtml: (connectionId: string, path: string): Promise<{ token: string; url: string }> =>
+      ipcRenderer.invoke(ipc.preview.openHtml, connectionId, path),
+
+    /**
+     * Revoke a preview. Fire-and-forget: it runs on the way out of a file,
+     * where an awaited round trip would sit inside a close handler for no
+     * observable gain, and a token that outlives its release by a few
+     * milliseconds can still only read inside the folder it was scoped to.
+     */
+    release: (token: string): void => ipcRenderer.send(ipc.preview.release, token),
+
+    /**
+     * Subscribe to a preview's asset counters. Returns an unsubscribe fn.
+     *
+     * The counts are the whole reason the preview is honest rather than
+     * merely pretty: a page missing its stylesheet and a page that genuinely
+     * looks like that are indistinguishable on screen, and this is what tells
+     * them apart.
+     */
+    onStats: (
+      handler: (stats: {
+        token: string;
+        loaded: number;
+        blocked: number;
+        missing: number;
+        capped: boolean;
+      }) => void,
+    ): (() => void) => {
+      const listener = (
+        _e: unknown,
+        payload: {
+          token: string;
+          loaded: number;
+          blocked: number;
+          missing: number;
+          capped: boolean;
+        },
+      ): void => handler(payload);
+      ipcRenderer.on(ipc.preview.stats, listener);
+      return () => ipcRenderer.removeListener(ipc.preview.stats, listener);
     },
   },
 
