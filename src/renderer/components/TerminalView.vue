@@ -419,6 +419,14 @@ function onCustomKey(e: KeyboardEvent): boolean {
 
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.shiftKey && (e.key === 'V' || e.key === 'v')) {
+    // Same defect as the typing branch above, and the same fix: returning
+    // false stops xterm — `_keyDown` bails at the custom handler and never
+    // calls its own `cancel()` — but leaves the DOM event LIVE. Chromium then
+    // performs its own Ctrl+Shift+V (paste as plain text), which fires a
+    // `paste` event on xterm's textarea, which xterm's own listener turns
+    // into a second write. One keystroke, two paths: measured in Electron as
+    // two onData calls each carrying the whole clipboard.
+    e.preventDefault();
     void pasteFromClipboard();
     return false;
   }
