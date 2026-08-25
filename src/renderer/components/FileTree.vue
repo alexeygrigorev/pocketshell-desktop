@@ -3,7 +3,7 @@
 // enter it; click a file to open it in the editor. Includes a one-line
 // breadcrumb, a summonable search box, a capped row list with "Load more",
 // refresh, and a "new folder/file" affordance wired to the store.
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import AppIcon, { type AppIconName } from './AppIcon.vue';
 import PopupMenu from './PopupMenu.vue';
 import { api } from '../ipc';
@@ -32,20 +32,63 @@ const files = useFilesStore();
 const connId = computed(() => connection.connectionId);
 
 /**
- * The path as clickable cells, on ONE line, always.
+ * The path as cells, on ONE line, always — as many whole segments as the
+ * measured width holds, and the rest behind the `…` menu.
  *
- * The strip used to be `flex-wrap: wrap` with every segment listed, which on a
- * deep path in a narrow pane became three lines of chrome above a list — in a
- * pane whose whole job is the list. The wrap is gone and the middle of a long
- * path now collapses into a single `…` cell instead; `buildCrumbs` owns that
- * rule (and the `~`-replaces-home rule it inherited) and is unit-tested.
+ * THE WIDTH IS MEASURED, and that is the substance of this. The strip used to
+ * collapse to a fixed four cells whatever the pane was, and then run each
+ * survivor through `splitLabel` on top, so a 250px pane produced
+ * `~ / … / v…previews / olya-…`: two truncations of one fact, with the folder
+ * you are standing in the one that got cut. A cell count cannot be right at
+ * both 180px and 640px, which is the whole range this splitter covers, so it
+ * was wrong nearly everywhere and character truncation was left to finish a
+ * job the collapse should have done. `fileListView.ts` carries the sources —
+ * Carbon, Spectrum, WinUI, Nautilus, Grafana, VS Code — and the ladder they
+ * agree on: collapse WHOLE segments first, cut characters only out of what
+ * survives, and only ever out of one label.
  *
  * The hidden segments are not lost: the `…` opens a menu listing them, each
  * one still a link to that directory. That is what keeps this a breadcrumb
- * rather than a decorative string. The full path is also always one click away
- * in the editable path bar (the pencil, or Ctrl+L).
+ * rather than a decorative string, and NN/g's tooltip guidance is explicit
+ * that a tooltip cannot be the only route to something you need in order to
+ * act. The full path is also always one click away in the editable path bar
+ * (the pencil, or Ctrl+L), and on the strip's own `title`.
  */
-const breadcrumbs = computed<Crumb[]>(() => buildCrumbs(files.cwd, files.home));
+const stripEl = ref<HTMLElement | null>(null);
+/** Pixels the crumb strip has to itself. `null` until the observer has run. */
+const stripWidth = ref<number | null>(null);
+const breadcrumbs = computed<Crumb[]>(() =>
+  buildCrumbs(files.cwd, files.home, { width: stripWidth.value ?? Number.POSITIVE_INFINITY }),
+);
+
+/**
+ * One ResizeObserver, on the strip itself, is the entire cost of measuring.
+ *
+ * It observes `.crumbs`, whose width is the leftover after the button slot,
+ * so nothing here has to know what the buttons cost. That only works because
+ * `.crumbs` is `flex: 1 1 0` rather than `1 1 auto`: with an `auto` basis the
+ * box would be CONTENT-sized whenever the crumbs were shorter than the space,
+ * and a width that depends on the content that depends on the width is a
+ * resize loop.
+ *
+ * Re-attached through a watcher rather than in `onMounted` because the strip
+ * is `v-if`'d away while the path bar is open — the element the observer holds
+ * would otherwise be a detached node from the first Ctrl+L onwards.
+ */
+let stripObserver: ResizeObserver | null = null;
+watch(stripEl, (el) => {
+  stripObserver?.disconnect();
+  stripObserver = null;
+  if (!el || typeof ResizeObserver === 'undefined') return;
+  stripObserver = new ResizeObserver(() => {
+    stripWidth.value = el.clientWidth;
+  });
+  stripObserver.observe(el);
+});
+onBeforeUnmount(() => {
+  stripObserver?.disconnect();
+  stripObserver = null;
+});
 
 /** Anchor for the `…` menu; null when it is closed. */
 const gapMenu = ref<{ hidden: { name: string; path: string }[]; anchor: Box } | null>(null);
@@ -64,10 +107,10 @@ function crumbHidden(crumb: Crumb): { name: string; path: string }[] {
   return crumb.kind === 'gap' ? crumb.hidden : [];
 }
 function crumbName(crumb: Crumb): string {
-  return crumb.kind === 'segment' ? crumb.name : '…';
+  return crumb.kind === 'gap' ? '…' : crumb.name;
 }
 function crumbPath(crumb: Crumb): string {
-  return crumb.kind === 'segment' ? crumb.path : '';
+  return crumb.kind === 'gap' ? '' : crumb.path;
 }
 
 async function onGapCrumb(path: string): Promise<void> {
@@ -245,9 +288,21 @@ function icon(entry: DirEntry): AppIconName {
  * the extension. `splitLabel` is reused rather than reimplemented so this is
  * the app's ONE truncation rule and not a third variant of it.
  *
- * The breadcrumb's segment names go through the same function, for the same
- * reason: a single very long directory name still has to fit on the one line
- * the strip now gets.
+ * The breadcrumb uses it on EXACTLY ONE cell — the current folder, and only
+ * when that folder alone is wider than the strip. Ancestors do not go through
+ * it at all any more: a crumb that has already been narrowed to fit and is
+ * then cut mid-name reads as a directory that does not exist (`v…previews`),
+ * which is the reverse of every implementation surveyed in `fileListView.ts`
+ * and is what Spectrum means by "Don't truncate multiple labels
+ * simultaneously". An ancestor that does not fit is DROPPED, whole, into the
+ * `…` menu, where its real name is still readable and still clickable.
+ *
+ * That the surviving cut is a MIDDLE one is the other half of the finding:
+ * every filesystem UI that cuts a path segment cuts the middle — Nautilus's
+ * `PANGO_ELLIPSIZE_MIDDLE`, Finder's path bar, Grafana's "center truncation",
+ * whose stated reason is ours: "a simple end truncation isn't all that useful
+ * given the types of naming schemes people use". `olya-merin` and
+ * `olya-merina` differ in their last character; `olya-…` distinguishes neither.
  */
 function nameParts(name: string): { labelHead: string; labelTail: string } {
   return splitLabel(name);
@@ -400,27 +455,39 @@ defineExpose({ editPath: startEditing, focusSearch });
         @blur="cancelEditing"
       />
       <template v-else>
-        <!-- One scrolling-free line: the crumb strip takes the leftover width
-             and clips, the button slot never shrinks. `:title` carries the
-             full path so a collapsed middle is still readable on hover. -->
-        <span class="crumbs" :title="files.cwd">
-          <span v-for="(c, i) in breadcrumbs" :key="i" class="crumb">
+        <!-- One scrolling-free line. `.crumbs` is the measured box: its width
+             is what `buildCrumbs` fits the path into, which is why the ref is
+             here and not on `.breadcrumb`. `:title` carries the full path, as
+             a supplement to the `…` menu and never as a substitute for it. -->
+        <span ref="stripEl" class="crumbs" :title="files.cwd">
+          <span v-for="(c, i) in breadcrumbs" :key="i" class="crumb" :class="`is-${c.kind}`">
             <button
               v-if="c.kind === 'gap'"
               class="gap"
-              :title="`${crumbHidden(c).length} more folders`"
+              :title="`${crumbHidden(c).length} folders not shown`"
               aria-label="Show the hidden path segments"
               @click="openGap($event, c)"
             >
               …
             </button>
-            <a v-else :title="crumbPath(c)" @click="onCrumb(crumbPath(c))">
+            <!-- WHERE YOU ARE, and therefore not a link. NN/g guideline #5,
+                 USWDS and the ARIA authoring practices all say the current
+                 item should not link; here it would also be a click that
+                 navigates to the directory already on screen. It is the one
+                 cell allowed to truncate its own text — see `nameParts`. -->
+            <span v-else-if="c.kind === 'current'" class="here" aria-current="page">
               <span class="nm-head">{{ nameParts(crumbName(c)).labelHead }}</span>
               <span v-if="nameParts(crumbName(c)).labelTail" class="nm-tail">
                 {{ nameParts(crumbName(c)).labelTail }}
               </span>
-            </a>
-            <span v-if="i < breadcrumbs.length - 1" class="sep">/</span>
+            </span>
+            <!-- An ancestor is whole or it is in the menu, so it renders as
+                 one unsplit string with no ellipsis of its own. -->
+            <a v-else :title="crumbPath(c)" @click="onCrumb(crumbPath(c))">{{ crumbName(c) }}</a>
+            <!-- No separator after the `/` root: it IS the separator, and
+                 `/ / srv / www` says the same thing twice in a strip whose
+                 whole problem is space. `~` still takes one. -->
+            <span v-if="i < breadcrumbs.length - 1 && crumbName(c) !== '/'" class="sep">/</span>
           </span>
         </span>
         <span class="strip-actions">
@@ -564,10 +631,12 @@ defineExpose({ editPath: startEditing, focusSearch });
       </ul>
     </PopupMenu>
 
-    <!-- The `…` crumb's contents. Collapsing the middle of a path is only
-         acceptable because the segments it hides are still HERE and still
-         navigate; a plain ellipsis with no way back would have turned the
-         breadcrumb into decoration. -->
+    <!-- The `…` crumb's contents. Collapsing part of a path is only acceptable
+         because the segments it hides are still HERE and still navigate; a
+         plain ellipsis with no way back would have turned the breadcrumb into
+         decoration. A menu rather than a tooltip for the reason NN/g gives:
+         information a user needs in order to ACT has to be on screen, and a
+         hover target is not available to everyone. -->
     <PopupMenu
       v-if="gapMenu"
       :anchor="gapMenu.anchor"
@@ -575,7 +644,7 @@ defineExpose({ editPath: startEditing, focusSearch });
       @close="gapMenu = null"
     >
       <ul>
-        <li class="menu-head">Skipped folders</li>
+        <li class="menu-head">Folders not shown</li>
         <li v-for="seg in gapMenu.hidden" :key="seg.path">
           <button class="menu-item" :title="seg.path" @click="onGapCrumb(seg.path)">
             <AppIcon name="folder" :size="14" />
@@ -602,9 +671,12 @@ defineExpose({ editPath: startEditing, focusSearch });
   background: var(--surface);
   height: 100%;
 }
-/* ONE LINE, ALWAYS. `flex-wrap: wrap` here is what made a deep path render as
-   three rows of chrome above the list; the collapsing in `buildCrumbs` is what
-   lets `nowrap` be safe rather than merely clipping the tail. */
+/* ONE LINE, ALWAYS — a rule every design system surveyed states outright
+   (Carbon: "Breadcrumbs should never wrap onto a second line"; Atlassian:
+   "always display on a single line"; NN/g guideline #9). `flex-wrap: wrap`
+   here is what made a deep path render as three rows of chrome above the list;
+   the measured collapsing in `buildCrumbs` is what lets `nowrap` be honest
+   rather than merely clipping the tail. */
 .breadcrumb {
   display: flex;
   align-items: center;
@@ -617,18 +689,46 @@ defineExpose({ editPath: startEditing, focusSearch });
   overflow: hidden;
 }
 /* Takes the leftover width and clips inside itself, so overflow never reaches
-   the button slot. */
+   the button slot.
+
+   `flex: 1 1 0` and NOT `1 1 auto`: the zero basis makes this box exactly the
+   leftover space whatever it contains. With an `auto` basis it would be
+   content-sized whenever the crumbs were short, and since the crumbs are
+   chosen FROM this box's measured width (see the ResizeObserver in the
+   script), a content-sized width is a resize loop. */
 .crumbs {
   display: flex;
   align-items: center;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
 }
+/* Ancestors yield, the current folder does not. `buildCrumbs` has already
+   picked cells that fit, so this is the belt to that braces: a few pixels of
+   estimation error must cost the LEFT of the strip, never the folder you are
+   standing in. `text-overflow` is left at `clip` here on purpose — an ellipsis
+   on an ancestor is the second truncation this redesign removed, and a clipped
+   cell that only appears on a rounding error should not advertise itself as a
+   deliberate shortening. */
+   The shrink FACTORS are the priority order, and the order is the whole point:
+   ancestors 100, current 1, the `…` zero. Flex shares a deficit in proportion
+   to `base x factor`, so a 100:1 ratio makes the ancestors absorb essentially
+   all of it and bottom out at `min-width: 0` before the current gives up a
+   single pixel. The `…` never yields at all — it is the only route back to
+   the folders it stands for, so it outranks every cell it hides. */
 .crumb {
   display: flex;
   align-items: center;
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.crumb.is-gap {
+  flex: 0 0 auto;
+}
+.crumb.is-current {
+  flex: 0 1 auto;
   min-width: 0;
 }
 /* The buttons get a slot that never shrinks — being pushed off the end of the
@@ -653,6 +753,22 @@ defineExpose({ editPath: startEditing, focusSearch });
 .crumb a:hover {
   color: var(--fg);
   text-decoration: underline;
+}
+/* "You are here" (NN/g, *Navigation: You Are Here*): the current folder is the
+   one cell that is not a link, so it needs to LOOK unlike one or it reads as a
+   crumb that has stopped working. Full `--fg` against the ancestors'
+   `--fg-secondary`, and the weight lift is the same signal Nautilus's path bar
+   gives its `current-dir` button while dimming everything left of it.
+   Still no accent: accent is reserved for the selected ROW (DESIGN.md 5.2).
+   The head/tail spans inside it pick up the SAME `.nm-head`/`.nm-tail` rules
+   the entry rows use, further down; that is the point: one truncation
+   mechanism, applied to one cell instead of four. */
+.crumb.is-current .here {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-weight: var(--fw-medium);
 }
 /* The collapsed middle. Styled as a control rather than as text because it
    opens a menu — a `…` that looks like punctuation would never be clicked. */

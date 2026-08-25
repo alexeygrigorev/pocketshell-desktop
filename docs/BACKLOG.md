@@ -63,6 +63,8 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Clicking outside closes it when empty | `bc86cf7` |
 | ✅ | `Ctrl+V` in the terminal routes the clipboard to it | `1d89bf4` |
 | ✅ | Text and arrows in the doodle surface | `298921a` |
+| ✅ | Annotate an image that is already attached | _pending_ |
+| ✅ | Cancelling the doodle no longer discards it silently | _pending_ |
 
 ### Files
 
@@ -78,6 +80,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Right-click → open in a new panel | `c614e7e` |
 | ✅ | Fixed-width file browser panel | `c614e7e` |
 | ✅ | Breadcrumb on one line | `2f684dd` |
+| ✅ | …but it over-corrected into `~ / … /v…previews / olya-…` | _pending_ |
 | ✅ | Cap at 100 rows with "load more" and search | `2f684dd` |
 | ✅ | Preview HTML | `384f66a` |
 | ✅ | Serve a folder over HTTP | `8d17f90` |
@@ -111,6 +114,8 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Zoom in Settings | `31019f2` |
 | ✅ | Light theme, then multiple palettes | `448ad7a` |
 | ✅ | Drop the "force a new session" checkbox | `cde5dd5` |
+| ✅ | See every shortcut, grouped by surface, in Settings | this change |
+| ✅ | Rebind a shortcut, with conflicts named and the shell protected | this change |
 
 ### Housekeeping
 
@@ -136,7 +141,7 @@ is roughly the order things were asked, and that history is useful.
 | 🔄 | CodeMirror's baked `dark: true` — reconfigure on theme appearance |
 | 🔄 | `Ctrl+W` closes the window instead of deleting a word |
 | 🔄 | CodeMirror duplicated into the installer |
-| 🔄 | Annotate an image already attached to the composer |
+| 🔄 | Point the chord handlers at the shortcut registry — they still spell chords inline (`docs/SHORTCUTS.md` §6) |
 
 ---
 
@@ -180,8 +185,11 @@ is roughly the order things were asked, and that history is useful.
 
 Things nobody asked about that turned out to matter.
 
+- **Every implementation of a breadcrumb that has to fit a narrow box does the two truncations in the same order, and it is the opposite of what we shipped twice.** Collapse WHOLE segments into a menu first; cut characters only out of what survives, and only out of one label. Carbon, WinUI, Spectrum ("Don't truncate multiple labels simultaneously"), Fluent, GitLab and Grafana all agree; VS Code goes further and never cuts characters at all, scrolling instead. Stacking a middle-collapse on a character-truncate is the failure `b841362` removed from the session rows and `2f684dd` reinvented in the Files breadcrumb — twice, independently, because the rule was written as "fit four cells" instead of "fit this many pixels". A cell count is tuned for one width; a drag-resizable pane has none. `docs/DESIGN.md` §5.7.1 has the ladder and the sources.
 - **A running Electron instance serves the bundle it loaded at launch.** A rebuilt `out/` changes nothing for an open window. This produced a convincing false bug report: the app was sending a command that no longer existed in the source, because the instance predated the fix by fifteen minutes.
 - **Four separate bugs came from geometry not reaching the far end** — the sliced status line, the font refit, the zoom refit, and stale rows below the status bar. `1b64555` gave that one owner, tracking *what the remote was last told* rather than what xterm last was.
+- **The composer's chords are live on the Files tab.** `FolderWorkspaceView` mounts it once behind a `v-show` so a tab switch cannot cost a draft, and its handler is on `window` with `capture: true` — so `Ctrl+\`` there toggles a panel nobody can see. `FilesView.vue`'s own comment asserted the opposite for months. This is what a chord chosen against a mental map rather than a table looks like, and it is why `src/shared/shortcuts.ts` exists.
+- **Electron's default menu binds fifteen accelerators this app never declared**, read out of the shipped binary rather than remembered. Two of them have already cost a bug (`Ctrl+=` doing nothing, `Ctrl+W` closing the window), and the useful distinction is that the *editing* roles yield to a cancelled keydown while the *window* roles do not. `docs/SHORTCUTS.md` §1.6.
 - **Three bugs came from `return false` in xterm's key handler** without `preventDefault()`. It stops xterm but leaves the DOM event live, because `_keyDown` bails before calling its own `cancel()`.
 - **`tmux -u` and plain `tmux` spell names differently**, per display column. That desynchronised the two halves of the session/cwd join for months of session names containing non-ASCII.
 - **The session list and the cwd probe can read different tmux servers.** `6fe2619` sweeps every socket rather than assuming one.

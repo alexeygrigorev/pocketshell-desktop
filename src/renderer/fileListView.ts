@@ -102,86 +102,244 @@ export function viewFileRows<T extends NamedEntry>(
 // Breadcrumb
 // ---------------------------------------------------------------------------
 
-/** One breadcrumb cell: either a segment you can click, or the gap marker. */
+/** A place the breadcrumb can send you: a directory and the name to call it. */
+export interface CrumbTarget {
+  name: string;
+  path: string;
+}
+
+/**
+ * One breadcrumb cell.
+ *
+ * `current` is a separate kind from `segment` rather than "the last segment",
+ * because almost every rule below treats it differently: it is the only cell
+ * that is never collapsed, the only one allowed to truncate its own text, and
+ * the only one that is not a link. Making the template ask `i === last` for
+ * each of those is how the three rules drift apart.
+ */
 export type Crumb =
   | { kind: 'segment'; name: string; path: string }
-  | { kind: 'gap'; hidden: { name: string; path: string }[] };
+  | { kind: 'current'; name: string; path: string }
+  | { kind: 'gap'; hidden: CrumbTarget[] };
+
+// ---------------------------------------------------------------------------
+// WHAT THE RESEARCH SAID, AND WHY THIS FUNCTION HAS THE SHAPE IT HAS
+// ---------------------------------------------------------------------------
+//
+// The predecessor of this code collapsed the middle of the path to a fixed
+// four cells and then ran each SURVIVING cell through `splitLabel`, so a
+// 250px pane rendered `~ / … / v…previews / olya-…` — two different
+// truncations of the same fact stacked on top of each other, with the folder
+// the user is actually standing in the one that got cut. That is the identical
+// failure `b841362` deleted from the session rows. It came back because the
+// collapse rule was STRUCTURAL (always four cells, whatever the width), so it
+// could not do the work at a narrow width and character truncation had to
+// finish the job.
+//
+// Every implementation that was read does the two operations in a fixed order,
+// and it is the opposite of what we shipped:
+//
+//   COLLAPSE WHOLE SEGMENTS FIRST; CUT CHARACTERS ONLY OUT OF WHAT SURVIVES.
+//
+//   - IBM Carbon, Breadcrumb usage: "When space becomes limited, use an
+//     overflow menu to truncate the breadcrumbs" — and for the narrowest
+//     viewports, "start with the overflow first, followed by one breadcrumb",
+//     i.e. literally `… / current`.
+//     https://carbondesignsystem.com/components/breadcrumb/usage/
+//   - Microsoft WinUI BreadcrumbBar (what Windows 11's address bar is):
+//     "the breadcrumbs collapse and an ellipsis replaces the leftmost nodes.
+//     Clicking the ellipsis opens a flyout to show the collapsed nodes." No
+//     intra-node trimming is documented at all.
+//     https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/breadcrumbbar
+//   - Adobe Spectrum is the explicit prohibition on what we were doing:
+//     "Don't truncate multiple labels simultaneously."
+//     https://spectrum.adobe.com/page/breadcrumbs/
+//   - Grafana's nested-folder breadcrumb spec is the most complete published
+//     ladder and is the one this function follows: collapse the centre items,
+//     then the first-level item, then the parent of the current page, and only
+//     THEN centre-truncate the current page itself. Their stated reason for
+//     centre rather than end is ours exactly: "a simple end truncation isn't
+//     all that useful given the types of naming schemes people use."
+//     https://github.com/grafana/grafana/issues/62266
+//
+// SO THE COLLAPSE HAS TO BE MEASURED, not structural. The predecessor's own
+// comment argued the opposite ("measuring would let a wide pane show more, at
+// the cost of a layout pass") and that reasoning is what produced the bug: a
+// cell count tuned for one width is wrong at every other width, and this pane
+// is drag-resizable from 180px to 640px. A single ResizeObserver on the strip
+// (FileTree.vue) is the whole cost, and it fires on splitter drags, not on
+// navigation.
+//
+// WHY THE LAST SEGMENT IS PROTECTED BUT NOT SACRED. The formal breadcrumb
+// systems forbid touching it (Fluent 2's last item is non-interactive and
+// never truncated; GitLab Pajamas truncates "all but the last breadcrumb item
+// ... to 128px"). But those live in containers that can grow or wrap, and this
+// one cannot. The systems that render real filesystem paths in a box that
+// genuinely cannot grow protect the tail by BUDGET instead: GNOME Nautilus's
+// path bar gives ancestors 7 characters and the current directory 4x that
+// (`nautilus-pathbar.c`, `NAUTILUS_PATH_BAR_BUTTON_ELLISPIZE_MINIMUM_CHARS`),
+// and Grafana reaches the current page only after three collapse stages have
+// failed. Here the budget is "everything that is left", which is the same idea
+// at its limit: the current folder is cut only when it alone does not fit, and
+// nothing else is ever cut at all.
+//
+// WHY THE ELLIPSIS IS A MENU AND NOT A TOOLTIP. NN/g's tooltip guidance rules
+// tooltips out as the SOLE route to something you need: "is the information in
+// the tooltip necessary for users in order to complete a task? If the answer
+// is no, a tooltip is well-suited. Otherwise, the information should be present
+// on the screen" — and a hidden path segment is a navigation target, not a
+// nicety. Carbon, Fluent, Primer, Spectrum and Atlassian all put the collapsed
+// items in a menu. https://www.nngroup.com/articles/tooltip-guidelines/
+//
+// WHAT WAS REJECTED, AND WHY:
+//
+//   - VS Code's answer (`breadcrumbsWidget.ts` wraps the items in a
+//     `DomScrollableElement` and calls `reveal(items[items.length - 1])`) is a
+//     horizontally scrolling strip with the tail pinned: nothing is ever
+//     collapsed and nothing is ever ellipsized. It is the cleanest design in
+//     the survey and it does not fit here — a 250px strip that scrolls needs
+//     an affordance saying so, NN/g #9-#10 and LogRocket both flag horizontal
+//     scroll as a dexterity cost, and the ancestors would be reachable only by
+//     a gesture. Note that VS Code itself concedes the narrow case with
+//     `breadcrumbs.filePath: "last"` — "Only show the last element of the file
+//     path" — which is exactly the terminal state this ladder reaches.
+//   - Nautilus's per-ancestor middle ellipsis (7 chars) is the closest thing
+//     to a licence for the old behaviour, but it is paid for by a path bar
+//     that scrolls and by a tooltip on every button; dropping the ancestor
+//     whole and putting it in the menu says the same thing without inventing a
+//     name like `v…previews` that matches no directory on the host.
+//   - A per-item character cap (Fluent's 30, Pajamas' 128px) needs a container
+//     where 30 characters is a small fraction of the width. Here the entire
+//     strip is about 22 characters.
+//
+// Everything hidden stays reachable three ways regardless: the `…` menu, the
+// `title` on the strip, and the editable path bar (the pencil, or Ctrl+L).
 
 /**
- * How many trailing segments survive a collapse.
+ * Average advance of one character of `--fs-200` in `--font-ui` (Inter 12px),
+ * rounded UP.
  *
- * Two, plus the root. The root says which machine-relative anchor you are
- * under (`~` or `/`), the last segment is where you ARE, and the one before it
- * is what disambiguates it — the difference between `.../job-market/2026-02-27`
- * and `.../archive/2026-02-27` is entirely in that second-to-last name, and
- * dated or numbered leaf directories (which is what the user's folders look
- * like) are exactly the case where the leaf alone tells you nothing. Three
- * would routinely not fit in a pane that can be dragged down to ~200px.
+ * An estimate, deliberately, and deliberately generous. The alternative is
+ * measuring each candidate string in a canvas or a hidden element, which buys
+ * exactness we cannot spend: the fit decision is "does this whole segment
+ * survive", so being a few pixels pessimistic drops one more ancestor into a
+ * menu that is one click away, while being optimistic pushes the current
+ * folder under `overflow: hidden`. Round the error towards the harmless side.
  */
-export const CRUMB_TAIL_SEGMENTS = 2;
+const CRUMB_CHAR_PX = 7;
+
+/** The `/` between two cells, plus its margins. */
+const CRUMB_SEP_PX = 9;
+
+/** The `…` button, plus its padding. */
+const CRUMB_GAP_PX = 13;
+
+/** What a cell showing `name` costs, separator included. */
+function cellWidth(name: string): number {
+  return name.length * CRUMB_CHAR_PX + CRUMB_SEP_PX;
+}
 
 /**
- * Turn an absolute path into breadcrumb cells, collapsing the middle once
- * there are more segments than fit on one line.
+ * Turn an absolute path into breadcrumb cells that fit `width` pixels on one
+ * line, collapsing whole segments — never characters — until they do.
  *
- * The rule is structural, not measured: the result is never more than four
- * cells. Measuring would let a wide pane show more, at the cost of a layout
- * pass on every navigation and a strip whose contents change when the user
- * drags the splitter — and the pane in question can be dragged narrow, which
- * is where the wrapping showed up in the first place.
+ * See the block above for the sources; the ladder it implements is:
  *
- * SEGMENT-level collapsing, not character-level truncation of the whole
- * string: for a path the useful end is the tail, and cutting mid-name produces
- * a crumb that is neither readable nor clickable. `splitLabel` still handles
- * the within-name case (a single very long directory name) in the template —
- * this app has one truncation rule and this is not a second one, it is the
- * layer above it.
+ *   1. Everything fits, so show everything. (VS Code's whole design, and
+ *      Carbon's "The full breadcrumb path should remain visible when there's
+ *      enough horizontal space".)
+ *   2. Otherwise reserve the `…` FIRST. It is the only route back to what is
+ *      about to be hidden, so it outranks every segment it stands for.
+ *   3. Reserve the root next, BEFORE any ancestor competes for the space. It
+ *      is one character wide and it is the only cell that says which
+ *      machine-relative anchor you are under; Grafana's ladder likewise keeps
+ *      `Home` through every stage. Reserving it first is also what makes the
+ *      strip monotonic under a splitter drag — if ancestors were filled first
+ *      they could eat the 16px the root wanted, so widening the pane by four
+ *      pixels could take the `~` AWAY. Spectrum lets even the root fall into
+ *      the menu when it truly does not fit ("regardless of showRoot"), and so
+ *      does this, but only at the very bottom.
+ *   4. Fill ancestors right-to-left with what is left, whole names only. A
+ *      name that does not fit goes into the menu; it is never shortened, and
+ *      what survives is always an unbroken run ending at the current folder —
+ *      a gap between two shown cells would name a parent that is not the
+ *      parent.
+ *   5. Only now, and only for the current folder, does text get cut — by
+ *      `splitLabel` in the template, which keeps the tail. That is the last
+ *      rung of Grafana's ladder and it applies to exactly one label.
  *
- * The hidden segments are carried ON the gap cell rather than thrown away, so
- * the `…` can list them and stay navigable. Losing the ability to click a
- * middle segment is the one thing that would make a breadcrumb not worth
- * having.
- *
- * @param cwd  absolute remote directory
- * @param home the login home, or '' when it is not resolved yet
+ * @param cwd     absolute remote directory
+ * @param home    the login home, or '' when it is not resolved yet
+ * @param options `width` is the pixels available to the crumb strip. Omitted
+ *                (or non-finite) means "not measured yet", and an unmeasured
+ *                strip shows the whole path rather than guessing — a first
+ *                paint that collapses and then expands is worse than one that
+ *                clips for a frame.
  */
-export function buildCrumbs(
-  cwd: string,
-  home: string,
-  options: { maxSegments?: number; tail?: number } = {},
-): Crumb[] {
-  const tail = options.tail ?? CRUMB_TAIL_SEGMENTS;
-  // Collapse only once collapsing would actually SAVE a cell. At `tail + 1`
-  // the strip is at most four cells either way — root + up to three segments,
-  // or root + `…` + the two-segment tail — so "one line" is a property of the
-  // shape rather than a hope about the width, and a three-deep path is never
-  // hollowed out for nothing.
-  const maxSegments = options.maxSegments ?? tail + 1;
+export function buildCrumbs(cwd: string, home: string, options: { width?: number } = {}): Crumb[] {
+  const width = options.width ?? Number.POSITIVE_INFINITY;
 
   // `~` REPLACES the home prefix rather than sitting in front of the absolute
   // spelling of it — otherwise the login home renders as `~ / home / alexey`,
   // the same location said twice with the first copy linking elsewhere.
   const inHome = home !== '' && (cwd === home || cwd.startsWith(home + '/'));
-  const root: Crumb = inHome
-    ? { kind: 'segment', name: '~', path: home }
-    : { kind: 'segment', name: '/', path: '/' };
+  const root: CrumbTarget = inHome ? { name: '~', path: home } : { name: '/', path: '/' };
   const rest = inHome ? cwd.slice(home.length) : cwd;
 
-  const segments: { name: string; path: string }[] = [];
+  const trail: CrumbTarget[] = [root];
   let acc = inHome ? home : '';
   for (const part of rest.split('/').filter(Boolean)) {
     acc += '/' + part;
-    segments.push({ name: part, path: acc });
+    trail.push({ name: part, path: acc });
   }
 
-  if (segments.length <= maxSegments) {
-    return [root, ...segments.map((s) => ({ kind: 'segment' as const, ...s }))];
+  // Where you are. Always shown, never collapsed, not a link.
+  const current: Crumb = { kind: 'current', ...trail[trail.length - 1]! };
+  const ancestors = trail.slice(0, -1);
+  const link = (t: CrumbTarget): Crumb => ({ kind: 'segment', ...t });
+
+  // (1) The whole trail, if it fits. `cellWidth` charges the current a
+  // separator it does not have, which is the pessimism this wants.
+  const full = trail.reduce((w, t) => w + cellWidth(t.name), 0);
+  if (ancestors.length === 0 || full <= width) {
+    return [...ancestors.map(link), current];
   }
-  const kept = segments.slice(-tail);
-  const hidden = segments.slice(0, segments.length - tail);
-  return [
-    root,
-    { kind: 'gap', hidden },
-    ...kept.map((s) => ({ kind: 'segment' as const, ...s })),
-  ];
+
+  // (2) The `…` is reserved before anything it could hide, and the current
+  // folder's own width comes off the top with it. `left` can go negative —
+  // that is the case where the current folder alone overflows, and rung 5
+  // handles it in the template.
+  let left = width - CRUMB_GAP_PX - CRUMB_SEP_PX - cellWidth(current.name);
+
+  // (3) Then the root, ahead of every ancestor.
+  const head: Crumb[] = [];
+  if (cellWidth(root.name) <= left) {
+    head.push(link(root));
+    left -= cellWidth(root.name);
+  }
+
+  // (4) Then ancestors, right to left, until one does not fit.
+  const shown: CrumbTarget[] = [];
+  let firstShown = ancestors.length;
+  for (let i = ancestors.length - 1; i >= 1; i--) {
+    const cost = cellWidth(ancestors[i]!.name);
+    if (cost > left) break;
+    left -= cost;
+    shown.unshift(ancestors[i]!);
+    firstShown = i;
+  }
+  const hidden = ancestors.slice(head.length, firstShown);
+
+  // A formality with these constants rather than a live branch, and kept so
+  // the function stays total if they ever change. It cannot fire today: every
+  // cell that got added was checked against a `left` that already had the `…`
+  // deducted, so reaching here with nothing hidden would mean the whole trail
+  // plus the `…` fit — and step (1) would have returned it.
+  if (hidden.length === 0) return [...head, ...shown.map(link), current];
+
+  // Baymard's "never truncate a single value" — don't spend a control to hide
+  // one item — needs no code for the same reason: showing a lone hidden folder
+  // instead of the `…` means showing the entire trail, which step (1) already
+  // priced and rejected. The accounting decides it, not a special case.
+  return [...head, { kind: 'gap', hidden }, ...shown.map(link), current];
 }
