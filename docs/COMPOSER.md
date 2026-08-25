@@ -527,7 +527,7 @@ type ComposerMode = 'hidden' | 'docked' | 'expanded';
 
 | State | Rendering | Geometry |
 | --- | --- | --- |
-| `hidden` | A **rail pill**: chevron, `PROMPT` label, the waiting draft's first line (or the `Compose prompt…` placeholder), an attachment-count badge, and the `Ctrl+\`` hint | 32px tall, shrink-to-fit, **pinned** to the dock's bottom-right corner (§21.4) |
+| `hidden` | The card is gone; the **fixed toggle** (§21.4) widens into a rail: `PROMPT` label, the waiting draft's first line (or the `Compose prompt…` placeholder), an attachment-count badge, the `Ctrl+\`` hint, and the chevron | 32px tall, shrink-to-fit leftward, **pinned** to the pane's bottom-right corner |
 | `docked` (default) | Full card | the remembered geometry: position and size, both dragged by the user, default 720—240 in the resting corner |
 | `expanded` | Same card, maximized | fills the dock: full width, height capped at 80% of the body. Ignores the remembered geometry, which `docked` returns to |
 
@@ -550,9 +550,9 @@ per session.
 
 | From | Trigger | To |
 | --- | --- | --- |
-| `hidden` | click the rail / `Ctrl+Shift+K` / `Ctrl+Shift+↑` | `docked`, draft focused |
+| `hidden` | click the fixed toggle / `Ctrl+\`` / `Ctrl+Shift+K` / `Ctrl+Shift+↑` | the last open mode, draft focused |
 | `hidden` | a seed action (slash command tapped in the terminal, "send to composer" from Files, paste-to-attach) | `docked`, draft focused |
-| `docked` | `Ctrl+Shift+K` / `Ctrl+Shift+↓` / chevron | `hidden` |
+| `docked` | click the **same** fixed toggle / `Ctrl+\`` / `Ctrl+Shift+K` / `Ctrl+Shift+↓` | `hidden` |
 | `docked` | `Ctrl+Shift+↑` / drag the top handle above threshold / double-click the handle | `expanded` |
 | `expanded` | `Ctrl+Shift+↓` / `Escape` (see §12.2) / drag the handle down | `docked` |
 | any | **successful** send | the last open mode (never `hidden` — see §12.3) |
@@ -965,7 +965,7 @@ a resize needs them.
 
 | | |
 |---|---|
-| Move handle | the **header strip** — the card's title bar, `cursor: move`, `user-select: none`. Presses that land on the maximize/close buttons are excluded; double-clicking it maximizes, as a title bar does everywhere |
+| Move handle | the **header strip** — the card's title bar, `cursor: move`, `user-select: none`. Presses that land on its one button (maximize/restore) are excluded; double-clicking it maximizes, as a title bar does everywhere |
 | Resize | **all four edges and all four corners**, 6px strips and 14px corner boxes overlaid on the card's own padding, so none of them covers the textarea. The top one keeps the old sash's look and its double-click. Corners are declared after edges so they win the hit test where both would answer |
 | Floors | 360—190. 360 leaves ~40 mono columns beside the tools pill and Send; 190 is the height at which the toolbar, two draft lines, the tiles and the Send row all still fit |
 | Cap | 80% of the pane's height, and never wider or taller than the pane |
@@ -1011,21 +1011,48 @@ That last one is why the card is *not* `overflow: hidden`, which in turn is why
 `.sash` closes the card's top corners itself.
 
 `<style scoped>` per component, matching every existing view.
-### 21.4 The collapsed pill stays in the corner
+### 21.4 One toggle, one position — the control that never moves
 
-The card moves; the pill does not. Closing a card the user has dragged to the
-middle of the pane puts the pill back in the dock's bottom-right corner, and
-re-opening restores the card to where they left it.
+Opening and closing used to be two different controls in two different places:
+the collapsed pill *was* the opener, and the card's header carried a close
+button. So the user reached for one spot to put the panel away and a different
+spot to bring it back, and the control they had just clicked was no longer under
+the cursor. The user's words: *"I want the button that minimizes it — on the
+same place — so when I click on it it goes down, and then if I want to hide it
+I just click on the same thing."*
 
-That asymmetry is deliberate, and the reserve is the argument. The pane gives up
-`rail + inset` px of terminal **forever** so that a closed composer costs
-nothing and stays visible. That budget is only honest if the pill actually lives
-in the strip it paid for: a pill that wandered with the card would cover
-terminal rows — including tmux's status line — while the app went on reserving
-a strip nobody used. It also keeps the pill where the eye already learnt to look,
-which is the entire job of a collapsed rail (§12), and it keeps a 32px target
-free of any drag-versus-click ambiguity.
+**There is now exactly one open/close control, and it is anchored to the PANE.**
 
+```
+ .composer-dock          the session body, inset on all sides
+ ├── .composer-stage     the dock MINUS the rail strip — the card's world
+ │   └── .composer       the card: dragged, resized, maximized, or absent
+ └── .rail               the fixed toggle, in the strip the stage gives up
+```
+
+| | |
+|---|---|
+| Position | pinned `right: 0; bottom: 0` of the dock, in the strip `.tab-body` already reserves. Identical in every state |
+| Both states | open — chevron **down**, the direction the panel will travel. Closed — chevron **up**. The chevron is the LAST child and the padding on that side is fixed, so the toggle's box does not move when the rail widens to the left |
+| Never covered | `.composer-stage` stops at the strip's top edge, so no card geometry can address the space below it — at rest, dragged into that corner, or maximized |
+| Never covers | the strip is the reserved band, so the toggle costs no terminal row, including tmux's status line |
+| Click target | the whole rail. It is pinned, so it is never dragged: a click is unambiguously a click |
+
+It could not have lived on the card. The card moves — that is the previous
+feature — so any control riding on it has no fixed position to offer.
+
+**The header's close button is gone.** It kept maximize/restore, which acts on
+the card's own size and belongs to the card. A second closer, on a surface the
+user can drag anywhere, is precisely the "the control moved" problem this
+section exists to remove. The other ways out are unchanged and all end in the
+same visible state: `Ctrl+\``, `Ctrl+Shift+K`, `Ctrl+Shift+↓`, and rung 4 of the
+Escape ladder (§12.2). `lastOpenMode` still carries docked-vs-maximized across
+the round trip, so the toggle re-opens the panel the way the user left it.
+
+The chevron mapping and the rail's draft preview are pure functions
+(`railToggle`, `draftSummary` in `src/shared/composerText.ts`), tested in
+`tests/unit/composerText.test.ts`; the coordinate invariance itself is asserted
+end-to-end in `tests/e2e/composer.spec.ts`.
 
 ## 22. Deliberately NOT ported
 

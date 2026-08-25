@@ -14,6 +14,8 @@ import { ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from '
  *    splitting the pane with it, and — the guarantee that matters — the
  *    terminal's own box is IDENTICAL open and closed, because a panel that
  *    resized the terminal would resize the remote tmux with it;
+ *  - ONE fixed toggle opens and closes it, in the SAME screen position both
+ *    ways, so the pointer never has to move between the two;
  *  - hiding it leaves a discoverable rail, and the draft survives the round trip
  *    (the whole reason the rail exists — a preserved "Not sent" draft must never
  *    become invisible);
@@ -139,17 +141,18 @@ test.describe('prompt composer panel', () => {
 
     // The guarantee: closing and re-opening the panel leaves the terminal the
     // exact same size, so the remote tmux is never asked to reflow.
-    await page.locator('.composer .panel-action').nth(1).click();
-    await expect(page.locator('.composer .rail')).toBeVisible();
+    await page.locator('.rail').click();
+    await expect(page.locator('.composer')).toHaveCount(0);
     const closed = await page.locator('.terminal-area > .terminal').boundingBox();
     expect(closed!.height).toBe(term!.height);
     expect(closed!.width).toBe(term!.width);
 
-    // ...and the rail pill is the one state that covers no terminal row at all.
-    const rail = await page.locator('.composer').boundingBox();
+    // ...and the rail strip covers no terminal row, which is what the pane
+    // reserves it for.
+    const rail = await page.locator('.rail').boundingBox();
     expect(rail!.y).toBeGreaterThanOrEqual(closed!.y + closed!.height - 1);
 
-    await page.locator('.composer .rail').click();
+    await page.locator('.rail').click();
     await expect(page.locator('.composer .draft')).toBeVisible();
   });
 
@@ -169,15 +172,71 @@ test.describe('prompt composer panel', () => {
   });
 
   test('closing leaves a rail that advertises the unsent draft, and reopens it', async () => {
-    await page.locator('.composer .panel-action').nth(1).click();
-    await expect(page.locator('.composer .rail')).toBeVisible();
+    await page.locator('.rail').click();
+    await expect(page.locator('.composer')).toHaveCount(0);
     await expect(page.locator('.composer .draft')).toHaveCount(0);
     // The pill says a draft is waiting by SHOWING it: a dot could only raise
     // the question of which unsent prompt was sitting there.
-    await expect(page.locator('.composer .ghost')).toHaveText('hello there');
+    await expect(page.locator('.rail .ghost')).toHaveText('hello there');
 
-    await page.locator('.composer .rail').click();
+    await page.locator('.rail').click();
     await expect(page.locator('.composer .draft')).toHaveValue('hello there');
+  });
+
+  test('opens and closes from ONE control that never moves', async () => {
+    const toggle = page.locator('.rail .chevron');
+
+    // Open: the toggle points down, because down is where the panel will go.
+    await expect(page.locator('.composer')).toBeVisible();
+    const whenOpen = await toggle.boundingBox();
+
+    // Click it, without moving the pointer afterwards.
+    await page.mouse.click(
+      whenOpen!.x + whenOpen!.width / 2,
+      whenOpen!.y + whenOpen!.height / 2,
+    );
+    await expect(page.locator('.composer')).toHaveCount(0);
+    const whenClosed = await toggle.boundingBox();
+
+    // THE requirement: the same pixel, both ways round.
+    expect(whenClosed).toEqual(whenOpen);
+
+    // And clicking that same pixel again brings it back.
+    await page.mouse.click(
+      whenOpen!.x + whenOpen!.width / 2,
+      whenOpen!.y + whenOpen!.height / 2,
+    );
+    await expect(page.locator('.composer')).toBeVisible();
+    expect(await toggle.boundingBox()).toEqual(whenOpen);
+  });
+
+  test('the toggle stays put and uncovered wherever the card goes', async () => {
+    const toggle = page.locator('.rail .chevron');
+    const home = await toggle.boundingBox();
+
+    // Maximized: the card takes all the room it is allowed and still leaves the
+    // toggle alone — the stage it lives in excludes the rail strip.
+    await page.locator('.composer .panel-action').first().click();
+    const maxed = await page.locator('.composer').boundingBox();
+    expect(await toggle.boundingBox()).toEqual(home);
+    expect(maxed!.y + maxed!.height).toBeLessThanOrEqual(home!.y);
+    await page.locator('.composer .panel-action').first().click();
+
+    // Dragged into the bottom-right corner, the same holds.
+    const header = await page.locator('.composer .panel-header').boundingBox();
+    await page.mouse.move(header!.x + 40, header!.y + header!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(header!.x + 600, header!.y + 600, { steps: 12 });
+    await page.mouse.up();
+    const card = await page.locator('.composer').boundingBox();
+    expect(await toggle.boundingBox()).toEqual(home);
+    expect(card!.y + card!.height).toBeLessThanOrEqual(home!.y);
+  });
+
+  test('the header carries maximize and nothing that closes the panel', async () => {
+    // A second closer riding on a card the user can drag anywhere is exactly
+    // the "the control moved" problem the fixed toggle exists to solve.
+    await expect(page.locator('.composer .panel-action')).toHaveCount(1);
   });
 
   test('does not restate the session name inside the composer', async () => {
@@ -193,7 +252,7 @@ test.describe('prompt composer panel', () => {
   test('Ctrl+` toggles the panel from the terminal', async () => {
     await page.locator('.terminal-area > .terminal').first().click();
     await page.keyboard.press('Control+`');
-    await expect(page.locator('.composer .rail')).toBeVisible();
+    await expect(page.locator('.composer')).toHaveCount(0);
     await page.keyboard.press('Control+`');
     await expect(page.locator('.composer .draft')).toHaveValue('hello there');
   });
@@ -288,15 +347,15 @@ test.describe('prompt composer panel', () => {
     // been opened on started from its default — open — and closing the panel
     // was undone by the next session switch.
     await openSession(page, 'main');
-    await page.locator('.composer .panel-action').nth(1).click();
-    await expect(page.locator('.composer .rail')).toBeVisible();
+    await page.locator('.rail').click();
+    await expect(page.locator('.composer')).toHaveCount(0);
 
     await page.locator('.session-row', { hasText: 'build' }).first().click();
-    await expect(page.locator('.composer .rail')).toBeVisible();
-    await expect(page.locator('.composer .draft')).toHaveCount(0);
+    await expect(page.locator('.rail')).toBeVisible();
+    await expect(page.locator('.composer')).toHaveCount(0);
 
     // Re-opening restores the panel, and the draft belonging to THIS session.
-    await page.locator('.composer .rail').click();
+    await page.locator('.rail').click();
     await expect(page.locator('.composer .draft')).toHaveValue('');
   });
 

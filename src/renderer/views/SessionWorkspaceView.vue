@@ -324,6 +324,10 @@ function onFocusTerminal(): void {
  * constant; the dock is an overlay that takes no part in the tab body's layout.
  * Moving or resizing the card therefore cannot alter the terminal's row count,
  * whatever corner the user drags it into.
+ *
+ * The bottom — the strip the reserve pays for — belongs to the composer's
+ * fixed open/close toggle, and PromptComposer keeps the draggable card out of
+ * it. That is what makes the toggle un-coverable in every card position.
  */
 .composer-dock {
   position: absolute;
@@ -337,10 +341,8 @@ function onFocusTerminal(): void {
   z-index: 5;
   pointer-events: none;
 }
-/* The dock covers the whole pane so the card can be dragged anywhere in it, so
-   the dock MUST be transparent to the mouse or it would eat every click meant
-   for the terminal. The card takes its own events back. */
-.composer-dock > * {
-  pointer-events: auto;
-}
+/* Which parts of that overlay accept the mouse is PromptComposer's business:
+   it layers a stage and a pinned toggle inside here and re-enables events on
+   just those two. A blanket rule on the dock's children would have handed them
+   back to the whole layer and swallowed every click meant for the terminal. */
 </style>

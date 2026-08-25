@@ -847,7 +847,8 @@ resizes it**; what follows is where it starts and what it is made of.
 | Resize | eight grips: four 6px edges, four 14px corners. Floors 360×190, height capped at 80% of the pane |
 | Corners / elevation | `--r-xl` and `0 8px 32px rgba(0,0,0,.5)` — §5.5's `OverlayPanel` treatment, Y offset pulled in from 16px because a card that can sit flush against the bottom of its dock would throw that shadow off the pane and leave its *top* edge, the one with terminal text behind it, unseparated |
 | Surface | `--surface`, fully opaque, `--border` hairline. Never translucent: terminal text bleeding through a prompt field is unreadable for both |
-| Closed | a 32px rail **pill** (`border-radius: 999px`, shrink-to-fit) **pinned** to the resting corner wherever the card was dragged, showing the waiting draft's first line and an attachment count |
+| Toggle | ONE control opens and closes it, pinned to the pane's bottom-right corner and present in both states, so the same pixel alternates down/up. It cannot live on the card — the card moves. The card's header keeps maximize/restore only |
+| Closed | the card is removed; the toggle widens leftward into a 32px rail (`border-radius: 999px`) showing the waiting draft's first line and an attachment count |
 | Reserved | `.tab-body` permanently pads the pill's height plus its inset, whatever the composer is doing — so the terminal's row count never changes and the remote tmux never reflows. See COMPOSER.md §21.2 and §21.4 |
 
 The two constants (`--composer-rail-h`, `--composer-inset`) live on

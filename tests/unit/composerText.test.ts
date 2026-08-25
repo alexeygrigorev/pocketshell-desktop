@@ -3,7 +3,9 @@ import {
   appendAttachmentPaths,
   appendSeededPrompt,
   attachmentDisplayName,
+  draftSummary,
   insertCommandText,
+  railToggle,
   slashQueryFor,
 } from '../../src/shared/composerText';
 import { commandsFor, filteredCommands, insertionTextFor } from '../../src/shared/agentCommands';
@@ -155,5 +157,60 @@ describe('agent command catalog (AgentCommandCatalog.kt)', () => {
     const clear = commandsFor('claude').find((c) => c.command === '/clear');
     expect(insertionTextFor(compact!)).toBe('/compact ');
     expect(insertionTextFor(clear!)).toBe('/clear');
+  });
+});
+
+describe('draftSummary — what the collapsed rail advertises', () => {
+  it('is empty when there is no draft', () => {
+    expect(draftSummary('')).toBe('');
+  });
+
+  it('is empty for a whitespace-only draft, which has nothing to advertise', () => {
+    expect(draftSummary('   \n\t\n  ')).toBe('');
+  });
+
+  it('takes the first line', () => {
+    expect(draftSummary('fix the parser\nand then the tests')).toBe('fix the parser');
+  });
+
+  it('skips leading blank lines rather than previewing nothing', () => {
+    expect(draftSummary('\n\n  the real first line\nmore')).toBe('the real first line');
+  });
+
+  it('trims, so indentation does not eat the preview', () => {
+    expect(draftSummary('      indented')).toBe('indented');
+  });
+
+  it('handles a single line with no trailing newline', () => {
+    expect(draftSummary('just this')).toBe('just this');
+  });
+});
+
+describe('railToggle — one control, two states', () => {
+  it('points DOWN when the panel is open, because that is where it goes', () => {
+    expect(railToggle(true).icon).toBe('chevron-down');
+  });
+
+  it('points UP when the panel is closed, because that is where it comes from', () => {
+    expect(railToggle(false).icon).toBe('chevron-up');
+  });
+
+  it('names the action it will perform, not the state it is in', () => {
+    expect(railToggle(true).label).toBe('Hide the prompt panel');
+    expect(railToggle(false).label).toBe('Open the prompt panel');
+  });
+
+  it('advertises the same keyboard chord in both states', () => {
+    expect(railToggle(true).title).toContain('Ctrl+`');
+    expect(railToggle(false).title).toContain('Ctrl+`');
+  });
+
+  it('is a true alternation: flipping twice returns the original', () => {
+    let open = false;
+    const first = railToggle(open);
+    open = !open;
+    expect(railToggle(open)).not.toEqual(first);
+    open = !open;
+    expect(railToggle(open)).toEqual(first);
   });
 });

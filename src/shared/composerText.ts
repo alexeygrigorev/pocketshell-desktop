@@ -94,3 +94,46 @@ export const COMPOSER_STRINGS = {
   /** `PromptComposerSheet.kt:1010` */
   uploading: (n: number): string => `Uploading ${n} attachment(s)...`,
 } as const;
+
+/**
+ * The first line of a draft worth showing in the collapsed rail.
+ *
+ * A preserved draft has to stay discoverable (docs/COMPOSER.md §12), and the
+ * rail used to signal one with a status pip beside the placeholder. Showing the
+ * draft's own opening line instead answers the question the pip could only
+ * raise — WHICH unsent prompt is waiting — in the same 32px of space.
+ *
+ * Leading blank lines are skipped rather than rendered as an empty preview: a
+ * draft that begins with a newline still has something to say.
+ */
+export function draftSummary(draft: string): string {
+  const line = draft.split('\n').find((l) => l.trim() !== '');
+  return line === undefined ? '' : line.trim();
+}
+
+/**
+ * The fixed open/close toggle, which is ONE control in two states rather than
+ * two controls in two places (docs/COMPOSER.md §21.5).
+ *
+ * The chevron points the way the panel will travel — down to put it away, up to
+ * bring it back — which is the whole of the affordance: the user aims at one
+ * unmoving spot and it alternates. Keeping that mapping here rather than in the
+ * template is what lets a test pin it.
+ */
+export function railToggle(open: boolean): {
+  icon: 'chevron-up' | 'chevron-down';
+  title: string;
+  label: string;
+} {
+  return open
+    ? {
+        icon: 'chevron-down',
+        title: 'Hide the prompt panel (Ctrl+`)',
+        label: 'Hide the prompt panel',
+      }
+    : {
+        icon: 'chevron-up',
+        title: 'Open the prompt panel (Ctrl+`)',
+        label: 'Open the prompt panel',
+      };
+}

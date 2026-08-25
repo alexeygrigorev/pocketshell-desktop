@@ -10,8 +10,10 @@
 // (row-resize cursor, min 190px, max 80% of the body), its height is remembered
 // per session across hide/show, and a small toolbar row carries the panel title
 // on the left with maximize/restore and close on the right. `Ctrl+\`` toggles
-// it, matching VS Code muscle memory; when it is closed it shrinks to a rail
-// PILL in the same corner, so the affordance never teleports and a preserved
+// it, matching VS Code muscle memory — and so does ONE fixed toggle pinned to
+// the pane's bottom-right corner, which is present whether the card is open or
+// closed and is the only control that opens and closes it. Closed, that toggle
+// widens into a rail showing the waiting draft's first line, so a preserved
 // draft can always be found by eye.
 //
 // The card overlays the terminal instead of splitting the pane with it, and
@@ -29,9 +31,9 @@
 //
 // Three deliberate divergences from the Android original (docs/COMPOSER.md):
 //
-//  1. §12 — a third `hidden` mode that leaves a rail pill behind, instead of the
+//  1. §12 — a third `hidden` mode that leaves a rail behind, instead of the
 //     phone's "the sheet is simply gone". A preserved "Not sent" draft must stay
-//     discoverable; the pill carries a draft dot and an attachment count.
+//     discoverable; the rail shows its first line and an attachment count.
 //  2. §12.3 — a SUCCESSFUL send does NOT hide the composer. The phone dismisses
 //     its sheet on delivery because a modal sheet occludes the terminal on a
 //     phone screen; here the composer is where the user works, so it stays open
@@ -55,7 +57,13 @@ import AppIcon from './AppIcon.vue';
 import OverlayPanel from './OverlayPanel.vue';
 import DoodleCanvas from './DoodleCanvas.vue';
 import RemoteImagePicker from './RemoteImagePicker.vue';
-import { COMPOSER_STRINGS, slashQueryFor, insertCommandText } from '../../shared/composerText';
+import {
+  COMPOSER_STRINGS,
+  draftSummary,
+  insertCommandText,
+  railToggle,
+  slashQueryFor,
+} from '../../shared/composerText';
 import {
   composerTiming,
   deliverPayload,
@@ -127,18 +135,11 @@ const state = computed<ComposerSessionState>(() => composer.states[key.value] ??
 const mode = computed(() => composer.mode);
 const attachments = computed(() => state.value.attachments);
 
-/**
- * What the collapsed pill says.
- *
- * A preserved draft has to stay discoverable (§12), and the pill used to signal
- * one with a dot beside the words "Compose prompt—". Showing the draft's own
- * first line instead answers the question that dot could only raise — WHICH
- * unsent prompt is waiting — in the same space, so the dot went with it.
- */
-const railPreview = computed(() => {
-  const line = state.value.draft.split('\n').find((l) => l.trim() !== '');
-  return line === undefined ? '' : line.trim();
-});
+/** The waiting draft's first line, shown in the rail while the card is closed. */
+const railPreview = computed(() => draftSummary(state.value.draft));
+
+/** Chevron direction and copy for the fixed toggle — pure, so it can be pinned. */
+const toggle = computed(() => railToggle(mode.value !== 'hidden'));
 
 // ---------------------------------------------------------------------------
 // Slash commands
@@ -522,15 +523,23 @@ function openComposer(): void {
   focusDraft();
 }
 
+/**
+ * THE open/close control. One handler, one screen position, both directions:
+ * clicking the fixed toggle puts the card away, clicking the same pixel brings
+ * it back. `toggleHidden` is what preserves docked-vs-maximized across the
+ * round trip, so re-opening restores the mode the user left.
+ */
+function onToggleRail(): void {
+  composer.toggleHidden();
+  // Opening lands the caret in the draft; closing deliberately does not move
+  // focus, so the pointer and the keyboard do not disagree about where you are.
+  if (mode.value !== 'hidden') focusDraft();
+}
+
 /** The panel's maximize/restore button. Restoring returns the dragged height. */
 function toggleExpanded(): void {
   composer.setMode(mode.value === 'expanded' ? 'docked' : 'expanded');
   focusDraft();
-}
-
-/** The panel's close button. Closes to the rail; never discards (§12.2). */
-function closePanel(): void {
-  composer.setMode('hidden');
 }
 
 /**
@@ -656,14 +665,22 @@ function onGlobalKey(e: KeyboardEvent): void {
 // usable are unit-tested rather than re-derived from mouse events here.
 // ---------------------------------------------------------------------------
 
-/** The dock's content box — what the card's geometry is measured against. */
+/**
+ * The STAGE's content box — what the card's geometry is measured against.
+ *
+ * The stage is the dock minus the rail strip along its bottom, so every clamp
+ * in composerGeometry.ts confines the card to the area above the toggle without
+ * knowing the toggle exists. That is why a card dragged into the bottom-right
+ * corner, or maximized, still cannot cover the control that closes it.
+ */
 const paneBox = ref<PaneBox | null>(null);
-let dockEl: HTMLElement | null = null;
+const stageEl = ref<HTMLElement | null>(null);
 let paneObserver: ResizeObserver | null = null;
 
 function measurePane(): void {
-  if (!dockEl) return;
-  paneBox.value = { width: dockEl.clientWidth, height: dockEl.clientHeight };
+  const el = stageEl.value;
+  if (!el) return;
+  paneBox.value = { width: el.clientWidth, height: el.clientHeight };
 }
 
 type DragIntent = { kind: 'move' } | { kind: 'resize'; edge: ResizeEdge };
@@ -746,13 +763,11 @@ function onHeaderDoubleClick(e: MouseEvent): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Where the card is painted. `hidden` contributes nothing: the pill is pinned to
- * the dock's corner by CSS, deliberately ignoring the remembered geometry
- * (§21.1 — the reserved strip is the one place it can sit without covering a
- * terminal row).
+ * Where the card is painted. Only ever read while the card exists: `hidden`
+ * removes it from the tree entirely, because the rail is now a separate element
+ * that stays put rather than the same box collapsed (§21.5).
  */
 const rootStyle = computed(() => {
-  if (mode.value === 'hidden') return {};
   const g = card.value;
   return {
     right: `${g.right}px`,
@@ -764,17 +779,15 @@ const rootStyle = computed(() => {
 
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKey, { capture: true });
-  // The dock is this card's containing block AND its bounds; it is the parent
-  // element because the card is mounted straight into it
-  // (SessionWorkspaceView.vue).
-  dockEl = rootEl.value?.parentElement ?? null;
   measurePane();
-  if (dockEl && typeof ResizeObserver !== 'undefined') {
+  if (stageEl.value && typeof ResizeObserver !== 'undefined') {
     // The pane changes without a window resize too — the session panel's
     // splitter moves it — and a card clamped to a stale pane would hang off
-    // the edge. Nothing in here resizes the dock, so this cannot feed back.
+    // the edge. Nothing in here resizes the stage, so this cannot feed back.
+    // The stage is rendered in every mode, so the measurement stays live while
+    // the card is closed and re-opening lands correctly clamped.
     paneObserver = new ResizeObserver(measurePane);
-    paneObserver.observe(dockEl);
+    paneObserver.observe(stageEl.value);
   }
   caret.value = state.value.caret;
   // The composer is the primary surface: land in it (§11).
@@ -794,237 +807,276 @@ defineExpose({ focusDraft, openComposer });
 <template>
   <div
     ref="rootEl"
-    :class="['composer', mode, { 'drag-over': dragActive }]"
-    :style="rootStyle"
+    :class="['composer-root', { 'drag-over': dragActive }]"
     @keydown="onRootKeydown"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <!-- hidden: a 32px rail, so a preserved "Not sent" draft is discoverable. -->
-    <button
-      v-if="mode === 'hidden'"
-      class="rail"
-      type="button"
-      title="Open the prompt panel (Ctrl+`)"
-      @click="openComposer"
-    >
-      <AppIcon class="chevron" name="chevron-up" />
-      <span class="rail-title">Prompt</span>
-      <span :class="['ghost', { placeholder: !railPreview }]">
-        {{ railPreview || COMPOSER_STRINGS.placeholder }}
-      </span>
-      <span v-if="attachments.length" class="rail-badge">
-        <AppIcon name="paperclip" />
-        {{ attachments.length }}
-      </span>
-      <span class="hint">Ctrl+`</span>
-    </button>
-
-    <template v-else>
-      <!-- Every edge and corner is a resize grip. The top one keeps the sash's
+    <!-- The stage is the card's world: the dock minus the rail strip, so the
+         card can be dragged and maximized freely and STILL never covers the
+         toggle that closes it. Rendered in every mode, so the pane measurement
+         survives a close. -->
+    <div ref="stageEl" class="composer-stage">
+      <div v-if="mode !== 'hidden'" :class="['composer', mode]" :style="rootStyle">
+        <!-- Every edge and corner is a resize grip. The top one keeps the sash's
            look and its double-click, so that affordance is where it always was. -->
-      <div
-        v-for="edge in RESIZE_EDGES"
-        :key="edge"
-        :class="['grip', `grip-${edge}`, { sash: edge === 'n' }]"
-        :title="edge === 'n' ? 'Drag to resize · double-click to maximize' : undefined"
-        aria-hidden="true"
-        @mousedown="beginDrag($event, { kind: 'resize', edge })"
-        @dblclick="edge === 'n' && toggleExpanded()"
-      ></div>
+        <div
+          v-for="edge in RESIZE_EDGES"
+          :key="edge"
+          :class="['grip', `grip-${edge}`, { sash: edge === 'n' }]"
+          :title="edge === 'n' ? 'Drag to resize · double-click to maximize' : undefined"
+          aria-hidden="true"
+          @mousedown="beginDrag($event, { kind: 'resize', edge })"
+          @dblclick="edge === 'n' && toggleExpanded()"
+        ></div>
 
-      <!-- Panel toolbar, and the card's title bar: press it to move the card.
-           The session name used to sit here and no longer does. The session bar
-           names the session one row above, and the composer is mounted inside
-           that session's workspace, so it could never have meant another one. -->
-      <div class="panel-header" @mousedown="onHeaderDown" @dblclick="onHeaderDoubleClick">
-        <span class="panel-title">Prompt</span>
-        <span class="spacer"></span>
-        <button
-          class="panel-action"
-          type="button"
-          :title="mode === 'expanded' ? 'Restore panel (Ctrl+Shift+↓)' : 'Maximize panel (Ctrl+Shift+↑)'"
-          :aria-label="mode === 'expanded' ? 'Restore panel' : 'Maximize panel'"
-          @click="toggleExpanded"
-        >
-          <AppIcon :name="mode === 'expanded' ? 'chevron-down' : 'chevron-up'" />
-        </button>
-        <button
-          class="panel-action"
-          type="button"
-          title="Close panel (Ctrl+`)"
-          aria-label="Close panel"
-          @click="closePanel"
-        >
-          <AppIcon name="close" />
-        </button>
-      </div>
+        <!-- Panel toolbar, and the card's title bar: press it to move the card.
+           It carries maximize/restore and nothing else. The close button that
+           used to sit beside it is GONE: closing now belongs to the fixed rail
+           toggle below, and a second closer riding on a card the user can drag
+           anywhere is exactly the "the control moved" problem being fixed. -->
+        <div class="panel-header" @mousedown="onHeaderDown" @dblclick="onHeaderDoubleClick">
+          <span class="panel-title">Prompt</span>
+          <span class="spacer"></span>
+          <button
+            class="panel-action"
+            type="button"
+            :title="mode === 'expanded' ? 'Restore panel (Ctrl+Shift+↓)' : 'Maximize panel (Ctrl+Shift+↑)'"
+            :aria-label="mode === 'expanded' ? 'Restore panel' : 'Maximize panel'"
+            @click="toggleExpanded"
+          >
+            <AppIcon :name="mode === 'expanded' ? 'chevron-down' : 'chevron-up'" />
+          </button>
+        </div>
 
-      <!-- Above the field, never below: the list must not be pushed off-screen. -->
-      <SlashCommandDropdown
-        v-if="slashOpen"
-        class="slash-anchor"
-        :commands="slashCommands"
-        :active="activeCommand"
-        @pick="acceptCommand"
-        @hover="(i: number) => (activeCommand = i)"
-      />
+        <!-- Above the field, never below: the list must not be pushed off-screen. -->
+        <SlashCommandDropdown
+          v-if="slashOpen"
+          class="slash-anchor"
+          :commands="slashCommands"
+          :active="activeCommand"
+          @pick="acceptCommand"
+          @hover="(i: number) => (activeCommand = i)"
+        />
 
-      <!-- Everything between the toolbar and the Send row lives in one
+        <!-- Everything between the toolbar and the Send row lives in one
            scroller: the draft absorbs slack when the panel is tall, and when it
            is at the floor (or a banner appears) this scrolls instead of
            squeezing the Send row out of reach. -->
-      <div class="panel-body">
-        <div class="draft-wrap">
-          <textarea
-            ref="draftEl"
-            class="draft"
-            :value="state.draft"
-            :placeholder="COMPOSER_STRINGS.placeholder"
-            spellcheck="false"
-            aria-label="Prompt draft"
-            @input="onInput"
-            @keyup="syncCaret"
-            @click="syncCaret"
-            @keydown="onDraftKeydown"
-            @paste="onPaste"
-          />
+        <div class="panel-body">
+          <div class="draft-wrap">
+            <textarea
+              ref="draftEl"
+              class="draft"
+              :value="state.draft"
+              :placeholder="COMPOSER_STRINGS.placeholder"
+              spellcheck="false"
+              aria-label="Prompt draft"
+              @input="onInput"
+              @keyup="syncCaret"
+              @click="syncCaret"
+              @keydown="onDraftKeydown"
+              @paste="onPaste"
+            />
+          </div>
+
+          <div v-if="state.error" class="banner" role="alert">
+            <span class="banner-text">{{ state.error }}</span>
+            <button
+              v-if="state.draft.length || attachments.length"
+              class="discard"
+              type="button"
+              @click="onDiscard"
+            >
+              Discard
+            </button>
+          </div>
+
+          <p v-if="state.uploadingCount > 0" class="uploading muted">
+            {{ COMPOSER_STRINGS.uploading(state.uploadingCount) }}
+          </p>
+
+          <!-- Own scroller: 20 attachments must not cost Send its slot. -->
+          <div v-if="attachments.length" class="tiles-wrap">
+            <ComposerAttachmentTiles
+              :attachments="attachments"
+              :disabled="state.sendInFlight"
+              @remove="(p: string) => composer.removeAttachment(key, p)"
+            />
+          </div>
         </div>
 
-        <div v-if="state.error" class="banner" role="alert">
-          <span class="banner-text">{{ state.error }}</span>
-          <button
-            v-if="state.draft.length || attachments.length"
-            class="discard"
-            type="button"
-            @click="onDiscard"
-          >
-            Discard
-          </button>
-        </div>
-
-        <p v-if="state.uploadingCount > 0" class="uploading muted">
-          {{ COMPOSER_STRINGS.uploading(state.uploadingCount) }}
+        <p v-if="state.connectionDegraded" class="conn-lost">
+          {{ COMPOSER_STRINGS.connectionLost }}
         </p>
 
-        <!-- Own scroller: 20 attachments must not cost Send its slot. -->
-        <div v-if="attachments.length" class="tiles-wrap">
-          <ComposerAttachmentTiles
-            :attachments="attachments"
-            :disabled="state.sendInFlight"
-            @remove="(p: string) => composer.removeAttachment(key, p)"
-          />
-        </div>
-      </div>
-
-      <p v-if="state.connectionDegraded" class="conn-lost">
-        {{ COMPOSER_STRINGS.connectionLost }}
-      </p>
-
-      <div class="controls">
-        <div class="pill">
+        <div class="controls">
+          <div class="pill">
+            <button
+              class="tool"
+              type="button"
+              title="Attach files (Ctrl+Shift+A)"
+              aria-label="Attach to prompt"
+              :disabled="state.uploadingCount > 0"
+              @click="onAttachClick"
+            >
+              <AppIcon name="paperclip" />
+            </button>
+            <button
+              class="tool"
+              type="button"
+              title="Draw or annotate an image"
+              aria-label="Draw or annotate an image"
+              :disabled="state.uploadingCount > 0"
+              @click="openDoodle"
+            >
+              <AppIcon name="edit-2" />
+            </button>
+            <button
+              class="tool"
+              type="button"
+              :title="
+                (agentKind ?? null) === null
+                  ? 'Slash commands need a detected agent'
+                  : 'Slash commands'
+              "
+              aria-label="Slash commands"
+              :disabled="state.uploadingCount > 0 || (agentKind ?? null) === null"
+              @click="onSlashButton"
+            >
+              /
+            </button>
+          </div>
+          <span class="spacer"></span>
+          <span class="kbd-hint muted">Enter send &middot; Shift+Enter newline</span>
           <button
-            class="tool"
+            class="send"
             type="button"
-            title="Attach files (Ctrl+Shift+A)"
-            aria-label="Attach to prompt"
-            :disabled="state.uploadingCount > 0"
-            @click="onAttachClick"
+            :disabled="!canSend"
+            title="Send (Enter)"
+            @click="onSend"
           >
-            <AppIcon name="paperclip" />
-          </button>
-          <button
-            class="tool"
-            type="button"
-            title="Draw or annotate an image"
-            aria-label="Draw or annotate an image"
-            :disabled="state.uploadingCount > 0"
-            @click="openDoodle"
-          >
-            <AppIcon name="edit-2" />
-          </button>
-          <button
-            class="tool"
-            type="button"
-            :title="
-              (agentKind ?? null) === null
-                ? 'Slash commands need a detected agent'
-                : 'Slash commands'
-            "
-            aria-label="Slash commands"
-            :disabled="state.uploadingCount > 0 || (agentKind ?? null) === null"
-            @click="onSlashButton"
-          >
-            /
+            {{ state.sendInFlight ? 'Sending…' : 'Send' }}
           </button>
         </div>
-        <span class="spacer"></span>
-        <span class="kbd-hint muted">Enter send &middot; Shift+Enter newline</span>
-        <button
-          class="send"
-          type="button"
-          :disabled="!canSend"
-          title="Send (Enter)"
-          @click="onSend"
-        >
-          {{ state.sendInFlight ? 'Sending…' : 'Send' }}
-        </button>
       </div>
-    </template>
+    </div>
+
+    <!-- THE open/close control.
+         Anchored to the PANE, not to the card: the card moves, so a control on
+         it could not be the fixed point the user is asking for. It sits in the
+         strip the tab body already reserves, which is the one band of the pane
+         nothing else may occupy — so it is never covered, in any card
+         position, at any card size, including maximized.
+         Closed, it widens to the left to advertise the waiting draft; the
+         chevron stays last, so the pixel under the cursor is the same one. -->
+    <button
+      :class="['rail', { open: mode !== 'hidden' }]"
+      type="button"
+      :title="toggle.title"
+      :aria-label="toggle.label"
+      :aria-expanded="mode !== 'hidden'"
+      @click="onToggleRail"
+    >
+      <template v-if="mode === 'hidden'">
+        <span class="rail-title">Prompt</span>
+        <span :class="['ghost', { placeholder: !railPreview }]">
+          {{ railPreview || COMPOSER_STRINGS.placeholder }}
+        </span>
+        <span v-if="attachments.length" class="rail-badge">
+          <AppIcon name="paperclip" />
+          {{ attachments.length }}
+        </span>
+        <span class="hint">Ctrl+`</span>
+      </template>
+      <span class="chevron"><AppIcon :name="toggle.icon" /></span>
+    </button>
 
     <!-- The drawing surface is modal because it takes a pointer drag as its
          primary input: with the composer still live behind it, a stroke that
-         left the canvas would land in the draft. -->
-    <OverlayPanel
-      v-if="doodleStep !== 'closed'"
-      :title="doodleTitle"
-      size="md"
-      @close="closeDoodle"
-    >
-      <div v-if="doodleStep === 'source'" class="doodle-sources">
-        <p v-if="doodleError" class="doodle-error">{{ doodleError }}</p>
-        <button class="source" type="button" @click="startBlank">
-          <AppIcon name="edit-2" />
-          <span class="source-label">Blank sheet</span>
-          <span class="source-hint">Sketch something from nothing</span>
-        </button>
-        <button class="source" type="button" @click="startFromClipboard">
-          <AppIcon name="image" />
-          <span class="source-label">From the clipboard</span>
-          <span class="source-hint">Annotate the screenshot you just copied</span>
-        </button>
-        <button class="source" type="button" @click="startFromLocalFile">
-          <AppIcon name="folder" />
-          <span class="source-label">From this computer…</span>
-          <span class="source-hint">Pick an image file to draw on</span>
-        </button>
-        <button class="source" type="button" @click="doodleStep = 'remote'">
-          <AppIcon name="symlink" />
-          <span class="source-label">From the host…</span>
-          <span class="source-hint">Browse images already on the server</span>
-        </button>
-      </div>
-
-      <RemoteImagePicker
-        v-else-if="doodleStep === 'remote'"
-        :connection-id="props.connectionId"
-        @pick="onRemotePick"
-        @close="doodleStep = 'source'"
-      />
-
-      <DoodleCanvas
-        v-else
-        :backdrop="doodleBackdrop"
-        :backdrop-name="doodleName"
-        @commit="onDoodleCommit"
+         left the canvas would land in the draft. The wrapper takes pointer
+         events back: everything in this component is transparent to the mouse
+         by default so the terminal underneath stays clickable. -->
+    <div v-if="doodleStep !== 'closed'" class="modal-layer">
+      <OverlayPanel
+        :title="doodleTitle"
+        size="md"
         @close="closeDoodle"
-      />
-    </OverlayPanel>
+      >
+        <div v-if="doodleStep === 'source'" class="doodle-sources">
+          <p v-if="doodleError" class="doodle-error">{{ doodleError }}</p>
+          <button class="source" type="button" @click="startBlank">
+            <AppIcon name="edit-2" />
+            <span class="source-label">Blank sheet</span>
+            <span class="source-hint">Sketch something from nothing</span>
+          </button>
+          <button class="source" type="button" @click="startFromClipboard">
+            <AppIcon name="image" />
+            <span class="source-label">From the clipboard</span>
+            <span class="source-hint">Annotate the screenshot you just copied</span>
+          </button>
+          <button class="source" type="button" @click="startFromLocalFile">
+            <AppIcon name="folder" />
+            <span class="source-label">From this computer…</span>
+            <span class="source-hint">Pick an image file to draw on</span>
+          </button>
+          <button class="source" type="button" @click="doodleStep = 'remote'">
+            <AppIcon name="symlink" />
+            <span class="source-label">From the host…</span>
+            <span class="source-hint">Browse images already on the server</span>
+          </button>
+        </div>
+
+        <RemoteImagePicker
+          v-else-if="doodleStep === 'remote'"
+          :connection-id="props.connectionId"
+          @pick="onRemotePick"
+          @close="doodleStep = 'source'"
+        />
+
+        <DoodleCanvas
+          v-else
+          :backdrop="doodleBackdrop"
+          :backdrop-name="doodleName"
+          @commit="onDoodleCommit"
+          @close="closeDoodle"
+        />
+      </OverlayPanel>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* ---- the three layers ---------------------------------------------------
+ * root    fills `.composer-dock`, i.e. the session body inset on all sides.
+ * stage   the same box MINUS the rail strip along the bottom — the card's
+ *         world, and the element composerGeometry.ts measures.
+ * rail    the fixed toggle, in the strip the stage gives up.
+ *
+ * All of it is `pointer-events: none` and the two real controls take their own
+ * events back, because these layers cover the whole pane and would otherwise
+ * swallow every click meant for the terminal underneath. Drag-and-drop still
+ * works: pointer-events governs hit-testing, not the propagation of an event
+ * that started on a descendant which does accept them.
+ */
+.composer-root,
+.composer-stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.composer-stage {
+  /* The strip is not the card's to use. This one declaration is what makes the
+     toggle un-coverable: no card geometry can address the space below it. */
+  bottom: calc(var(--composer-rail-h, 32px) + var(--composer-inset, 12px));
+}
+.composer,
+.rail,
+.modal-layer {
+  pointer-events: auto;
+}
+
 /* ---- the floating card --------------------------------------------------
  * The card is absolutely positioned inside `.composer-dock`, which is the
  * session body inset on all four sides (SessionWorkspaceView.vue). Its box —
@@ -1053,52 +1105,77 @@ defineExpose({ focusDraft, openComposer });
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 /* Chromium follows the element's own corners here, so the dashed accent traces
-   the card's radius rather than boxing it. */
-.composer.drag-over {
+   the card's radius (or the rail's pill) rather than boxing it. The flag is on
+   the root because a file may be dropped on either, and when the card is closed
+   the rail is the only target there is. */
+.composer-root.drag-over .composer,
+.composer-root.drag-over .rail {
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
 }
 
-/* ---- closed: the rail pill, so the panel can always be found by eye ------
- * PINNED to the dock's bottom-right corner, deliberately ignoring wherever the
- * user dragged the open card. Two reasons, which are one reason twice: the pane
- * permanently reserves `rail + inset` at its bottom edge, and that budget is
- * only honest if the pill actually lives in it — a pill that wandered would
- * cover terminal rows while the app went on paying for a strip nobody used. It
- * also keeps the pill where the eye already learnt to look, which is the whole
- * job of a collapsed rail. The card's own position is remembered and restored
- * when it re-opens.
+/* ---- the fixed toggle ---------------------------------------------------
+ * ONE control, two states, ONE position. It is pinned to the pane's
+ * bottom-right corner and is the only thing that opens and closes the panel, so
+ * the user aims at a single unmoving pixel and it alternates — which is
+ * exactly what a control that lived on the card could never do, because the
+ * card moves.
+ *
+ * It sits in the strip `.tab-body` already reserves, so it covers no terminal
+ * row; the stage above excludes that strip, so no card can cover IT. Those two
+ * facts together are the whole design (§21.5).
+ *
+ * Closed it widens to the LEFT to advertise the waiting draft. The chevron is
+ * the last child and the padding on that side is fixed, so the toggle's own box
+ * is at identical coordinates in both states however much text appears beside
+ * it.
  */
-.composer.hidden {
+.rail {
+  position: absolute;
   right: 0;
   bottom: 0;
-  width: auto;
-  max-width: 100%;
-  height: var(--composer-rail-h, 32px);
-  border-radius: 999px;
-}
-.rail {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  width: 100%;
-  height: 100%;
-  padding: 0 var(--sp-3);
-  background: transparent;
-  border: none;
-  border-radius: inherit;
+  max-width: 100%;
+  height: var(--composer-rail-h, 32px);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   color: var(--fg-muted);
   font-family: var(--font-ui);
   font-size: var(--fs-200);
   cursor: pointer;
   text-align: left;
 }
+/* Open, the rail carries the chevron alone: the card above it already says
+   everything the closed state has to spell out. Symmetric padding turns it into
+   a round button without moving the chevron, which stays hard against the same
+   right edge. */
+.rail.open {
+  padding-left: var(--sp-2);
+}
 .rail:hover {
-  background: var(--state-hover);
+  background: var(--surface-2);
   color: var(--fg-secondary);
 }
+.rail:hover .chevron {
+  color: var(--fg);
+}
+/* A fixed box, not a bare icon: it makes the target the same size in both
+   states as well as in the same place, and it is what the geometry test
+   measures. */
 .chevron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   color: var(--fg-secondary);
+  transition: color var(--dur-fast) var(--ease);
 }
 .rail-title {
   font-size: var(--fs-100);
