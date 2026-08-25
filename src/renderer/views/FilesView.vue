@@ -220,7 +220,7 @@ async function onReloadPreview(): Promise<void> {
  * that way: `*.vue` is a `DefineComponent<…, any>` in env.d.ts, so the instance
  * type collapses to `any` and takes the call site with it.
  */
-const treeRef = ref<{ editPath: () => void } | null>(null);
+const treeRef = ref<{ editPath: () => void; focusSearch: () => void } | null>(null);
 
 function onKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -235,6 +235,12 @@ function onKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && (e.key === 'l' || e.key === 'L')) {
     e.preventDefault();
     treeRef.value?.editPath();
+  }
+  // Ctrl+F filters the TREE, not the open file: CodeEditor loads no
+  // @codemirror/search extension, so nothing else in this pane claims it.
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+    e.preventDefault();
+    treeRef.value?.focusSearch();
   }
 }
 

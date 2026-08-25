@@ -1,14 +1,16 @@
 <script setup lang="ts">
 // FileTree: the SFTP directory listing for the current path. Click a dir to
-// enter it; click a file to open it in the editor. Includes a breadcrumb,
+// enter it; click a file to open it in the editor. Includes a one-line
+// breadcrumb, a summonable search box, a capped row list with "Load more",
 // refresh, and a "new folder/file" affordance wired to the store.
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import AppIcon, { type AppIconName } from './AppIcon.vue';
 import PopupMenu from './PopupMenu.vue';
 import { api } from '../ipc';
 import { useConnectionStore } from '../stores/connection';
 import { useFilesStore, formatBytes, normaliseTypedPath } from '../stores/files';
 import { splitLabel } from '../sessionGrouping';
+import { buildCrumbs, FILE_ROW_CAP, viewFileRows, type Crumb } from '../fileListView';
 import { pointAnchor, type Box } from '../../shared/popupPlacement';
 import type { DirEntry } from '../../main/sftp/SftpService';
 
@@ -30,36 +32,48 @@ const files = useFilesStore();
 const connId = computed(() => connection.connectionId);
 
 /**
- * The path as clickable segments.
+ * The path as clickable cells, on ONE line, always.
  *
- * This used to unconditionally prepend a `~` crumb pointing at `/` and then
- * list the absolute components after it, so sitting in the login home
- * rendered as `~ / home / alexey` — the same location, said twice, with the
- * first copy linking somewhere else entirely. A `~` is only meaningful if it
- * REPLACES the home prefix, so that is what it does now: when the cwd is
- * inside the login home the home part collapses into a single `~` crumb and
- * only the segments below it are listed; anywhere else the root crumb is `/`,
- * which is what it actually is.
+ * The strip used to be `flex-wrap: wrap` with every segment listed, which on a
+ * deep path in a narrow pane became three lines of chrome above a list — in a
+ * pane whose whole job is the list. The wrap is gone and the middle of a long
+ * path now collapses into a single `…` cell instead; `buildCrumbs` owns that
+ * rule (and the `~`-replaces-home rule it inherited) and is unit-tested.
  *
- * `files.home` is resolved lazily and may be empty for the first render or on
- * a host where the resolve failed. That case falls through to the absolute
- * form, which is correct — just longer.
+ * The hidden segments are not lost: the `…` opens a menu listing them, each
+ * one still a link to that directory. That is what keeps this a breadcrumb
+ * rather than a decorative string. The full path is also always one click away
+ * in the editable path bar (the pencil, or Ctrl+L).
  */
-const breadcrumbs = computed(() => {
-  const cwd = files.cwd;
-  const home = files.home;
-  const inHome = home !== '' && (cwd === home || cwd.startsWith(home + '/'));
-  const root = inHome ? { name: '~', path: home } : { name: '/', path: '/' };
-  const rest = inHome ? cwd.slice(home.length) : cwd;
+const breadcrumbs = computed<Crumb[]>(() => buildCrumbs(files.cwd, files.home));
 
-  const crumbs: { name: string; path: string }[] = [root];
-  let acc = inHome ? home : '';
-  for (const p of rest.split('/').filter(Boolean)) {
-    acc += '/' + p;
-    crumbs.push({ name: p, path: acc });
-  }
-  return crumbs;
-});
+/** Anchor for the `…` menu; null when it is closed. */
+const gapMenu = ref<{ hidden: { name: string; path: string }[]; anchor: Box } | null>(null);
+
+function openGap(e: MouseEvent, crumb: Crumb): void {
+  if (crumb.kind !== 'gap') return;
+  gapMenu.value = { hidden: crumb.hidden, anchor: pointAnchor(e.clientX, e.clientY) };
+}
+
+/**
+ * Accessors so the template never has to narrow the crumb union itself.
+ * `v-if`-based narrowing across sibling bindings is exactly the kind of thing
+ * that compiles today and stops compiling on a toolchain bump.
+ */
+function crumbHidden(crumb: Crumb): { name: string; path: string }[] {
+  return crumb.kind === 'gap' ? crumb.hidden : [];
+}
+function crumbName(crumb: Crumb): string {
+  return crumb.kind === 'segment' ? crumb.name : '…';
+}
+function crumbPath(crumb: Crumb): string {
+  return crumb.kind === 'segment' ? crumb.path : '';
+}
+
+async function onGapCrumb(path: string): Promise<void> {
+  gapMenu.value = null;
+  await onCrumb(path);
+}
 
 /**
  * The row the context menu is acting on, and where to draw the menu.
@@ -87,6 +101,10 @@ function pathOf(entry: DirEntry): string {
  * element, and the two elements are in different tabs of the workspace — they
  * are never both on screen, and neither is an ancestor of the other, so there
  * is no bubbling path between them.
+ *
+ * The menu acts on the entry it was opened on, which is a RENDERED row — so
+ * the row cap and the search filter cannot desynchronise it: a row you cannot
+ * see is a row you cannot right-click.
  */
 function onRowContextMenu(e: MouseEvent, entry: DirEntry): void {
   menu.value = { entry, anchor: pointAnchor(e.clientX, e.clientY) };
@@ -143,6 +161,53 @@ async function copyPath(entry: DirEntry): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Serve this folder
+// ---------------------------------------------------------------------------
+//
+// Runs a real static HTTP server on the HOST for this directory, tunnels it
+// through the port-forward machinery the Ports panel already owns, and opens
+// the local URL in the system browser. Distinct from the HTML preview, which
+// renders one file by pulling its assets over SFTP: this is the actual site,
+// with working relative URLs and working JavaScript, because a real origin is
+// serving it.
+//
+// The server binds the host's LOOPBACK and nothing else — see
+// `SERVE_BIND_ADDRESS` in src/main/portfwd/serveCommand.ts for why that is the
+// single most important line in the feature. There is no bind-address control
+// here, or anywhere in the renderer, by design.
+//
+// `window.open` rather than an IPC verb: main's `setWindowOpenHandler` already
+// allow-lists http(s) and hands those to `shell.openExternal` (index.ts:148),
+// which is how every other external link in this app is opened. A served URL
+// is `http://127.0.0.1:<port>/`, so it takes exactly that path.
+
+/** Absolute path of the folder whose serve request is in flight. */
+const serving = ref<string | null>(null);
+
+async function serveFolder(entry: DirEntry): Promise<void> {
+  const connectionId = connId.value;
+  const dir = pathOf(entry);
+  closeMenu();
+  if (!connectionId) return;
+  serving.value = dir;
+  files.error = null;
+  try {
+    const served = await api.serve.start(connectionId, dir);
+    // `url` is non-null on success — the main process refuses to resolve a
+    // record whose tunnel never opened, precisely so this cannot hand the
+    // browser a link to nothing.
+    if (served.url) window.open(served.url, '_blank', 'noopener,noreferrer');
+  } catch (e) {
+    // The main process writes these to be read: "No python3 on the host",
+    // "<dir> is not readable on the host", "no free port". The banner is the
+    // right surface for them — a folder that did not get served must say so.
+    files.error = (e as Error).message;
+  } finally {
+    serving.value = null;
+  }
+}
+
 async function onEntry(entry: DirEntry): Promise<void> {
   if (!connId.value) return;
   if (entry.type === 'dir') {
@@ -179,9 +244,72 @@ function icon(entry: DirEntry): AppIconName {
  * `report-2026-02.csv` are one character apart, and it is the last one before
  * the extension. `splitLabel` is reused rather than reimplemented so this is
  * the app's ONE truncation rule and not a third variant of it.
+ *
+ * The breadcrumb's segment names go through the same function, for the same
+ * reason: a single very long directory name still has to fit on the one line
+ * the strip now gets.
  */
 function nameParts(name: string): { labelHead: string; labelTail: string } {
   return splitLabel(name);
+}
+
+// ---------------------------------------------------------------------------
+// Row cap + search
+// ---------------------------------------------------------------------------
+//
+// The cap is a RENDER cap, not a fetch limit: `api.sftp.list` already returns
+// the whole directory in a single `readdir`, so nothing is saved by asking for
+// less, and everything is lost by it — the search below filters the FULL
+// listing the store is holding, which is what makes a match past row 100
+// findable at all. `src/renderer/fileListView.ts` carries that reasoning and
+// the logic; this half is the wiring.
+
+/** Rows currently allowed to render. Grows by `FILE_ROW_CAP` per "Load more". */
+const cap = ref(FILE_ROW_CAP);
+/** The filter text. Blank means "no filter", not "match nothing". */
+const query = ref('');
+const searchOpen = ref(false);
+const searchEl = ref<HTMLInputElement | null>(null);
+
+const view = computed(() => viewFileRows(files.entries, { query: query.value, cap: cap.value }));
+
+// Entering a directory starts at 100 again, or the cap silently stops meaning
+// anything after a few folders. The query is cleared too: a filter that
+// survives navigation looks like an empty directory in the next folder.
+watch(
+  () => files.cwd,
+  () => {
+    cap.value = FILE_ROW_CAP;
+    query.value = '';
+    searchOpen.value = false;
+  },
+);
+
+// Typing resets the cap as well, so the first 100 MATCHES are shown rather
+// than the first 100 matches among the first 100 rows.
+watch(query, () => {
+  cap.value = FILE_ROW_CAP;
+});
+
+function loadMore(): void {
+  cap.value += FILE_ROW_CAP;
+}
+
+async function focusSearch(): Promise<void> {
+  searchOpen.value = true;
+  await nextTick();
+  searchEl.value?.focus();
+  searchEl.value?.select();
+}
+
+function closeSearch(): void {
+  searchOpen.value = false;
+  query.value = '';
+}
+
+/** `3946` -> `3,946`. Thousands in a count are the whole point of showing it. */
+function count(n: number): string {
+  return n.toLocaleString();
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +331,8 @@ function nameParts(name: string): { labelHead: string; labelTail: string } {
 //
 // Editing REPLACES the crumbs rather than sitting beside them, which also keeps
 // c9d4039's `~` collapsing intact by not touching the crumb builder at all.
+// It is now also the escape hatch that makes the crumb COLLAPSING safe: however
+// much of the middle the `…` swallows, the full path is one click from here.
 
 /** True while the strip is an input rather than a row of crumbs. */
 const editing = ref(false);
@@ -247,8 +377,8 @@ async function onSubmit(): Promise<void> {
   if (files.error == null) editing.value = false;
 }
 
-/** Lets FilesView put the caret here from its Ctrl+L handler. */
-defineExpose({ editPath: startEditing });
+/** Lets FilesView put the caret in either field from its keydown handler. */
+defineExpose({ editPath: startEditing, focusSearch });
 </script>
 
 <template>
@@ -270,30 +400,82 @@ defineExpose({ editPath: startEditing });
         @blur="cancelEditing"
       />
       <template v-else>
-        <span v-for="(c, i) in breadcrumbs" :key="i" class="crumb">
-          <a @click="onCrumb(c.path)">{{ c.name }}</a>
-          <span v-if="i < breadcrumbs.length - 1" class="sep">/</span>
+        <!-- One scrolling-free line: the crumb strip takes the leftover width
+             and clips, the button slot never shrinks. `:title` carries the
+             full path so a collapsed middle is still readable on hover. -->
+        <span class="crumbs" :title="files.cwd">
+          <span v-for="(c, i) in breadcrumbs" :key="i" class="crumb">
+            <button
+              v-if="c.kind === 'gap'"
+              class="gap"
+              :title="`${crumbHidden(c).length} more folders`"
+              aria-label="Show the hidden path segments"
+              @click="openGap($event, c)"
+            >
+              …
+            </button>
+            <a v-else :title="crumbPath(c)" @click="onCrumb(crumbPath(c))">
+              <span class="nm-head">{{ nameParts(crumbName(c)).labelHead }}</span>
+              <span v-if="nameParts(crumbName(c)).labelTail" class="nm-tail">
+                {{ nameParts(crumbName(c)).labelTail }}
+              </span>
+            </a>
+            <span v-if="i < breadcrumbs.length - 1" class="sep">/</span>
+          </span>
         </span>
-        <button class="icon-btn sm" title="Go to path (Ctrl+L)" @click="startEditing">
-          <AppIcon name="edit-2" :size="14" />
-        </button>
+        <span class="strip-actions">
+          <button
+            class="icon-btn sm"
+            :class="{ on: searchOpen }"
+            title="Search this folder"
+            @click="searchOpen ? closeSearch() : focusSearch()"
+          >
+            <AppIcon name="search" :size="14" />
+          </button>
+          <button class="icon-btn sm" title="Go to path (Ctrl+L)" @click="startEditing">
+            <AppIcon name="edit-2" :size="14" />
+          </button>
+          <button
+            class="icon-btn sm"
+            :disabled="files.loading"
+            title="Refresh"
+            @click="files.refresh(connId!)"
+          >
+            <AppIcon name="refresh" :size="14" :class="{ spin: files.loading }" />
+          </button>
+        </span>
       </template>
-      <button
-        class="icon-btn sm"
-        :disabled="files.loading"
-        title="Refresh"
-        @click="files.refresh(connId!)"
-      >
-        <AppIcon name="refresh" :size="14" :class="{ spin: files.loading }" />
+    </div>
+
+    <!-- Summoned, not permanent. The strip above already carries a path and
+         three buttons; a fourth always-on control in a pane that can be
+         dragged narrow would crowd the one line the breadcrumb just won. -->
+    <div v-if="searchOpen" class="search">
+      <AppIcon name="search" :size="12" />
+      <input
+        ref="searchEl"
+        v-model="query"
+        class="search-input"
+        spellcheck="false"
+        autocomplete="off"
+        :placeholder="`Filter ${count(files.entries.length)} entries`"
+        aria-label="Filter this folder"
+        @keydown.esc.stop.prevent="closeSearch"
+      />
+      <button class="icon-btn sm" title="Close search" @click="closeSearch">
+        <AppIcon name="close" :size="12" />
       </button>
     </div>
+
     <ul class="entries">
+      <!-- `..` sits OUTSIDE the v-for on purpose: it is navigation, not
+           content, so neither the cap nor the filter may take it away. -->
       <li v-if="files.cwd !== '/'" class="entry up" @click="files.cd(connId!, '..')">
         <AppIcon name="folder" />
         <span class="nm muted">..</span>
       </li>
       <li
-        v-for="e in files.entries"
+        v-for="e in view.rows"
         :key="e.name"
         class="entry"
         :class="{ active: files.openPath && files.openPath.endsWith('/' + e.name) }"
@@ -311,7 +493,21 @@ defineExpose({ editPath: startEditing });
         </span>
         <span v-if="e.type === 'file'" class="sz">{{ formatBytes(e.size) }}</span>
       </li>
-      <li v-if="!files.entries.length && !files.loading" class="empty muted">empty directory</li>
+
+      <!-- The count is the useful half: "Load more" alone does not say whether
+           it is 12 rows away or 3,846. -->
+      <li v-if="view.hidden > 0" class="more">
+        <button class="more-btn" @click="loadMore">
+          Load more — showing {{ count(view.rows.length) }} of {{ count(view.total) }}
+        </button>
+      </li>
+
+      <li v-if="view.filtered && view.total === 0" class="empty muted">
+        nothing matches “{{ query }}”
+      </li>
+      <li v-else-if="!files.entries.length && !files.loading" class="empty muted">
+        empty directory
+      </li>
     </ul>
     <p v-if="files.error" class="error">{{ files.error }}</p>
 
@@ -337,6 +533,18 @@ defineExpose({ editPath: startEditing });
             {{ menu.entry.type === 'dir' ? 'Open here' : 'Open in this tab' }}
           </button>
         </li>
+        <!-- A FOLDER action: serving a single file is what the HTML preview is
+             for, and `http.server` needs a directory root anyway. -->
+        <li v-if="menu.entry.type === 'dir'">
+          <button
+            class="menu-item"
+            :disabled="serving !== null"
+            @click="serveFolder(menu.entry)"
+          >
+            <AppIcon name="arrow-right" :size="14" />
+            Serve this folder
+          </button>
+        </li>
         <li class="menu-sep" />
         <li>
           <button class="menu-item" @click="copyPath(menu.entry)">
@@ -351,6 +559,27 @@ defineExpose({ editPath: startEditing });
           <button class="menu-item" @click="downloadEntry(menu.entry)">
             <AppIcon name="download" :size="14" />
             Save to this computer…
+          </button>
+        </li>
+      </ul>
+    </PopupMenu>
+
+    <!-- The `…` crumb's contents. Collapsing the middle of a path is only
+         acceptable because the segments it hides are still HERE and still
+         navigate; a plain ellipsis with no way back would have turned the
+         breadcrumb into decoration. -->
+    <PopupMenu
+      v-if="gapMenu"
+      :anchor="gapMenu.anchor"
+      label="Path"
+      @close="gapMenu = null"
+    >
+      <ul>
+        <li class="menu-head">Skipped folders</li>
+        <li v-for="seg in gapMenu.hidden" :key="seg.path">
+          <button class="menu-item" :title="seg.path" @click="onGapCrumb(seg.path)">
+            <AppIcon name="folder" :size="14" />
+            {{ seg.name }}
           </button>
         </li>
       </ul>
@@ -373,20 +602,50 @@ defineExpose({ editPath: startEditing });
   background: var(--surface);
   height: 100%;
 }
+/* ONE LINE, ALWAYS. `flex-wrap: wrap` here is what made a deep path render as
+   three rows of chrome above the list; the collapsing in `buildCrumbs` is what
+   lets `nowrap` be safe rather than merely clipping the tail. */
 .breadcrumb {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
-  min-height: var(--tabbar-h);
+  height: var(--tabbar-h);
   padding: var(--sp-1) var(--sp-3);
   border-bottom: 1px solid var(--border);
   font-size: var(--fs-200);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+/* Takes the leftover width and clips inside itself, so overflow never reaches
+   the button slot. */
+.crumbs {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.crumb {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+/* The buttons get a slot that never shrinks — being pushed off the end of the
+   strip is the failure this replaces. */
+.strip-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 /* Navigation, not selection: accent is reserved for the selected row (see
    HostPickerView and DESIGN.md §5.2). An all-cyan crumb row made pure
    wayfinding the loudest thing on the Files screen. */
 .crumb a {
+  display: flex;
+  min-width: 0;
   cursor: pointer;
   color: var(--fg-secondary);
   transition: color var(--dur-fast) var(--ease);
@@ -395,19 +654,29 @@ defineExpose({ editPath: startEditing });
   color: var(--fg);
   text-decoration: underline;
 }
+/* The collapsed middle. Styled as a control rather than as text because it
+   opens a menu — a `…` that looks like punctuation would never be clicked. */
+.gap {
+  flex: none;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: var(--fs-200);
+  line-height: 1;
+}
+.gap:hover {
+  color: var(--fg);
+}
 .sep {
   color: var(--fg-muted);
   margin: 0 2px;
+  flex: none;
 }
-/* Layout only — the size comes from the shared `.icon-btn.sm` primitive; this
-   used to fork it with its own height. The `auto` belongs to the FIRST trailing
-   button only: with both claiming it the free space would be split between
-   them and the pair would drift apart across the strip. */
-.icon-btn {
-  margin-left: auto;
-}
-.icon-btn + .icon-btn {
-  margin-left: 0;
+/* Layout only — the size comes from the shared `.icon-btn.sm` primitive. */
+.icon-btn.on {
+  color: var(--accent);
 }
 /* Takes the strip's whole width while it is open — it replaces the crumbs
    rather than sharing the row with them. */
@@ -425,6 +694,31 @@ defineExpose({ editPath: startEditing });
   font-size: var(--fs-200);
 }
 .path-input::placeholder {
+  color: var(--fg-muted);
+}
+/* The summoned filter row. Its own line rather than a fourth control on the
+   breadcrumb strip, and only present while it is in use. */
+.search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--control-h-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  padding: 0 var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-200);
+}
+.search-input::placeholder {
   color: var(--fg-muted);
 }
 .entries {
@@ -514,6 +808,23 @@ defineExpose({ editPath: startEditing });
   font-size: var(--fs-100);
   text-align: right;
   white-space: nowrap;
+}
+.more {
+  padding: var(--sp-1) var(--sp-2);
+}
+.more-btn {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--fg-secondary);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-100);
+  cursor: pointer;
+}
+.more-btn:hover {
+  color: var(--fg);
+  background: var(--state-hover);
 }
 .empty {
   padding: var(--sp-4) var(--sp-3);
