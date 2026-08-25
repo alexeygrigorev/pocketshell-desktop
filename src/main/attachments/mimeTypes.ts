@@ -141,3 +141,72 @@ export function extensionForMimeType(mime: string | null | undefined): string | 
   // dots or unusual length is a registry name, not an extension.
   return /^[a-z0-9]{1,8}$/.test(subtype) ? subtype : null;
 }
+
+// ---------------------------------------------------------------------------
+// The inverse direction: extension -> mime
+// ---------------------------------------------------------------------------
+//
+// The Files tab needs the OPPOSITE lookup from everything above. It starts
+// from a remote filename — the only thing an SFTP listing gives it — and has
+// to decide what the bytes are before it reads them, because reading an mp3
+// as UTF-8 text is what froze the app. To render those bytes it then needs a
+// mime type for the `Blob` it hands to `<audio>` / `<embed>`, since a Blob
+// with no type is served as `application/octet-stream` and Chromium will not
+// play or paginate it.
+//
+// This lives here, beside {@link extensionForMimeType}, rather than in a
+// second table next to the Files tab. Two independent mime tables in one app
+// drift the moment either is extended — and this one was extended today with
+// the full audio set precisely because audio matters now.
+
+/**
+ * Reverse of {@link EXTENSIONS}, built once, FIRST SPELLING WINS.
+ *
+ * The forward table is many-to-one (`audio/mpeg` and `audio/mp3` both yield
+ * `mp3`), so the inverse needs a tie-break. Declaration order is it: every
+ * group in the table above is written canonical-spelling-first — `image/jpeg`
+ * before `image/jpg`, `audio/mpeg` before `audio/mp3`, `application/pdf`
+ * before its legacy aliases — so taking the first entry that maps to an
+ * extension yields the registered type rather than a vendor alias.
+ */
+const MIME_BY_EXTENSION: Readonly<Record<string, string>> = (() => {
+  const out: Record<string, string> = {};
+  for (const [mime, ext] of Object.entries(EXTENSIONS)) {
+    out[ext] ??= mime;
+  }
+  // Spellings a user's files carry but a clipboard never offers, so they have
+  // no row in the forward table: `.jpeg` written out in full, the audiobook
+  // and secondary Ogg suffixes, and the two plain-text suffixes that must
+  // resolve to a type rather than fall through to "unknown binary".
+  out['jpeg'] = 'image/jpeg';
+  out['m4b'] = 'audio/mp4';
+  out['oga'] = 'audio/ogg';
+  out['spx'] = 'audio/ogg';
+  return out;
+})();
+
+/**
+ * The canonical mime type for a file extension, or null when unknown.
+ *
+ * Accepts the extension with or without its leading dot, in any case.
+ * Deliberately returns null rather than `application/octet-stream` for an
+ * unrecognised extension: "I do not know" and "I know it is opaque bytes" are
+ * different answers, and the Files tab's classifier acts on the difference —
+ * an unknown extension gets its bytes sniffed, a known-opaque one does not.
+ */
+export function mimeTypeForExtension(ext: string | null | undefined): string | null {
+  if (ext == null) return null;
+  const key = ext.trim().toLowerCase().replace(/^\./, '');
+  if (key === '') return null;
+  return MIME_BY_EXTENSION[key] ?? null;
+}
+
+/** The lower-cased extension of a path's basename (no dot), or null. */
+export function extensionOfPath(path: string): string | null {
+  // POSIX separators only: every path this sees is a remote one.
+  const base = path.split('/').pop() ?? '';
+  const dot = base.lastIndexOf('.');
+  // A leading dot is a dotfile (`.bashrc`), not an extension.
+  if (dot <= 0 || dot === base.length - 1) return null;
+  return base.slice(dot + 1).toLowerCase();
+}

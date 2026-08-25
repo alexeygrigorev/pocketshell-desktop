@@ -20,17 +20,40 @@ import { createPinia, setActivePinia } from 'pinia';
 
 const realPath = vi.fn<(connectionId: string, path: string) => Promise<string>>();
 const list = vi.fn<(connectionId: string, path: string) => Promise<unknown[]>>();
+const stat = vi.fn<(connectionId: string, path: string) => Promise<{ size: number }>>();
+const readBinary =
+  vi.fn<(connectionId: string, path: string, maxBytes?: number) => Promise<Uint8Array>>();
+const readFile = vi.fn<(connectionId: string, path: string) => Promise<string>>();
 
 vi.mock('../../src/renderer/ipc', () => ({
   api: {
     sftp: {
       realPath: (connectionId: string, path: string) => realPath(connectionId, path),
       list: (connectionId: string, path: string) => list(connectionId, path),
+      stat: (connectionId: string, path: string) => stat(connectionId, path),
+      readBinary: (connectionId: string, path: string, maxBytes?: number) =>
+        readBinary(connectionId, path, maxBytes),
+      readFile: (connectionId: string, path: string) => readFile(connectionId, path),
     },
   },
 }));
 
-const { useFilesStore, stripTilde } = await import('../../src/renderer/stores/files');
+// jsdom does not implement object URLs; the store only ever mints and revokes
+// them, so a counter is enough to assert it does not leak one per click.
+const created: string[] = [];
+const revoked: string[] = [];
+globalThis.URL.createObjectURL = (): string => {
+  const url = `blob:mock/${created.length}`;
+  created.push(url);
+  return url;
+};
+globalThis.URL.revokeObjectURL = (url: string): void => {
+  revoked.push(url);
+};
+
+const { useFilesStore, stripTilde, MAX_TEXT_BYTES } = await import(
+  '../../src/renderer/stores/files'
+);
 
 const CONN = 'conn-1' as never;
 
@@ -38,7 +61,12 @@ beforeEach(() => {
   setActivePinia(createPinia());
   realPath.mockReset();
   list.mockReset();
+  stat.mockReset();
+  readBinary.mockReset();
+  readFile.mockReset();
   list.mockResolvedValue([]);
+  created.length = 0;
+  revoked.length = 0;
 });
 
 describe('stripTilde', () => {
@@ -111,5 +139,186 @@ describe('files store open()', () => {
     expect(files.cwd).toBe('');
     expect(files.entries).toEqual([]);
     expect(files.error).toBe('Channel closed');
+  });
+});
+
+/**
+ * Leaving the Files tab must not cost the user their place.
+ *
+ * The tab is behind a `v-if`, so switching to Terminal unmounts the view.
+ * That unmount used to call `clear()`, which reset `cwd` — so coming back
+ * re-ran `open()` and dropped the user at the session's start directory (or,
+ * while the session cwd was missing, at the login home) no matter how deep
+ * they had navigated. The position is now remembered per connection AND per
+ * session, which is what stops one session's directory becoming another's.
+ */
+describe('files store remembers where each session was left', () => {
+  it('returns to the directory the user navigated to, not the start path', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p === 'git/app' ? '/home/u/git/app' : p));
+    const files = useFilesStore();
+
+    await files.open(CONN, '~/git/app');
+    await files.cd(CONN, '/home/u/git/app/src/deep');
+    expect(files.cwd).toBe('/home/u/git/app/src/deep');
+
+    // Terminal tab -> Files tab: the view unmounts and re-mounts, so `open`
+    // runs again with the same start path.
+    await files.open(CONN, '~/git/app');
+
+    expect(files.cwd).toBe('/home/u/git/app/src/deep');
+  });
+
+  it('does not leak one session\u2019s directory into another\u2019s', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    const files = useFilesStore();
+
+    await files.open(CONN, '/home/u/git/app');
+    await files.cd(CONN, '/home/u/git/app/src');
+
+    // A different session, with its own working directory.
+    await files.open(CONN, '/home/u/git/other');
+    expect(files.cwd).toBe('/home/u/git/other');
+
+    // ...and going back to the first still lands where it was left.
+    await files.open(CONN, '/home/u/git/app');
+    expect(files.cwd).toBe('/home/u/git/app/src');
+  });
+
+  it('uses a newly recovered session path on the first visit after the fix', async () => {
+    // Before the cwd bug was fixed this session had `path: null`, so the tab
+    // opened at the login home. Once tmux's answer comes through, the FIRST
+    // visit must honour it rather than a home remembered from before.
+    realPath.mockImplementation((_c, p) => Promise.resolve(p === '.' ? '/home/u' : p));
+    const files = useFilesStore();
+
+    await files.open(CONN, undefined);
+    expect(files.cwd).toBe('/home/u');
+
+    await files.open(CONN, '/home/u/git/red-stamp-sound');
+
+    expect(files.cwd).toBe('/home/u/git/red-stamp-sound');
+  });
+
+  it('keeps an unsaved edit across a tab switch instead of discarding it', async () => {
+    // A clean buffer is a cache and is cheap to rebuild; an unsaved edit
+    // exists nowhere else, so throwing it away silently would be worse than
+    // the bug this whole mechanism fixes.
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: 12 });
+    readBinary.mockResolvedValue(new TextEncoder().encode('hello world\n'));
+    const files = useFilesStore();
+
+    await files.open(CONN, '/home/u/git/app');
+    await files.openFile(CONN, 'notes.md');
+    files.setContent('edited, not saved');
+
+    await files.open(CONN, '/home/u/git/other');
+    expect(files.openPath).toBeNull();
+
+    await files.open(CONN, '/home/u/git/app');
+    expect(files.openContent).toBe('edited, not saved');
+    expect(files.dirty).toBe(true);
+  });
+
+  it('forgets a connection on disconnect, which is what clear() is for', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    const files = useFilesStore();
+
+    await files.open(CONN, '/home/u/git/app');
+    await files.cd(CONN, '/home/u/git/app/src');
+    files.clear(CONN);
+
+    expect(files.cwd).toBe('');
+    await files.open(CONN, '/home/u/git/app');
+    expect(files.cwd).toBe('/home/u/git/app');
+  });
+});
+
+/**
+ * The freeze: clicking an mp3 read it as UTF-8 and bound megabytes of
+ * replacement characters to a textarea.
+ *
+ * The invariant these pin is that `openMode` is `text` only for bytes that
+ * decoded as text, and that every other outcome — including every FAILURE —
+ * ends in the binary panel rather than in the editor.
+ */
+describe('files store openFile() type gating', () => {
+  const openIn = async (name: string, bytes?: Uint8Array, size?: number) => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: size ?? bytes?.length ?? 0 });
+    if (bytes) readBinary.mockResolvedValue(bytes);
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u');
+    await files.openFile(CONN, name);
+    return files;
+  };
+
+  it('plays audio instead of decoding it', async () => {
+    const files = await openIn('song.mp3', new Uint8Array([0x49, 0x44, 0x33, 0x04, 0xff, 0xfb]));
+
+    expect(files.openMode).toBe('audio');
+    expect(files.openMime).toBe('audio/mpeg');
+    expect(files.openUrl).toBeTruthy();
+    expect(files.openContent).toBe('');
+  });
+
+  it('renders a PDF instead of decoding it', async () => {
+    const files = await openIn('paper.pdf', new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]));
+
+    expect(files.openMode).toBe('pdf');
+    expect(files.openMime).toBe('application/pdf');
+    expect(files.openUrl).toBeTruthy();
+  });
+
+  it('never uses readFile — the UTF-8 path is gone entirely', async () => {
+    await openIn('song.mp3', new Uint8Array([0x49, 0x44, 0x33]));
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it('opens ordinary text in the editor', async () => {
+    const files = await openIn('notes.md', new TextEncoder().encode('# hi\n'));
+
+    expect(files.openMode).toBe('text');
+    expect(files.openContent).toBe('# hi\n');
+    expect(files.openUrl).toBeNull();
+  });
+
+  it('refuses an oversized text file without transferring it', async () => {
+    const files = await openIn('huge.log', undefined, MAX_TEXT_BYTES + 1);
+
+    expect(files.openMode).toBe('binary');
+    expect(files.openNote).toContain('limit');
+    expect(readBinary).not.toHaveBeenCalled();
+  });
+
+  it('refuses a known-binary type from the listing alone', async () => {
+    const files = await openIn('dump.zip', undefined, 4096);
+
+    expect(files.openMode).toBe('binary');
+    expect(readBinary).not.toHaveBeenCalled();
+  });
+
+  it('shows the binary panel, not text, when the read fails', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: 10 });
+    readBinary.mockRejectedValue(new Error('Permission denied'));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u');
+
+    await files.openFile(CONN, 'thing.mp3');
+
+    expect(files.openMode).toBe('binary');
+    expect(files.openContent).toBe('');
+    expect(files.openNote).toContain('Permission denied');
+  });
+
+  it('revokes the previous object URL when another file is opened', async () => {
+    const files = await openIn('a.mp3', new Uint8Array([0x49, 0x44, 0x33]));
+    const first = files.openUrl;
+
+    readBinary.mockResolvedValue(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+    await files.openFile(CONN, 'b.pdf');
+
+    expect(revoked).toContain(first);
   });
 });

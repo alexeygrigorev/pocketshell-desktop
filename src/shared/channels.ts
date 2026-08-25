@@ -61,7 +61,7 @@ export const ipc = {
     list: 'sftp:list',
     stat: 'sftp:stat',
     readFile: 'sftp:readFile', // UTF-8 text; mangles anything binary
-    readBinary: 'sftp:readBinary', // raw bytes, size-capped (images)
+    readBinary: 'sftp:readBinary', // raw bytes, size-capped (images, audio, pdf)
     writeFile: 'sftp:writeFile',
     mkdir: 'sftp:mkdir',
     rename: 'sftp:rename',
@@ -70,6 +70,7 @@ export const ipc = {
     realPath: 'sftp:realPath',
     upload: 'sftp:upload',
     download: 'sftp:download',
+    saveAs: 'sftp:saveAs', // download to a location picked in a native dialog
     progress: 'sftp:event:progress', // event: { transferId, bytes, total? }
   },
   forwards: {

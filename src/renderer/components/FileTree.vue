@@ -5,7 +5,7 @@
 import { computed } from 'vue';
 import AppIcon, { type AppIconName } from './AppIcon.vue';
 import { useConnectionStore } from '../stores/connection';
-import { useFilesStore } from '../stores/files';
+import { useFilesStore, formatBytes } from '../stores/files';
 import type { DirEntry } from '../../main/sftp/SftpService';
 
 const emit = defineEmits<{ openFile: [path: string] }>();
@@ -14,11 +14,32 @@ const connection = useConnectionStore();
 const files = useFilesStore();
 const connId = computed(() => connection.connectionId);
 
+/**
+ * The path as clickable segments.
+ *
+ * This used to unconditionally prepend a `~` crumb pointing at `/` and then
+ * list the absolute components after it, so sitting in the login home
+ * rendered as `~ / home / alexey` — the same location, said twice, with the
+ * first copy linking somewhere else entirely. A `~` is only meaningful if it
+ * REPLACES the home prefix, so that is what it does now: when the cwd is
+ * inside the login home the home part collapses into a single `~` crumb and
+ * only the segments below it are listed; anywhere else the root crumb is `/`,
+ * which is what it actually is.
+ *
+ * `files.home` is resolved lazily and may be empty for the first render or on
+ * a host where the resolve failed. That case falls through to the absolute
+ * form, which is correct — just longer.
+ */
 const breadcrumbs = computed(() => {
-  const parts = files.cwd.split('/').filter(Boolean);
-  const crumbs: { name: string; path: string }[] = [{ name: '~', path: '/' }];
-  let acc = '';
-  for (const p of parts) {
+  const cwd = files.cwd;
+  const home = files.home;
+  const inHome = home !== '' && (cwd === home || cwd.startsWith(home + '/'));
+  const root = inHome ? { name: '~', path: home } : { name: '/', path: '/' };
+  const rest = inHome ? cwd.slice(home.length) : cwd;
+
+  const crumbs: { name: string; path: string }[] = [root];
+  let acc = inHome ? home : '';
+  for (const p of rest.split('/').filter(Boolean)) {
     acc += '/' + p;
     crumbs.push({ name: p, path: acc });
   }
@@ -36,14 +57,9 @@ async function onEntry(entry: DirEntry): Promise<void> {
 
 async function onCrumb(path: string): Promise<void> {
   if (!connId.value) return;
-  files.cwd = path;
-  await files.refresh(connId.value);
-}
-
-function fmtSize(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+  // `goTo` rather than setting `cwd` and refreshing by hand, so a breadcrumb
+  // jump is remembered as this session's position like any other move.
+  await files.goTo(connId.value, path);
 }
 
 /**
@@ -87,7 +103,7 @@ function icon(entry: DirEntry): AppIconName {
       >
         <AppIcon :name="icon(e)" :class="icon(e)" />
         <span class="nm" :title="e.name">{{ e.name }}</span>
-        <span v-if="e.type === 'file'" class="sz">{{ fmtSize(e.size) }}</span>
+        <span v-if="e.type === 'file'" class="sz">{{ formatBytes(e.size) }}</span>
       </li>
       <li v-if="!files.entries.length && !files.loading" class="empty muted">empty directory</li>
     </ul>

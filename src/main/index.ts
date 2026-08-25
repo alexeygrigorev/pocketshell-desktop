@@ -62,6 +62,27 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Chromium's built-in PDF viewer is a "plugin" as far as Electron's API
+      // is concerned, and this is the flag its documentation names for it.
+      // The Files tab renders a remote PDF by putting its bytes behind a blob
+      // URL and pointing an `<embed type="application/pdf">` at it.
+      //
+      // Measured on this exact Electron (33.3.1) rather than assumed: the
+      // viewer paints from a blob URL with this flag BOTH true and false —
+      // `navigator.pdfViewerEnabled` is true either way, and a screenshot of
+      // the embed shows the real viewer chrome and the page. So on this
+      // version the flag is not what makes it work; the CSP is (see
+      // renderer/index.html — without `object-src blob:` the same embed emits
+      // a policy violation and paints nothing).
+      //
+      // It stays on anyway because it is the documented contract, it costs
+      // nothing here, and a version or platform where the default flips back
+      // would fail SILENTLY — a blank frame with no error is exactly the kind
+      // of regression not worth risking to save one line. It does NOT
+      // reintroduce NPAPI or any third-party plugin surface; that machinery
+      // has been gone from Chromium for years, and `sandbox: true` and
+      // `contextIsolation: true` both continue to apply.
+      plugins: true,
     },
   });
 

@@ -7,10 +7,19 @@
          img-src carries `blob:` for the object URLs the composer mints to preview
          a locally-staged attachment (PromptComposer's previewFor). Those bytes are
          already in this process and never touch the network, so the grant widens
-         nothing: without it the thumbnails are simply blocked in the built app. -->
+         nothing: without it the thumbnails are simply blocked in the built app.
+
+         media-src, object-src and frame-src carry `blob:` for the same reason and
+         for the same kind of URL — the Files tab plays audio through `<audio>` and
+         paginates a PDF through Chromium's own viewer on an `<embed>`. They have to
+         be spelled out even though `default-src 'self'` looks permissive: default-src
+         is what these fetches fall back to, and `'self'` does NOT include blob:. Left
+         out, the audio element silently loads nothing and the PDF frame renders blank
+         — both of which look identical to a coding mistake, which is exactly why they
+         are listed here rather than left to the default. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'self' blob:; frame-src 'self' blob:; connect-src 'self'"
     />
     <title>PocketShell</title>
   </head>

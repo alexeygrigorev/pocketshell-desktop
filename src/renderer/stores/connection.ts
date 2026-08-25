@@ -7,6 +7,7 @@ import type {
   ConnectionState,
   HostEntry,
 } from '../../shared/types';
+import { useFilesStore } from './files';
 
 /**
  * Connection store: owns the active connection to a host and its bootstrap
@@ -105,6 +106,13 @@ export const useConnectionStore = defineStore('connection', () => {
 
   async function disconnect(): Promise<void> {
     if (connectionId.value) {
+      // Drop this host's browsing state BEFORE the id is forgotten. The files
+      // store is a singleton keyed by connection, and this is the guarantee
+      // that one host's listing can never be shown for another — the reason
+      // `clear()` exists. It used to be triggered by the Files tab
+      // unmounting, which fired on every tab switch and cost the user their
+      // place; disconnect is the event that actually invalidates the state.
+      useFilesStore().clear(connectionId.value);
       await api.ssh.close(connectionId.value);
     }
     connectionId.value = null;

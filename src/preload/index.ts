@@ -294,8 +294,8 @@ const api = {
      * process copies into a Uint8Array before sending; `shell.onData`
      * already ships bytes this way).
      */
-    readBinary: (connectionId: string, path: string): Promise<Uint8Array> =>
-      ipcRenderer.invoke(ipc.sftp.readBinary, connectionId, path),
+    readBinary: (connectionId: string, path: string, maxBytes?: number): Promise<Uint8Array> =>
+      ipcRenderer.invoke(ipc.sftp.readBinary, connectionId, path, maxBytes),
 
     /** Write UTF-8 text to a file (overwrites). */
     writeFile: (connectionId: string, path: string, content: string): Promise<boolean> =>
@@ -336,6 +336,16 @@ const api = {
       localPath: string;
       transferId: string;
     }): Promise<boolean> => ipcRenderer.invoke(ipc.sftp.download, payload),
+
+    /**
+     * Download a remote file to a location the user picks in a native save
+     * dialog. Resolves to the path written, or null if they cancelled.
+     *
+     * The Files tab's answer for everything it will not render. Unlike
+     * `readBinary` this streams straight to disk, so it has no size ceiling.
+     */
+    saveAs: (payload: { connectionId: string; remotePath: string }): Promise<string | null> =>
+      ipcRenderer.invoke(ipc.sftp.saveAs, payload),
 
     /** Subscribe to transfer-progress events. Returns an unsubscribe fn. */
     onProgress: (
