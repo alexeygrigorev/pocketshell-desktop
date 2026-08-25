@@ -148,10 +148,43 @@ describe('extensionForMimeType', () => {
     expect(extensionForMimeType('application/zip')).toBe('zip');
   });
 
+  it('maps the common audio types', () => {
+    expect(extensionForMimeType('audio/mpeg')).toBe('mp3');
+    expect(extensionForMimeType('audio/mp4')).toBe('m4a');
+    expect(extensionForMimeType('audio/wav')).toBe('wav');
+    expect(extensionForMimeType('audio/ogg')).toBe('ogg');
+    expect(extensionForMimeType('audio/opus')).toBe('opus');
+    expect(extensionForMimeType('audio/flac')).toBe('flac');
+    expect(extensionForMimeType('audio/aac')).toBe('aac');
+    expect(extensionForMimeType('audio/webm')).toBe('weba');
+  });
+
+  it('maps the PDF spellings, including the legacy one', () => {
+    expect(extensionForMimeType('application/pdf')).toBe('pdf');
+    expect(extensionForMimeType('application/x-pdf')).toBe('pdf');
+    // Would otherwise sanitise to ".acrobat", which no reader opens.
+    expect(extensionForMimeType('application/acrobat')).toBe('pdf');
+  });
+
+  it('tabulates the audio spellings the subtype heuristic gets wrong', () => {
+    // Each of these is why the audio rows are listed out rather than
+    // left to the `x-`/`vnd.` fallback: the registry name and the
+    // extension diverge, so the fallback would produce ".wave" or, for
+    // the dashed ones, no extension at all.
+    expect(extensionForMimeType('audio/wave')).toBe('wav');
+    expect(extensionForMimeType('audio/vnd.wave')).toBe('wav');
+    expect(extensionForMimeType('audio/x-pn-wav')).toBe('wav');
+    expect(extensionForMimeType('audio/x-ms-wma')).toBe('wma');
+  });
+
   it('normalises case and strips parameters', () => {
     expect(extensionForMimeType('IMAGE/PNG')).toBe('png');
     expect(extensionForMimeType('image/png; charset=binary')).toBe('png');
     expect(extensionForMimeType('  image/jpeg  ')).toBe('jpg');
+    // The codecs parameter is how Opus normally announces itself; the
+    // container is still Ogg, so the extension is too.
+    expect(extensionForMimeType('audio/ogg; codecs=opus')).toBe('ogg');
+    expect(extensionForMimeType('AUDIO/MPEG')).toBe('mp3');
   });
 
   it('falls back to a plausible subtype for untabulated types', () => {

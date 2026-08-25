@@ -35,6 +35,12 @@ const EXTENSIONS: Readonly<Record<string, string>> = {
   'image/vnd.microsoft.icon': 'ico',
   // Documents and text — "upload a file" is not image-only.
   'application/pdf': 'pdf',
+  // `application/x-pdf` and `application/vnd.pdf` would survive the
+  // subtype heuristic below on their own; `application/acrobat` is the
+  // one legacy spelling that would not, and it is still what a few
+  // older Windows applications put on the clipboard.
+  'application/x-pdf': 'pdf',
+  'application/acrobat': 'pdf',
   'text/plain': 'txt',
   'text/markdown': 'md',
   'text/csv': 'csv',
@@ -59,13 +65,44 @@ const EXTENSIONS: Readonly<Record<string, string>> = {
   'application/x-gzip': 'gz',
   'application/x-tar': 'tar',
   'application/x-7z-compressed': '7z',
-  // Audio / video, for completeness — the pipeline is type-agnostic.
+  // Audio. Tabulated in full rather than left to the subtype heuristic,
+  // because audio is no longer here "for completeness": a voice memo or
+  // a recorded call is an ordinary thing to hand a coding agent, and it
+  // is the one attachment class that routinely arrives as bytes with a
+  // mime type and no filename (a recorder applet's drag payload), which
+  // is exactly the case this table exists to serve.
+  //
+  // The heuristic gets several of these right by accident — `audio/flac`
+  // yields `flac` — but it is actively wrong wherever the registry name
+  // and the extension diverge, and audio is where that happens most:
+  // `audio/vnd.wave` would land as `.wave`, and `audio/x-ms-wma` folds
+  // to `ms-wma`, which the alphanumeric guard then rejects outright,
+  // leaving the file with no extension at all. Listing the spellings is
+  // cheaper than teaching the heuristic about them.
   'audio/mpeg': 'mp3',
+  'audio/mp3': 'mp3',
   'audio/mp4': 'm4a',
+  'audio/x-m4a': 'm4a',
+  'audio/aac': 'aac',
+  'audio/x-aac': 'aac',
   'audio/ogg': 'ogg',
+  'audio/opus': 'opus',
+  'audio/flac': 'flac',
+  'audio/x-flac': 'flac',
   'audio/wav': 'wav',
+  'audio/wave': 'wav',
+  'audio/vnd.wave': 'wav',
   'audio/x-wav': 'wav',
+  'audio/x-pn-wav': 'wav',
+  'audio/aiff': 'aiff',
+  'audio/x-aiff': 'aiff',
+  'audio/x-ms-wma': 'wma',
+  // `weba`, not `webm`: a WebM container holding only an audio track is
+  // conventionally suffixed `.weba`, and keeping it distinct from the
+  // video row below is what stops a voice clip from being labelled a
+  // video on the remote side.
   'audio/webm': 'weba',
+  // Video.
   'video/mp4': 'mp4',
   'video/quicktime': 'mov',
   'video/webm': 'webm',

@@ -93,6 +93,25 @@ describe('sanitiseSource', () => {
     expect(renderSanitised(sanitiseSource(source))).toBe('report.pdf');
   });
 
+  it('derives an audio extension for a nameless recording', () => {
+    // A voice memo dragged out of a recorder applet arrives exactly like
+    // a pasted screenshot — bytes plus a mime type, no filename — so the
+    // agent's only clue to what it has been handed is this extension.
+    const source: AttachmentSource = {
+      kind: 'bytes',
+      data: new Uint8Array([1]),
+      mimeType: 'audio/mpeg',
+    };
+    expect(renderSanitised(sanitiseSource(source))).toBe('shared.mp3');
+  });
+
+  it('keeps a picked PDF or audio file its own extension', () => {
+    const pdf: AttachmentSource = { kind: 'file', path: '/home/me/docs/spec.pdf' };
+    const memo: AttachmentSource = { kind: 'file', path: '/home/me/rec/standup.m4a' };
+    expect(renderSanitised(sanitiseSource(pdf))).toBe('spec.pdf');
+    expect(renderSanitised(sanitiseSource(memo))).toBe('standup.m4a');
+  });
+
   it('uses the basename of a picked file', () => {
     const source: AttachmentSource = { kind: 'file', path: '/home/me/a b/notes.md' };
     expect(renderSanitised(sanitiseSource(source))).toBe('notes.md');

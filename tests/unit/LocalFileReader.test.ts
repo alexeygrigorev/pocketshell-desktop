@@ -22,6 +22,18 @@ describe('MAX_IMAGE_READ_BYTES', () => {
     expect(MAX_IMAGE_READ_BYTES).toBeLessThan(MAX_ATTACHMENT_BYTES);
     expect(MAX_IMAGE_READ_BYTES).toBe(32 * 1024 * 1024);
   });
+
+  it('leaves room for a long recording to attach without being readable back', () => {
+    // The asymmetry is deliberate, and this pins it so nobody "fixes"
+    // a large audio attachment by raising the read ceiling. A 48 MiB
+    // podcast episode streams to the host through the stager, and is
+    // refused only by the doodle read-back, where its bytes would have
+    // to survive a Buffer, a structured clone and a decode that will
+    // never happen because it is not an image.
+    const anHourOfSpokenAudio = 48 * 1024 * 1024;
+    expect(anHourOfSpokenAudio).toBeGreaterThan(MAX_IMAGE_READ_BYTES);
+    expect(anHourOfSpokenAudio).toBeLessThan(MAX_ATTACHMENT_BYTES);
+  });
 });
 
 describe('LocalFileReader', () => {

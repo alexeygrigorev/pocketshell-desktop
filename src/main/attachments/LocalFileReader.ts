@@ -54,6 +54,19 @@ import { resolve } from 'node:path';
  *
  * `sftp:readBinary` shares this ceiling: the bytes land in the renderer
  * exactly the same way, so the same reasoning fixes the same number.
+ *
+ * It bounds the READ-BACK path only, and it is worth being explicit
+ * about what that excludes, because the obvious reading is wrong.
+ * Attaching a file does not come through here: the composer hands
+ * `attachments:stage` the picked path and {@link AttachmentStager}
+ * streams it to the host with `fastPut`, bounded by
+ * {@link MAX_ATTACHMENT_BYTES}' 100 MiB. So an hour-long recording or a
+ * scanned PDF far over 32 MiB attaches to a prompt perfectly well; what
+ * it cannot do is become a doodle backdrop, which is the correct
+ * outcome for a file that has no pixels. Raising this number is
+ * therefore never the way to make a large non-image attach — that path
+ * is already open, and the bitmap arithmetic above still governs this
+ * one.
  */
 export const MAX_IMAGE_READ_BYTES = 32 * 1024 * 1024;
 
