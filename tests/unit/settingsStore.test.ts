@@ -29,11 +29,18 @@ beforeEach(() => {
 });
 
 describe('defaults', () => {
-  it('seeds the three documented keys, composer switches ON', () => {
+  it('seeds the documented keys, composer switches ON', () => {
     const settings = useSettingsStore();
     expect(settings.typingOpensComposer).toBe(true);
     expect(settings.closeComposerOnSend).toBe(true);
     expect(settings.defaultHost).toBeNull();
+  });
+
+  it('seeds typography with exactly what shipped before it was settable', () => {
+    const settings = useSettingsStore();
+    expect(settings.monospaceFontFamily).toBeNull();
+    expect(settings.terminalFontSize).toBe(16);
+    expect(settings.editorFontSize).toBe(13);
   });
 
   it('exposes every key of AppSettings on the store, not behind a container', () => {
@@ -119,6 +126,34 @@ describe('degrading a stored blob', () => {
     expect(settings).not.toHaveProperty('fromTheFuture');
     settings.set('defaultHost', 'b');
     expect(stored()).not.toHaveProperty('fromTheFuture');
+  });
+
+  it('clamps a stored font size instead of discarding it', () => {
+    localStorage.setItem(KEY, JSON.stringify({ terminalFontSize: 400, editorFontSize: 2 }));
+    const settings = useSettingsStore();
+    expect(settings.terminalFontSize).toBe(32);
+    expect(settings.editorFontSize).toBe(8);
+  });
+
+  it('falls back to the shipped size when the stored one is not a number', () => {
+    localStorage.setItem(KEY, JSON.stringify({ terminalFontSize: 'big' }));
+    expect(useSettingsStore().terminalFontSize).toBe(16);
+  });
+
+  it('sanitises a stored font family rather than trusting it', () => {
+    localStorage.setItem(KEY, JSON.stringify({ monospaceFontFamily: 'Fira Code"; }' }));
+    expect(useSettingsStore().monospaceFontFamily).toBe('Fira Code');
+  });
+
+  it('round-trips the typography keys', () => {
+    const first = useSettingsStore();
+    first.set('monospaceFontFamily', 'JetBrains Mono');
+    first.set('terminalFontSize', 20);
+    setActivePinia(createPinia());
+    const second = useSettingsStore();
+    expect(second.monospaceFontFamily).toBe('JetBrains Mono');
+    expect(second.terminalFontSize).toBe(20);
+    expect(second.editorFontSize).toBe(13);
   });
 
   it('rejects a non-string, non-null defaultHost', () => {

@@ -1,5 +1,11 @@
 import { defineStore } from 'pinia';
 import { reactive, toRefs, watch } from 'vue';
+import {
+  EDITOR_FONT_SIZE_DEFAULT,
+  parseFontSize,
+  sanitiseFontFamily,
+  TERMINAL_FONT_SIZE_DEFAULT,
+} from '../fonts';
 
 /**
  * App-level preferences — the settings screen's model.
@@ -76,6 +82,17 @@ export interface AppSettings {
    * `src/renderer/autoConnect.ts`.
    */
   defaultHost: string | null;
+  /**
+   * One monospace family for every mono surface — terminal, file editor and the
+   * app's mono chrome alike — or null for the shipped stack. Stored as a bare
+   * family NAME, never a stack: `src/renderer/fonts.ts` appends the fallbacks,
+   * which is what stops an uninstalled choice landing on a proportional face.
+   */
+  monospaceFontFamily: string | null;
+  /** Terminal cell size, in px. Changing it re-fits the PTY's rows/columns. */
+  terminalFontSize: number;
+  /** File-editor text size, in px. Separate from the terminal's — see fonts.ts. */
+  editorFontSize: number;
 }
 
 /**
@@ -114,6 +131,13 @@ export const SETTING_SPECS: SettingSpecs = {
   typingOpensComposer: { default: true, parse: asBoolean },
   closeComposerOnSend: { default: true, parse: asBoolean },
   defaultHost: { default: null, parse: asHostAlias },
+  // Typography. Every default here is EXACTLY what shipped before the setting
+  // existed — the shipped stack, TERMINAL_OPTIONS.fontSize, and the `--fs-300`
+  // the editor theme has always used — so upgrading changes nothing on screen
+  // until the user asks for a change.
+  monospaceFontFamily: { default: null, parse: sanitiseFontFamily },
+  terminalFontSize: { default: TERMINAL_FONT_SIZE_DEFAULT, parse: parseFontSize },
+  editorFontSize: { default: EDITOR_FONT_SIZE_DEFAULT, parse: parseFontSize },
 };
 
 const STORAGE_KEY = 'pocketshell.settings.v1';

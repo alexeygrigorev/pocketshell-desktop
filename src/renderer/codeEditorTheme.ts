@@ -35,7 +35,11 @@ const chrome = EditorView.theme(
       // The editor's type is the terminal's type. Line height matches the
       // textarea this replaces so swapping the two does not reflow the pane.
       fontFamily: 'var(--font-mono)',
-      fontSize: 'var(--fs-300)',
+      // `--code-font-size`, not `--fs-300`: both default to 13px, but the
+      // former is the user's editor size setting and the latter is the UI
+      // density scale. They were the same value and the same token until the
+      // first of them became settable. See src/renderer/fonts.ts.
+      fontSize: 'var(--code-font-size)',
     },
     '&.cm-focused': {
       // CodeMirror draws a focus outline on the editor box by default. This

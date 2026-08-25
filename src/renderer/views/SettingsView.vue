@@ -26,6 +26,14 @@ import AppIcon from '../components/AppIcon.vue';
 import { useConnectionStore } from '../stores/connection';
 import { useSettingsStore } from '../stores/settings';
 import { defaultHostStatus } from '../autoConnect';
+import {
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  MONOSPACE_FAMILIES,
+  parseFontSize,
+  resolveMonoStack,
+  sanitiseFontFamily,
+} from '../fonts';
 
 const connection = useConnectionStore();
 const settings = useSettingsStore();
@@ -51,6 +59,44 @@ function onDefaultHostChange(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   // '' is the "no default" option; the store's parser normalises it to null.
   settings.set('defaultHost', value === '' ? null : value);
+}
+
+/**
+ * The stack the chosen family actually resolves to, used to render the sample
+ * line below the control.
+ *
+ * The sample is not decoration. There is no way to ask the renderer whether a
+ * family is installed, so the sample IS the answer: type a name, and if the
+ * sample does not change, the font is not on this machine and the stack fell
+ * through to Consolas. That is a better report than any check this app could
+ * make, and it costs one element.
+ */
+const monoSample = computed(() => resolveMonoStack(settings.monospaceFontFamily));
+
+/**
+ * Committed on `change` (blur, Enter, or picking a datalist suggestion) rather
+ * than on `input`. A family name is only meaningful once it is finished — the
+ * partial "Fira Cod" would resolve to the fallback and flicker the whole app's
+ * mono chrome on the way to "Fira Code".
+ */
+function onFamilyChange(event: Event): void {
+  const el = event.target as HTMLInputElement;
+  const clean = sanitiseFontFamily(el.value) ?? null;
+  settings.set('monospaceFontFamily', clean);
+  // Write the cleaned value back so the field shows what was actually stored;
+  // otherwise a name that lost characters to the sanitiser would look accepted
+  // verbatim until the panel was reopened.
+  el.value = clean ?? '';
+}
+
+/** Both size fields. The clamp lives in `fonts.ts` so it cannot drift. */
+function onSizeChange(key: 'terminalFontSize' | 'editorFontSize', event: Event): void {
+  const el = event.target as HTMLInputElement;
+  // `min`/`max` on a number input are advisory — they gate the stepper, not a
+  // typed value — so the clamp is applied here regardless of what the DOM says.
+  const size = parseFontSize(el.value) ?? settings[key];
+  settings.set(key, size);
+  el.value = String(size);
 }
 </script>
 
@@ -91,6 +137,83 @@ function onDefaultHostChange(event: Event): void {
           more, so PocketShell starts on the host list until you pick a new default.
         </span>
       </p>
+    </section>
+
+    <section class="group">
+      <h3 class="group-title">Monospace text</h3>
+
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="mono-family">Font</label>
+          <p class="row-hint">
+            Used by the terminal, the file editor and every path, port and session name
+            in the app — they are one surface, so they share one face. Pick a suggestion
+            or type any family installed on this machine; leave it empty for the default.
+            A font you do not have falls back to Consolas, never to a proportional face.
+          </p>
+        </div>
+        <input
+          id="mono-family"
+          class="control"
+          type="text"
+          list="mono-families"
+          placeholder="Consolas (default)"
+          :value="settings.monospaceFontFamily ?? ''"
+          @change="onFamilyChange"
+        />
+        <datalist id="mono-families">
+          <option v-for="family in MONOSPACE_FAMILIES" :key="family" :value="family" />
+        </datalist>
+      </div>
+
+      <!-- Renders in the resolved stack at the terminal's own size: the only
+           honest answer to "is this font actually installed?". -->
+      <p class="sample" :style="{ fontFamily: monoSample }">
+        ABCdef 0123 il1 O0 {}[]() -&gt;= !== &amp;&amp; ~/.ssh/config
+      </p>
+
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="terminal-size">Terminal size</label>
+          <p class="row-hint">
+            Pixels. Changing this changes the cell size, so the terminal reports a new
+            row and column count to the remote and tmux redraws to fit. Above about
+            22px an 80-column pane no longer fits a default window with the session
+            panel open.
+          </p>
+        </div>
+        <input
+          id="terminal-size"
+          class="control size"
+          type="number"
+          :min="FONT_SIZE_MIN"
+          :max="FONT_SIZE_MAX"
+          step="1"
+          :value="settings.terminalFontSize"
+          @change="onSizeChange('terminalFontSize', $event)"
+        />
+      </div>
+
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="editor-size">File editor size</label>
+          <p class="row-hint">
+            Pixels, for the Files tab's editor. Separate from the terminal because the
+            two ship at different sizes and only the terminal's size is visible to the
+            program on the other end.
+          </p>
+        </div>
+        <input
+          id="editor-size"
+          class="control size"
+          type="number"
+          :min="FONT_SIZE_MIN"
+          :max="FONT_SIZE_MAX"
+          step="1"
+          :value="settings.editorFontSize"
+          @change="onSizeChange('editorFontSize', $event)"
+        />
+      </div>
     </section>
 
     <section class="group">
@@ -236,6 +359,24 @@ function onDefaultHostChange(event: Event): void {
 }
 .switch:hover {
   background: var(--state-hover);
+}
+.control.size {
+  width: 5rem;
+  font-variant-numeric: tabular-nums;
+}
+/* On the terminal's own ground and at its own size, so the sample answers the
+   question the user is actually asking — "what will my terminal look like" —
+   rather than "what does this font look like on a settings panel". */
+.sample {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--term-bg);
+  color: var(--term-fg);
+  font-size: var(--term-font-size);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow-x: auto;
 }
 .notice {
   display: flex;

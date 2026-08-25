@@ -156,6 +156,40 @@ This deliberately diverges from the Android app, which bundles JetBrains Mono
 Matching the user's own terminal beats matching the phone here — that is the
 explicit ask.
 
+**Revised — the face is now a setting (`src/renderer/fonts.ts`).** The stack
+above is the *default*, not the only value. Settings carries one
+`monospaceFontFamily` for the whole app, and `App.vue` writes it onto `<html>`
+as `--font-mono`, so it moves the terminal, the file editor and every mono
+chrome element together. That "together" is this section's own rule and is why
+there is one family setting rather than one per surface: a per-surface family
+would let the user undo, one dropdown at a time, the single-surface effect the
+section exists to create.
+
+Two mechanics matter:
+
+- **The choice is PREPENDED to the stack above, never substituted for it.** A
+  family the user does not have installed therefore falls through Consolas →
+  `ui-monospace` → `monospace`. There is no path to a proportional face, which
+  for a terminal is not degradation but breakage.
+- **The stored value is a single family NAME, sanitised** — no quotes, no
+  braces, no commas. Commas are stripped specifically so one setting cannot
+  smuggle in a whole stack and get behind that fallback tail.
+
+The picker is a curated list of common monospace families plus free text, and
+not an enumeration of installed fonts: an Electron renderer has no reliable way
+to obtain one (`queryLocalFonts` is behind a permission Electron does not
+surface, and width-probing misreports on metric-compatible faces). The Settings
+panel renders a sample line in the resolved stack on `--term-bg`, which is the
+honest substitute — if the sample does not change, the font is not installed.
+
+**Size is two settings, not one** (`terminalFontSize`, `editorFontSize`), and
+neither touches the UI scale in §2.4. The reasons are in `fonts.ts`' header;
+the short form is that the two surfaces ship at different sizes today (16 and
+13) so a single knob would resize one of them on upgrade, and that the
+terminal's size is visible to the remote — it sets the PTY's row/column count —
+while the editor's is not. Both are clamped to 8–32px: the UI ladder tops out
+at 20px because it sizes *chrome*, and this sizes text a user reads all day.
+
 ### 2.4 Type scale
 
 Derived from the Android ladder in `shared/ui-kit/.../theme/Type.kt` (11 / 13 /
@@ -235,6 +269,23 @@ Windows Terminal's own `initialRows` default is exactly **30**. The conversion
 is right. Note the current `TerminalView.vue` uses `fontSize: 13` — the new
 value is a large, deliberate jump, which is what "take the config from Windows
 Terminal" means. Expose it as `--term-font-size` so it stays tunable.
+
+**Revised — shipped at 16, and now user-settable (§2.3).** The 21px conversion
+was not taken: the user chose to read Windows Terminal's `16` literally as
+pixels, so `TERMINAL_OPTIONS.fontSize` is **16** and `--term-font-size` mirrors
+it. That number is now only the *default* of `terminalFontSize` in Settings,
+which is why it must stay exactly 16 — changing it would resize the terminal of
+every existing user on upgrade, silently, which is the one thing a default is
+there to prevent. §7.3's open question is settled by that setting: 21 is two
+clicks away for anyone who wants it, and nobody gets it by surprise.
+
+xterm does **not** read the cascade — it rasterises to a canvas from its options
+object — so `--term-font-size` cannot drive it. `TerminalView.vue` assigns
+`term.options.fontFamily/fontSize` from the settings store and then calls
+`fitAddon.fit()`, because a changed cell size changes the row and column count
+and an unfitted terminal reports stale geometry to the remote. The token remains
+the value the rest of the app sizes terminal-adjacent chrome from (the Settings
+sample line, for one).
 
 `lineHeight` stays at **1.0**: the user sets no `font.cellHeight`, so Windows
 Terminal uses Consolas' natural cell, whose design line box is ≈1.0em.

@@ -1,6 +1,35 @@
 <script setup lang="ts">
-// Root component: just the router-outlet. All views (HostPicker,
-// HostWorkspace) are routed. Global theme vars live in <style>.
+// Root component: the router-outlet, plus the one place the app's typography
+// settings are written into the document.
+//
+// The `:root` block below is the DEFAULT for every token. The three typography
+// tokens are the only ones a user can move, and they are moved by setting them
+// as inline custom properties on <html> — which outranks `:root` in the
+// cascade, so the block below stays readable as "what ships" and the override
+// stays visible in devtools as "what the user chose".
+//
+// This is deliberately the whole wiring for three of the four surfaces. The
+// app's mono chrome, the file editor (codeEditorTheme.ts reads --font-mono and
+// --code-font-size) and the terminal's padding are plain CSS, so a settings
+// change repaints them on the next frame with no component involved and no
+// restart. xterm is the exception — it rasterises from an options object and
+// never reads the cascade — so TerminalView assigns its own font and re-fits.
+import { watchEffect } from 'vue';
+import { fontCssVariables } from './fonts';
+import { useSettingsStore } from './stores/settings';
+
+const settings = useSettingsStore();
+
+watchEffect(() => {
+  const vars = fontCssVariables({
+    monospaceFontFamily: settings.monospaceFontFamily,
+    terminalFontSize: settings.terminalFontSize,
+    editorFontSize: settings.editorFontSize,
+  });
+  for (const [name, value] of Object.entries(vars)) {
+    document.documentElement.style.setProperty(name, value);
+  }
+});
 </script>
 
 <template>
@@ -122,7 +151,15 @@
 
   /* ---- Typography ---------------------------------------------------- */
   --font-ui: 'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  /* The shipped mono stack, and the fallback tail a chosen family is prepended
+     to. Overridden on <html> by the settings store — see the script block and
+     src/renderer/fonts.ts. Must stay in sync with FALLBACK_STACK there. */
   --font-mono: Consolas, 'Cascadia Mono', ui-monospace, monospace;
+  /* The file editor's text size. Its own token rather than `--fs-300` directly
+     because it is now user-settable and the UI scale is not: `--fs-300` sizes
+     28px rows and 40px bars, and a font preference has no business moving
+     those. The default is `--fs-300`'s value, so nothing changed on upgrade. */
+  --code-font-size: 13px;
 
   --fs-100: 11px;
   --lh-100: 1.45;
