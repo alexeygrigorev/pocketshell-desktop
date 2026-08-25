@@ -4,6 +4,7 @@ import type { ConnectResult, ExecResult, ShellId } from '../../shared/types.js';
 import { newClient, ConnectionRegistry, type ConnectionRecord } from './ConnectionRegistry.js';
 import { ShellTracker } from './ShellTracker.js';
 import type { KnownHosts } from '../ssh-config/KnownHosts.js';
+import { log } from '../log.js';
 
 /**
  * SSH connection service wrapping `ssh2`. Mirrors the contract of the
@@ -285,6 +286,19 @@ export class SshService {
   shellInput(shellId: ShellId, data: string | Buffer): boolean {
     const rec = this.shells.get(shellId);
     if (!rec) return false;
+    // Diagnostic for double-delivery. A paste that arrives twice is either
+    // the renderer SENDING it twice (two live onData bindings) or the
+    // terminal ECHOING it twice (two live output subscriptions), and those
+    // need opposite fixes — this line tells the two apart. Only sizeable
+    // payloads are logged: a per-keystroke entry would drown the file and
+    // slow typing, and a paste is the reported symptom.
+    if (data.length >= 8) {
+      log('shell', 'input', {
+        shellId,
+        bytes: data.length,
+        preview: data.toString().slice(0, 60),
+      });
+    }
     try {
       rec.channel.write(data);
       return true;

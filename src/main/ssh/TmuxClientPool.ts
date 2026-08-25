@@ -4,8 +4,10 @@ import {
   clientTtyVar,
   sessionAttachCommand,
   sessionSwitchCommand,
+  SWITCH_NO_CLIENT_EXIT,
 } from '../../shared/attachCommand.js';
 import type { SshService } from './SshService.js';
+import { log } from '../log.js';
 
 /**
  * One attached tmux client per SSH connection, moved between sessions with
@@ -112,18 +114,45 @@ export class TmuxClientPool {
     sessionName: string,
     opts: AttachSessionOptions,
   ): Promise<AttachSessionResult> {
+    // Every branch below is logged. This whole path is designed to degrade
+    // silently — a switch that does not work becomes an ordinary re-join,
+    // which is correct but indistinguishable from the feature never having
+    // shipped. The log is the only way to tell which branch actually ran.
     const held = this.live(connectionId);
+    log('tmux', 'attach requested', {
+      connectionId,
+      sessionName,
+      hasClient: held != null,
+      showing: held?.session ?? null,
+    });
     if (held) {
       // Already showing it. Re-attaching or re-switching would only cost a
       // redraw; this happens when the renderer re-asks for the session it is
       // on (a remount behind a v-show, a retry after a transient error).
       if (held.session === sessionName) return { shellId: held.shellId, switched: true };
 
+      const started = Date.now();
       const res = await this.ssh.exec(connectionId, sessionSwitchCommand(held.ttyVar, sessionName));
       if (res.exitCode === 0) {
         held.session = sessionName;
+        log('tmux', 'switch-client ok', { sessionName, ms: Date.now() - started });
         return { shellId: held.shellId, switched: true };
       }
+
+      // The fallback the user cannot see. Exit 65 is the documented "no
+      // handshake variable" code, which means the joining PTY never managed
+      // to publish its tty — so we are re-joining every time and the whole
+      // fast-switch feature is inert. Anything else is tmux itself refusing
+      // (client detached, session gone, wrong server).
+      log('tmux', 'switch-client FAILED - falling back to full re-join', {
+        sessionName,
+        ttyVar: held.ttyVar,
+        exitCode: res.exitCode,
+        noHandshake: res.exitCode === SWITCH_NO_CLIENT_EXIT,
+        stderr: res.stderr.trim().slice(0, 400),
+        stdout: res.stdout.trim().slice(0, 400),
+        ms: Date.now() - started,
+      });
 
       // Any non-zero exit: give up on this client entirely and join afresh.
       // Closing it here rather than leaving it to the renderer keeps the old
