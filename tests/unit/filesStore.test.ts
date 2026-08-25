@@ -781,6 +781,35 @@ describe('files store openFile() on markdown', () => {
     await files.restylePreview(CONN);
     expect(openMarkdown).not.toHaveBeenCalled();
   });
+
+  /**
+   * Found by running the app, not by reading it: releasing a preview used to
+   * clear `openHasScripts`, so the "scripts are not run" line vanished on every
+   * Reload and on every theme re-mint — leaving a document that renders as an
+   * empty shell with nothing on screen saying why. Those two flags describe the
+   * SOURCE, which is still open; only the asset counts belong to the render
+   * being thrown away.
+   */
+  it('keeps saying scripts are not run after a re-mint', async () => {
+    const files = await openMd('README.md', 'text\n\n<script>x</script>\n\n![b](https://x/b.svg)\n');
+    expect(files.openHasScripts).toBe(true);
+    expect(files.openHasRemoteRefs).toBe(true);
+
+    await files.restylePreview(CONN);
+    expect(files.openHasScripts).toBe(true);
+    expect(files.openHasRemoteRefs).toBe(true);
+
+    await files.reloadPreview(CONN);
+    expect(files.openHasScripts).toBe(true);
+    expect(files.openHasRemoteRefs).toBe(true);
+  });
+
+  it('still clears both flags when the file is actually closed', async () => {
+    const files = await openMd('README.md', '<script>x</script>\n');
+    files.closeFile();
+    expect(files.openHasScripts).toBe(false);
+    expect(files.openHasRemoteRefs).toBe(false);
+  });
 });
 
 /**

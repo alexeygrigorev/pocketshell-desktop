@@ -412,8 +412,21 @@ export const useFilesStore = defineStore('files', () => {
     const token = previewToken.value;
     previewToken.value = null;
     previewUrl.value = null;
+    // The COUNTS go, because they describe the render that is being thrown
+    // away. `openHasScripts` and `openHasRemoteRefs` do NOT, and used to —
+    // which was a real bug, caught by running the thing rather than by
+    // reading it. Those two are facts about the SOURCE, derived from the
+    // buffer, and the buffer is still open; clearing them here made the
+    // "scripts are not run" line vanish on every Reload and on every theme
+    // re-mint, leaving a page that renders as an empty shell with nothing
+    // saying why. That line existing at all is the feature's answer to
+    // "degraded and broken look identical", so silently dropping it was the
+    // exact failure the toolbar was built to prevent.
+    //
+    // Nothing needs them cleared here: every path that actually closes a file
+    // goes through `resetOpenFile`, which clears both, and `save` recomputes
+    // them from the new buffer.
     previewStats.value = null;
-    openHasScripts.value = false;
     if (token) api.preview.release(token);
   }
 
