@@ -42,7 +42,10 @@ export type AppIconName =
   | 'refresh'
   | 'rotate-ccw'
   | 'search'
+  | 'settings'
   | 'square'
+  | 'star'
+  | 'star-filled'
   | 'symlink'
   | 'toggle-left'
   | 'toggle-right'
@@ -59,6 +62,16 @@ interface IconShape {
   paths: string[];
   filled?: boolean;
 }
+
+/**
+ * Feather's `star` polygon, its ten points written as one path so the template
+ * stays a single path loop. Shared by the two entries below rather than typed
+ * twice: `star` and `star-filled` are ONE mark in two states, and a
+ * transcription drift between them would show up as the outline and the solid
+ * being subtly different stars.
+ */
+const STAR_PATH =
+  'M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26z';
 
 const GEOMETRY: Record<AppIconName, IconShape> = {
   // Feather's `alert-triangle`. The banner mark for a scan that is failing —
@@ -150,11 +163,28 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   'rotate-ccw': { paths: ['M1 4v6h6', 'M3.51 15a9 9 0 1 0 2.13-9.36L1 10'] },
   // Feather's `search`, its <circle> as an arc pair. Filter fields only.
   search: { paths: ['M11 3a8 8 0 1 0 0 16a8 8 0 1 0 0-16', 'M21 21l-4.35-4.35'] },
+  // Feather's `settings` — the gear, opening the app-level settings panel. Its
+  // <circle cx=12 cy=12 r=3> is an arc pair, the same conversion `dot` and
+  // `search` use; the outer path is verbatim. The gear rather than `sliders`:
+  // sliders reads as "filter/adjust this view", and this control is not scoped
+  // to the screen it sits on.
+  settings: {
+    paths: [
+      'M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6',
+      'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z',
+    ],
+  },
   // Feather's `square` — the rectangle shape tool. Same rounded <rect> as
   // `panel-left`'s frame, converted the same way.
   square: {
     paths: ['M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z'],
   },
+  // "Default host" in the picker, in its two states. Outline vs solid is a
+  // SHAPE difference, not a colour one, for the same reason `toggle-left` and
+  // `toggle-right` exist as a pair: a two-state control has to be readable
+  // without relying on the tint.
+  star: { paths: [STAR_PATH] },
+  'star-filled': { paths: [STAR_PATH], filled: true },
   symlink: { paths: ['M4 4v7a4 4 0 0 0 4 4h12', 'M15 10l5 5-5 5'] },
   // Feather's `toggle-left` / `toggle-right`: the port panel's per-row on/off.
   // A real two-state mark, so "forwarded" and "silenced" differ in SHAPE and

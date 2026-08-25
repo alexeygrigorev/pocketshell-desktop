@@ -20,6 +20,7 @@ import AppIcon from '../components/AppIcon.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
 import PortPanelView from './PortPanelView.vue';
+import SettingsView from './SettingsView.vue';
 import UsageView from './UsageView.vue';
 import type { SessionSummary } from '../../shared/types';
 
@@ -28,8 +29,17 @@ const router = useRouter();
 const connection = useConnectionStore();
 const agents = useAgentsStore();
 
-/** Which host-level panel is open as an overlay, if any. */
-const panel = ref<'ports' | 'usage' | null>(null);
+/**
+ * Which panel is open as an overlay, if any.
+ *
+ * `settings` is the odd one out and is here anyway: it is APP-level, not
+ * host-level, so it does not belong to this header the way Ports and Usage do.
+ * But a route would unmount this view and take the terminal's scrollback with
+ * it, and the panel has to be reachable from a connected host as well as from
+ * the picker. One shared `SettingsView`, two callers, no navigation. See the
+ * header comment in views/SettingsView.vue.
+ */
+const panel = ref<'ports' | 'usage' | 'settings' | null>(null);
 
 /** Session-panel geometry. Collapsed hides it entirely; width is drag-resized. */
 const panelCollapsed = ref(false);
@@ -151,6 +161,9 @@ async function onRefreshUsage(): Promise<void> {
       <div class="host-actions">
         <button class="btn-ghost" title="Port forwarding" @click="panel = 'ports'">Ports</button>
         <button class="btn-ghost" title="Provider usage" @click="panel = 'usage'">Usage</button>
+        <button class="icon-btn" title="Settings" @click="panel = 'settings'">
+          <AppIcon name="settings" />
+        </button>
         <button class="btn-ghost disconnect" @click="onDisconnect">disconnect</button>
       </div>
     </header>
@@ -207,6 +220,9 @@ async function onRefreshUsage(): Promise<void> {
       </template>
       <!-- `embedded`: the overlay header renders the title AND the refresh. -->
       <UsageView v-if="connection.connectionId" embedded />
+    </OverlayPanel>
+    <OverlayPanel v-if="panel === 'settings'" title="Settings" size="md" @close="panel = null">
+      <SettingsView />
     </OverlayPanel>
   </div>
 </template>
