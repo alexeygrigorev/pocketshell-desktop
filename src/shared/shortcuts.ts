@@ -129,8 +129,12 @@ export const SURFACES: readonly SurfaceSpec[] = [
  *     a key to xterm — so `Ctrl+S` can save a file there while staying XOFF at
  *     a shell. That asymmetry is the reason this is a graph and not a flat
  *     "everything collides with everything".
- *   - Tab chords ride the terminal's own custom key handler, so they collide
- *     with terminal chords, and with Files (a Files tab is a tab too).
+ *   - Tab chords are handled by ONE window listener in capture, not by the
+ *     terminal's custom key handler — that is the only way a single
+ *     implementation serves the terminal, the Files tree and the composer
+ *     alike, and it is why they work on a Files tab at all. They still
+ *     collide with terminal chords, because a tab chord fires while a
+ *     terminal is showing and both would claim the keystroke.
  *   - The annotate surface opens over the composer and covers it, but the
  *     composer's window handler is still attached underneath.
  *
