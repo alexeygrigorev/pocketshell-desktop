@@ -10,6 +10,12 @@
  * CSS on the dock rather than as a number in here — the JS never has to know
  * what the inset is. `{ right: 0, bottom: 0 }` IS the resting corner.
  *
+ * The card is a pure OVERLAY: the pane it floats in is the whole terminal, and
+ * nothing here reserves any of it. The one place the card may not go is the
+ * small corner box the fixed open/close toggle occupies — `PaneBox.keepOut`
+ * below — because a card that could be dragged on top of the control that
+ * closes it would be a trap.
+ *
  * WHY right/bottom AND NOT left/top. The card's home is the bottom-right
  * corner: that is where it starts, where the collapsed pill lives, and where
  * `defaultGeometry()` returns it to. Storing the offsets from that same corner
@@ -32,6 +38,18 @@ export interface ComposerGeometry {
 export interface PaneBox {
   width: number;
   height: number;
+  /**
+   * A box in the pane's BOTTOM-RIGHT corner the card may not cover: the fixed
+   * toggle (docs/COMPOSER.md §21.4). Measured from the live element rather
+   * than declared here, so the toggle's size stays a CSS decision and this is
+   * simply told the answer.
+   *
+   * A corner box rather than the full-width band it replaced: with the reserved
+   * strip gone the pane is all terminal, and forbidding the card a stripe
+   * across the whole bottom would cost placement freedom for no reason. Only
+   * the toggle itself is off-limits.
+   */
+  keepOut?: { width: number; height: number };
 }
 
 /** Which edges a drag moves. Corners carry one letter per axis. */
@@ -101,13 +119,27 @@ export function defaultGeometry(): ComposerGeometry {
  */
 export function clampGeometry(g: ComposerGeometry, pane: PaneBox): ComposerGeometry {
   const width = clamp(g.width, Math.min(COMPOSER_LAYOUT.minWidth, pane.width), pane.width);
-  const height = clamp(g.height, Math.min(COMPOSER_LAYOUT.minHeight, pane.height), maxHeightIn(pane));
-  return {
-    width,
-    height,
-    right: clamp(g.right, 0, Math.max(0, pane.width - width)),
-    bottom: clamp(g.bottom, 0, Math.max(0, pane.height - height)),
-  };
+  const right = clamp(g.right, 0, Math.max(0, pane.width - width));
+
+  // Only a card whose horizontal span reaches over the corner has to clear the
+  // toggle at all; one parked to the left of it may sit on the pane's floor.
+  const keep = pane.keepOut;
+  const overCorner = keep !== undefined && right < keep.width;
+
+  // Clearing it means fitting ABOVE it, so the height cap tightens too —
+  // otherwise raising the card would only push its top off the pane instead.
+  const minH = Math.min(COMPOSER_LAYOUT.minHeight, pane.height);
+  const roomAbove = overCorner && keep ? Math.max(0, pane.height - keep.height) : pane.height;
+  const height = clamp(g.height, minH, Math.max(minH, Math.min(maxHeightIn(pane), roomAbove)));
+
+  const ceiling = Math.max(0, pane.height - height);
+  // `Math.min` with the ceiling is the degenerate guard: on a pane too short to
+  // hold the card above the toggle, the card wins and the toggle is covered.
+  // That needs a pane shorter than the 190px floor plus the toggle, which is
+  // not a window anyone has — and Escape and Ctrl+` still close it.
+  const floor = overCorner && keep ? Math.min(keep.height, ceiling) : 0;
+
+  return { width, height, right, bottom: clamp(g.bottom, floor, ceiling) };
 }
 
 /**
@@ -116,6 +148,9 @@ export function clampGeometry(g: ComposerGeometry, pane: PaneBox): ComposerGeome
  * from how wide a prompt wants to be by default.
  */
 export function maximizedGeometry(pane: PaneBox): ComposerGeometry {
+  // Full width means it always spans the corner, so `clampGeometry` lifts it
+  // clear of the toggle and shortens it to suit. Maximized still cannot cover
+  // the control that un-maximizes it.
   return clampGeometry(
     { right: 0, bottom: 0, width: pane.width, height: maxHeightIn(pane) },
     pane,

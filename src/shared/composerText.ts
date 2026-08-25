@@ -96,44 +96,97 @@ export const COMPOSER_STRINGS = {
 } as const;
 
 /**
- * The first line of a draft worth showing in the collapsed rail.
- *
- * A preserved draft has to stay discoverable (docs/COMPOSER.md §12), and the
- * rail used to signal one with a status pip beside the placeholder. Showing the
- * draft's own opening line instead answers the question the pip could only
- * raise — WHICH unsent prompt is waiting — in the same 32px of space.
- *
- * Leading blank lines are skipped rather than rendered as an empty preview: a
- * draft that begins with a newline still has something to say.
- */
-export function draftSummary(draft: string): string {
-  const line = draft.split('\n').find((l) => l.trim() !== '');
-  return line === undefined ? '' : line.trim();
-}
-
-/**
  * The fixed open/close toggle, which is ONE control in two states rather than
- * two controls in two places (docs/COMPOSER.md §21.5).
+ * two controls in two places (docs/COMPOSER.md §21.4).
  *
- * The chevron points the way the panel will travel — down to put it away, up to
- * bring it back — which is the whole of the affordance: the user aims at one
- * unmoving spot and it alternates. Keeping that mapping here rather than in the
- * template is what lets a test pin it.
+ * The chevron points the way the panel will travel — down to put it away, up
+ * to bring it back — which is the whole of the affordance: the user aims at
+ * one unmoving spot and it alternates. Keeping that mapping here rather than in
+ * the template is what lets a test pin it.
+ *
+ * `unsent` is the answer to "is there anything waiting in there?", which the
+ * collapsed control has to give without opening. It used to be given by a strip
+ * showing the draft's first line; now that the composer floats over the
+ * terminal, that strip was the most intrusive thing on screen at rest, so the
+ * answer moved into the copy and a pip on the icon. It only applies while the
+ * panel is CLOSED — open, the draft is right there to read.
  */
-export function railToggle(open: boolean): {
+export function railToggle(
+  open: boolean,
+  unsent = false,
+): {
   icon: 'chevron-up' | 'chevron-down';
   title: string;
   label: string;
+  unsent: boolean;
 } {
-  return open
-    ? {
-        icon: 'chevron-down',
-        title: 'Hide the prompt panel (Ctrl+`)',
-        label: 'Hide the prompt panel',
-      }
-    : {
-        icon: 'chevron-up',
-        title: 'Open the prompt panel (Ctrl+`)',
-        label: 'Open the prompt panel',
-      };
+  if (open) {
+    return {
+      icon: 'chevron-down',
+      title: 'Hide the prompt panel (Ctrl+`)',
+      label: 'Hide the prompt panel',
+      unsent: false,
+    };
+  }
+  return {
+    icon: 'chevron-up',
+    title: unsent
+      ? 'Open the prompt panel — unsent draft (Ctrl+`)'
+      : 'Open the prompt panel (Ctrl+`)',
+    label: unsent ? 'Open the prompt panel, unsent draft' : 'Open the prompt panel',
+    unsent,
+  };
+}
+
+/**
+ * Is this keystroke the user starting to TYPE, or driving the terminal?
+ *
+ * Used by `typingOpensComposer` (docs/COMPOSER.md §26): with that setting on, a
+ * printable key pressed at a CLOSED composer opens it and lands in the draft
+ * instead of reaching the shell. Everything this returns false for still goes
+ * straight through, and the list of those is the load-bearing part — a terminal
+ * that swallows Ctrl-C is broken, and the user still has to answer prompts,
+ * page through `less` and drive tmux while the composer is shut.
+ *
+ * The line, exactly:
+ *
+ *   - ANY of Ctrl / Meta / Alt held → not typing. That covers Ctrl-C, Ctrl-D,
+ *     Ctrl-Z, Ctrl-R, tmux's own prefix, and every app chord in one rule.
+ *     Shift is deliberately NOT in that list: Shift-A is a capital letter.
+ *   - A `key` that is not exactly one character → not typing. Named keys are
+ *     spelled out by the DOM (`Enter`, `Tab`, `Escape`, `ArrowUp`, `F5`,
+ *     `Backspace`, `Home`…), so one rule covers the whole keyboard's worth of
+ *     control keys without listing them. Counted by code point, so an astral
+ *     character still reads as one.
+ *   - A bare SPACE → not typing. It is the near-universal "next page" key in
+ *     pagers and tmux copy mode, and nobody begins a prompt with it. Only the
+ *     TRIGGER is affected: once the composer is open the draft has focus and a
+ *     space types normally.
+ *   - Mid-IME-composition → not typing. The composing text belongs to whatever
+ *     already has focus; stealing it half-written would drop it.
+ */
+export function isTypingKey(e: {
+  key: string;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
+  isComposing?: boolean;
+}): boolean {
+  if (e.isComposing === true) return false;
+  if (e.ctrlKey === true || e.metaKey === true || e.altKey === true) return false;
+  if (Array.from(e.key).length !== 1) return false;
+  return e.key !== ' ';
+}
+
+/**
+ * Splice `insert` into `text` at `caret`, returning the new text and where the
+ * caret lands. Used to plant the keystroke that OPENED the composer, which must
+ * not be lost — having to retype the first letter is the whole failure this
+ * feature exists to avoid. The caret is the one the session remembered, so
+ * re-opening a half-written draft by typing continues where the user left off
+ * rather than appending to the end.
+ */
+export function insertAtCaret(text: string, caret: number, insert: string): [string, number] {
+  const at = Math.max(0, Math.min(caret, text.length));
+  return [text.slice(0, at) + insert + text.slice(at), at + insert.length];
 }

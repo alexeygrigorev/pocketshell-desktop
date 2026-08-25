@@ -23,6 +23,8 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useConnectionStore } from '../stores/connection';
 import { useSessionsStore } from '../stores/sessions';
+import { useComposerStore } from '../stores/composer';
+import { useSettingsStore } from '../stores/settings';
 import AppIcon from '../components/AppIcon.vue';
 import TerminalView from '../components/TerminalView.vue';
 import PromptComposer from '../components/PromptComposer.vue';
@@ -35,6 +37,8 @@ const route = useRoute();
 const router = useRouter();
 const connection = useConnectionStore();
 const sessions = useSessionsStore();
+const composer = useComposerStore();
+const settings = useSettingsStore();
 
 const tab = ref<'terminal' | 'conversation' | 'files'>('terminal');
 
@@ -93,9 +97,41 @@ function onCloseSession(): void {
  */
 const terminalRef = ref<{ focus: () => void } | null>(null);
 
-/** Escape rung 3: blur the draft and put the caret back in the pane. */
+/** Same reasoning for the composer, whose `typeInto` the terminal feeds. */
+const composerRef = ref<{ typeInto: (text: string) => void } | null>(null);
+
+/**
+ * Whether the terminal should withhold printable keystrokes instead of sending
+ * them to the shell (docs/COMPOSER.md §26).
+ *
+ * The two halves of the condition live here rather than in either component:
+ * the SETTING is app-level, and "only while the composer is closed" is a fact
+ * about the composer. TerminalView is handed the answer, so it needs to know
+ * about neither. Being a computed, it also tracks both at runtime — flipping
+ * the switch in Settings changes the very next keystroke.
+ */
+const interceptTyping = computed(
+  () => settings.typingOpensComposer && composer.mode === 'hidden' && tab.value !== 'files',
+);
+
+/** A keystroke the terminal withheld: it belongs in the draft, not the shell. */
+function onTyped(text: string): void {
+  composerRef.value?.typeInto(text);
+}
+
+/**
+ * Put the keyboard back in the pane — Escape rung 3, and every path that
+ * closes the composer, which must hand focus back or the next keystroke has
+ * nowhere to go and `typingOpensComposer` never fires.
+ *
+ * It deliberately does NOT switch tabs any more. It used to, which was
+ * defensible while this was only Escape's business; now that closing the panel
+ * routes through it too, being thrown from Conversation to Terminal for
+ * dismissing a card would be a non-sequitur. On the other tabs the blur the
+ * caller already did is the whole of the job.
+ */
 function onFocusTerminal(): void {
-  if (tab.value !== 'terminal') tab.value = 'terminal';
+  if (tab.value !== 'terminal') return;
   terminalRef.value?.focus();
 }
 </script>
@@ -131,7 +167,7 @@ function onFocusTerminal(): void {
     </header>
 
     <div class="session-body">
-      <div :class="['tab-body', { 'with-composer': tab !== 'files' }]">
+      <div class="tab-body">
         <!-- Terminal: kept mounted so switching tabs never drops the attach. -->
         <div v-show="tab === 'terminal'" class="terminal-area">
           <TerminalView
@@ -140,6 +176,8 @@ function onFocusTerminal(): void {
             :connection-id="connection.connectionId"
             :command="command"
             :session-key="sessionName"
+            :intercept-typing="interceptTyping"
+            @typed="onTyped"
           />
         </div>
 
@@ -162,6 +200,7 @@ function onFocusTerminal(): void {
         class="composer-dock"
       >
         <PromptComposer
+          ref="composerRef"
           :connection-id="connection.connectionId"
           :session-name="sessionName"
           :agent-kind="agentKind"
@@ -181,20 +220,14 @@ function onFocusTerminal(): void {
   flex: 1;
   min-height: 0;
 
-  /* ---- the composer's two geometry constants ---------------------------
-   * Declared here rather than in App.vue's :root because they describe THIS
-   * pane's relationship with the composer, and only this pane reserves room
-   * for it. Custom properties inherit, so PromptComposer — a descendant —
-   * reads the same two numbers, which is the point: the space reserved below
-   * and the space the card is inset by can only be kept equal if there is one
-   * pair of values.
-   *
-   *   --composer-rail-h  the height of the collapsed rail pill.
-   *   --composer-inset   the gap between the card and the pane's edges. This
-   *                      is what makes it read as floating rather than as a
-   *                      bar welded to the window.
-   */
-  --composer-rail-h: 32px;
+  /* The gap between the floating composer and this pane's edges — what makes
+     it read as hovering rather than as a bar welded to the window. Declared
+     here rather than in App.vue's :root because it describes THIS pane's
+     relationship with the composer, and custom properties inherit, so
+     PromptComposer reads the same number without being handed it.
+     `--composer-rail-h` used to sit beside it, sizing a strip reserved out of
+     the terminal for the collapsed toggle. There is no such strip any more
+     (see `.tab-body` below), and the toggle sizes itself from --control-h-sm. */
   --composer-inset: var(--sp-3);
 }
 /* ---- one row of chrome ---------------------------------------------------
@@ -286,14 +319,23 @@ function onFocusTerminal(): void {
   flex: 1;
   min-height: 0;
 }
-/* Permanent room for the collapsed rail pill AND for the gap it floats in, so
-   the pill never covers a terminal row — including tmux's status bar, which is
-   the bottom one and the one worth protecting. This padding is a constant: it
-   is reserved whether the composer is open, closed or mid-drag, which is what
-   makes the terminal's row count independent of the composer (see below). */
-.tab-body.with-composer {
-  padding-bottom: calc(var(--composer-rail-h) + var(--composer-inset));
-}
+/*
+ * NO ROOM IS RESERVED FOR THE COMPOSER. It used to keep `rail + inset` of
+ * padding here permanently — about two terminal rows, given up whether the
+ * composer was open or shut — so that the collapsed toggle could sit below
+ * the last row rather than on top of it. The user asked for those rows back:
+ * the composer should fly over the terminal, not take a slice of it.
+ *
+ * THE ROW-COUNT GUARANTEE SURVIVES THIS. It never depended on the padding being
+ * 44px, only on its being a CONSTANT: the terminal is sized once, by the pane,
+ * and no composer state can change it. Zero is a constant. Opening, closing,
+ * dragging and resizing the card still cause no SSH window-change and no remote
+ * tmux reflow — the guarantee simply settles at a larger row count now.
+ *
+ * What it does cost: the toggle floats over the bottom-right of the terminal,
+ * where tmux paints the right end of its status line. That is deliberate and
+ * the toggle is styled to defer to it (see `.rail` in PromptComposer.vue).
+ */
 .terminal-area {
   flex: 1;
   min-width: 0;
@@ -308,9 +350,11 @@ function onFocusTerminal(): void {
  * close, drag-resize and mode switch changed the terminal's pixel height —
  * which changes its ROW COUNT, which is an SSH window-change the remote tmux
  * has to redraw and reflow for. Typing a prompt should not reflow the session
- * behind it. `.tab-body.with-composer` reserves the rail's room permanently
- * instead, so the terminal is sized as though the composer were closed and
- * STAYS that size whatever the panel does.
+ * behind it. The composer is an overlay instead, contributing nothing to the tab
+ * body's layout, so the terminal is sized once by the pane and STAYS that size
+ * whatever the panel does. It used to also reserve a strip of padding for the
+ * collapsed toggle; see `.tab-body` above for why that went and why the
+ * guarantee did not go with it.
  *
  * Why the dock is the WHOLE body and not a strip at the bottom.
  *
@@ -320,14 +364,14 @@ function onFocusTerminal(): void {
  * gives the card's percentages something definite to resolve against, which an
  * auto-height strip could not.
  *
- * What it does NOT do is change the terminal's size. The reserve below is a
- * constant; the dock is an overlay that takes no part in the tab body's layout.
- * Moving or resizing the card therefore cannot alter the terminal's row count,
- * whatever corner the user drags it into.
+ * What it does NOT do is take part in the tab body's layout, in any state. That
+ * is the whole reason moving or resizing the card cannot alter the terminal's
+ * row count, whatever corner the user drags it into.
  *
- * The bottom — the strip the reserve pays for — belongs to the composer's
- * fixed open/close toggle, and PromptComposer keeps the draggable card out of
- * it. That is what makes the toggle un-coverable in every card position.
+ * The composer's fixed open/close toggle is pinned to this dock's bottom-right
+ * corner, and PromptComposer keeps the draggable card out of that corner's box.
+ * That is what makes the toggle un-coverable in every card position — it is a
+ * hole in the card's placement, not a band carved out of the pane.
  */
 .composer-dock {
   position: absolute;

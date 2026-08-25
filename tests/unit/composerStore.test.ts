@@ -439,3 +439,65 @@ describe('connection degradation is advisory (§9)', () => {
     expect(await composer.send(KEY, async () => true)).toBe(true);
   });
 });
+
+/**
+ * `closeComposerOnSend` (docs/COMPOSER.md §26): the phone's rhythm — send, the
+ * card gets out of the way, the next keystroke brings it back.
+ */
+describe('close on send', () => {
+  it('closes the composer after a confirmed delivery', async () => {
+    composer.setDraft(KEY, 'ship it');
+    await composer.send(KEY, async () => true, { closeOnDelivery: true });
+    expect(composer.mode).toBe('hidden');
+  });
+
+  it('leaves it OPEN when the send failed, where the banner and draft are', async () => {
+    composer.setDraft(KEY, 'ship it');
+    await composer.send(KEY, async () => false, { closeOnDelivery: true });
+    expect(composer.mode).not.toBe('hidden');
+    expect(composer.states[KEY]?.error).toBe(COMPOSER_STRINGS.notSent);
+    expect(composer.states[KEY]?.draft).toBe('ship it');
+  });
+
+  it('leaves it open when a send times out, which is a failure like any other', async () => {
+    composerTiming.sendTimeoutMs = 10;
+    composer.setDraft(KEY, 'slow one');
+    await composer.send(KEY, () => new Promise<boolean>(() => {}), { closeOnDelivery: true });
+    expect(composer.mode).not.toBe('hidden');
+  });
+
+  it('keeps the composer open on delivery when the setting is off', async () => {
+    composer.setDraft(KEY, 'ship it');
+    await composer.send(KEY, async () => true);
+    expect(composer.mode).toBe('docked');
+  });
+
+  it('remembers docked-vs-maximized across a close-on-send round trip', async () => {
+    composer.setMode('expanded');
+    composer.setDraft(KEY, 'ship it');
+    await composer.send(KEY, async () => true, { closeOnDelivery: true });
+    expect(composer.mode).toBe('hidden');
+    composer.toggleHidden();
+    expect(composer.mode).toBe('expanded');
+  });
+
+  it('still clears the draft and the tiles on the way out', async () => {
+    composer.setDraft(KEY, 'ship it');
+    await attach(KEY, [A]);
+    await composer.send(KEY, async () => true, { closeOnDelivery: true });
+    expect(composer.states[KEY]?.draft).toBe('');
+    expect(composer.states[KEY]?.attachments).toEqual([]);
+  });
+
+  it('a partially-staged batch does not turn a delivery into a failure', async () => {
+    // #570 partial failure happens at STAGE time: the survivors are attached
+    // and an error is shown. If the user sends anyway, the send either lands or
+    // it does not — the earlier attachment error has no say in whether the
+    // panel closes.
+    await attach(KEY, [A], { ok: false, paths: [A], failedCount: 1, error: 'huge.bin too large' });
+    expect(composer.states[KEY]?.error).not.toBeNull();
+    await composer.send(KEY, async () => true, { closeOnDelivery: true });
+    expect(composer.mode).toBe('hidden');
+    expect(composer.states[KEY]?.error).toBeNull();
+  });
+});

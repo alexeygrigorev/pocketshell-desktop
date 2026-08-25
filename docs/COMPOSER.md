@@ -527,7 +527,7 @@ type ComposerMode = 'hidden' | 'docked' | 'expanded';
 
 | State | Rendering | Geometry |
 | --- | --- | --- |
-| `hidden` | The card is gone; the **fixed toggle** (§21.4) widens into a rail: `PROMPT` label, the waiting draft's first line (or the `Compose prompt…` placeholder), an attachment-count badge, the `Ctrl+\`` hint, and the chevron | 32px tall, shrink-to-fit leftward, **pinned** to the pane's bottom-right corner |
+| `hidden` | The card is gone; the **fixed toggle** (§21.4) remains — a 24px icon button wearing a pip when a draft or attachment is waiting | pinned to the pane's bottom-right corner, floating over the terminal |
 | `docked` (default) | Full card | the remembered geometry: position and size, both dragged by the user, default 720—240 in the resting corner |
 | `expanded` | Same card, maximized | fills the dock: full width, height capped at 80% of the body. Ignores the remembered geometry, which `docked` returns to |
 
@@ -939,9 +939,17 @@ and resize from any edge.
  .session-body            position: relative
  └── .composer-dock       position: absolute; inset: var(--composer-inset)
                           pointer-events: none      ← the terminal stays clickable
-     └── .composer        position: absolute; right/bottom/width/height inline
-                          pointer-events: auto
+     └── .composer-root   the card's world, and what the geometry measures
+         ├── .composer    position: absolute; right/bottom/width/height inline
+         └── .rail        the fixed toggle (§21.4), pinned to the corner
 ```
+
+`.composer-root` is the WHOLE dock. It used to be a `.composer-stage` that
+excluded a strip along the bottom, because the toggle lived in a band reserved
+out of the terminal. With that band gone (§21.2) the card gets the whole pane,
+and the only thing it must still clear is the toggle's own box — expressed as
+`PaneBox.keepOut` rather than as a wall, so a card parked to the LEFT of the
+toggle may sit on the pane's floor.
 
 **The dock is INSET, not padded.** An absolutely positioned child resolves its
 offsets against its containing block's *padding* box, so padding on the dock
@@ -970,6 +978,7 @@ a resize needs them.
 | Floors | 360—190. 360 leaves ~40 mono columns beside the tools pill and Send; 190 is the height at which the toolbar, two draft lines, the tiles and the Send row all still fit |
 | Cap | 80% of the pane's height, and never wider or taller than the pane |
 | Containment | clamped **fully inside** the pane, always. The strongest form of "never draggable off-screen": there is no partially-lost state to recover from, so no rescue affordance is needed |
+| Keep-out | the fixed toggle's measured corner box. A card spanning it is lifted to sit above it, and shortened if it would not otherwise fit — so the control that closes the card can never end up underneath it |
 | Snapping | on mouse-**up** after a MOVE only, 12px, each axis independently, to that axis's two flush positions. Never during a drag (DESIGN.md §5.9 wants pointer-1:1) and never after a resize, which would silently change the size just chosen |
 | Maximize | fills the dock — full width, capped height. Deliberately unlike the resting card: "maximize" is a request for all the room there is, a different question from how wide a prompt wants to be |
 | Corners / elevation | `--r-xl` and `0 8px 32px rgba(0,0,0,.5)` — §5.5's `OverlayPanel` treatment with the Y offset pulled in from 16px, because a card that can sit flush against the bottom of its dock would throw that shadow off the pane and leave its *top* edge, the one with terminal text behind it, unseparated |
@@ -983,23 +992,31 @@ had, exactly like dragging a maximized OS window restores it under the cursor.
 
 ### 21.2 The terminal-never-resizes guarantee
 
-`.tab-body.with-composer` reserves
-`calc(var(--composer-rail-h) + var(--composer-inset))` — **permanently**, open
-or closed, moved or resized or mid-drag. The terminal is therefore sized as
-though the composer were closed and stays that size whatever the card does, so
-opening a prompt is never an SSH window-change and never makes the remote tmux
-reflow.
+**The composer reserves nothing.** `.tab-body` used to carry
+`padding-bottom: calc(var(--composer-rail-h) + var(--composer-inset))` — about
+two terminal rows, given up permanently whether the composer was open or shut,
+so that the collapsed toggle could sit *below* the last row instead of on top of
+it. The user asked for those rows back: *"prompt composer thing should be flying
+so it shouldn't be taking space from the terminal it should be an overlay."*
 
-**Moving and resizing did not weaken this.** The dock is an overlay: it takes no
-part in the tab body's layout, so no card geometry can reach the terminal's box.
-What *did* change is what the reserve is for. It used to be "the strip the pill
-lives in"; it is now "the strip the composer's resting place lives in", and it
-is the one piece of the composer's geometry the user cannot move — see §21.4.
+**The guarantee survives the change.** It never depended on the padding being
+44px, only on its being a **constant**: the terminal is sized by the pane, and
+no composer state can change it. Zero is a constant. Opening, closing, moving
+and resizing the card still cause no SSH window-change and no remote tmux
+reflow — the guarantee simply settles at a larger row count. The dock is an
+absolutely positioned overlay and takes no part in the tab body's layout in any
+state, which is the mechanism, and it is unchanged.
 
-Both constants are declared on `.session-workspace` in `SessionWorkspaceView.vue`
-rather than in `App.vue`'s `:root`: they describe that pane's relationship with
-the composer, and custom properties inherit, so the reserved space and the card's
-inset are guaranteed to be the same number.
+What the change costs is stated plainly in §21.4: the toggle now floats over
+the bottom-right of the terminal, where tmux paints the right end of its status
+line.
+
+`--composer-inset` is declared on `.session-workspace` in
+`SessionWorkspaceView.vue` rather than in `App.vue`'s `:root`: it describes that
+pane's relationship with the composer, and custom properties inherit, so
+PromptComposer reads it without being handed it. `--composer-rail-h` sat beside
+it to size the reserved strip and is **gone** with the strip; the toggle sizes
+itself from `--control-h-sm`.
 
 ### 21.3 Inside the card
 
@@ -1014,45 +1031,97 @@ That last one is why the card is *not* `overflow: hidden`, which in turn is why
 ### 21.4 One toggle, one position — the control that never moves
 
 Opening and closing used to be two different controls in two different places:
-the collapsed pill *was* the opener, and the card's header carried a close
+the collapsed rail *was* the opener, and the card's header carried a close
 button. So the user reached for one spot to put the panel away and a different
 spot to bring it back, and the control they had just clicked was no longer under
 the cursor. The user's words: *"I want the button that minimizes it — on the
 same place — so when I click on it it goes down, and then if I want to hide it
 I just click on the same thing."*
 
-**There is now exactly one open/close control, and it is anchored to the PANE.**
+**There is exactly one open/close control, and it is anchored to the PANE.**
 
 ```
  .composer-dock          the session body, inset on all sides
- ├── .composer-stage     the dock MINUS the rail strip — the card's world
+ ├── .composer-root      the card's world: the whole dock
  │   └── .composer       the card: dragged, resized, maximized, or absent
- └── .rail               the fixed toggle, in the strip the stage gives up
+ └── .rail               the fixed toggle, pinned to the bottom-right corner
 ```
 
 | | |
 |---|---|
-| Position | pinned `right: 0; bottom: 0` of the dock, in the strip `.tab-body` already reserves. Identical in every state |
-| Both states | open — chevron **down**, the direction the panel will travel. Closed — chevron **up**. The chevron is the LAST child and the padding on that side is fixed, so the toggle's box does not move when the rail widens to the left |
-| Never covered | `.composer-stage` stops at the strip's top edge, so no card geometry can address the space below it — at rest, dragged into that corner, or maximized |
-| Never covers | the strip is the reserved band, so the toggle costs no terminal row, including tmux's status line |
-| Click target | the whole rail. It is pinned, so it is never dragged: a click is unambiguously a click |
+| Position | pinned `right: 0; bottom: 0` of the dock. Identical in every state — open, closed, card dragged elsewhere, card maximized |
+| Both states | open — chevron **down**, the direction the panel will travel. Closed — chevron **up** |
+| Size | a 24px (`--control-h-sm`) round button around a **14px** mark. Both sit on docs/POLISH.md §2.7's scale; 14 is its "dense chrome" size and this is the densest chrome in the app. Nothing smaller stays a comfortable pointer target |
+| Never covered | `PaneBox.keepOut` (§21.1) is the toggle's measured box; `clampGeometry` lifts any card that would span it. A **corner hole in the card's placement**, not a band carved out of the pane |
+| Click target | the whole button. It is pinned, so it is never dragged: a click is unambiguously a click |
 
-It could not have lived on the card. The card moves — that is the previous
-feature — so any control riding on it has no fixed position to offer.
+It could not have lived on the card. The card moves — that is §21.1 — so
+any control riding on it has no fixed position to offer.
 
-**The header's close button is gone.** It kept maximize/restore, which acts on
-the card's own size and belongs to the card. A second closer, on a surface the
-user can drag anywhere, is precisely the "the control moved" problem this
-section exists to remove. The other ways out are unchanged and all end in the
+**Why it is a bare icon.** It began as a rail spelling out a `PROMPT` label, the
+waiting draft's first line, an attachment count and the `Ctrl+\`` hint. That was
+right while the composer owned a reserved strip below the terminal. Once it
+became a pure overlay (§21.2) everything it drew sat on top of terminal output,
+which made the *quietest* state the most intrusive one. An icon is the least
+that still offers the affordance. The user: *"let's make it smaller and an
+icon."*
+
+Nothing the rail answered was simply deleted:
+
+| Was | Now |
+|---|---|
+| `PROMPT` label | the tooltip and the `aria-label` |
+| `Ctrl+\`` hint | the tooltip, in both states |
+| draft's first line, attachment count | a 6px accent **pip** on the button's corner, plus `— unsent draft` in the tooltip. `railToggle(open, unsent)` owns that copy |
+| the `Compose prompt…` placeholder | **deleted.** It was never an answer to anything — a label for a button that already has a chevron and a tooltip |
+
+The pip follows docs/POLISH.md §2.4: a CSS circle, not a glyph, so it does not
+scale with font metrics, ringed in the panel surface so it reads against
+whatever terminal output is behind it.
+
+**Resting opacity.** The button sits at `opacity: 0.55` and lifts to 1 on hover
+and focus, so tmux's status line reads through the chrome until the chrome is
+wanted. A waiting draft overrides that and holds it at full opacity: that is
+exactly when it should stop deferring.
+
+**The card has a close button too — superseding this section's own earlier
+decision.** For one revision it did not: the header carried maximize/restore
+alone, on the reasoning that a second closer, on a surface the user can drag
+anywhere, was the "the control moved" problem all over again. That was a fair
+reading of the complaint as it stood, and it is recorded here rather than
+deleted because the reversal is the interesting part.
+
+What it got wrong is that OPENING and CLOSING are not symmetric acts. Closing is
+something you do to a surface you are already looking at, at the point of
+attention — the conventional — gesture, which needs no fixed address because
+you are looking straight at it. Opening is a summons issued from somewhere else
+entirely, and *that* is what needs one unmoving pixel. The user, having used the
+result: *"the button on the top right of prompt composer should be x — I want
+it to close the composer (i.e. minify)."*
+
+So the header is `[ PROMPT ——— maximize/restore ] [ close ]`: the
+conventional window order, dismissal last so it is not what the cursor lands on
+by accident. Maximize keeps its button rather than retreating into the header's
+double-click — that gesture still works, and so do `Ctrl+Shift+↑`/`↓`, but a
+primary affordance should not live only behind an undiscoverable one.
+
+Both closers run the same `hideComposer()`, so `lastOpenMode` carries
+docked-vs-maximized across the round trip whichever is used, and the pinned
+toggle's fixed-position invariant is untouched: it is an ADDITIONAL way to
+close, not a replacement. The other ways out are unchanged and all end in the
 same visible state: `Ctrl+\``, `Ctrl+Shift+K`, `Ctrl+Shift+↓`, and rung 4 of the
-Escape ladder (§12.2). `lastOpenMode` still carries docked-vs-maximized across
-the round trip, so the toggle re-opens the panel the way the user left it.
+Escape ladder (§12.2).
 
-The chevron mapping and the rail's draft preview are pure functions
-(`railToggle`, `draftSummary` in `src/shared/composerText.ts`), tested in
-`tests/unit/composerText.test.ts`; the coordinate invariance itself is asserted
-end-to-end in `tests/e2e/composer.spec.ts`.
+**Closing always hands the keyboard back to the terminal.** Every path — the
+pinned toggle, the card's close, Escape rung 4, the chords, close-on-send —
+routes through one `hideComposer()` that focuses the pane. That is not a
+nicety: the typing intercept of §26 lives on the terminal's own textarea, so a
+close that left focus on a button would leave the next keystroke going nowhere
+and the whole feature looking broken.
+
+The chevron mapping and the unsent copy are a pure function (`railToggle` in
+`src/shared/composerText.ts`), tested in `tests/unit/composerText.test.ts`; the
+coordinate invariance is asserted end-to-end in `tests/e2e/composer.spec.ts`.
 
 ## 22. Deliberately NOT ported
 
@@ -1177,3 +1246,82 @@ lines and the `Attached files:` block — the bracketed-paste proof (§16.2).
    (§11) contradicts what that document says about tab ownership, this spec's
    §11 justification should be reconciled by whoever owns that file — flagged,
    not edited.
+
+## 26. Two behaviours the user drives from Settings
+
+Both are switches in `stores/settings.ts` (`typingOpensComposer`,
+`closeComposerOnSend`), both default **on**, and both are read through the store
+on every use rather than copied at mount @D@ flipping either one takes effect on
+the next keystroke.
+
+They exist for one reason, stated by the user: on the phone the composer is the
+primary way you talk to the agent, and they want the same reflex on the desktop
+with typing as the trigger. Together they make the rhythm: type anywhere, the
+card appears with what you typed; send, it gets out of the way; type again, it
+is back.
+
+### 26.1 `typingOpensComposer`
+
+A printable keystroke at a CLOSED composer opens it and lands in the draft
+instead of reaching the shell. **The character that triggered it is not lost** @D@
+having to retype the first letter of every prompt would defeat the point.
+
+Where it is decided:
+
+| | |
+|---|---|
+| Predicate | `isTypingKey` in `src/shared/composerText.ts`, unit-tested. Pure, so the line it draws is checkable rather than buried in an event handler |
+| Intercept | `TerminalView.vue`'s existing `attachCustomKeyEventHandler`, which already owns the clipboard chords. Returning `false` stops xterm turning the key into input bytes |
+| Condition | `SessionWorkspaceView.vue` computes `settings.typingOpensComposer && composer.mode === 'hidden' && tab !== 'files'` and hands TerminalView the answer as `interceptTyping`. The terminal knows nothing about the composer or the settings; the composer knows nothing about the terminal's key handling |
+| Delivery | TerminalView emits `typed`; the workspace calls the composer's `typeInto(char)`, which opens on `lastOpenMode` and splices the character in at the remembered caret (`insertAtCaret`) |
+
+**Where the line is drawn, exactly.** `isTypingKey` returns false @D@ so the key
+goes straight to the shell @D@ for:
+
+- **anything with Ctrl, Meta or Alt.** One rule covers Ctrl-C, Ctrl-D, Ctrl-Z,
+  Ctrl-R, tmux's prefix and every app chord. A terminal that swallows Ctrl-C is
+  broken. Shift is deliberately not in that list: Shift-A is a capital letter.
+- **any key whose `key` is not exactly one code point.** The DOM spells named
+  keys out (`Enter`, `Tab`, `Escape`, `ArrowUp`, `F5`, `Backspace`, `Home`…), so
+  one rule covers the whole control keyboard without enumerating it.
+- **a bare space.** It is the near-universal "next page" in pagers and tmux copy
+  mode, and nobody begins a prompt with it. Only the TRIGGER is affected: once
+  the composer is open the draft has focus and space types normally.
+- **a key mid-IME-composition.** The composing text belongs to whatever already
+  has focus; stealing it half-written would drop it.
+
+**The keypress latch.** xterm consults the handler for keydown *and* keypress,
+and it is the keypress it turns into a byte. Swallowing only the keydown would
+still let the character through @D@ and by keypress time the condition has gone
+false, because the composer we just opened is no longer closed. So the decision
+is latched on the keydown and spent on the keypress.
+
+**Escape hatches**, in order of immediacy:
+
+1. **Escape.** Rung 3 of the ladder blurs the draft and returns focus to the
+   pane while leaving the composer OPEN @D@ and the intercept only fires while it
+   is closed. So one keypress gets a plain terminal back, with the draft
+   preserved. No new chord was invented for this; the ladder already did it.
+2. **The setting**, for turning the behaviour off entirely.
+
+### 26.2 `closeComposerOnSend`
+
+After a delivered send the composer closes itself, and the next keystroke brings
+it back (@S@26.1). This is the phone's rhythm, asked for explicitly.
+
+- **Only a confirmed delivery closes it.** A failure @D@ including a timeout,
+  which @S@4.2 treats as a failure @D@ leaves the card open: the composed payload
+  is back in the draft and the "Not sent" banner is showing, and closing over
+  the top of that would hide both, leaving an invisible unsent prompt and no
+  explanation.
+- A **partial attachment failure** (#570) happens at STAGE time, not send time.
+  Its survivors are attached and its error shown; if the user then sends, the
+  send either lands or it does not, and the earlier error has no say in whether
+  the panel closes.
+- The rule lives in the store's `send(key, deliver, { closeOnDelivery })` rather
+  than in the component, so the failure case is testable without a settings
+  fixture. The component passes the setting in and, on a delivered-and-closed
+  send, hands focus to the terminal @D@ which is what arms @S@26.1 for the next
+  keystroke.
+- It composes with `lastOpenMode`: a maximized composer that closes on send
+  re-opens maximized.

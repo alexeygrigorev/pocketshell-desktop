@@ -32,6 +32,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api } from '../ipc';
 import { useShellsStore } from '../stores/shells';
+import { isTypingKey } from '../../shared/composerText';
 import type { ConnectionId, ShellId } from '../../shared/types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -53,6 +54,14 @@ const props = defineProps<{
   /** A key that, when changed, re-points the pane (used to switch sessions). */
   sessionKey?: string;
   /**
+   * When true, a printable keystroke is NOT sent to the shell: it is emitted as
+   * `typed` instead, for the prompt composer to open with. The caller decides
+   * when that applies (the setting, and only while the composer is closed) —
+   * this component just obeys a boolean, so it needs to know nothing about
+   * either the composer or the settings store.
+   */
+  interceptTyping?: boolean;
+  /**
    * The tmux session to display. Falls back to {@link sessionKey}, which is
    * the session name at every current call site; the separate prop exists so a
    * caller whose key is not a session name can say so rather than having main
@@ -60,6 +69,13 @@ const props = defineProps<{
    */
   sessionName?: string;
 }>();
+
+/**
+ * `typed` carries the character that was withheld from the shell, so whoever
+ * opens the composer can plant it in the draft. Losing it would mean retyping
+ * the first letter of every prompt, which is the whole point of the feature.
+ */
+const emit = defineEmits<{ (e: 'typed', text: string): void }>();
 
 /** The tmux session this pane should be showing, or '' for a bare shell. */
 const targetSession = computed(() => props.sessionName ?? props.sessionKey ?? '');
@@ -369,11 +385,38 @@ function onTerminalContextMenu(e: MouseEvent): void {
 }
 
 /**
- * Intercept the clipboard chords before xterm turns them into input bytes.
- * Returning false tells xterm to leave the event alone.
+ * True between swallowing a typing KEYDOWN and the KEYPRESS it produces.
+ *
+ * xterm consults this handler for keydown AND keypress, and it turns the
+ * keypress into the byte it sends. Swallowing only the keydown would still let
+ * the character reach the shell — and by keypress time `interceptTyping` has
+ * already gone false, because the composer we just opened is no longer closed.
+ * So the decision is latched on the keydown and spent on the keypress.
+ */
+let swallowKeypress = false;
+
+/**
+ * Intercept the clipboard chords, and (when asked) plain typing, before xterm
+ * turns them into input bytes. Returning false tells xterm to leave the event
+ * alone.
  */
 function onCustomKey(e: KeyboardEvent): boolean {
+  if (e.type === 'keypress') {
+    if (!swallowKeypress) return true;
+    swallowKeypress = false;
+    return false;
+  }
   if (e.type !== 'keydown') return true;
+
+  // Typing opens the composer instead of reaching the shell. Everything
+  // `isTypingKey` rejects — every chord, every named key, a bare space —
+  // falls through to xterm untouched; see its contract for where that line is.
+  if (props.interceptTyping === true && isTypingKey(e)) {
+    swallowKeypress = true;
+    emit('typed', e.key);
+    return false;
+  }
+
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.shiftKey && (e.key === 'V' || e.key === 'v')) {
     void pasteFromClipboard();

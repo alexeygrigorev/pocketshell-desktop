@@ -147,10 +147,14 @@ test.describe('prompt composer panel', () => {
     expect(closed!.height).toBe(term!.height);
     expect(closed!.width).toBe(term!.width);
 
-    // ...and the rail strip covers no terminal row, which is what the pane
-    // reserves it for.
+    // The composer reserves NO terminal space, so the toggle floats over the
+    // bottom-right of the terminal rather than below it. That is deliberate:
+    // "the toggle never covers a terminal row" was retired when the user asked
+    // for those rows back. What survives is the line above — the terminal is
+    // the same size whatever the composer is doing.
     const rail = await page.locator('.rail').boundingBox();
-    expect(rail!.y).toBeGreaterThanOrEqual(closed!.y + closed!.height - 1);
+    expect(rail!.y).toBeLessThan(closed!.y + closed!.height);
+    expect(rail!.x).toBeGreaterThan(closed!.x + closed!.width / 2);
 
     await page.locator('.rail').click();
     await expect(page.locator('.composer .draft')).toBeVisible();
@@ -171,20 +175,34 @@ test.describe('prompt composer panel', () => {
     await expect(page.locator('.composer')).toBeVisible();
   });
 
-  test('closing leaves a rail that advertises the unsent draft, and reopens it', async () => {
+  test('the closed toggle still says a draft is waiting, and reopens it', async () => {
     await page.locator('.rail').click();
     await expect(page.locator('.composer')).toHaveCount(0);
     await expect(page.locator('.composer .draft')).toHaveCount(0);
-    // The pill says a draft is waiting by SHOWING it: a dot could only raise
-    // the question of which unsent prompt was sitting there.
-    await expect(page.locator('.rail .ghost')).toHaveText('hello there');
+
+    // The toggle is a bare icon now — it floats over terminal output, so the
+    // strip that used to spell the draft out was the most intrusive possible
+    // resting state. The answer it gave survives as a pip and as tooltip copy.
+    await expect(page.locator('.rail .unsent-pip')).toBeVisible();
+    await expect(page.locator('.rail')).toHaveAttribute('title', /unsent draft/);
 
     await page.locator('.rail').click();
     await expect(page.locator('.composer .draft')).toHaveValue('hello there');
   });
 
+  test('the toggle stays quiet when there is nothing waiting behind it', async () => {
+    await clearDraft(page);
+    await page.locator('.rail').click();
+    await expect(page.locator('.composer')).toHaveCount(0);
+    await expect(page.locator('.rail .unsent-pip')).toHaveCount(0);
+    await expect(page.locator('.rail')).not.toHaveAttribute('title', /unsent/);
+    await page.locator('.rail').click();
+    await page.locator('.composer .draft').click();
+    await page.keyboard.type('hello there');
+  });
+
   test('opens and closes from ONE control that never moves', async () => {
-    const toggle = page.locator('.rail .chevron');
+    const toggle = page.locator('.rail');
 
     // Open: the toggle points down, because down is where the panel will go.
     await expect(page.locator('.composer')).toBeVisible();
@@ -211,7 +229,7 @@ test.describe('prompt composer panel', () => {
   });
 
   test('the toggle stays put and uncovered wherever the card goes', async () => {
-    const toggle = page.locator('.rail .chevron');
+    const toggle = page.locator('.rail');
     const home = await toggle.boundingBox();
 
     // Maximized: the card takes all the room it is allowed and still leaves the
@@ -233,10 +251,53 @@ test.describe('prompt composer panel', () => {
     expect(card!.y + card!.height).toBeLessThanOrEqual(home!.y);
   });
 
-  test('the header carries maximize and nothing that closes the panel', async () => {
-    // A second closer riding on a card the user can drag anywhere is exactly
-    // the "the control moved" problem the fixed toggle exists to solve.
-    await expect(page.locator('.composer .panel-action')).toHaveCount(1);
+  test('the header carries maximize and a close, in that order', async () => {
+    // An earlier pass had only maximize here, to keep ONE closer in ONE place.
+    // The user then asked for an X on the card: dismissing the surface you are
+    // looking at and re-opening from a pinned icon turn out to be different
+    // acts, and only the second needs a fixed address (COMPOSER.md @S@21.4).
+    const actions = page.locator('.composer .panel-action');
+    await expect(actions).toHaveCount(2);
+    await expect(actions.nth(1)).toHaveAttribute('aria-label', /close/i);
+
+    // It closes, and the pinned toggle — which has not moved — reopens it.
+    const toggle = await page.locator('.rail').boundingBox();
+    await actions.nth(1).click();
+    await expect(page.locator('.composer')).toHaveCount(0);
+    expect(await page.locator('.rail').boundingBox()).toEqual(toggle);
+    await page.locator('.rail').click();
+    await expect(page.locator('.composer')).toBeVisible();
+  });
+
+  test('typing at a closed composer opens it and keeps the first letter', async () => {
+    await clearDraft(page);
+    await page.locator('.rail').click();
+    await expect(page.locator('.composer')).toHaveCount(0);
+
+    // Focus is in the terminal after a close, which is what makes this work.
+    await page.keyboard.type('hey');
+    await expect(page.locator('.composer .draft')).toHaveValue('hey');
+    // ...and none of it reached the shell.
+    expect(await terminalText(page)).not.toContain('hey');
+  });
+
+  test('control keys still reach the shell while the composer is closed', async () => {
+    await clearDraft(page);
+    await page.locator('.rail').click();
+    await expect(page.locator('.composer')).toHaveCount(0);
+
+    // Enter at a shell prompt must still be Enter: a terminal that swallows it
+    // is not a terminal. Same for Ctrl-C, which is the one key a user reaches
+    // for when something has gone wrong.
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Control+c');
+    await expect(page.locator('.composer')).toHaveCount(0);
+    await expect
+      .poll(() => terminalText(page), { timeout: 10_000 })
+      .toMatch(/\$\s*$|\^C/);
+
+    await page.locator('.rail').click();
+    await expect(page.locator('.composer .draft')).toBeVisible();
   });
 
   test('does not restate the session name inside the composer', async () => {
@@ -379,6 +440,24 @@ test.describe('prompt composer panel', () => {
     });
     expect(fit).not.toBeNull();
     expect(fit!.screenBottom).toBeLessThanOrEqual(fit!.contentBottom + 1);
+  });
+
+  test('a delivered send puts the composer away, and typing brings it back', async () => {
+    await openSession(page, 'main');
+    await clearDraft(page);
+    await page.keyboard.type('echo close_on_send_probe');
+    await page.keyboard.press('Enter');
+
+    // Delivered -> the card is gone and the terminal is whole again.
+    await expect(page.locator('.composer')).toHaveCount(0, { timeout: 15_000 });
+    await expect
+      .poll(() => terminalText(page), { timeout: 15_000 })
+      .toContain('close_on_send_probe');
+
+    // ...and the next keystroke brings it straight back, carrying that key.
+    await page.keyboard.type('n');
+    await expect(page.locator('.composer .draft')).toHaveValue('n');
+    await clearDraft(page);
   });
 
   test('a multi-line prompt reaches the pane carrying every line', async () => {

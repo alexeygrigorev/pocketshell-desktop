@@ -240,3 +240,81 @@ describe('maximizedGeometry', () => {
     expect(maximizedGeometry(PANE).height).toBeLessThan(PANE.height);
   });
 });
+
+/**
+ * The keep-out corner: the fixed open/close toggle's box, which the card must
+ * never cover. It replaced a full-width band once the composer became a pure
+ * overlay — the pane is all terminal now, so only the toggle itself is
+ * off-limits and the rest of the floor is the card's to use.
+ */
+describe('keepOut — the corner the fixed toggle occupies', () => {
+  const TOGGLE = { width: 36, height: 36 };
+  const PANE_K = { ...PANE, keepOut: TOGGLE };
+
+  /** Do the two boxes overlap, in the same bottom-right-origin coordinates? */
+  function coversToggle(g: ComposerGeometry): boolean {
+    return g.right < TOGGLE.width && g.bottom < TOGGLE.height;
+  }
+
+  it('lifts a card parked in the corner clear of the toggle', () => {
+    const g = clampGeometry({ right: 0, bottom: 0, width: 720, height: 240 }, PANE_K);
+    expect(g.bottom).toBe(TOGGLE.height);
+    expect(coversToggle(g)).toBe(false);
+  });
+
+  it('leaves a card parked to the LEFT of the toggle on the pane floor', () => {
+    // The whole point of a corner box rather than a band: this card clears the
+    // toggle horizontally, so it may sit as low as it likes.
+    const g = clampGeometry({ right: 400, bottom: 0, width: 500, height: 240 }, PANE_K);
+    expect(g.bottom).toBe(0);
+    expect(coversToggle(g)).toBe(false);
+  });
+
+  it('does not move a card that already clears the toggle vertically', () => {
+    const g = { right: 0, bottom: 200, width: 720, height: 240 };
+    expect(clampGeometry(g, PANE_K)).toEqual(g);
+  });
+
+  it('shortens a card that could not otherwise fit above the toggle', () => {
+    // Asking for the full 80% AND the corner: the height gives way, not the
+    // clearance, because a card hanging off the top of the pane is worse.
+    const g = clampGeometry(
+      { right: 0, bottom: 0, width: 720, height: maxHeightIn(PANE) },
+      PANE_K,
+    );
+    expect(g.bottom + g.height).toBeLessThanOrEqual(PANE.height);
+    expect(coversToggle(g)).toBe(false);
+  });
+
+  it('keeps maximized clear of the toggle it would otherwise bury', () => {
+    const g = maximizedGeometry(PANE_K);
+    expect(g.width).toBe(PANE.width);
+    expect(g.bottom).toBe(TOGGLE.height);
+    expect(coversToggle(g)).toBe(false);
+    expectLegal(g);
+  });
+
+  it('never lets a MOVE drag the card under the toggle', () => {
+    const start = { right: 300, bottom: 300, width: 500, height: 240 };
+    const dragged = moveGeometry(start, 99999, 99999, PANE_K);
+    expect(coversToggle(dragged)).toBe(false);
+    expectLegal(dragged);
+  });
+
+  it('never lets a RESIZE grow the card under the toggle', () => {
+    const start = { right: 0, bottom: 200, width: 500, height: 240 };
+    const grown = resizeGeometry(start, 0, 99999, 's', PANE_K);
+    expect(coversToggle(grown)).toBe(false);
+    expectLegal(grown);
+  });
+
+  it('is inert when no toggle is declared', () => {
+    const g = { right: 0, bottom: 0, width: 720, height: 240 };
+    expect(clampGeometry(g, PANE)).toEqual(g);
+  });
+
+  it('is idempotent, so a re-render cannot walk the card up the pane', () => {
+    const once = clampGeometry({ right: 0, bottom: 0, width: 720, height: 240 }, PANE_K);
+    expect(clampGeometry(once, PANE_K)).toEqual(once);
+  });
+});

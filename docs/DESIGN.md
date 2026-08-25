@@ -926,14 +926,17 @@ resizes it**; what follows is where it starts and what it is made of.
 | Resize | eight grips: four 6px edges, four 14px corners. Floors 360×190, height capped at 80% of the pane |
 | Corners / elevation | `--r-xl` and `0 8px 32px rgba(0,0,0,.5)` — §5.5's `OverlayPanel` treatment, Y offset pulled in from 16px because a card that can sit flush against the bottom of its dock would throw that shadow off the pane and leave its *top* edge, the one with terminal text behind it, unseparated |
 | Surface | `--surface`, fully opaque, `--border` hairline. Never translucent: terminal text bleeding through a prompt field is unreadable for both |
-| Toggle | ONE control opens and closes it, pinned to the pane's bottom-right corner and present in both states, so the same pixel alternates down/up. It cannot live on the card — the card moves. The card's header keeps maximize/restore only |
-| Closed | the card is removed; the toggle widens leftward into a 32px rail (`border-radius: 999px`) showing the waiting draft's first line and an attachment count |
-| Reserved | `.tab-body` permanently pads the pill's height plus its inset, whatever the composer is doing — so the terminal's row count never changes and the remote tmux never reflows. See COMPOSER.md §21.2 and §21.4 |
+| Header | `PROMPT` ——— maximize/restore, close. Conventional window order, dismissal last. The card's close and the pinned toggle run the same action; see COMPOSER.md §21.4 for why there are two |
+| Toggle | ONE control opens and closes it: a 24px round icon button (14px mark, POLISH.md §2.7's dense size) pinned to the pane's bottom-right corner, present in both states, so the same pixel alternates down/up. It cannot live on the card — the card moves. The card's header keeps maximize/restore only |
+| Closed | the card is removed and the toggle is all that remains. A 6px accent pip (POLISH.md §2.4) on its corner says a draft or attachment is waiting; the label and the `Ctrl+\`` hint live in its tooltip |
+| At rest | `opacity: 0.55`, lifting to 1 on hover/focus — it floats over tmux's status line, so chrome defers to that line until it is wanted. A waiting draft holds it at full opacity |
+| Reserved | **nothing.** The composer is a pure overlay and takes no terminal rows in any state. The row-count guarantee survives because a reserve of zero is still a constant: the terminal is sized by the pane and no composer state can change it. See COMPOSER.md §21.2 |
 
-The two constants (`--composer-rail-h`, `--composer-inset`) live on
-`.session-workspace`, not in `:root`: they describe one pane's relationship with
-the composer, and one declaration keeps the reserved strip and the card's inset
-equal by construction.
+`--composer-inset` lives on `.session-workspace`, not in `:root`: it describes
+one pane's relationship with the composer, and custom properties inherit, so the
+composer reads it without being handed it. `--composer-rail-h` sat beside it to
+size the strip reserved out of the terminal for the collapsed toggle, and went
+when that strip did.
 
 ### 5.5b Splitter (`02`, `03` · `HostWorkspaceView.vue`)
 

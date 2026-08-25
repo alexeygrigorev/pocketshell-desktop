@@ -3,8 +3,9 @@ import {
   appendAttachmentPaths,
   appendSeededPrompt,
   attachmentDisplayName,
-  draftSummary,
+  insertAtCaret,
   insertCommandText,
+  isTypingKey,
   railToggle,
   slashQueryFor,
 } from '../../src/shared/composerText';
@@ -160,32 +161,6 @@ describe('agent command catalog (AgentCommandCatalog.kt)', () => {
   });
 });
 
-describe('draftSummary — what the collapsed rail advertises', () => {
-  it('is empty when there is no draft', () => {
-    expect(draftSummary('')).toBe('');
-  });
-
-  it('is empty for a whitespace-only draft, which has nothing to advertise', () => {
-    expect(draftSummary('   \n\t\n  ')).toBe('');
-  });
-
-  it('takes the first line', () => {
-    expect(draftSummary('fix the parser\nand then the tests')).toBe('fix the parser');
-  });
-
-  it('skips leading blank lines rather than previewing nothing', () => {
-    expect(draftSummary('\n\n  the real first line\nmore')).toBe('the real first line');
-  });
-
-  it('trims, so indentation does not eat the preview', () => {
-    expect(draftSummary('      indented')).toBe('indented');
-  });
-
-  it('handles a single line with no trailing newline', () => {
-    expect(draftSummary('just this')).toBe('just this');
-  });
-});
-
 describe('railToggle — one control, two states', () => {
   it('points DOWN when the panel is open, because that is where it goes', () => {
     expect(railToggle(true).icon).toBe('chevron-down');
@@ -212,5 +187,91 @@ describe('railToggle — one control, two states', () => {
     expect(railToggle(open)).not.toEqual(first);
     open = !open;
     expect(railToggle(open)).toEqual(first);
+  });
+
+  it('says a draft is waiting when the panel is closed over one', () => {
+    const waiting = railToggle(false, true);
+    expect(waiting.unsent).toBe(true);
+    expect(waiting.title).toContain('unsent draft');
+    expect(waiting.label).toContain('unsent draft');
+  });
+
+  it('stays quiet when the closed panel holds nothing', () => {
+    expect(railToggle(false, false).unsent).toBe(false);
+    expect(railToggle(false).title).not.toContain('unsent');
+  });
+
+  it('never claims unsent work while the panel is OPEN, where the draft shows', () => {
+    expect(railToggle(true, true).unsent).toBe(false);
+    expect(railToggle(true, true).title).not.toContain('unsent');
+  });
+});
+
+/**
+ * The typing intercept's whole contract. Everything this rejects reaches the
+ * shell untouched, so the false cases matter more than the true ones.
+ */
+describe('isTypingKey — what opens the composer, and what must not', () => {
+  const press = (key: string, mods: Partial<Record<string, boolean>> = {}) =>
+    isTypingKey({ key, ...mods });
+
+  it('accepts letters, digits and punctuation', () => {
+    for (const k of ['a', 'Z', '7', '/', '-', '?', 'é', '\u4f60']) {
+      expect(press(k)).toBe(true);
+    }
+  });
+
+  it('accepts Shift, because Shift-A is a capital letter', () => {
+    expect(press('A', { shiftKey: true })).toBe(true);
+  });
+
+  it('never steals a control chord — Ctrl-C must reach the shell', () => {
+    for (const k of ['c', 'd', 'z', 'r', 'l', 'a', 'b']) {
+      expect(press(k, { ctrlKey: true })).toBe(false);
+      expect(press(k, { metaKey: true })).toBe(false);
+      expect(press(k, { altKey: true })).toBe(false);
+    }
+  });
+
+  it('never steals a named key', () => {
+    for (const k of [
+      'Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown',
+      'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'F5',
+      'Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Insert',
+    ]) {
+      expect(press(k)).toBe(false);
+    }
+  });
+
+  it('leaves a bare space to the pager it pages', () => {
+    // Only the TRIGGER: once the composer is open, the draft has focus and a
+    // space is an ordinary character again.
+    expect(press(' ')).toBe(false);
+  });
+
+  it('leaves an in-flight IME composition where it already is', () => {
+    expect(press('a', { isComposing: true })).toBe(false);
+  });
+});
+
+describe('insertAtCaret — the keystroke that opened the composer is not lost', () => {
+  it('plants the character at the caret', () => {
+    expect(insertAtCaret('hello world', 5, 'X')).toEqual(['helloX world', 6]);
+  });
+
+  it('starts a draft from empty', () => {
+    expect(insertAtCaret('', 0, 'h')).toEqual(['h', 1]);
+  });
+
+  it('continues a remembered draft where the caret was left', () => {
+    expect(insertAtCaret('fix the ', 8, 'p')).toEqual(['fix the p', 9]);
+  });
+
+  it('survives a caret past the end of the text', () => {
+    expect(insertAtCaret('abc', 99, 'd')).toEqual(['abcd', 4]);
+  });
+
+  it('survives a negative caret', () => {
+    expect(insertAtCaret('abc', -5, 'z')).toEqual(['zabc', 1]);
   });
 });

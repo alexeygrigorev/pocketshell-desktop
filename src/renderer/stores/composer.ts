@@ -458,6 +458,15 @@ export const useComposerStore = defineStore('composer', () => {
   async function send(
     key: string,
     deliver: (payload: string) => Promise<boolean>,
+    opts: {
+      /**
+       * The `closeComposerOnSend` setting (docs/COMPOSER.md §26). Passed in
+       * rather than read here: this store has no business importing the
+       * settings store, and a parameter is what lets the failure case be
+       * tested without a settings fixture.
+       */
+      closeOnDelivery?: boolean;
+    } = {},
   ): Promise<boolean> {
     const s = ensure(key);
     if (s.sendInFlight) return false; // :662
@@ -484,6 +493,11 @@ export const useComposerStore = defineStore('composer', () => {
 
     if (ok) {
       markDelivered(key);
+      // Only a CONFIRMED delivery may close the panel. A failure leaves it open
+      // on purpose: the payload is back in the draft, the "Not sent" banner is
+      // showing, and closing over the top of that would hide both — the user
+      // would be told nothing and left with an invisible unsent prompt.
+      if (opts.closeOnDelivery === true) setMode('hidden');
       return true;
     }
     restoreFailedSend(key, payload);
