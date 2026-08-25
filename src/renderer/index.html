@@ -16,10 +16,28 @@
          is what these fetches fall back to, and `'self'` does NOT include blob:. Left
          out, the audio element silently loads nothing and the PDF frame renders blank
          — both of which look identical to a coding mistake, which is exactly why they
-         are listed here rather than left to the default. -->
+         are listed here rather than left to the default.
+
+         frame-src ALSO carries `psview:`, and that one is a different kind of
+         grant, so it gets its own paragraph. It is the custom scheme main
+         registers to serve a remote HTML file and the assets that file asks
+         for (src/main/preview/HtmlPreviewService.ts) — the Files tab's HTML
+         preview frames a `psview://<token>/<remote path>` URL. It appears on
+         frame-src and on NOTHING ELSE, deliberately: the app document itself
+         has no business fetching one of those responses, so img-src, media-src
+         and connect-src do not name the scheme and a stray `fetch('psview:…')`
+         from app code is refused by this policy before it reaches main.
+
+         Note also what is NOT widened for the preview. The framed document is
+         governed by its OWN policy, delivered as a real Content-Security-Policy
+         header on every psview: response, because CSP is not inherited across a
+         normal (non-local-scheme) frame navigation. That policy is far stricter
+         than this one — `default-src 'none'`, no scripts, no network of any
+         kind — and it is the one that matters for untrusted remote HTML. This
+         line only decides whether the frame may exist at all. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'self' blob:; frame-src 'self' blob:; connect-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'self' blob:; frame-src 'self' blob: psview:; connect-src 'self'"
     />
     <title>PocketShell</title>
   </head>

@@ -18,7 +18,7 @@
 // components/CodeEditor.vue for the probe output.
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useConnectionStore } from '../stores/connection';
-import { useFilesStore, formatBytes } from '../stores/files';
+import { useFilesStore, formatBytes, isEditable } from '../stores/files';
 import FileTree from '../components/FileTree.vue';
 
 /**
@@ -208,6 +208,11 @@ async function onDownload(): Promise<void> {
   await files.download(connId.value);
 }
 
+async function onReloadPreview(): Promise<void> {
+  if (!connId.value) return;
+  await files.reloadPreview(connId.value);
+}
+
 /**
  * Template ref on the tree, so the chord below can put the caret in its path
  * bar. Typed by the one method called rather than `InstanceType<typeof
@@ -236,6 +241,56 @@ function onKeydown(e: KeyboardEvent): void {
 /** Basename of the open file, for the viewer headings. */
 const openName = computed(() => files.openPath?.split('/').pop() ?? '');
 const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSize) : ''));
+
+/**
+ * What the preview toolbar says about the render, in the order the reader
+ * needs it.
+ *
+ * This line is not decoration. A page missing its stylesheet and a page that
+ * genuinely looks unstyled are IDENTICAL on screen, and shipping a preview
+ * that cannot tell them apart is the specific failure this feature was not
+ * allowed to have. So every reason a render might be incomplete gets a
+ * sentence:
+ *
+ *   - unsaved edits, which the preview does not show at all (it renders the
+ *     host's copy, and the buffer beside it says something else);
+ *   - scripts, which never run — a page that builds itself at runtime is a
+ *     shell here, and saying so is the difference between "degraded" and
+ *     "broken";
+ *   - resources on remote origins, which are refused so that rendering a
+ *     page cannot tell a third party which file on which host is being
+ *     inspected. This one is derived from the SOURCE rather than counted,
+ *     and it has to be: the refusal happens inside this renderer, under the
+ *     frame's own CSP, so the request never reaches main and main can never
+ *     report it. Without the line, a page whose images all live on a CDN
+ *     would say "0 blocked" beside a grid of broken-image icons;
+ *   - assets refused for being outside the page's own folder, which is the
+ *     one real limit of the scoping in HtmlPreviewService and the one a user
+ *     can act on (open the page from its project root instead);
+ *   - assets that were asked for and are not there, which is usually the
+ *     page's own bug and is worth distinguishing from ours;
+ *   - the budget cap, which means the render is knowingly partial.
+ *
+ * The counts come from main and arrive asynchronously as the frame loads, so
+ * the line settles a moment after the page paints. That is the honest
+ * ordering — we cannot know what a page will ask for until it asks.
+ */
+const previewNote = computed(() => {
+  const parts: string[] = [];
+  if (files.dirty) parts.push('showing the saved copy — unsaved edits are not rendered');
+  if (files.openHasScripts) parts.push('scripts are not run');
+  if (files.openHasRemoteRefs) parts.push('remote resources are not loaded');
+  const stats = files.previewStats;
+  if (stats) {
+    if (stats.loaded > 0) parts.push(`${stats.loaded} asset${stats.loaded === 1 ? '' : 's'} loaded`);
+    if (stats.blocked > 0) {
+      parts.push(`${stats.blocked} outside this folder — not loaded`);
+    }
+    if (stats.missing > 0) parts.push(`${stats.missing} missing`);
+    if (stats.capped) parts.push('asset budget reached — render is partial');
+  }
+  return parts.join(' · ');
+});
 </script>
 
 <template>
@@ -268,7 +323,7 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
                `Save (⌘S)` — a macOS glyph on a Windows-first app. The chord
                belongs in the tooltip, in this app's Ctrl+... convention. -->
           <button
-            v-if="files.openMode === 'text'"
+            v-if="isEditable(files.openMode)"
             class="save-btn"
             :disabled="!files.dirty || files.saving"
             title="Ctrl+S"
@@ -292,6 +347,123 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
           :filename="files.openPath"
           @update:model-value="files.setContent"
         />
+
+        <!-- HTML: the one file kind with two presentations.
+             ==================================================================
+             The `sandbox` attribute below is EMPTY on purpose and must stay
+             that way. An empty sandbox is the maximally restrictive one: the
+             document lands on an opaque origin (so it is cross-origin to this
+             app and cannot touch its DOM), no script runs, no form submits, no
+             popup opens, and nothing may navigate the top-level page. Adding a
+             single token — `allow-scripts` above all — would hand a remote
+             host arbitrary execution inside the renderer process that holds
+             this app's SSH sessions. The reasoning, and what a scripted
+             preview would cost and buy, is written out in full at
+             src/main/preview/HtmlPreviewService.ts.
+
+             The document is ALSO governed by a strict Content-Security-Policy
+             delivered as a real header on every psview: response, because a
+             CSP is not inherited across this kind of frame navigation. Two
+             independent mechanisms, neither relying on the other.
+
+             MEASURED in the built app rather than assumed, the way the PDF
+             embed and the Monaco CSP question were settled. Loading the
+             fixture page in the packaged renderer and probing from inside the
+             frame:
+
+               window.api                 -> undefined  (no preload in subframes)
+               window.parent.document     -> SecurityError
+               window.top.location.href   -> SecurityError
+               inline <script>            -> "Blocked script execution … the
+                                             document's frame is sandboxed and
+                                             the 'allow-scripts' permission is
+                                             not set"
+               <img src="https://…">      -> refused by img-src
+               location.origin            -> "psview://<token>"
+
+             That last one is worth writing down because it is NOT the "null"
+             a fully sandboxed frame is usually described as having: on this
+             Electron, a document on a registered standard scheme keeps a
+             serialised origin even under an empty sandbox. It changes
+             nothing that matters — the three probes above are the actual
+             isolation and all three hold — and it has one pleasant
+             consequence: the token sits in the URL's HOST position, so two
+             open previews are on different origins from each other as well as
+             from the app.
+
+             `referrerpolicy="no-referrer"` is belt-and-braces: with no network
+             permitted there is nothing to send a referrer to, but if that ever
+             changes, the previewed page's own path — which names a directory
+             on the user's server — should not be the thing that leaks first. -->
+        <div v-else-if="files.openMode === 'html'" class="html-view">
+          <div class="html-bar">
+            <div class="seg" role="group" aria-label="HTML view">
+              <button
+                type="button"
+                :class="{ active: files.htmlView === 'preview' }"
+                :disabled="!files.previewUrl"
+                @click="files.setHtmlView('preview')"
+              >
+                Preview
+              </button>
+              <button
+                type="button"
+                :class="{ active: files.htmlView === 'source' }"
+                @click="files.setHtmlView('source')"
+              >
+                Source
+              </button>
+            </div>
+            <!-- Recovers a preview that a link click emptied, as well as
+                 re-reading a file that changed on the host. See the store's
+                 `reloadPreview` for why a preview can end up empty at all —
+                 briefly: a remote link is refused by the app's CSP, and with
+                 no scripts in the frame there is nothing to intercept the
+                 click before Chromium paints its error page. -->
+            <button
+              v-if="files.htmlView === 'preview'"
+              type="button"
+              class="reload-btn"
+              title="Render again from the host"
+              @click="onReloadPreview"
+            >
+              Reload
+            </button>
+            <span v-if="files.htmlView === 'preview' && previewNote" class="html-note muted">
+              {{ previewNote }}
+            </span>
+          </div>
+
+          <iframe
+            v-if="files.htmlView === 'preview' && files.previewUrl"
+            class="html-frame"
+            sandbox=""
+            referrerpolicy="no-referrer"
+            :src="files.previewUrl"
+            :title="`Preview of ${openName}`"
+          />
+          <!-- The preview could not be minted at all (the file moved, the
+               connection went away). The source is still right there, so this
+               says why rather than showing an empty frame. -->
+          <div
+            v-else-if="files.htmlView === 'preview'"
+            class="viewer binary-panel"
+          >
+            <p class="binary-title">{{ openName }}</p>
+            <p class="muted">{{ files.openNote ?? 'Preview unavailable.' }}</p>
+            <button class="save-btn" @click="files.setHtmlView('source')">View source</button>
+          </div>
+          <!-- Same binding contract as the plain-text arm: `:model-value` plus
+               `@update:model-value`, so edits go through `setContent` and the
+               dirty flag and Ctrl+S keep working on an HTML file exactly as
+               they do on any other source file. -->
+          <CodeEditor
+            v-else
+            :model-value="files.openContent"
+            :filename="files.openPath"
+            @update:model-value="files.setContent"
+          />
+        </div>
 
         <!-- Audio: a real player, not a description of one. The blob URL is
              minted in the store and revoked when the file closes, so the
@@ -469,6 +641,95 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
 }
 .audio {
   width: min(480px, 100%);
+}
+/* HTML: a strip of controls over whichever half is showing. */
+.html-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.html-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--fs-100);
+}
+/* A segmented control rather than two buttons: the two are mutually exclusive
+   views of one file, and a pair of independent buttons reads as two actions. */
+.seg {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.seg button {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-200);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.seg button + button {
+  border-left: 1px solid var(--border);
+}
+.seg button:hover:not(:disabled) {
+  background: var(--state-hover);
+  color: var(--fg);
+}
+.seg button.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: var(--fw-semibold);
+}
+.seg button:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+/* Quiet, like Close: reloading is a recovery, never the encouraged action. */
+.reload-btn {
+  flex: 0 0 auto;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  background: transparent;
+  color: var(--fg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-family: var(--font-ui);
+  font-size: var(--fs-200);
+  cursor: pointer;
+}
+.reload-btn:hover {
+  color: var(--fg);
+  background: var(--state-hover);
+}
+.html-note {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* White, not `--term-bg`: a page authored for a browser assumes a light canvas
+   and specifies only the colours it cares about, so painting the frame in the
+   app's dark surface makes unstyled black text invisible — a "broken preview"
+   with no cause the user could ever find. The frame is a document viewport,
+   not part of the app's own surface, and is treated as one. */
+.html-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: none;
+  background: #fff;
 }
 /* The PDF plugin fills the pane; it brings its own chrome and scrolling. */
 .pdf {

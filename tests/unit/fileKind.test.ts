@@ -89,6 +89,25 @@ describe('classifyByName', () => {
     expect(classifyByName('/x/report.docx').kind).toBe('binary');
   });
 
+  it('routes a web page to the HTML view rather than to the plain editor', () => {
+    for (const name of ['/x/index.html', '/x/page.HTM', '/x/doc.xhtml']) {
+      expect(classifyByName(name).kind, name).toBe('html');
+    }
+    expect(classifyByName('/x/index.html').mime).toBe('text/html');
+  });
+
+  it('leaves page TEMPLATES as plain text, not as pages', () => {
+    // A `.php` or a `.vue` contains markup but is source for a page rather
+    // than a page: previewing one renders a broken document full of
+    // unexecuted directives, which is strictly worse than showing the source
+    // the user can actually reason about. Same for a stylesheet or an SVG,
+    // which are edited far more often than they are looked at here.
+    expect(classifyByName('/x/index.php').kind).toBe('text');
+    expect(classifyByName('/x/App.vue').kind).toBe('text');
+    expect(classifyByName('/x/main.css').kind).toBe('text');
+    expect(classifyByName('/x/logo.svg').kind).toBe('text');
+  });
+
   it('says "unknown" for a name it cannot place — never "text"', () => {
     // This is the case the whole module exists for. Falling through to the
     // editor here is precisely the bug that froze the app.

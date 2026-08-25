@@ -47,6 +47,21 @@ export type FileKind =
   | 'audio'
   /** Chromium's PDF viewer, via `<embed>` on a blob URL. */
   | 'pdf'
+  /**
+   * A web page: BOTH a rendered preview in a sandboxed frame and the editor.
+   *
+   * The only kind with two presentations, and it is not a special case for its
+   * own sake. HTML is text — it edits and saves exactly like any other source
+   * file, and losing that would be a regression, since a file browser with an
+   * editor in it is where people fix a typo in a page. But it is also the one
+   * text format whose whole point is what it looks like when a browser runs
+   * it, and reading `<div class="wrapper">` is a poor substitute for that.
+   * So `html` gets a toggle rather than a choice made for it. See
+   * src/renderer/views/FilesView.vue for which side is the default and why,
+   * and src/main/preview/HtmlPreviewService.ts for what the preview may and
+   * may not do.
+   */
+  | 'html'
   /** Opaque bytes: the binary panel, with a download button. */
   | 'binary'
   /** Not placeable from the name alone — sniff the bytes. */
@@ -77,7 +92,7 @@ const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
   'log', 'out', 'err', 'diff', 'patch',
   'json', 'jsonl', 'ndjson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'properties', 'env',
   'csv', 'tsv',
-  'xml', 'html', 'htm', 'css', 'scss', 'sass', 'less', 'svg',
+  'xml', 'css', 'scss', 'sass', 'less', 'svg',
   'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte',
   'py', 'pyi', 'rb', 'php', 'pl', 'pm', 'lua', 'r',
   'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'rs', 'go', 'java', 'kt', 'kts', 'scala', 'swift',
@@ -114,6 +129,25 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
   'iso', 'img', 'dmg', 'deb', 'rpm', 'apk',
 ]);
 
+/**
+ * Extensions routed to the HTML preview.
+ *
+ * Kept OUT of {@link TEXT_EXTENSIONS} above rather than merely checked before
+ * it, so there is exactly one place that says what an `.html` is. A duplicate
+ * entry in both sets would still work today — the html check below runs first
+ * — but it would silently become a bug the moment someone reorders the arms,
+ * and the reorder would look harmless.
+ *
+ * `.xhtml` is included because Chromium renders it and the editor edits it,
+ * which is the whole contract of this kind. Anything more exotic that happens
+ * to contain markup (`.jsp`, `.erb`, `.hbs`, a `.php` template) is NOT here
+ * and stays plain text: those are SOURCE for a page rather than a page, and
+ * previewing one shows a broken document full of unexecuted directives, which
+ * is a worse answer than showing the source the user can actually reason
+ * about.
+ */
+const HTML_EXTENSIONS: ReadonlySet<string> = new Set(['html', 'htm', 'xhtml']);
+
 /** Image extensions a `<img>` on a blob URL can actually paint. */
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif',
@@ -145,6 +179,7 @@ export function classifyByName(path: string): FileClass {
 
   const mime = mimeTypeForExtension(ext);
   if (ext === 'pdf') return { kind: 'pdf', mime: mime ?? 'application/pdf' };
+  if (HTML_EXTENSIONS.has(ext)) return { kind: 'html', mime: mime ?? 'text/html' };
   if (AUDIO_EXTENSIONS.has(ext)) return { kind: 'audio', mime: mime ?? 'audio/mpeg' };
   if (IMAGE_EXTENSIONS.has(ext)) return { kind: 'image', mime: mime ?? 'image/png' };
   if (TEXT_EXTENSIONS.has(ext)) return { kind: 'text', mime: mime ?? 'text/plain' };

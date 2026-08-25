@@ -182,6 +182,32 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = (() => {
   out['m4b'] = 'audio/mp4';
   out['oga'] = 'audio/ogg';
   out['spx'] = 'audio/ogg';
+  // Web-asset spellings, added for the HTML preview (src/main/preview/).
+  //
+  // These are here rather than in the forward table because they are not
+  // things a CLIPBOARD ever hands over — nobody pastes a webfont — so they
+  // have no "what extension would a human expect" answer to contribute. What
+  // they do have is a Content-Type the preview's protocol handler must send:
+  // a stylesheet served as `application/octet-stream` is ignored by the
+  // renderer, and a font fetched without `font/woff2` is refused, both of
+  // which look exactly like a page that has no styling rather than like the
+  // header bug they are.
+  //
+  // `htm` and `xhtml` earn their place for a different reason: they are what
+  // the Files tab's classifier keys on to route a file to the preview at all
+  // (src/renderer/fileKind.ts), and a `.htm` that resolved to null would open
+  // in the editor while its `.html` twin previewed.
+  out['htm'] = 'text/html';
+  out['xhtml'] = 'application/xhtml+xml';
+  out['mjs'] = 'text/javascript';
+  out['cjs'] = 'text/javascript';
+  out['map'] = 'application/json';
+  out['webmanifest'] = 'application/manifest+json';
+  out['woff'] = 'font/woff';
+  out['woff2'] = 'font/woff2';
+  out['ttf'] = 'font/ttf';
+  out['otf'] = 'font/otf';
+  out['eot'] = 'application/vnd.ms-fontobject';
   return out;
 })();
 

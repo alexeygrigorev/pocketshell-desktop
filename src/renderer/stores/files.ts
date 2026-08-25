@@ -193,6 +193,32 @@ export const useFilesStore = defineStore('files', () => {
   const openHasScripts = ref(false);
 
   /**
+   * True when the source references a resource on a remote origin.
+   *
+   * This exists because of a blind spot in the asset counters, and the blind
+   * spot is structural rather than a bug: a `<img src="https://tracker/…">` is
+   * refused by the frame's own CSP INSIDE the renderer, so the request never
+   * reaches main and main can never count it. Without this flag a page whose
+   * every image is on a CDN would report "0 blocked" and render as a grid of
+   * broken-image icons with nothing saying why — the exact "silently looks
+   * broken" outcome the whole toolbar line exists to prevent.
+   *
+   * Deliberately keyed on `src=` and on a `<link>`'s `href=` rather than on
+   * any `http` in the document. An `<a href="https://…">` is a LINK, not a
+   * resource: nothing about it fails to load, and saying "remote resources are
+   * not loaded" because a page cites a source would be its own small lie.
+   */
+  const openHasRemoteRefs = ref(false);
+
+  /** Does this source pull a sub-resource off a remote origin? */
+  function referencesRemote(source: string): boolean {
+    return (
+      /\bsrc\s*=\s*["']?https?:/i.test(source) ||
+      /<link\b[^>]*\bhref\s*=\s*["']?https?:/i.test(source)
+    );
+  }
+
+  /**
    * Per-preview asset counters, pushed from main as the frame loads.
    *
    * Reset to nulls whenever a preview is minted so a stale count from the
@@ -454,6 +480,8 @@ export const useFilesStore = defineStore('files', () => {
       htmlView.value = 'source';
       openHasScripts.value =
         openMode.value === 'html' && /<script[\s>]/i.test(openContent.value);
+      openHasRemoteRefs.value =
+        openMode.value === 'html' && referencesRemote(openContent.value);
     } else {
       resetOpenFile();
     }
@@ -592,6 +620,7 @@ export const useFilesStore = defineStore('files', () => {
         }
         openContent.value = new TextDecoder('utf-8').decode(bytes);
         openHasScripts.value = /<script[\s>]/i.test(openContent.value);
+        openHasRemoteRefs.value = referencesRemote(openContent.value);
         openMode.value = 'html';
         htmlView.value = 'preview';
         dirty.value = false;
@@ -659,6 +688,7 @@ export const useFilesStore = defineStore('files', () => {
       await api.sftp.writeFile(connectionId, openPath.value, openContent.value);
       dirty.value = false;
       openHasScripts.value = /<script[\s>]/i.test(openContent.value);
+      openHasRemoteRefs.value = referencesRemote(openContent.value);
       rememberHere();
       // A saved HTML file gets a FRESH preview rather than a reloaded one.
       //
@@ -711,6 +741,7 @@ export const useFilesStore = defineStore('files', () => {
     dirty.value = false;
     htmlView.value = 'preview';
     openHasScripts.value = false;
+    openHasRemoteRefs.value = false;
   }
 
   /** Show the source of the open HTML file, or its render. */
@@ -871,6 +902,7 @@ export const useFilesStore = defineStore('files', () => {
     previewStats,
     htmlView,
     openHasScripts,
+    openHasRemoteRefs,
     dirty,
     saving,
     opening,

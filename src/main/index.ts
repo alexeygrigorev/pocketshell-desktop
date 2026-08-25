@@ -1,4 +1,6 @@
 import { app, BrowserWindow, shell } from 'electron';
+import { HtmlPreviewService, registerPreviewScheme } from './preview/HtmlPreviewService.js';
+import { PREVIEW_SCHEME } from './preview/previewPaths.js';
 import { join, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -24,13 +26,23 @@ const helper = new PocketshellClient(ssh);
 const sftp = new SftpService(registry);
 const forwards = new ForwardService(ssh, registry);
 const projects = new ProjectsService(ssh, helper);
-// Evict cached per-connection state (SFTP wrapper, forwarders, remote $HOME)
-// on close.
+const preview = new HtmlPreviewService(sftp);
+// Evict cached per-connection state (SFTP wrapper, forwarders, remote $HOME,
+// live HTML previews) on close.
 ssh.onCloseConnection((id) => {
   sftp.evict(id);
   forwards.evict(id);
   projects.evict(id);
+  preview.evict(id);
 });
+
+// The `psview:` scheme has to be declared BEFORE app ready — Chromium fixes
+// the standard-scheme table when the network service starts — so it happens
+// here at module scope rather than in `whenReady`, alongside the service that
+// owns it. The request HANDLER is installed after ready; only the declaration
+// is early. See HtmlPreviewService for what the scheme is and why the Files
+// tab's HTML preview is not a blob URL.
+registerPreviewScheme();
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -142,6 +154,26 @@ function createWindow(): void {
     return { action: 'deny' };
   });
 
+  // A previewed HTML page may contain links, and a link click inside the
+  // preview frame is a NAVIGATION rather than a `window.open` — so it does not
+  // pass through the handler above.
+  //
+  // The renderer's CSP already lists `psview:` for `frame-src` and nothing
+  // remote, and `frame-src` is checked on every navigation of a nested
+  // browsing context, not only its first. This is the belt to that braces, and
+  // it is worth having because the two failure modes are so different: a CSP
+  // mistake here would mean a remote document could make the app fetch an
+  // arbitrary http URL — leaking, at minimum, which file the user is looking
+  // at and when. Sub-frames may navigate WITHIN the preview scheme (following
+  // a relative link to the page next door is a reasonable thing to want) and
+  // nowhere else. The main frame is untouched: that is the app's own routing.
+  mainWindow.webContents.on('will-frame-navigate', (details) => {
+    if (details.isMainFrame) return;
+    if (details.url.startsWith(`${PREVIEW_SCHEME}://`)) return;
+    console.warn('[pocketshell] refused preview-frame navigation:', details.url);
+    details.preventDefault();
+  });
+
   // Zoom chords. Recognised here, DECIDED in the renderer.
   //
   // Two jobs, and they are inseparable. The first is to catch every spelling
@@ -192,6 +224,9 @@ if (!gotLock) {
   // app would just look dead on launch. Log it and exit non-zero instead.
   app.whenReady().then(
     () => {
+      // After ready and before the window: the handler must be live by the
+      // time anything can frame a `psview:` URL.
+      preview.install();
       registerIpcHandlers({
         registry,
         ssh,
@@ -199,6 +234,7 @@ if (!gotLock) {
         sftp,
         forwards,
         projects,
+        preview,
         getWindows: () => BrowserWindow.getAllWindows(),
       });
       createWindow();
