@@ -52,7 +52,16 @@ const props = defineProps<{
   activeSession?: string | null;
 }>();
 
-const emit = defineEmits<{ select: [session: SessionSummary] }>();
+/**
+ * `back` and `collapse` are panel chrome, emitted for the host workspace to
+ * act on. They live in THIS header because the host topbar is gone (the host's
+ * identity moved to the OS title bar) and the `SESSIONS` row is now the
+ * workspace's top-left row: an arrow beside `SESSIONS` reads as "leave this
+ * host's sessions", and the hide toggle sits on the thing it hides. The
+ * workspace stays the owner of the route and of the collapsed flag — this
+ * component only announces the clicks.
+ */
+const emit = defineEmits<{ select: [session: SessionSummary]; back: []; collapse: [] }>();
 
 const connection = useConnectionStore();
 const projects = useProjectsStore();
@@ -291,10 +300,20 @@ function tooltip(row: SessionRow, dir: SessionDirectory): string {
 <template>
   <div class="tree">
     <div class="tree-header">
-      <span class="title">sessions</span>
-      <button class="icon-btn" :disabled="sessions.loading" title="Refresh" @click="onRefresh">
-        <AppIcon name="refresh" :size="14" :class="{ spin: sessions.loading }" />
+      <button class="icon-btn" title="Back to hosts" @click="emit('back')">
+        <AppIcon name="arrow-left" :size="14" />
       </button>
+      <span class="title">sessions</span>
+      <div class="header-actions">
+        <button class="icon-btn" :disabled="sessions.loading" title="Refresh" @click="onRefresh">
+          <AppIcon name="refresh" :size="14" :class="{ spin: sessions.loading }" />
+        </button>
+        <button class="icon-btn" title="Hide session panel" @click="emit('collapse')">
+          <!-- VS Code's "toggle sidebar" mark: truer to the action than a
+               hamburger, which promises a menu. -->
+          <AppIcon name="panel-left" :size="14" />
+        </button>
+      </div>
     </div>
 
     <div class="folder-list">
@@ -456,22 +475,37 @@ function tooltip(row: SessionRow, dir: SessionDirectory): string {
 .tree {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* Flex-sized, not height:100%: the host panel is a flex column now, with
+     the workspace's host-actions row below this component. The tree takes
+     everything above it. Surface and the panel's right hairline moved to the
+     aside for the same reason — a border on this element alone would stop
+     short of that row. */
+  flex: 1 1 auto;
+  min-height: 0;
   /* Matches HostWorkspaceView's MIN_PANEL_WIDTH. It used to be 240px, which
      silently contradicted the 200px drag clamp. */
   min-width: 200px;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
   /* Query container for the narrow-panel rule at the bottom of this block. */
   container-type: inline-size;
 }
+/* The workspace's top-left row, same --topbar-h as the session bar across the
+   splitter, so the two headers read as one line. Padding is --sp-2, not
+   --sp-3: ghost icon buttons carry their own inner inset, and the old padding
+   plus theirs pushed the back arrow visibly off the panel's left rhythm. */
 .tree-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: var(--sp-1);
   height: var(--topbar-h);
-  padding: 0 var(--sp-3);
+  flex: 0 0 auto;
+  padding: 0 var(--sp-2);
   border-bottom: 1px solid var(--border);
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
 }
 .title {
   font-size: var(--fs-100);

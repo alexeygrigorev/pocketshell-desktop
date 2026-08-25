@@ -619,7 +619,7 @@ the single biggest "unpolished" signal in the before-screenshots.
 .icon-btn:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .icon-btn.sm { width: var(--control-h-sm); height: var(--control-h-sm); }
 
-/* Ghost LABELED button — header text actions (Ports, Usage, disconnect). */
+/* Ghost LABELED button — text actions (Ports, Usage, Disconnect). */
 .btn-ghost {
   height: var(--control-h);
   display: inline-flex; align-items: center; gap: var(--sp-1);
@@ -726,6 +726,34 @@ agent badge (`Claude` / `Codex` / `OpenCode`, purple `--agent` on
 already documents this. The badge slot should be laid out now (fixed 72px
 trailing column) so adding the field later is a data change, not a layout
 change.
+
+### 5.3b Host workspace chrome — NO topbar (revised, implemented)
+
+The host topbar — back, collapse, `hetzner · alexey@135.181.114.209`,
+Ports/Usage/Settings, disconnect — is **gone**. It was a full `--topbar-h` of
+chrome above every terminal whose largest element was an identity label, in an
+app whose whole point is the terminal; the same reasoning that merged the
+session bar and tab strip (§5.4) applies one row up. Every control was
+redistributed, none deleted:
+
+| Was in the topbar | Lives now | Why there |
+|---|---|---|
+| Host label (`name · user@hostname`) | **the OS window title** | The native title bar was already spending its row saying the static word "PocketShell". Built by the pure `src/shared/windowTitle.ts`, applied over `win:setTitle`; the renderer drives it because the title mirrors the *view*, not the connection (Back keeps the link alive while the picker shows). Also puts the host in the taskbar and Alt-Tab. |
+| Back arrow | leading slot of the session panel's `SESSIONS` header | An arrow beside `SESSIONS` reads as "leave this host's sessions". The header row was already paying `--topbar-h`. |
+| Collapse toggle (`panel-left`) | trailing slot of the same header, beside Refresh | The hide control sits on the thing it hides. |
+| Ports / Usage / Settings | a `.host-actions` row at the panel's **foot**, below "New session" | Host-scoped, so they belong to the host-scoped surface; bottom-most = most global (the VS Code gear-at-the-bottom register, gear far right). Ports and Usage keep text labels; two unlabeled overlay glyphs would be a memory test. Fits the 200px floor: ~150px of controls. |
+| Disconnect | the **host picker**, on the connected host's row | Every disconnect already navigated to the picker; the button now lives at its destination, labeled, beside where the connection was opened. The connected row also gets the §5.2 `--success` dot, and clicking it re-enters the workspace **without re-dialling** (a second dial would orphan the live connection). |
+| Missing-tools notice | unchanged — the workspace's top strip | Rendered only when a tool is absent, so the usual cost is zero rows. |
+
+**Collapsed state is a rail, not nothing.** With the topbar gone, a zero-width
+collapse would take the expand toggle — and with it every host control — off
+screen. Collapsing now leaves a ~36px rail (`--surface`, right hairline)
+holding the expand toggle and the back arrow, so both stay one click away
+while ~90% of the panel's width still goes to the terminal.
+
+Alignment note: the `SESSIONS` header and the session bar across the splitter
+are both `--topbar-h`, so the window's top row reads as one line broken only
+by the panel seam.
 
 ### 5.4 Session workspace header — ONE row (`03`, `04`, `05`)
 

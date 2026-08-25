@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron';
 import { ipc } from '../shared/channels.js';
+import { APP_TITLE } from '../shared/windowTitle.js';
 import type {
   AttachmentSource,
   BootstrapResult,
@@ -110,6 +111,19 @@ export function registerIpcHandlers(deps: {
       if (!win.isDestroyed()) win.webContents.send(channel, payload);
     }
   };
+
+  // --- win:setTitle --------------------------------------------------------
+  // The OS window title mirrors the VIEW — "PocketShell" on the picker, the
+  // host's identity in the workspace — which is why the renderer drives it
+  // rather than main deriving it from connection events: a connection outlives
+  // the workspace view (Back keeps the link alive), so main cannot know which
+  // screen the window is showing. The string is built by the shared pure
+  // windowTitle(); this side only validates and applies it.
+  ipcMain.on(ipc.win.setTitle, (evt, title: unknown) => {
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    if (!win || win.isDestroyed()) return;
+    win.setTitle(typeof title === 'string' && title.trim() ? title : APP_TITLE);
+  });
 
   // --- ssh:listConfigHosts -------------------------------------------------
   ipcMain.handle(ipc.ssh.listConfigHosts, async (): Promise<HostEntry[]> => {

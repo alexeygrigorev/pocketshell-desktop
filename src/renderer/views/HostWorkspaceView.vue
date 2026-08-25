@@ -8,14 +8,30 @@
 //   /host/:name                  -> SessionPlaceholderView (nothing selected)
 //   /host/:name/session/:session -> SessionWorkspaceView (Terminal/Conversation/Files)
 //
-// There is deliberately NO tab bar at this level. Sessions are the default
-// view of a host, and tabs belong to the selected session. The two host-scoped
-// panels — port forwarding and provider usage — are header buttons that open
-// an overlay, because neither is a property of a single session.
-import { computed, onBeforeUnmount, ref } from 'vue';
+// There is deliberately NO host topbar. The row that used to sit here —
+// back, collapse, `hetzner · alexey@135.181.114.209`, Ports/Usage/Settings,
+// disconnect — spent a full --topbar-h above every terminal mostly on an
+// identity label, in an app whose whole point is the terminal. It went four
+// ways (docs/DESIGN.md §5.3b):
+//
+//   - the IDENTITY is the OS window title now (the `win:setTitle` watch
+//     below) — the native title bar was already there, saying "PocketShell";
+//   - BACK and COLLAPSE moved into the session panel's own `SESSIONS` header
+//     row, which was already paying for its --topbar-h;
+//   - PORTS / USAGE / SETTINGS are a panel-foot row (`.host-actions` below);
+//   - DISCONNECT moved to the host picker's row for the connected host —
+//     every disconnect already navigated there, so the button now lives at
+//     its own destination, next to where the connection was opened.
+//
+// Sessions are the default view of a host, and tabs belong to the selected
+// session. The two host-scoped panels — port forwarding and provider usage —
+// open as overlays, because neither is a property of a single session.
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAgentsStore } from '../stores/agents';
 import { useConnectionStore } from '../stores/connection';
+import { api } from '../ipc';
+import { windowTitle } from '../../shared/windowTitle';
 import AppIcon from '../components/AppIcon.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
@@ -30,14 +46,27 @@ const connection = useConnectionStore();
 const agents = useAgentsStore();
 
 /**
+ * The host's identity, projected into the OS title bar. Watched rather than
+ * set once: a reconnect can swap `activeHost` while this view stays mounted.
+ * There is deliberately no reset on unmount — the picker claims the title in
+ * its own onMounted, so the handoff cannot depend on Vue's mount/unmount
+ * ordering during a route swap.
+ */
+watch(
+  () => connection.activeHost,
+  (host) => api.win.setTitle(windowTitle(host)),
+  { immediate: true },
+);
+
+/**
  * Which panel is open as an overlay, if any.
  *
  * `settings` is the odd one out and is here anyway: it is APP-level, not
- * host-level, so it does not belong to this header the way Ports and Usage do.
- * But a route would unmount this view and take the terminal's scrollback with
- * it, and the panel has to be reachable from a connected host as well as from
- * the picker. One shared `SettingsView`, two callers, no navigation. See the
- * header comment in views/SettingsView.vue.
+ * host-level, so it does not belong to this workspace the way Ports and Usage
+ * do. But a route would unmount this view and take the terminal's scrollback
+ * with it, and the panel has to be reachable from a connected host as well as
+ * from the picker. One shared `SettingsView`, two callers, no navigation. See
+ * the header comment in views/SettingsView.vue.
  */
 const panel = ref<'ports' | 'usage' | 'settings' | null>(null);
 
@@ -119,11 +148,6 @@ function onDragEnd(): void {
 
 onBeforeUnmount(onDragEnd);
 
-async function onDisconnect(): Promise<void> {
-  await connection.disconnect();
-  void router.push({ name: 'hosts' });
-}
-
 function onBack(): void {
   void router.push({ name: 'hosts' });
 }
@@ -140,34 +164,6 @@ async function onRefreshUsage(): Promise<void> {
 
 <template>
   <div class="workspace">
-    <header class="topbar">
-      <button class="icon-btn" title="Back to hosts" @click="onBack">
-        <AppIcon name="arrow-left" />
-      </button>
-      <button
-        class="icon-btn"
-        :title="panelCollapsed ? 'Show session panel' : 'Hide session panel'"
-        @click="panelCollapsed = !panelCollapsed"
-      >
-        <!-- VS Code's "toggle sidebar" mark: truer to the action than a
-             hamburger, which promises a menu. -->
-        <AppIcon name="panel-left" />
-      </button>
-      <span class="host-label">
-        {{ connection.activeHost?.name ?? 'host' }}
-        <span class="muted">·</span>
-        <span class="muted">{{ connection.activeHost?.user }}@{{ connection.activeHost?.hostname }}</span>
-      </span>
-      <div class="host-actions">
-        <button class="btn-ghost" title="Port forwarding" @click="panel = 'ports'">Ports</button>
-        <button class="btn-ghost" title="Provider usage" @click="panel = 'usage'">Usage</button>
-        <button class="icon-btn" title="Settings" @click="panel = 'settings'">
-          <AppIcon name="settings" />
-        </button>
-        <button class="btn-ghost disconnect" @click="onDisconnect">disconnect</button>
-      </div>
-    </header>
-
     <!-- Only rendered when something is actually missing. The always-on
          chip row this replaces spent header space telling the user their
          host was fine, which is the case that needs no words at all. -->
@@ -180,13 +176,48 @@ async function onRefreshUsage(): Promise<void> {
     </p>
 
     <div class="body">
-      <!-- Persistent session panel: always mounted, never navigated away from. -->
+      <!-- Collapsed: a slim rail, not nothing. With the topbar gone, a
+           zero-width collapse would take the expand toggle (and with it every
+           host-level control) off the screen entirely; the rail keeps expand
+           and back one click away and still returns ~90% of the panel's width
+           to the terminal. v-if, not v-show — it must never match a selector
+           while the expanded header's twin buttons do. -->
+      <aside v-if="panelCollapsed" class="collapsed-rail">
+        <button class="icon-btn" title="Show session panel" @click="panelCollapsed = false">
+          <AppIcon name="panel-left" :size="14" />
+        </button>
+        <button class="icon-btn" title="Back to hosts" @click="onBack">
+          <AppIcon name="arrow-left" :size="14" />
+        </button>
+      </aside>
+
+      <!-- Persistent session panel: always mounted, never navigated away from.
+           v-show, not v-if — collapsing must not cost the tree its disclosure
+           and scroll state. A flex column: the tree above, host actions below. -->
       <aside
         v-show="!panelCollapsed"
         class="session-panel"
         :style="{ width: `${panelWidth}px` }"
       >
-        <SessionTree :active-session="activeSession" @select="onSelectSession" />
+        <SessionTree
+          :active-session="activeSession"
+          @select="onSelectSession"
+          @back="onBack"
+          @collapse="panelCollapsed = true"
+        />
+        <!-- Host destinations, at the panel's very foot — below even "New
+             session", because that button is scoped to the LIST above it and
+             this row is scoped to the host (the VS Code gear-at-the-bottom
+             register). Ports and Usage keep their text labels: they are the
+             two overlays, and two unlabeled glyphs here would be a memory
+             test. The gear stays icon-only, as it already is everywhere. -->
+        <div class="host-actions">
+          <button class="btn-ghost" title="Port forwarding" @click="panel = 'ports'">Ports</button>
+          <button class="btn-ghost" title="Provider usage" @click="panel = 'usage'">Usage</button>
+          <button class="icon-btn" title="Settings" @click="panel = 'settings'">
+            <AppIcon name="settings" />
+          </button>
+        </div>
       </aside>
       <div
         v-show="!panelCollapsed"
@@ -233,29 +264,10 @@ async function onRefreshUsage(): Promise<void> {
   flex-direction: column;
   height: 100vh;
 }
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  height: var(--topbar-h);
-  flex: 0 0 auto;
-  padding: 0 var(--sp-3);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-.host-label {
-  font-weight: var(--fw-semibold);
-  font-size: var(--fs-400);
-  line-height: var(--lh-400);
-  margin-left: var(--sp-1);
-}
-.host-label .muted {
-  font-weight: var(--fw-regular);
-  font-size: var(--fs-200);
-  font-family: var(--font-mono);
-}
 /* Warning-toned but not an alarm: it is an instruction, and the user can
-   still use every other part of the app while it stands. */
+   still use every other part of the app while it stands. With the topbar gone
+   it is the workspace's top strip — rendered only when it applies, so the
+   usual cost is zero rows. */
 .install-ask {
   display: flex;
   align-items: center;
@@ -268,27 +280,48 @@ async function onRefreshUsage(): Promise<void> {
   font-size: var(--fs-200);
   line-height: var(--lh-200);
 }
-.host-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  margin-left: auto;
-}
-/* Destructive: neutral at rest, error-tinted only on hover. No border-color
-   line — the button is a ghost now and has no border to tint. */
-.btn-ghost.disconnect:hover:not(:disabled) {
-  background: var(--error-soft);
-  color: var(--error);
-}
 .body {
   display: flex;
   flex: 1;
   min-height: 0;
 }
+/* Surface and the right hairline live on the aside, not on SessionTree: the
+   panel is a column of [tree, host-actions] and the seam has to run past
+   both. The splitter sits just outside it, transparent at rest. */
 .session-panel {
   flex: 0 0 auto;
   min-width: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+/* The gear takes the far corner — bottom-right of the panel is the app-level
+   slot, and pushing it away from Ports/Usage keeps the host pair reading as a
+   pair. */
+.host-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+  padding: var(--sp-1) var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+.host-actions .icon-btn {
+  margin-left: auto;
+}
+/* Expand-affordance column for the collapsed state. Same surface and hairline
+   as the panel it stands in for. */
+.collapsed-rail {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
 }
 /* Transparent at rest: the session panel's own 1px right border is the visual
    seam, and the 4px --bg band this used to paint read as a dark gutter
@@ -307,8 +340,8 @@ async function onRefreshUsage(): Promise<void> {
   background: var(--accent-dim);
   transition-delay: 250ms;
 }
-/* No border-left here: SessionTree already draws the panel's right hairline
-   and the splitter sits between them. */
+/* No border-left here: the session panel draws its own right hairline and the
+   splitter sits between them. */
 .session-pane {
   flex: 1;
   min-width: 0;

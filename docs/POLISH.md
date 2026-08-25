@@ -6,6 +6,14 @@ revises DESIGN.md, §9 lists the revision explicitly. Grounded in the
 current committed screenshots `docs/screenshots/after-01…after-08.png`
 (1280×800) and in the CSS that produced them.
 
+> **Later revision:** the host topbar this document inventories (back /
+> panel-toggle / host label / Ports / Usage / disconnect) no longer exists —
+> DESIGN.md §5.3b redistributed it (identity → OS window title, back +
+> collapse → the `SESSIONS` header, Ports/Usage/Settings → the panel foot,
+> Disconnect → the picker's connected row). The per-control treatments below
+> (ghost classes, the disconnect error-hover, the `panel-left` mark) survive
+> in the controls' new homes; only the row they shared is gone.
+
 User direction, decoded from three messages:
 
 1. *"should be more smooth… the triangles should be better looking and

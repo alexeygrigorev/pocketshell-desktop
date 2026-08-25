@@ -28,6 +28,8 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useConnectionStore } from '../stores/connection';
 import { useSettingsStore } from '../stores/settings';
+import { api } from '../ipc';
+import { windowTitle } from '../../shared/windowTitle';
 import {
   autoConnectAttempted,
   decideAutoConnect,
@@ -55,7 +57,27 @@ const defaultMissing = computed(
   () => defaultHostStatus(settings.defaultHost, connection.hosts) === 'missing',
 );
 
+/**
+ * The host we are connected to right now, if any. Back from the workspace
+ * keeps the link alive, so this list can be looked at WHILE connected — and
+ * that row then behaves differently in three ways: its dot is green, clicking
+ * it re-enters the workspace instead of dialling a second connection over the
+ * first, and it carries the Disconnect button. Disconnect lives here rather
+ * than in the workspace because every disconnect already navigated here — the
+ * button now sits at its own destination, beside where the connection was
+ * opened.
+ */
+const connectedName = computed(() =>
+  connection.state === 'connected' && connection.connectionId
+    ? (connection.activeHost?.name ?? null)
+    : null,
+);
+
 onMounted(async () => {
+  // Reclaim the OS window title from the workspace, which sets the host's
+  // identity on it and deliberately does not reset it on unmount (mount order
+  // during a route swap is not something to depend on).
+  api.win.setTitle(windowTitle(null));
   await connection.loadHosts();
   const decision = decideAutoConnect({
     defaultHost: settings.defaultHost,
@@ -97,7 +119,19 @@ function onCancelAutoConnect(): void {
 }
 
 async function onConnect(host: HostEntry): Promise<void> {
+  // Already connected to this host: go back in, don't dial again. A second
+  // dial would open a second connection and orphan the first — the session
+  // panel, terminal pool and forwards all key off the old id.
+  if (host.name === connectedName.value) {
+    enterWorkspace(host);
+    return;
+  }
   if (await dial(host)) enterWorkspace(host);
+}
+
+/** Hang up. Stays on the picker — the row's dot going grey is the feedback. */
+async function onDisconnect(): Promise<void> {
+  await connection.disconnect();
 }
 
 /**
@@ -168,15 +202,29 @@ function onToggleDefault(host: HostEntry): void {
           >
             <!-- Mirrors the Android StatusDot: the desktop used to show
                  connection state only as the word "connecting…". -->
-            <span class="status-dot" :class="{ connecting: connectingTo === host.name }" />
+            <span
+              class="status-dot"
+              :class="{
+                connecting: connectingTo === host.name,
+                connected: connectedName === host.name,
+              }"
+            />
             <span class="host-name">{{ host.name }}</span>
             <span class="host-detail">
               {{ host.user || '(default user)' }}@{{ host.hostname }}:{{ host.port }}
             </span>
             <span v-if="connectingTo === host.name" class="muted">connecting…</span>
             <!-- A list row that goes somewhere gets a chevron, not an arrow
-                 (VS Code / macOS convention). -->
+                 (VS Code / macOS convention). Kept on the connected row too:
+                 it still goes somewhere — back into the workspace. -->
             <AppIcon v-else name="chevron-right" class="chevron" />
+          </button>
+          <button
+            v-if="connectedName === host.name"
+            class="btn-ghost disconnect"
+            @click="onDisconnect"
+          >
+            Disconnect
           </button>
           <button
             class="icon-btn star"
@@ -321,6 +369,16 @@ h1 {
 .status-dot.connecting {
   background: var(--warning);
   animation: pulse 1.2s var(--ease) infinite;
+}
+.status-dot.connected {
+  background: var(--success);
+}
+/* Destructive: neutral at rest, error-tinted only on hover — the same
+   treatment the workspace's disconnect button had before it moved here. No
+   border-color line: the button is a ghost and has no border to tint. */
+.btn-ghost.disconnect:hover:not(:disabled) {
+  background: var(--error-soft);
+  color: var(--error);
 }
 @keyframes pulse {
   50% {

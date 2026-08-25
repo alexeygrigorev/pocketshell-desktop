@@ -9,6 +9,15 @@
  */
 
 export const ipc = {
+  /**
+   * Window chrome. `setTitle` is the one renderer -> main channel that is
+   * fire-and-forget (`ipcRenderer.send`, not `invoke`): a title update has no
+   * result worth awaiting, and making the caller await it would put an IPC
+   * round-trip inside a navigation watcher.
+   */
+  win: {
+    setTitle: 'win:setTitle',
+  },
   ssh: {
     listConfigHosts: 'ssh:listConfigHosts',
     connect: 'ssh:connect',

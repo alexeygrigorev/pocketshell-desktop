@@ -9,6 +9,7 @@ import { SftpService } from './sftp/SftpService.js';
 import { ForwardService } from './portfwd/ForwardService.js';
 import { ProjectsService } from './projects/ProjectsService.js';
 import { registerIpcHandlers } from './ipc.js';
+import { APP_TITLE } from '../shared/windowTitle.js';
 
 // Electron + ESM: __dirname is not defined for the bundled output under some
 // loaders; electron-vite emits CJS for main, so __dirname is available. We
@@ -55,7 +56,10 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
-    title: 'PocketShell',
+    // The launch title only. Once connected, the renderer retitles the window
+    // with the host's identity over `win:setTitle` (the workspace has no
+    // identity bar of its own — the native title bar carries it).
+    title: APP_TITLE,
     icon: windowIcon(),
     webPreferences: {
       preload: join(__dir, '../preload/index.js'),

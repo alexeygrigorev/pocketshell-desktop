@@ -46,6 +46,17 @@ import type {
 export type Unsubscribe = () => void;
 
 const api = {
+  win: {
+    /**
+     * Set the OS window title. Fire-and-forget on purpose — see the channel
+     * comment in src/shared/channels.ts. Build the string with the shared
+     * `windowTitle()` so every caller formats identity the same way.
+     */
+    setTitle: (title: string): void => {
+      ipcRenderer.send(ipc.win.setTitle, title);
+    },
+  },
+
   ssh: {
     /** Read ~/.ssh/config into HostEntry rows. Empty if no config. */
     listConfigHosts: (): Promise<HostEntry[]> => ipcRenderer.invoke(ipc.ssh.listConfigHosts),
