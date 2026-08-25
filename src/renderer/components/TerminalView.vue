@@ -475,11 +475,40 @@ defineExpose({ focus: (): void => term?.focus() });
 </template>
 
 <style scoped>
+/*
+ * The padding lives on `.xterm`, NOT here, and that is load-bearing rather
+ * than cosmetic.
+ *
+ * `App.vue` sets `* { box-sizing: border-box }`, so Chromium returns the
+ * BORDER-box height from `getComputedStyle(el).height`. FitAddon then does,
+ * in `proposeDimensions()`:
+ *
+ *     const h = parseInt(getComputedStyle(term.element.parentElement).height)
+ *     const avail = h - (padding of term.element)
+ *     rows = Math.floor(avail / cellHeight)
+ *
+ * It subtracts the padding of the element it OWNS, never the padding of the
+ * parent it MEASURES. Under `content-box` those are the same number; under
+ * `border-box` they are not. With the padding here, it read this box as 684px
+ * while the content box was 668px, asked for 36 rows x 19px = 684px, and
+ * overflowed by exactly the 16px of `--term-padding` — which `overflow:
+ * hidden` then sliced off the bottom row, leaving 3px of tmux's status line.
+ * That is the line the user reads constantly to know which session they are
+ * in, so the failure was both invisible in code and loud on screen.
+ *
+ * Moving the padding onto the element FitAddon subtracts from makes its
+ * arithmetic true again: 35 rows, 665px, status line whole, and the 8px inset
+ * looks identical. The background stays HERE so the black still reaches the
+ * container edges rather than leaving an unpainted frame.
+ *
+ * This is the defect POLISH.md 6.5 predicted ("confirm FitAddon runs after
+ * final layout so the last row lands whole") and it long predates the
+ * floating composer; the composer only moved the sliced row up off the window
+ * edge, where it finally became obvious.
+ */
 .terminal {
   width: 100%;
   height: 100%;
-  /* Windows Terminal defaults.json: padding "8, 8, 8, 8" */
-  padding: var(--term-padding);
   background: var(--term-bg);
   overflow: hidden;
   /* Windows Terminal defaults.json: antialiasingMode "grayscale" */
@@ -487,5 +516,7 @@ defineExpose({ focus: (): void => term?.focus() });
 }
 .terminal :deep(.xterm) {
   height: 100%;
+  /* Windows Terminal defaults.json: padding "8, 8, 8, 8" */
+  padding: var(--term-padding);
 }
 </style>
