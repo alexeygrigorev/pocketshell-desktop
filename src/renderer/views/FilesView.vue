@@ -10,13 +10,25 @@
 // editor, and nothing falls back INTO it — a file we cannot render ends in
 // the binary panel with a reason and a download button, never in mojibake.
 //
-// NOTE: Monaco is in deps and the architecture is ready for it; the textarea
-// is the Phase 2 editor so the build stays simple. Swapping in Monaco is a
-// localized change to this view's editor section.
-import { computed, onMounted, watch } from 'vue';
+// The editor is CodeEditor.vue (CodeMirror 6). Monaco was rejected on a
+// measurement rather than a preference: the packaged renderer runs from a
+// file:// document whose CSP refuses a blob: worker (`script-src 'self'`, and
+// `worker-src` falls back to it), which is exactly what Monaco's language
+// services need — the dev-works/packaged-dies failure. See the header of
+// components/CodeEditor.vue for the probe output.
+import { computed, defineAsyncComponent, onMounted, watch } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useFilesStore, formatBytes } from '../stores/files';
 import FileTree from '../components/FileTree.vue';
+
+/**
+ * Loaded on demand. CodeMirror is ~680 KB of the renderer, and a workspace
+ * that never opens a text file must not pay for it at startup: imported
+ * eagerly the entry chunk grows by 684 KB, asynchronously by 7 KB — and the
+ * editor arrives with the first file that needs it. Each grammar is a further
+ * chunk of its own, fetched only for the language actually opened.
+ */
+const CodeEditor = defineAsyncComponent(() => import('../components/CodeEditor.vue'));
 
 const props = defineProps<{
   /** Directory to open first (e.g. the selected session's cwd). Defaults to home. */
@@ -115,12 +127,16 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
 
         <p v-if="files.opening" class="loading muted">opening {{ openName }}…</p>
 
-        <textarea
+        <!-- `:model-value` + `@update:model-value`, NOT `v-model`: v-model
+             would assign straight to the store ref and skip `setContent`,
+             which is the only thing that raises the dirty flag. That is the
+             same trap the textarea avoided by binding `:value` rather than
+             two-way. -->
+        <CodeEditor
           v-else-if="files.openMode === 'text'"
-          class="editor"
-          :value="files.openContent"
-          @input="files.setContent(($event.target as HTMLTextAreaElement).value)"
-          spellcheck="false"
+          :model-value="files.openContent"
+          :filename="files.openPath"
+          @update:model-value="files.setContent"
         />
 
         <!-- Audio: a real player, not a description of one. The blob URL is
@@ -257,22 +273,6 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
 .close-btn:hover {
   color: var(--fg);
   background: var(--state-hover);
-}
-/* Deliberately the terminal's own background: an open file and the shell it
-   came from should read as the same surface. */
-.editor {
-  flex: 1;
-  width: 100%;
-  border: none;
-  outline: none;
-  resize: none;
-  background: var(--term-bg);
-  color: var(--term-fg);
-  font-family: var(--font-mono);
-  font-size: var(--fs-300);
-  line-height: 1.5;
-  padding: var(--sp-3) var(--sp-4);
-  tab-size: 2;
 }
 .loading {
   padding: var(--sp-4);

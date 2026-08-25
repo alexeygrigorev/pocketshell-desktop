@@ -71,6 +71,55 @@
   --term-font-size: 16px;
   --term-padding: 8px;
 
+  /* ---- Code (file editor syntax colours) ------------------------------
+   * Derived from Campbell (§3), because the Files tab's editor sits on
+   * `--term-bg` for the reason FilesView already states: an open file and the
+   * shell it came from should read as the same surface. A stock editor theme
+   * dropped onto that ground would be the only thing in the app not speaking
+   * the terminal's palette.
+   *
+   * Ratios are against `--term-bg` #0C0C0C, computed the same way as §3.3's
+   * audit. Two roles deliberately step OUTSIDE Campbell, both for the reason
+   * §3.3 already identified — the scheme's dim pairs are unreadable on its own
+   * background — and both handled here the way `minimumContrastRatio: 3`
+   * handles them in the terminal: lift only the failing pair, leave the rest
+   * pixel-identical.
+   *   - comment: Campbell brightBlack #767676 is 4.31:1, and §4.3 reserves
+   *     that band for >=15px or decorative text. Comments are 13px prose and
+   *     are read, so they take `--fg-secondary`'s value (6.36:1) instead.
+   *   - meta: Campbell magenta/brightMagenta are 2.44:1 / 3.20:1 — the exact
+   *     pair §3.3 calls "genuinely unreadable". Decorators, preprocessor lines
+   *     and doctypes take the app's own `--agent` violet (7.19:1).
+   */
+  --code-comment: #8b949e; /*  6.36:1 — lifted, see above */
+  --code-keyword: #3b78ff; /*  4.95:1 — Campbell brightBlue */
+  --code-string: #c19c00; /*  7.47:1 — Campbell yellow */
+  --code-number: #16c60c; /*  8.49:1 — Campbell brightGreen */
+  --code-function: #f9f1a5; /* 16.91:1 — Campbell brightYellow */
+  --code-type: #61d6d6; /* 11.27:1 — Campbell brightCyan */
+  --code-variable: #cccccc; /* 12.18:1 — Campbell foreground */
+  --code-tag: #3a96dd; /*  6.14:1 — Campbell cyan */
+  --code-attribute: #61d6d6; /* 11.27:1 — Campbell brightCyan */
+  --code-punctuation: #8b949e; /*  6.36:1 — brackets, dimmed a step */
+  --code-meta: #a78bfa; /*  7.19:1 — substituted, see above */
+  --code-invalid: #e74856; /*  5.09:1 — Campbell brightRed */
+  --code-link: #22d3ee; /* 10.82:1 — the app accent, so links read as links */
+  --code-heading: #f2f2f2; /* 17.47:1 — Campbell brightWhite */
+  --code-inserted: #16c60c; /*  8.49:1 — diff +, Campbell brightGreen */
+  --code-deleted: #e74856; /*  5.09:1 — diff -, Campbell brightRed */
+
+  /* Editor chrome. Line numbers are decorative and may sit at 4.31:1; the
+     cursor and selection are Windows Terminal's own (defaults.json cursor
+     #FFFFFF, selection = white at ~50% alpha, taken down here because an
+     editor selection covers text that is still being read). */
+  --code-gutter-fg: #767676;
+  --code-gutter-fg-active: #cccccc;
+  --code-active-line: rgba(255, 255, 255, 0.04);
+  --code-selection: rgba(255, 255, 255, 0.22);
+  --code-selection-inactive: rgba(255, 255, 255, 0.1);
+  --code-cursor: #ffffff;
+  --code-bracket-match: rgba(34, 211, 238, 0.25);
+
   /* ---- Typography ---------------------------------------------------- */
   --font-ui: 'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
   --font-mono: Consolas, 'Cascadia Mono', ui-monospace, monospace;

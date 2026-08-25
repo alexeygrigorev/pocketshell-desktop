@@ -15,6 +15,12 @@
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
+    // The unit suite lives in this project, and one of its specs mounts a
+    // renderer component — so the `*.vue` module shim has to be visible here
+    // too, or the import is an unresolved module. It is the renderer's own
+    // declaration file rather than a second copy, so the two projects cannot
+    // drift apart on what a `.vue` import resolves to.
+    "src/renderer/env.d.ts",
     "tests/unit/**/*.ts",
     "tests/integration/**/*.ts",
     "electron.vite.config.ts",
