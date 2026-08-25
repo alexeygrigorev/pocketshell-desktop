@@ -1,79 +1,90 @@
 import { randomBytes } from 'node:crypto';
 import type { ShellId } from '../../shared/types.js';
-import {
-  clientTtyVar,
-  sessionAttachCommand,
-  sessionSwitchCommand,
-  SWITCH_CLIENT_NOT_READY_EXIT,
-  SWITCH_NO_CLIENT_EXIT,
-} from '../../shared/attachCommand.js';
+import { clientTtyVar, sessionAttachCommand } from '../../shared/attachCommand.js';
 import type { SshService } from './SshService.js';
 import { log } from '../log.js';
 
 /**
- * One attached tmux client per SSH connection, moved between sessions with
- * `tmux switch-client` instead of being torn down and rebuilt.
+ * One attached tmux client PER SESSION TAB, kept alive for as long as the tab
+ * is open, so that returning to a tab costs nothing at all.
  *
- * ## The problem
+ * ## The problem, and why the previous answer was the wrong shape
  *
- * Selecting a session used to mean: open a second SSH channel, request a PTY,
- * wait for a login shell, and run `tmuxctl <name>` in it. Every part of that
- * is per-switch cost, and none of it is work the user asked for — they asked
- * to look at a different session on a host they are already attached to.
- * Measured against the Docker fixture that is ~250 ms of host time before the
- * first byte of the new session is drawn, ~220 ms of it Python startup inside
- * tmuxctl. See the cost table in src/shared/attachCommand.ts.
+ * Selecting a session originally meant: open a second SSH channel, request a
+ * PTY, wait for a login shell, and run `tmuxctl <name>` in it. Every part of
+ * that is per-switch cost. The first fix (commit 516b488) held ONE client per
+ * connection and moved it with `tmux switch-client`, which replaced ~250 ms of
+ * host time with ~10 ms of exec — measured on a loopback Docker fixture.
  *
- * tmux already has the operation the user is describing. A client attached to
- * a server can be pointed at any other session on that server without
- * detaching, and tmuxctl itself does exactly that when it is run from inside
- * tmux. This class holds on to the client so that operation is available.
+ * Measured on a REAL host, over a real link, out of the user's own log, that
+ * trade did not survive contact:
  *
- * ## The shape
+ *     switch that succeeded      p50 210 ms, max 425 ms   (8 of 41 attempts)
+ *     switch that failed         140 ms - 4.4 s, THEN a full re-join
  *
- * The first session opened on a connection is a normal join — the same
- * `tmuxctl` command, in the same kind of PTY, with the same failure text. All
- * that is added is a handshake statement recording the PTY's tty. Every
- * SUBSEQUENT session on that connection is one exec channel carrying one
- * `switch-client`, and the renderer keeps the same {@link ShellId}: same
- * channel, same xterm, same everything, new contents.
+ * Two costs the loopback benchmark could not show. First, a switch is an SSH
+ * exec channel, and a channel is round trips: measured under netem the switch
+ * tracks the link almost exactly — 15 ms at 0 RTT, 43 ms at 30 ms, 111 ms at
+ * 100 ms. Second, `switch-client` makes tmux repaint every cell of the new
+ * session down the PTY: 10.7 KB for one dense 200x50 screen, which is another
+ * ~8 ms at 30 ms RTT and a visible wipe-and-redraw at any latency.
  *
- * ## Why every failure degrades to a full join — and why it no longer does so
- * ## silently
+ * Neither cost is a defect in the switch. They are what a switch IS. No amount
+ * of tuning makes a remote repaint feel like changing tabs in an editor,
+ * because the editor is not asking another machine for the tab's contents.
  *
- * A switch can fail because the user detached the client from inside tmux,
- * because the session was killed on the host, because the handshake found no
- * tty, or because the link is sick — and the right RECOVERY for all four is the
- * same: close whatever we were holding and join from scratch, which is
- * precisely what the app did before this class existed. That makes the worst
- * case of the fast path equal to the old behaviour plus one cheap exec.
+ * ## The shape now
  *
- * This class used to draw the further conclusion that the four therefore did
- * not need telling apart, and that a host the optimisation did not suit should
- * degrade silently. Both halves of that were wrong, and together they hid the
- * defect that made the feature inert for every user: `switch-client` was being
- * asked for a client that the join had not finished creating, roughly two
- * seconds before it existed. Every signal said the fast path was available,
- * every switch failed, every failure became a re-join that opened a fresh
- * two-second window, and the only symptom was that nothing got faster.
+ * A tab that has been opened keeps its own PTY, its own tmux client and its own
+ * xterm, all mounted, for as long as the workspace is open. Switching tabs is
+ * therefore a renderer visibility change and NOTHING ELSE: no SSH, no exec, no
+ * redraw, no bytes. That is the property the user asked for by name — "the same
+ * as VS Code when I switch between files" — and it is not reachable by making
+ * the switch faster, only by not switching.
  *
- * So the recovery is unchanged and the reporting is not. The switch waits for
- * its own client instead of concluding it has none; the exit codes distinguish
- * "no rendezvous" from "no client yet" from tmux refusing; and a re-join that a
- * failed switch forced prints tmux's reason into the terminal the user is
- * already looking at, because a fallback nobody can see is a fallback nobody
- * can report.
+ * tmux is built for this. Many clients may attach to one server, each on its
+ * own session, and a session's window is sized from its own attached clients
+ * (`window-size latest` by default in tmux 3.x), so one tab's geometry cannot
+ * disturb another's.
  *
- * ## What it costs
+ * ## What it costs: SSH channels, and the ceiling is real
  *
- * One tmux global-environment variable per connection, left behind on the
- * host's tmux server when the app goes away. It cannot be unset from here —
- * by the time a connection closes there is no channel left to unset it on —
- * and the token is stable for a connection's lifetime specifically so a
- * re-join overwrites its own entry rather than adding another. Two app windows
- * on one host get one entry each, which is the reason the token is random at
- * all: a fixed name would have the second window's join silently redirect the
- * first window's switches.
+ * Every live tab holds one channel. `sshd`'s `MaxSessions` defaults to 10, and
+ * it is a HARD ceiling — measured against the fixture, channel 11 fails with
+ * `Channel open failure: open failed`, and it fails for everything else the app
+ * needs a channel for too (every `exec`, every SFTP operation, every tail).
+ *
+ * So the pool keeps at most {@link MAX_LIVE_CLIENTS} clients per connection and
+ * evicts the least recently used one beyond that. The budget is per CONNECTION
+ * but the demand is per FOLDER WORKSPACE — only the open workspace's tabs are
+ * mounted — and the measurement in docs/WORKSPACE.md §1 puts a real folder at
+ * one to four sessions, so eviction is a bound rather than a routine event.
+ *
+ * Eviction closes the PTY and nothing else. A tmux SESSION lives in the tmux
+ * server, not in our client, so an evicted tab loses no state whatsoever: the
+ * next visit re-joins and gets the session exactly as it was. The renderer
+ * learns through the ordinary `shell:exited` it already handles.
+ *
+ * ## What it costs: the first open of each tab
+ *
+ * A tab that has never been opened still pays the full join — a PTY, a login
+ * shell and `tmuxctl`, which is Python and is ~150 ms on the fixture and 1.5-2 s
+ * on the user's host. That cost is unchanged, but it is now paid ONCE PER TAB
+ * instead of once per switch, so it amortises to nothing over a working
+ * session. It is also the largest thing left; see the note on
+ * {@link sessionAttachCommand} about what a raw `tmux attach-session` would
+ * save, which is a separate decision from this one.
+ *
+ * ## What it costs on the host
+ *
+ * One tmux global-environment variable per (connection, session), left behind
+ * on the tmux server when the app goes away — the same leak the shared client
+ * had, bounded by distinct sessions opened rather than by joins, because the
+ * token is stable per session so a re-join overwrites its own entry. The
+ * variable is now only a diagnostic rendezvous: nothing reads it back since the
+ * pool stopped moving clients between sessions. It is kept because it is the
+ * one way to tell OUR client from the user's own terminal in `list-clients`,
+ * which is what makes a bug report about a stray client readable.
  */
 
 /** Callbacks for a shell this pool opens. Both carry the id they belong to. */
@@ -92,271 +103,284 @@ export interface AttachSessionOptions {
 export interface AttachSessionResult {
   shellId: ShellId;
   /**
-   * True when an existing client was pointed at the session, so the renderer
-   * still owns the same PTY and must NOT reset its terminal — tmux redraws the
-   * whole client itself, and a reset would drop the DEC private modes (mouse
-   * reporting above all) that the still-attached tmux client set and expects.
+   * True when the pool already held a live client for this session, so the
+   * renderer is being handed back the PTY it is already bound to and must NOT
+   * reset its terminal — the screen it is showing is still the right screen.
    *
-   * False when a new PTY was opened, which is the case the renderer has always
-   * handled: rebind the streams, reset the terminal, adopt the new id.
+   * False when a new PTY was opened: rebind the streams, reset the terminal,
+   * adopt the new id.
+   *
+   * In the per-tab design this is true only for a REPEAT ask about a tab that
+   * is already live — a remount behind a `v-show`, a second window on the same
+   * workspace, a retry after a transient error. The common case, a user
+   * clicking between tabs, never reaches this class at all, because each tab
+   * keeps the shell it was given.
    */
   switched: boolean;
 }
 
 /**
- * How long after a join a tmux client may still be on its way up.
+ * How many tmux clients one connection may hold at once.
  *
- * A join is a login shell plus `tmuxctl`, and tmuxctl is Python: measured, the
- * tmux client appears ~330 ms after the join on a loopback Docker fixture and
- * 1.5-2 s on a real host over a real link. Until it does, `switch-client -c`
- * fails with `can't find client` even though every other signal says the fast
- * path is available — which is exactly how this feature came to be inert (see
- * {@link sessionSwitchCommand}).
+ * Six, against an `sshd` `MaxSessions` of 10. The four channels of headroom are
+ * not slack: `SshService.exec` opens a channel per call and the app execs
+ * constantly (the session list refresh, every projects command, every rename),
+ * SFTP holds one for the Files tabs, and `tail` holds one per follow. Sizing
+ * this at 9 would make an ordinary folder with nine sessions break file
+ * browsing, and the failure — `Channel open failure` on an unrelated feature —
+ * would point nowhere near the cause.
  *
- * The budget is generous because being wrong in the two directions costs very
- * different amounts. Too short and the switch degrades to a full re-join, which
- * restarts the same window and keeps the app permanently slow. Too long and a
- * client that is genuinely gone delays ONE re-join, once, by the remainder —
- * and only when the join it belongs to failed, because a client that comes up
- * ends the wait the moment it does.
+ * Six is also comfortably above what a folder holds: docs/WORKSPACE.md §1
+ * measured 11 folders holding 11 sessions on this user's host, and the busiest
+ * folder in the log has three.
  */
-const CLIENT_SETTLE_MS = 5_000;
+export const MAX_LIVE_CLIENTS = 6;
 
-/** What the pool remembers about one connection's attached client. */
-interface SharedClient {
+/** What the pool remembers about one live tmux client. */
+interface SessionClient {
   shellId: ShellId;
+  /** The session this client is attached to. Fixed for its whole life. */
+  session: string;
   /** tmux global-environment variable holding this client's tty. */
   ttyVar: string;
-  /** The session the client is currently displaying. */
-  session: string;
-  /** When the PTY was opened, for sizing the settle budget above. */
-  joinedAt: number;
   /**
-   * True once a switch has actually moved this client, which proves tmux has
-   * it. From then on there is nothing to wait for: a switch that cannot find
-   * it is a client that has GONE (the user detached from inside tmux), not one
-   * that has yet to arrive, and waiting for it would only delay the re-join.
+   * Eviction order: a monotonic counter, NOT a timestamp.
+   *
+   * `Date.now()` has millisecond resolution and a user clicking through tabs
+   * produces several attaches inside one millisecond, which makes every
+   * `lastUsed` equal and collapses "least recently used" into "first in the
+   * map" — i.e. it would evict the tab the user is actively working in. A
+   * counter cannot tie.
    */
-  proven: boolean;
-}
-
-/**
- * One short line saying why a switch could not be taken, for the log AND for
- * the terminal.
- *
- * tmux's own words are preferred wherever it supplied any — `can't find
- * session: foo` is more useful than anything this file could paraphrase, and it
- * is the string a user can search for. Only the two codes the script raises
- * itself get written out here, because tmux never says them.
- */
-export function switchFailureReason(exitCode: number, stderr: string): string {
-  const first = stderr
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line.length > 0);
-  if (exitCode === SWITCH_NO_CLIENT_EXIT) {
-    return 'this host published no tmux client for the app to reuse';
-  }
-  if (exitCode === SWITCH_CLIENT_NOT_READY_EXIT) {
-    return 'the tmux client for the previous session never came up';
-  }
-  return first ?? `tmux switch-client exited ${exitCode}`;
+  useOrder: number;
+  /** When it was last used, for the eviction log only. */
+  lastUsedAt: number;
 }
 
 export class TmuxClientPool {
-  private readonly clients = new Map<string, SharedClient>();
-  /** connectionId -> its stable handshake token (see the class comment). */
-  private readonly tokens = new Map<string, string>();
+  /** connectionId -> sessionName -> its live client. */
+  private readonly clients = new Map<string, Map<string, SessionClient>>();
+  /**
+   * connectionId -> sessionName -> its stable handshake token.
+   *
+   * Kept even for sessions whose client has been evicted, so a re-join reuses
+   * the same tmux variable instead of leaving another behind (see the class
+   * comment). Tokens are strings; the map is bounded by sessions visited.
+   */
+  private readonly tokens = new Map<string, Map<string, string>>();
+  /** Ever-increasing stamp handed to a client each time it is used. */
+  private useClock = 0;
 
   constructor(private readonly ssh: SshService) {}
 
   /**
-   * Display [sessionName] on [connectionId], reusing the attached client when
-   * there is one. Never throws for a switch that did not work; only a failure
-   * to open a PTY at all propagates, which is the same contract
-   * `shell:open` already has.
+   * Display [sessionName] on [connectionId].
+   *
+   * Returns the live client for that session when there is one — which is the
+   * whole point, and costs nothing — and otherwise joins, evicting the least
+   * recently used client first if the connection is at its channel budget.
+   *
+   * Never throws for anything the host does; only a failure to open a PTY at
+   * all propagates, which is the contract `shell:open` already has.
    */
   async attach(
     connectionId: string,
     sessionName: string,
     opts: AttachSessionOptions,
   ): Promise<AttachSessionResult> {
-    // Every branch below is logged. This whole path is designed to degrade
-    // silently — a switch that does not work becomes an ordinary re-join,
-    // which is correct but indistinguishable from the feature never having
-    // shipped. The log is the only way to tell which branch actually ran.
-    const held = this.live(connectionId);
+    const held = this.live(connectionId, sessionName);
     log('tmux', 'attach requested', {
       connectionId,
       sessionName,
-      hasClient: held != null,
-      showing: held?.session ?? null,
+      held: held != null,
+      liveClients: this.liveCount(connectionId),
     });
     if (held) {
-      // Already showing it. Re-attaching or re-switching would only cost a
-      // redraw; this happens when the renderer re-asks for the session it is
-      // on (a remount behind a v-show, a retry after a transient error).
-      if (held.session === sessionName) return { shellId: held.shellId, switched: true };
-
-      // How long the switch may wait for its client before giving up. A client
-      // that has already been switched once is known to exist, so there is
-      // nothing to wait for; a fresh join may still be starting Python.
-      const waitMs = held.proven
-        ? 0
-        : Math.max(0, CLIENT_SETTLE_MS - (Date.now() - held.joinedAt));
-      const started = Date.now();
-      const res = await this.ssh.exec(
-        connectionId,
-        sessionSwitchCommand(held.ttyVar, sessionName, waitMs),
-      );
-      if (res.exitCode === 0) {
-        held.session = sessionName;
-        held.proven = true;
-        log('tmux', 'switch-client ok', { sessionName, waitMs, ms: Date.now() - started });
-        return { shellId: held.shellId, switched: true };
-      }
-
-      // The fallback the user cannot see — from here it is made visible, in the
-      // terminal, by handing the reason to the re-join below.
-      //
-      // The three interesting exits are different diagnoses. 65: the handshake
-      // variable was not there at all, so the PTY's `tmux` and this exec's
-      // `tmux` are probably not the same server — a host-compatibility problem
-      // this optimisation cannot solve. 66: the variable was there and named a
-      // tty that never became a client within the budget, so the join it
-      // belonged to failed. Anything else is tmux itself refusing, and its
-      // stderr says which: `can't find session` proves the client WAS found
-      // (tmux resolves -c before -t), so the handshake worked and the session
-      // is the problem.
-      const reason = switchFailureReason(res.exitCode, res.stderr);
-      log('tmux', 'switch-client FAILED - falling back to full re-join', {
-        sessionName,
-        ttyVar: held.ttyVar,
-        exitCode: res.exitCode,
-        noHandshake: res.exitCode === SWITCH_NO_CLIENT_EXIT,
-        clientNotReady: res.exitCode === SWITCH_CLIENT_NOT_READY_EXIT,
-        waitMs,
-        reason,
-        stderr: res.stderr.trim().slice(0, 400),
-        stdout: res.stdout.trim().slice(0, 400),
-        ms: Date.now() - started,
-      });
-
-      // Any non-zero exit: give up on this client entirely and join afresh.
-      // Closing it here rather than leaving it to the renderer keeps the old
-      // ordering intact — one PTY attached to this connection at a time — even
-      // though the renderer no longer closes anything on a session change.
-      this.ssh.shellClose(held.shellId);
-      this.clients.delete(connectionId);
-      return this.join(
-        connectionId,
-        sessionName,
-        opts,
-        `fast session switch unavailable (${reason}) - re-joining instead`,
-      );
+      // The tab is already up. This is the case the whole design exists to
+      // make free, and it is free: no exec, no redraw, no bytes on the wire.
+      held.useOrder = ++this.useClock;
+      held.lastUsedAt = Date.now();
+      return { shellId: held.shellId, switched: true };
     }
 
+    this.evictDownTo(connectionId, MAX_LIVE_CLIENTS - 1);
     return this.join(connectionId, sessionName, opts);
   }
 
-  /** Forget a connection's client. Called when the connection goes away. */
+  /** Forget a connection's clients. Called when the connection goes away. */
   release(connectionId: string): void {
     this.clients.delete(connectionId);
     this.tokens.delete(connectionId);
   }
 
   /**
-   * A session this pool may be showing has been renamed on the host.
+   * A session this pool holds a client for has been renamed on the host.
    *
-   * The pool remembers a session by NAME (`held.session`), and that name is
-   * what {@link isShowing} fences composer sends against and what
-   * {@link show} compares to decide a switch is unnecessary. A rename behind
-   * its back would therefore break two things quietly: the next composer send
+   * The pool keys clients by NAME, and that name is what {@link isShowing}
+   * fences composer sends against and what {@link attach} matches on. A rename
+   * behind its back would break two things quietly: the next composer send
    * would be rejected as belonging to a stranger, and re-selecting the renamed
-   * session would look like a different session and cost a full re-join.
+   * session would look like a session we do not hold and cost a full re-join
+   * beside the client that is already showing it.
    *
    * Nothing else has to move. The tmux CLIENT is unaffected — clients follow a
-   * session by id, so a rename does not detach anything, and the tty handshake
-   * variable is keyed on a random token rather than on the session name.
+   * session by id, so a rename does not detach anything — and the handshake
+   * variable is keyed on a random token rather than on the session name. The
+   * token map moves with it so a later re-join of the renamed session still
+   * overwrites its own tmux variable rather than adding one.
    *
    * Returns true when a record was actually updated, which is only a
-   * diagnostic: a rename of a session this connection is not showing is a
+   * diagnostic: a rename of a session this connection does not hold is a
    * perfectly ordinary no-op.
    */
   renamed(connectionId: string, from: string, to: string): boolean {
-    const held = this.clients.get(connectionId);
-    if (!held || held.session !== from) return false;
+    const held = this.clients.get(connectionId)?.get(from);
+    if (!held) return false;
+    const byName = this.clients.get(connectionId)!;
+    byName.delete(from);
     held.session = to;
+    byName.set(to, held);
+
+    const tokens = this.tokens.get(connectionId);
+    const token = tokens?.get(from);
+    if (tokens && token !== undefined) {
+      tokens.delete(from);
+      tokens.set(to, token);
+    }
     log('tmux', 'session renamed under a live client', { connectionId, from, to });
     return true;
   }
 
-  /** The session a connection's client is showing, or null. Test/diagnostic. */
-  currentSession(connectionId: string): string | null {
-    return this.live(connectionId)?.session ?? null;
+  /**
+   * The session a shell is attached to, or null. Test/diagnostic.
+   *
+   * Keyed on the SHELL rather than on the connection, because a connection no
+   * longer has one answer: it has one per live tab.
+   */
+  sessionForShell(shellId: ShellId): string | null {
+    for (const byName of this.clients.values()) {
+      for (const held of byName.values()) {
+        if (held.shellId === shellId) return held.session;
+      }
+    }
+    return null;
+  }
+
+  /** The sessions a connection currently holds live clients for. Diagnostic. */
+  liveSessions(connectionId: string): string[] {
+    const byName = this.clients.get(connectionId);
+    if (!byName) return [];
+    return [...byName.values()]
+      .filter((held) => this.ssh.shellTracker.get(held.shellId))
+      .map((held) => held.session);
   }
 
   /**
    * Whether it is safe to write [sessionName]'s input to [shellId].
    *
-   * This is the one hazard a shared client introduces, and it is worth naming
-   * precisely. A composer send is not one write: it puts the prompt text in,
-   * waits (250 ms or more for Codex's TUI), then sends Enter. When each session
-   * had its own PTY, a session change mid-send was harmless — the leftover
-   * writes went to a channel nobody was looking at. With one client they go to
-   * whatever session it is showing NOW, so a user who hits Send and
-   * immediately clicks another session could have the Enter submit a stranger's
-   * pane.
+   * With one client per session this fence is exact rather than temporal, and
+   * that is a genuine simplification of the hazard commit 516b488 described. A
+   * composer send is not one write — it puts the prompt text in, waits (250 ms
+   * or more for Codex's TUI), then sends Enter — and under a SHARED client a
+   * user who hit Send and immediately clicked another tab could have the Enter
+   * submit a stranger's pane, because the shell's meaning changed underneath
+   * the send. A per-tab client cannot change meaning: the shell is bound to its
+   * session for its whole life, so a send that started against the right shell
+   * finishes against the right session no matter what the user clicks.
    *
-   * A caller that names the session it means gets fenced against that. A caller
-   * that does not is passed through: terminal keystrokes come from the focused
-   * pane and are always meant for whatever it is currently displaying, and a
+   * The check is kept anyway, and is now a real assertion rather than a race
+   * guard: it catches a caller holding a stale id for a session whose tab was
+   * evicted and re-joined onto a different shell. A caller that names no
+   * session is passed through, as before — terminal keystrokes come from the
+   * focused pane and always mean whatever it is currently displaying, and a
    * shell this pool never opened cannot be misrouted in the first place.
    */
   isShowing(shellId: ShellId, sessionName: string): boolean {
-    for (const held of this.clients.values()) {
-      if (held.shellId === shellId) return held.session === sessionName;
-    }
-    return true;
+    const session = this.sessionForShell(shellId);
+    if (session === null) return true;
+    return session === sessionName;
   }
 
   /**
-   * The remembered client, but only if its channel is still tracked.
+   * The remembered client for a session, but only if its channel is still
+   * tracked.
    *
-   * The renderer closes the PTY when the terminal unmounts, and a dropped
+   * The renderer closes the PTY when a terminal unmounts, and a dropped
    * connection closes every shell on it, neither of which routes through this
    * class. Consulting the tracker rather than trusting the map is what keeps a
    * closed channel from being handed out as a live client.
    */
-  private live(connectionId: string): SharedClient | undefined {
-    const held = this.clients.get(connectionId);
+  private live(connectionId: string, sessionName: string): SessionClient | undefined {
+    const byName = this.clients.get(connectionId);
+    const held = byName?.get(sessionName);
     if (!held) return undefined;
     if (this.ssh.shellTracker.get(held.shellId)) return held;
-    this.clients.delete(connectionId);
+    byName!.delete(sessionName);
     return undefined;
+  }
+
+  /** How many of a connection's remembered clients still have a live channel. */
+  private liveCount(connectionId: string): number {
+    const byName = this.clients.get(connectionId);
+    if (!byName) return 0;
+    let n = 0;
+    for (const [name, held] of [...byName]) {
+      // Prune as we count: a shell the renderer or a drop closed is not a
+      // client, and leaving it in the map would evict a healthy tab to make
+      // room that was already there.
+      if (this.ssh.shellTracker.get(held.shellId)) n += 1;
+      else byName.delete(name);
+    }
+    return n;
+  }
+
+  /**
+   * Close least-recently-used clients until at most [limit] remain live.
+   *
+   * LRU rather than oldest-first because the tabs a user moves between are the
+   * ones that must stay instant, and those are exactly the recently used ones.
+   * Closing the PTY is the whole of an eviction: the tmux session is
+   * server-side and survives untouched, so the tab loses its channel and
+   * nothing else, and the renderer finds out through the `shell:exited` it
+   * already listens for.
+   */
+  private evictDownTo(connectionId: string, limit: number): void {
+    const byName = this.clients.get(connectionId);
+    if (!byName) return;
+    while (this.liveCount(connectionId) > Math.max(0, limit)) {
+      let victim: SessionClient | undefined;
+      for (const held of byName.values()) {
+        if (!this.ssh.shellTracker.get(held.shellId)) continue;
+        if (!victim || held.useOrder < victim.useOrder) victim = held;
+      }
+      if (!victim) return;
+      log('tmux', 'evicting the least recently used client to stay under the channel budget', {
+        connectionId,
+        session: victim.session,
+        shellId: victim.shellId,
+        idleMs: Date.now() - victim.lastUsedAt,
+        budget: MAX_LIVE_CLIENTS,
+      });
+      this.ssh.shellClose(victim.shellId);
+      byName.delete(victim.session);
+    }
   }
 
   /**
    * Open a PTY and run the documented join in it.
    *
-   * [note], when present, is printed into that PTY before the join runs. It is
-   * only ever set for a re-join that a failed switch forced, and it exists
-   * because "make the fallback visible" cannot mean "write a log line": the
-   * symptom the user reports is a session taking a second to open, and the
-   * place they are looking when it happens is the terminal. One line there,
-   * naming tmux's own reason, turns a silent slow path into an explained one.
-   *
-   * It is printed BEFORE `tmuxctl` because that is the only moment it can be:
-   * once tmux attaches it owns the screen. tmux draws over the alternate
-   * screen, so the note survives in the normal buffer rather than being lost.
+   * There is no longer a `note` parameter. It existed to print, into the
+   * terminal, the tmux reason a failed `switch-client` had forced a re-join —
+   * a fallback nobody could see. The pool no longer switches, so there is no
+   * such fallback and nothing to explain: a join here is either the first time
+   * a tab was opened or the return to an evicted one, and both are ordinary.
    */
   private async join(
     connectionId: string,
     sessionName: string,
     opts: AttachSessionOptions,
-    note?: string,
   ): Promise<AttachSessionResult> {
-    const ttyVar = clientTtyVar(this.tokenFor(connectionId));
+    const ttyVar = clientTtyVar(this.tokenFor(connectionId, sessionName));
     // The callbacks need the id of the shell they belong to, and the id only
     // exists once `openTrackedShell` resolves. A `const` captured from the
     // enclosing scope would be in its temporal dead zone for any byte that
@@ -368,7 +392,7 @@ export class TmuxClientPool {
     // so rather than so bytes get dropped.
     let id: ShellId | null = null;
     const shellId = await this.ssh.openTrackedShell(connectionId, {
-      command: sessionAttachCommand(sessionName, ttyVar, note),
+      command: sessionAttachCommand(sessionName, ttyVar),
       cols: opts.cols,
       rows: opts.rows,
       onData: (data) => {
@@ -377,30 +401,48 @@ export class TmuxClientPool {
       onExit: (exitCode) => {
         if (!id) return;
         // The PTY died — the user typed `exit`, the session was killed, the
-        // channel dropped. Drop the record so the next attach joins rather
-        // than switching a client that is not there.
-        if (this.clients.get(connectionId)?.shellId === id) {
-          this.clients.delete(connectionId);
-        }
+        // channel dropped, or this pool evicted it. Drop the record so the
+        // next attach joins rather than handing back a dead client.
+        const byName = this.clients.get(connectionId);
+        if (byName?.get(sessionName)?.shellId === id) byName.delete(sessionName);
         opts.onExit(id, exitCode);
       },
     });
     id = shellId;
-    this.clients.set(connectionId, {
+    let byName = this.clients.get(connectionId);
+    if (!byName) {
+      byName = new Map();
+      this.clients.set(connectionId, byName);
+    }
+    byName.set(sessionName, {
       shellId,
-      ttyVar,
       session: sessionName,
-      joinedAt: Date.now(),
-      proven: false,
+      ttyVar,
+      useOrder: ++this.useClock,
+      lastUsedAt: Date.now(),
     });
     return { shellId, switched: false };
   }
 
-  private tokenFor(connectionId: string): string {
-    let token = this.tokens.get(connectionId);
+  /**
+   * The handshake token for one (connection, session).
+   *
+   * Per session rather than per connection, because there is now a client per
+   * session and they must not share a tmux variable — the second join would
+   * overwrite the first's tty and a reader could not tell the two clients
+   * apart. Stable across re-joins of the same session, so an evicted tab that
+   * is revisited overwrites its own entry rather than leaving another behind.
+   */
+  private tokenFor(connectionId: string, sessionName: string): string {
+    let byName = this.tokens.get(connectionId);
+    if (!byName) {
+      byName = new Map();
+      this.tokens.set(connectionId, byName);
+    }
+    let token = byName.get(sessionName);
     if (!token) {
       token = randomBytes(6).toString('hex');
-      this.tokens.set(connectionId, token);
+      byName.set(sessionName, token);
     }
     return token;
   }

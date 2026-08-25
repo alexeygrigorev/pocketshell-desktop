@@ -33,26 +33,39 @@ import type { ShellId } from '../../shared/types';
  * (§25.2) — a consumer that captured the id once would end up writing to a
  * closed channel.
  *
- * WHAT A SHARED TMUX CLIENT CHANGES
- * ---------------------------------
- * Nothing in this file, but a great deal in how to read it. Main now holds ONE
- * attached tmux client per connection and moves it between sessions with
- * `switch-client` (src/main/ssh/TmuxClientPool.ts), so several session keys can
- * name the same ShellId over time, and writing to that shell puts bytes into
- * whichever session the client is displaying RIGHT NOW — not the session whose
- * key you looked the id up under.
+ * WHAT A CLIENT PER SESSION TAB CHANGES
+ * -------------------------------------
+ * Nothing in this file, but a great deal in how to read it — and the change is
+ * a relaxation, which is worth saying because the previous note here described
+ * the opposite.
  *
- * That makes the invariant this map has to carry stricter than it looks: at
- * most one key may be registered against a shared shell at a time, and it must
- * be the session the pane is actually showing. TerminalView enforces it by
- * unregistering the outgoing key BEFORE it asks main for the new one, so a
- * composer bound to the session the user just left resolves to `null` and its
- * send fails loudly instead of landing in a stranger's pane.
+ * Main briefly held ONE attached tmux client per connection and moved it
+ * between sessions with `switch-client`. Under that design several session keys
+ * could name the same ShellId over time, and writing to that shell put bytes
+ * into whichever session the client was displaying RIGHT NOW — not the session
+ * whose key you looked the id up under. This map therefore had to carry a
+ * stricter invariant than it looks like it carries: at most one key registered
+ * against a shared shell at a time, maintained by TerminalView unregistering
+ * the outgoing key BEFORE asking main for the new one.
  *
- * A registry is still the right shape for that — arguably more so than before.
- * Ownership of the PTY was already split between the component and main; what
- * moved is only the decision of whether a new PTY is needed at all, which
- * belongs on the side that can see the host.
+ * Main now keeps a client per session tab and holds it for the life of the tab
+ * (src/main/ssh/TmuxClientPool.ts), so a ShellId is bound to ONE session for as
+ * long as it exists. The map means exactly what it appears to mean again: a key
+ * is a session, its value is that session's own PTY, and several keys may be
+ * registered at once because several tabs really are live at once. A composer
+ * that resolves a shell for its session cannot be handed a stranger's pane,
+ * because there is no operation left that repoints a shell at another session.
+ *
+ * An entry can still go stale — the pool evicts the least recently used client
+ * when a connection runs out of SSH channels, which closes that PTY — so a
+ * consumer must still tolerate a write failing, and `shell:input` still fences
+ * on the session name. What it no longer has to tolerate is a write SUCCEEDING
+ * against the wrong session.
+ *
+ * A registry is still the right shape. Ownership of the PTY was already split
+ * between the component and main; what lives on the main side is the decision
+ * of whether a new PTY is needed at all, which belongs where the host is
+ * visible.
  */
 export const useShellsStore = defineStore('shells', () => {
   /** sessionKey -> the ShellId currently attached to it. */

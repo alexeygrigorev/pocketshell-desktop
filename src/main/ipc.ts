@@ -202,11 +202,12 @@ export function registerIpcHandlers(deps: {
   );
 
   // --- shell:attachSession -------------------------------------------------
-  // The session-switching path. Unlike `shell:open` this may reuse the PTY the
-  // renderer is already looking at: the pool holds one attached tmux client per
-  // connection and points it at another session, which is roughly an order of
-  // magnitude cheaper than a second channel + login shell + `tmuxctl`.
-  // `switched` tells the renderer which of the two happened.
+  // How a session tab gets its PTY. Unlike `shell:open` this may hand back a
+  // PTY the renderer is already bound to: the pool keeps one tmux client per
+  // session tab and holds it for the life of the tab, so a tab that is already
+  // open is answered with its existing shell and no host work at all.
+  // `switched` tells the renderer which of the two happened — true means "this
+  // is the shell you already have, leave your terminal alone".
   ipcMain.handle(
     ipc.shell.attachSession,
     async (
@@ -230,13 +231,16 @@ export function registerIpcHandlers(deps: {
   // Return what actually happened, not an unconditional true: the composer's
   // delivery-failure path depends on this being honest.
   // `sessionName` is optional and is a FENCE, not a target: it says which tmux
-  // session the caller believed it was writing to. One PTY now serves every
-  // session on a connection, so a multi-step write that straddles a session
-  // change — the composer's text-pause-Enter, above all — would otherwise
-  // finish in whatever session the pane switched to. Naming the session turns
-  // that into an honest `false`, which the composer already reports as a
-  // delivery failure. Callers with nothing to be confused about (terminal
-  // keystrokes, which always mean the pane as it is now) leave it off.
+  // session the caller believed it was writing to. It was built when one PTY
+  // served every session on a connection, where a multi-step write that
+  // straddled a session change — the composer's text-pause-Enter, above all —
+  // would finish in whatever session the pane had switched to. A PTY is now
+  // bound to one session for its whole life, so that race is gone and this
+  // check has become an assertion about a STALE id instead: a composer still
+  // holding the shell of a tab that was evicted and re-joined. It still turns
+  // into an honest `false`, which the composer already reports as a delivery
+  // failure. Callers with nothing to be confused about (terminal keystrokes,
+  // which always mean the pane as it is now) leave it off.
   ipcMain.handle(
     ipc.shell.input,
     async (_evt, shellId: string, data: string, sessionName?: string) => {
