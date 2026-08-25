@@ -13,14 +13,18 @@ import { join, relative, resolve, sep } from 'node:path';
 
 const RENDERER = resolve(__dirname, '..', '..', 'src', 'renderer');
 
-function vueFiles(dir: string): string[] {
+function files(dir: string, ext: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
-    if (statSync(full).isDirectory()) out.push(...vueFiles(full));
-    else if (name.endsWith('.vue')) out.push(full);
+    if (statSync(full).isDirectory()) out.push(...files(full, ext));
+    else if (name.endsWith(ext)) out.push(full);
   }
   return out.sort();
+}
+
+function vueFiles(dir: string): string[] {
+  return files(dir, '.vue');
 }
 
 /** Repo-relative, forward-slashed, so assertion output is readable anywhere. */
@@ -53,6 +57,24 @@ describe('design gates (docs/DESIGN.md §6, docs/POLISH.md §9)', () => {
   it('has no raw hex colours outside App.vue and TerminalView.vue', () => {
     const allowed = new Set(['App.vue', 'components/TerminalView.vue']);
     const offenders = vueFiles(RENDERER)
+      .filter((f) => !allowed.has(rel(f)))
+      .filter((f) => /#[0-9a-fA-F]{6}/.test(readFileSync(f, 'utf8')))
+      .map(rel);
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * Gate 1b — the same rule for renderer .ts modules, added when themes became
+   * data. `themes.ts` is the DESIGNATED second home for colour literals — a
+   * theme record is a palette, which is the one kind of code whose entire job
+   * is colour values, and tests/unit/themes.test.ts holds every record to the
+   * parity and contrast gates. Everything else in .ts (stores, composables,
+   * the CodeMirror theme) reads tokens, exactly as components do; a hex
+   * appearing there is a palette escaping its registry.
+   */
+  it('has no raw hex colours in renderer .ts outside themes.ts', () => {
+    const allowed = new Set(['themes.ts']);
+    const offenders = files(RENDERER, '.ts')
       .filter((f) => !allowed.has(rel(f)))
       .filter((f) => /#[0-9a-fA-F]{6}/.test(readFileSync(f, 'utf8')))
       .map(rel);

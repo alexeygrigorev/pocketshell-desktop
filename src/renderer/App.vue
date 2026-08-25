@@ -16,11 +16,38 @@
 // never reads the cascade — so TerminalView assigns its own font and re-fits.
 import { onBeforeUnmount, onMounted, watchEffect } from 'vue';
 import { fontCssVariables } from './fonts';
+import { resolveTheme } from './themes';
 import { zoomFactor } from './zoom';
 import { api } from './ipc';
 import { useSettingsStore } from './stores/settings';
 
 const settings = useSettingsStore();
+
+/**
+ * The ONE place a theme becomes pixels: the chosen record's tokens are written
+ * onto `<html>` as inline custom properties, exactly the way the typography
+ * settings land below. Everything that paints from the cascade — which is
+ * everything except xterm (TerminalView assigns `term.options.theme` from the
+ * same record) — repaints on the next frame, no restart, no remount.
+ *
+ * `resolveTheme` is reactive on both inputs: the stored choice, and (for
+ * `system`) the OS preference ref inside themes.ts, so flipping Windows'
+ * light/dark mode restyles a running app.
+ *
+ * `colorScheme` is set from the record's declared appearance so form controls,
+ * scrollbars and the UA's default canvas agree with the surfaces; `data-theme`
+ * is stamped for devtools legibility and tests, not for CSS to branch on —
+ * components must keep reading tokens, never the theme's name.
+ */
+watchEffect(() => {
+  const theme = resolveTheme(settings.theme);
+  const el = document.documentElement;
+  el.dataset['theme'] = theme.id;
+  el.style.colorScheme = theme.appearance;
+  for (const [name, value] of Object.entries(theme.tokens)) {
+    el.style.setProperty(name, value);
+  }
+});
 
 watchEffect(() => {
   const vars = fontCssVariables({
@@ -80,7 +107,7 @@ onBeforeUnmount(() => {
 
 <style>
 /* ---------------------------------------------------------------------------
- * Design tokens — see docs/DESIGN.md §4.3.
+ * Design tokens — see docs/DESIGN.md §4.3, and §8 for the theme system.
  *
  * Palette is the Android client's (GitHub-dark-derived): #0D1117 ground,
  * #E6EDF3 text, cyan #22D3EE accent. Contrast ratios in the comments are
@@ -88,6 +115,16 @@ onBeforeUnmount(() => {
  *
  * The six original names (--bg --fg --muted --accent --error --border) are
  * still defined, so nothing that predates the token set breaks.
+ *
+ * THIS BLOCK IS THE DARK THEME. Since themes became data
+ * (src/renderer/themes.ts), every colour-carrying token below is duplicated in
+ * the `dark` record there, and the chosen theme's record is written over these
+ * as inline properties on <html> (see the script block above). The block stays
+ * because it is what ships — the no-JS truth of "what the app looks like" —
+ * and tests/unit/themes.test.ts asserts the two copies never drift, so editing
+ * a dark colour here without touching the record (or vice versa) fails the
+ * suite. The non-colour tokens (type scale, spacing, radii, density, motion)
+ * are NOT themed and live only here.
  * ------------------------------------------------------------------------- */
 :root {
   color-scheme: dark;
@@ -131,6 +168,14 @@ onBeforeUnmount(() => {
   --state-hover: rgba(230, 237, 243, 0.05);
   --state-active: rgba(230, 237, 243, 0.09);
   --state-selected: var(--accent-soft);
+
+  /* ---- Elevation shadows ---------------------------------------------- */
+  /* Previously hardcoded per component (OverlayPanel, PromptComposer) as
+     rgba(0,0,0,.5), which was fine while there was one dark ground. A light
+     theme cannot use them — black at half opacity on white reads as a hole,
+     not a lift — so shadows are tokens now and each theme sets its own. */
+  --shadow-overlay: 0 16px 48px rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.5);
   --focus-ring: var(--accent);
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;

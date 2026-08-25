@@ -1392,7 +1392,7 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
      pane — leaving the TOP edge, the one that has terminal text behind it,
      with no separation at all. Same colour, same blur, so both read as one
      material. */
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-card);
 }
 /* Chromium follows the element's own corners here, so the dashed accent traces
    the card's radius (or the rail's pill) rather than boxing it. The flag is on
@@ -1450,7 +1450,7 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
   border-radius: 50%;
   /* The card's own elevation, so the two read as one floating material and the
      chip lifts off the terminal rather than sitting flat on it. */
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-card);
   color: var(--fg-secondary);
   cursor: pointer;
   transition:

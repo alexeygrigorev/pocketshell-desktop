@@ -17,7 +17,11 @@ import type { Terminal } from '@xterm/xterm';
  * anything to the arithmetic being checked.
  */
 
-vi.mock('../../src/renderer/ipc', () => ({ api: { sftp: {} } }));
+// The files store subscribes to HTML-preview asset counts as it is created,
+// so the stub needs that surface even though nothing here opens a file.
+vi.mock('../../src/renderer/ipc', () => ({
+  api: { sftp: {}, preview: { onStats: () => () => undefined } },
+}));
 
 const { scanBufferLine, pathLinks } = await import('../../src/renderer/terminalLinks');
 const { useFilesStore } = await import('../../src/renderer/stores/files');

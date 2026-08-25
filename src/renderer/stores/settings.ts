@@ -7,6 +7,7 @@ import {
   TERMINAL_FONT_SIZE_DEFAULT,
 } from '../fonts';
 import { normaliseRootList, normaliseRootPath, SESSION_ROOTS_MAX } from '../sessionGrouping';
+import { parseThemeChoice, THEME_CHOICE_DEFAULT } from '../themes';
 import { parseZoomPercent, stepZoomPercent, ZOOM_PERCENT_DEFAULT } from '../zoom';
 import { isLaunchableKind, type LaunchableKind } from '../../shared/agentLaunch';
 
@@ -99,6 +100,14 @@ export interface AppSettings {
   terminalFontSize: number;
   /** File-editor text size, in px. Separate from the terminal's — see fonts.ts. */
   editorFontSize: number;
+  /**
+   * The colour theme: a theme id from `src/renderer/themes.ts`, or `system`
+   * to follow the OS between the designated light and dark themes. Stored as
+   * a plain string rather than a union so a build that gains or loses a theme
+   * does not change this type; `parseThemeChoice` is what keeps stored ids
+   * honest, and an id this build does not know falls back to the default.
+   */
+  theme: string;
   /**
    * Whole-window zoom, as a percentage; 100 is unzoomed.
    *
@@ -253,6 +262,10 @@ export const SETTING_SPECS: SettingSpecs = {
   monospaceFontFamily: { default: null, parse: sanitiseFontFamily },
   terminalFontSize: { default: TERMINAL_FONT_SIZE_DEFAULT, parse: parseFontSize },
   editorFontSize: { default: EDITOR_FONT_SIZE_DEFAULT, parse: parseFontSize },
+  // `dark`, NOT `system`, for the same reason every default here is what it
+  // is: dark is what shipped, and an upgrade must not repaint the app of a
+  // user whose OS happens to be in light mode until they ask for it.
+  theme: { default: THEME_CHOICE_DEFAULT, parse: parseThemeChoice },
   // 100 for the same reason every typography default is what it is: an
   // upgrade must change nothing on screen until the user asks it to.
   zoomPercent: { default: ZOOM_PERCENT_DEFAULT, parse: parseZoomPercent },

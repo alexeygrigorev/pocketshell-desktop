@@ -10,8 +10,12 @@
  * exactly as they do into any other stylesheet — including inheriting whatever
  * `:root` says at the moment of paint, which a JS colour constant cannot do.
  *
- * The syntax colours are Campbell-derived; App.vue's `--code-*` block carries
- * the derivation and the contrast audit.
+ * The syntax colours are Campbell-derived in the dark theme; App.vue's
+ * `--code-*` block carries that derivation and its contrast audit. Since
+ * themes became data (src/renderer/themes.ts), every theme record supplies its
+ * own `--code-*` values — which is why this file keeps working unchanged: the
+ * rules below re-resolve against whatever the applied theme wrote onto
+ * `<html>`, on the next paint, with no editor rebuild.
  */
 import { EditorView } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
@@ -23,8 +27,17 @@ import type { Extension } from '@codemirror/state';
  *
  * `{ dark: true }` is not cosmetic — it tells CodeMirror to register this as a
  * dark theme, which is what makes the built-in `dropCursor`, panel and
- * placeholder styles pick their dark variants. The app is `color-scheme: dark`
- * unconditionally (App.vue), so this is stated rather than detected.
+ * placeholder styles pick their dark variants.
+ *
+ * KNOWN LIMIT: the flag is baked into the extension at definition time, so it
+ * states the SHIPPED theme's appearance and does not follow a light theme
+ * switch. Every colour a user actually reads here comes from the `--code-*`
+ * and `--term-*` tokens and retints correctly; what stays dark-flavoured under
+ * a light theme is CodeMirror's own base-theme details (panel chrome, the
+ * placeholder tint) — surfaces this editor does not currently show. Making it
+ * follow would mean exporting a per-appearance extension and having FilesView
+ * reconfigure the EditorState on theme change; do that if CM panels ever
+ * become visible here.
  */
 const chrome = EditorView.theme(
   {

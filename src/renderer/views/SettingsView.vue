@@ -50,6 +50,7 @@ import {
   ZOOM_PERCENT_MAX,
   ZOOM_PERCENT_MIN,
 } from '../zoom';
+import { THEME_CHOICE_SYSTEM, THEMES } from '../themes';
 
 const connection = useConnectionStore();
 const projects = useProjectsStore();
@@ -142,6 +143,17 @@ function onAddRoot(): void {
 function onRemoveRoot(path: string): void {
   settings.removeSessionRoot(path);
   rootError.value = null;
+}
+
+/* --- Theme ---------------------------------------------------------------
+ * The options are read off the THEMES registry, so this control never needs
+ * touching when a theme is added: one record in themes.ts and it is listed.
+ * `system` is not a theme and is offered separately, first, because it is a
+ * different KIND of answer — a rule, not a palette.
+ * ---------------------------------------------------------------------- */
+
+function onThemeChange(event: Event): void {
+  settings.set('theme', (event.target as HTMLSelectElement).value);
 }
 
 /* --- Zoom ----------------------------------------------------------------
@@ -295,6 +307,28 @@ function onSizeChange(key: 'terminalFontSize' | 'editorFontSize', event: Event):
 
     <section class="group">
       <h3 class="group-title">Display</h3>
+
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="theme-choice">Theme</label>
+          <p class="row-hint">
+            Colours for the whole app — panels, terminal and file editor together, so
+            they always read as one surface. <em>Follow Windows</em> switches between
+            Dark and Light with the system's own light and dark mode, live.
+          </p>
+        </div>
+        <select
+          id="theme-choice"
+          class="control"
+          :value="settings.theme"
+          @change="onThemeChange"
+        >
+          <option :value="THEME_CHOICE_SYSTEM">Follow Windows</option>
+          <option v-for="theme in THEMES" :key="theme.id" :value="theme.id">
+            {{ theme.label }}
+          </option>
+        </select>
+      </div>
 
       <div class="row">
         <div class="row-text">

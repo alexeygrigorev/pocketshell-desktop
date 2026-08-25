@@ -321,6 +321,14 @@ time and leaves the other 14 colours pixel-identical to Windows Terminal.
 
 ### 3.4 The options object
 
+> **Revised — the `theme` block moved to `src/renderer/themes.ts`.** With
+> themes as data (§8), the Campbell palette below lives verbatim in the `dark`
+> theme record, and TerminalView looks its theme up from the applied theme
+> instead of carrying one inline. Everything else in this options object —
+> font, cursor, scrollback, word delimiters, `minimumContrastRatio` — is not
+> themed and stays exactly as specified here. The provenance note travels with
+> the palette.
+
 Diff-ready replacement for the `TERMINAL_OPTIONS` const in
 `src/renderer/components/TerminalView.vue`. Every option name below was
 verified against `node_modules/@xterm/xterm/typings/xterm.d.ts` (6.0.0).
@@ -480,6 +488,16 @@ control. `--border` at 1.49:1 cannot carry a text input; that is why
 `--border-strong` exists and why §5.3 mandates it on inputs and selects.
 
 ### 4.3 The token block
+
+> **Revised — this block is now the DARK THEME, not the palette.** When themes
+> became data (§8), every colour-carrying token below was duplicated into the
+> `dark` record in `src/renderer/themes.ts`, and the applied theme's record is
+> written over these as inline custom properties on `<html>`. The block stays
+> in `App.vue` because it is what ships — the no-JS default — and
+> `tests/unit/themes.test.ts` asserts the two copies are identical, so neither
+> can drift. Everything below about WHY these values are what they are stands
+> unchanged; it is the reasoning for one theme of several rather than for the
+> app's only palette.
 
 Ready to paste over the `:root` block in `src/renderer/App.vue`. It is
 additive-compatible: the six existing names (`--bg --fg --muted --accent
@@ -1179,3 +1197,134 @@ at a time (which is exactly how the emoji arrived).
    explicit instruction or on desktop-input grounds: mono font is Consolas, not
    the phone's bundled JetBrains Mono (§2.3); tabs stay underlined rather than
    becoming a filled segmented control (§5.4).
+
+---
+
+## 8. Themes — the palette became data
+
+Added when the user asked for a light theme and then for "different themes
+like in VS Code". Everything before this section was written for a
+single-palette app; §3.4 and §4.3 carry pointers here rather than rewrites,
+per this repo's convention of marking superseded reasoning instead of
+deleting it.
+
+### 8.1 The shape: one record per theme, and nothing per-theme anywhere else
+
+A theme is one object in `src/renderer/themes.ts`:
+
+| Field | What it is |
+|---|---|
+| `id` | stable, persisted by the settings store — never renamed |
+| `label` | what the Settings picker shows |
+| `appearance` | `'dark'` \| `'light'` — **declared, not guessed** from the background. Decides which side of `system` the theme can serve and the `color-scheme` App.vue sets |
+| `tokens` | every colour-carrying custom property of §4.3, by name |
+| `terminal` | the complete xterm `ITheme` — ANSI 16, ground, ink, cursor, selection |
+
+Applying a theme is the pattern the app already had for fonts and zoom: one
+`watchEffect` in `App.vue` writes the record's tokens onto `<html>` as inline
+custom properties (outranking `:root` in the cascade), stamps `data-theme`,
+and sets `color-scheme`. Everything that paints from the cascade — the entire
+UI, the CodeMirror theme (`codeEditorTheme.ts` is pure `var(--…)`), the
+Settings samples, DoodleCanvas' pens — retints on the next frame with no
+restart and no component involved. xterm is the one surface that cannot read
+the cascade, so `TerminalView.vue` assigns `term.options.theme` from the same
+record and is the only other consumer.
+
+`system` is not a theme: it is a rule, resolved live through
+`matchMedia('(prefers-color-scheme: light)')` — the renderer-side face of
+Electron's `nativeTheme`, needing no IPC — and it picks between the two ids
+in `SYSTEM_THEME_IDS`. That pair is data too: with several dark themes
+registered, "which dark does the OS setting mean" is a product decision (the
+shipped default and its designed light counterpart), not a search.
+
+**The default is `dark`, not `system`**, because dark is what shipped and an
+upgrade must not repaint the app of anyone whose OS happens to be in light
+mode. The same rule every settings default in this app follows.
+
+**To add a theme: write one record in `THEMES`. That is the whole recipe.**
+The Settings picker lists the registry, the settings store's parser accepts
+whatever ids exist, and two executable gates in `tests/unit/themes.test.ts`
+hold the record to the bar: token parity (a record must define exactly the
+token set the dark theme defines — which that same test welds to `App.vue`'s
+`:root`) and the contrast floors of §8.2. A half-audited palette fails
+`npm run test:unit`; it cannot ship by accident.
+
+### 8.2 Contrast floors — the audit is executed, not remembered
+
+WCAG 2.1 relative luminance, computed by the test for every theme:
+
+| Pair | Floor | Why |
+|---|---:|---|
+| `--fg`, `--fg-secondary` on `--bg`/`--surface`/`--surface-2` | 4.5 | 13px body/secondary text (AA) |
+| `--fg-muted` on `--bg` | 3 | ≥15px or decorative only (§4.2's rule) |
+| `--border-strong` on `--bg` and `--surface-2` | 3 | WCAG 1.4.11 control boundaries |
+| `--accent`, `--success`, `--warning`, `--error`, `--agent` on `--bg` | 4.5 | read as text |
+| `--on-accent` on `--accent` | 4.5 | filled-button labels |
+| `--term-fg` and every `--code-*` text role on `--term-bg` | 4.5 | 13px editor prose |
+| `--code-gutter-fg` on `--term-bg` | 3 | line numbers are decorative (§4.3) |
+
+Where a scheme's own colour misses the floor for the role it takes, the token
+holds the scheme's colour **lifted toward the readable pole with hue
+preserved**, and the record's comment names the canonical origin and both
+ratios. This is the dark theme's own precedent: its `--code-comment` is a
+lifted Campbell brightBlack (§4.3).
+
+### 8.3 The set, and where each palette comes from
+
+Terminal ANSI sets are **transcribed, never invented** — the discipline §3
+established when it read Campbell out of Windows Terminal's `defaults.json`
+rather than reconstructing it. Transcription is verifiable. A scheme's own
+deliberately-weak pairs (Campbell's dim blue, Solarized's bright-slot base
+tones) are xterm's problem at render time via `minimumContrastRatio: 3`,
+identically in every theme.
+
+| Theme | Appearance | Terminal source | UI derivation |
+|---|---|---|---|
+| **Dark** (default) | dark | Campbell, WT 1.24 `defaults.json` (§3) | §4 — GitHub-dark via the Android client. Byte-identical to what shipped |
+| **Light** | light | GitHub Light ANSI, primer/primitives | GitHub Primer light — the same publisher the dark UI derives from, so `system` flips between one vendor's two designed modes. Code palette is GitHub's prettylights-light: unlike Campbell, this scheme's publisher ships a purpose-built editor palette for this exact ground, which beats forcing ANSI slots into syntax roles |
+| **Solarized Light** | light | Canonical table, ethanschoonover.com/solarized | Grounds are base3/base2 verbatim; the accents are designed midtones (~3–4:1 on base3) so **more roles are lifted here than anywhere else** — body text takes base02 because base00 is 4.13:1, and all eight accents are lifted to 4.5. Recognisably Solarized, deliberately deeper-inked |
+| **Nord** | dark | Official terminal mapping, nordtheme.com | nord0–nord3 are a ready-made elevation ramp, transcribed as the surfaces. Nord's famous 1.9:1 comment grey is lifted to 4.52 and says so |
+| **Gruvbox Dark** | dark | morhetz/gruvbox (dark, medium) | bg0…bg2 as the ramp, signature orange as the accent; the warm counterpart to Nord's cool |
+| **One Dark** | dark | Atom One Dark | The blue-grey middle ground VS Code users know; One Dark's own caret blue kept as the cursor |
+
+Chosen to span the space — neutral/cool/warm × dark/light — rather than four
+variations on dark blue. Accent identity note: cyan is the product's accent
+in the dark and light defaults; the adopted schemes keep their own signature
+accents (Nord frost, gruvbox orange, One Dark blue) because a Nord theme with
+a foreign cyan is not Nord.
+
+### 8.4 Key ratios per theme (text roles, on `--bg` / `--term-bg`)
+
+Computed by the audit; stated here for the record.
+
+| Theme | `--fg` | `--fg-secondary` | `--accent` | `--code-comment` |
+|---|---:|---:|---:|---:|
+| Dark | 16.02 | 6.15 | 10.47 | 6.36 |
+| Light | 15.80 | 6.11 | 5.36 | 6.39 |
+| Solarized Light | 12.05 | 5.72 | 4.52 | 4.53 |
+| Nord | 10.84 | 6.51 | 6.24 | 4.52 |
+| Gruvbox Dark | 10.75 | 5.65 | 5.84 | 4.51 |
+| One Dark | 6.57 | 5.42 | 5.92 | 4.53 |
+
+The secondary-text floor is the binding constraint everywhere: each theme's
+`--fg-secondary` is chosen to clear 4.5 **on `--surface-2`**, the deepest
+surface it is read on, which is why several sit at ~4.5 there while reading
+5.4–6.5 on the ground.
+
+### 8.5 What themes do NOT touch, and known limits
+
+- **Non-colour tokens** — type scale, spacing, radii, density, motion — are
+  not themed and live only in `:root`. A theme is a palette, not a layout.
+- **Shadows became tokens** (`--shadow-overlay`, `--shadow-card`) because the
+  light themes cannot use `rgba(0,0,0,.5)` — black at half opacity on white
+  reads as a hole, not a lift. Light themes carry soft ink shadows instead.
+- **CodeMirror's `{ dark: true }` flag** (codeEditorTheme.ts) is baked at
+  definition time and states the shipped appearance. Every colour a user
+  reads follows the theme via tokens; what stays dark-flavoured under a light
+  theme is CM base-theme details on surfaces the editor does not currently
+  show (panels, placeholder). Documented in the file; the fix is a
+  per-appearance extension plus an EditorState reconfigure if CM panels ever
+  appear.
+- **Terminal contents are the remote's.** A theme changes the 16 ANSI slots;
+  a remote program that hardcodes 256-colour or truecolor output (many TUIs
+  do) will look however it looks. That is every terminal emulator's contract.

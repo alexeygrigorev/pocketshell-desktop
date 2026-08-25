@@ -47,6 +47,12 @@ describe('defaults', () => {
     expect(useSettingsStore().zoomPercent).toBe(100);
   });
 
+  it('seeds the theme as dark — never system — for the same reason', () => {
+    // `system` as the default would repaint the app on upgrade for every user
+    // whose OS is in light mode. Dark is what shipped.
+    expect(useSettingsStore().theme).toBe('dark');
+  });
+
   it('exposes every key of AppSettings on the store, not behind a container', () => {
     // The contract another agent is coding against: `settings.typingOpensComposer`.
     const settings = useSettingsStore();
@@ -158,6 +164,21 @@ describe('degrading a stored blob', () => {
     expect(second.monospaceFontFamily).toBe('JetBrains Mono');
     expect(second.terminalFontSize).toBe(20);
     expect(second.editorFontSize).toBe(13);
+  });
+
+  it('keeps a stored theme it knows, drops one it does not', () => {
+    localStorage.setItem(KEY, JSON.stringify({ theme: 'nord' }));
+    expect(useSettingsStore().theme).toBe('nord');
+
+    // An id from a newer build (or a typo in a hand-edited blob) reverts to
+    // the default rather than leaving the app trying to apply nothing.
+    localStorage.setItem(KEY, JSON.stringify({ theme: 'vaporwave' }));
+    setActivePinia(createPinia());
+    expect(useSettingsStore().theme).toBe('dark');
+
+    localStorage.setItem(KEY, JSON.stringify({ theme: 'system' }));
+    setActivePinia(createPinia());
+    expect(useSettingsStore().theme).toBe('system');
   });
 
   it('rejects a non-string, non-null defaultHost', () => {

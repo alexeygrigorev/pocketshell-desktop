@@ -473,6 +473,27 @@ describe('files store openFile() on HTML', () => {
     expect(files.openHasScripts).toBe(false);
   });
 
+  it('flags remote sub-resources, which main can never count', async () => {
+    // A remote `<img>` is refused inside the renderer by the FRAME's own CSP,
+    // so the request never reaches main and never appears in the blocked
+    // count. Derived from the source or it is not reported at all.
+    const cdn = await openHtmlFile('cdn.html', '<img src="https://cdn.example/x.png">');
+    expect(cdn.openHasRemoteRefs).toBe(true);
+
+    const styled = await openHtmlFile('s.html', '<link rel=stylesheet href="//cdn/x.css">');
+    expect(styled.openHasRemoteRefs).toBe(false); // protocol-relative is not http(s)-spelled
+
+    const linked = await openHtmlFile('l.html', '<link rel=stylesheet href="http://cdn/x.css">');
+    expect(linked.openHasRemoteRefs).toBe(true);
+  });
+
+  it('does not call a plain hyperlink a remote resource', async () => {
+    // An `<a href="https://…">` loads nothing; claiming a resource was
+    // refused because a page cites a source would be its own small lie.
+    const files = await openHtmlFile('links.html', '<a href="https://example.com/">docs</a>');
+    expect(files.openHasRemoteRefs).toBe(false);
+  });
+
   it('falls back to the source view, with a reason, when the preview cannot be minted', async () => {
     openHtml.mockRejectedValue(new Error('No such file'));
     const files = await openHtmlFile('index.html', '<h1>hi</h1>');

@@ -741,6 +741,7 @@ Then §5 (focus), §6 (alignment/splitter), §7 (chip metrics).
 | §5.7 `.ic` glyphs | assumed tintable glyphs (emoji weren't) | real SVGs (user decision); `--warning` folder / `--fg-muted` file / `--fg-secondary` symlink now implementable, plus selected-state lift (§2.5) |
 | §4.3 motion tokens | `--dur-fast/--dur-normal/--ease` | + `--dur-slow: 280ms`, `--ease-out` (§4.1) |
 | (new) | — | §2 icon language: local inline SVG, Feather-derived (MIT), 24 viewBox / stroke 2 / 16-14-12 display sizes, currentColor, registry-only — the ComposerIcon contract, made app-wide |
+| §5.5 / §5.4b shadows | `box-shadow: … rgba(0,0,0,.5)` hardcoded in OverlayPanel and the composer | `var(--shadow-overlay)` / `var(--shadow-card)` — tokenised when themes became data (DESIGN.md §8), because light themes need ink shadows, not black ones; a matching hex gate now also covers renderer `.ts` files, with `themes.ts` as the palette registry's sanctioned home |
 
 Everything else in DESIGN.md stands, including the definition-of-done grep.
 **Add a second gate** alongside it — no character-as-icon anywhere:

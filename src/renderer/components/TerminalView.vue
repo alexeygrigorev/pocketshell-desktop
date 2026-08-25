@@ -42,6 +42,7 @@ import { useShellsStore } from '../stores/shells';
 import { createPathLinkProvider } from '../terminalLinks';
 import { useSettingsStore } from '../stores/settings';
 import { resolveMonoStack } from '../fonts';
+import { resolveTheme } from '../themes';
 import { isTypingKey } from '../../shared/composerText';
 import type { ConnectionId, ShellId } from '../../shared/types';
 import '@xterm/xterm/css/xterm.css';
@@ -151,34 +152,9 @@ const TERMINAL_OPTIONS: ITerminalOptions = {
   // own background; this lifts only those and leaves the rest untouched.
   minimumContrastRatio: 3,
 
-  // Built-in "Campbell" scheme, verbatim. Windows Terminal names the
-  // magenta slot "purple"; xterm calls it `magenta`.
-  theme: {
-    background: '#0C0C0C',
-    foreground: '#CCCCCC',
-    cursor: '#FFFFFF',
-    cursorAccent: '#0C0C0C',
-    // Campbell defines no selectionBackground; Windows Terminal falls back to
-    // white drawn at ~50% alpha. Kept translucent so text stays readable.
-    selectionBackground: 'rgba(255, 255, 255, 0.35)',
-    selectionInactiveBackground: 'rgba(255, 255, 255, 0.18)',
-    black: '#0C0C0C',
-    red: '#C50F1F',
-    green: '#13A10E',
-    yellow: '#C19C00',
-    blue: '#0037DA',
-    magenta: '#881798',
-    cyan: '#3A96DD',
-    white: '#CCCCCC',
-    brightBlack: '#767676',
-    brightRed: '#E74856',
-    brightGreen: '#16C60C',
-    brightYellow: '#F9F1A5',
-    brightBlue: '#3B78FF',
-    brightMagenta: '#B4009E',
-    brightCyan: '#61D6D6',
-    brightWhite: '#F2F2F2',
-  },
+  // No `theme` here: the palette belongs to the APPLIED THEME, looked up from
+  // src/renderer/themes.ts at construction and re-assigned by the watcher
+  // below. The dark record carries Campbell verbatim, provenance intact.
 };
 
 const containerEl = ref<HTMLDivElement | null>(null);
@@ -636,6 +612,7 @@ onMounted(async () => {
     ...TERMINAL_OPTIONS,
     fontFamily: resolveMonoStack(settings.monospaceFontFamily),
     fontSize: settings.terminalFontSize,
+    theme: resolveTheme(settings.theme).terminal,
   });
   fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
@@ -805,6 +782,24 @@ watch(
     term.options.fontFamily = resolveMonoStack(family);
     term.options.fontSize = size;
     scheduleFit();
+  },
+);
+
+/**
+ * Theme is live like the font settings above, and deliberately a SEPARATE
+ * watcher: a palette changes no cell metrics, so this must not drag a refit
+ * along with it. Folding it into the font watch would push a pointless resize
+ * at the remote on every theme change.
+ *
+ * `resolveTheme` is reactive on the stored choice and, for `system`, on the OS
+ * preference — so flipping Windows between light and dark retints the terminal
+ * too. xterm repaints on the options assignment.
+ */
+watch(
+  () => resolveTheme(settings.theme),
+  (theme) => {
+    if (!term) return;
+    term.options.theme = theme.terminal;
   },
 );
 watch(
