@@ -48,7 +48,34 @@ const connId = computed(() => connection.connectionId);
 
 onMounted(async () => {
   if (connId.value) await files.open(connId.value, props.startPath, props.sessionKey);
+  // AFTER `open()`, never before: `open()` restores the remembered directory
+  // and resets the open file, so a reveal applied first would be undone by the
+  // very mount that was triggered to show it.
+  await applyReveal();
 });
+
+/**
+ * Show a path someone clicked in the terminal.
+ *
+ * Two entry points because the tab may or may not already be mounted when the
+ * request lands. Clicking a path in the terminal is the unmounted case — the
+ * workspace switches tabs, this view mounts, and `onMounted` above takes the
+ * request. The watch covers a request that arrives while Files is already on
+ * screen. `takeReveal()` clears the request, so whichever fires first wins and
+ * a path is never opened twice.
+ */
+async function applyReveal(): Promise<void> {
+  const target = files.takeReveal();
+  if (target == null || !connId.value) return;
+  await files.revealPath(connId.value, target);
+}
+
+watch(
+  () => files.reveal,
+  async (next) => {
+    if (next != null) await applyReveal();
+  },
+);
 
 // The session's working directory can arrive AFTER this view mounts — the
 // sessions store is refreshed lazily, so a workspace opened by deep link (or

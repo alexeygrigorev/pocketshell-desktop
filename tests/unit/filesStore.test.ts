@@ -20,7 +20,8 @@ import { createPinia, setActivePinia } from 'pinia';
 
 const realPath = vi.fn<(connectionId: string, path: string) => Promise<string>>();
 const list = vi.fn<(connectionId: string, path: string) => Promise<unknown[]>>();
-const stat = vi.fn<(connectionId: string, path: string) => Promise<{ size: number }>>();
+const stat =
+  vi.fn<(connectionId: string, path: string) => Promise<{ size: number; type?: string }>>();
 const readBinary =
   vi.fn<(connectionId: string, path: string, maxBytes?: number) => Promise<Uint8Array>>();
 const readFile = vi.fn<(connectionId: string, path: string) => Promise<string>>();
@@ -51,7 +52,7 @@ globalThis.URL.revokeObjectURL = (url: string): void => {
   revoked.push(url);
 };
 
-const { useFilesStore, stripTilde, MAX_TEXT_BYTES } = await import(
+const { useFilesStore, stripTilde, resolveTerminalPath, MAX_TEXT_BYTES } = await import(
   '../../src/renderer/stores/files'
 );
 
@@ -320,5 +321,122 @@ describe('files store openFile() type gating', () => {
     await files.openFile(CONN, 'b.pdf');
 
     expect(revoked).toContain(first);
+  });
+});
+
+/**
+ * Resolving a path that was PRINTED, not browsed to.
+ *
+ * The rule here is the one the Files tab already fought for once: a session's
+ * relative path is relative to where that SESSION runs, which is neither the
+ * login home nor wherever this tab happens to be pointing. The second half is
+ * that the session's own cwd can be an unexpanded `~/git/foo`, so the base has
+ * to go through the same `stripTilde` the tab's own opening does.
+ */
+describe('resolveTerminalPath', () => {
+  it('joins a relative path onto the session cwd, not the login home', () => {
+    expect(resolveTerminalPath('tmp/a.mp3', '/home/alexey/git/foo')).toBe(
+      '/home/alexey/git/foo/tmp/a.mp3',
+    );
+  });
+
+  it('strips a tilde session cwd so the join stays SFTP-resolvable', () => {
+    // `~/git/foo` + `tmp/a.mp3` must not become a directory literally named `~`.
+    expect(resolveTerminalPath('tmp/a.mp3', '~/git/foo')).toBe('git/foo/tmp/a.mp3');
+  });
+
+  it('leaves an absolute path exactly as printed', () => {
+    expect(resolveTerminalPath('/srv/media/a.mp3', '/home/alexey')).toBe('/srv/media/a.mp3');
+  });
+
+  it('anchors a tilde path on the home, ignoring the session cwd', () => {
+    expect(resolveTerminalPath('~/notes.md', '/home/alexey/git/foo')).toBe('notes.md');
+  });
+
+  it('falls back to home-relative when the session reported no path', () => {
+    // Same fallback `open()` makes for the same missing fact.
+    expect(resolveTerminalPath('tmp/a.mp3', null)).toBe('tmp/a.mp3');
+    expect(resolveTerminalPath('tmp/a.mp3', undefined)).toBe('tmp/a.mp3');
+  });
+
+  it('drops a leading ./ rather than embedding it in the join', () => {
+    expect(resolveTerminalPath('./tmp/a.mp3', '/home/alexey')).toBe('/home/alexey/tmp/a.mp3');
+  });
+
+  it('leaves .. for the remote realpath to fold', () => {
+    // Folding it here would mean guessing about symlinks only the host knows.
+    expect(resolveTerminalPath('../b.txt', '/home/alexey/git')).toBe('/home/alexey/git/../b.txt');
+  });
+});
+
+describe('files store reveal', () => {
+  it('parks the resolved path for the Files tab to take exactly once', () => {
+    const files = useFilesStore();
+
+    files.requestReveal('tmp/a.mp3', '~/git/foo');
+
+    expect(files.reveal).toBe('git/foo/tmp/a.mp3');
+    expect(files.takeReveal()).toBe('git/foo/tmp/a.mp3');
+    expect(files.reveal).toBeNull();
+    expect(files.takeReveal()).toBeNull();
+  });
+
+  it('opens a file and moves the listing to its directory', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: 3, type: 'file' });
+    readBinary.mockResolvedValue(new Uint8Array([0x49, 0x44, 0x33]));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/alexey/git/foo');
+
+    await files.revealPath(CONN, '/home/alexey/git/foo/tmp/a.mp3');
+
+    expect(files.cwd).toBe('/home/alexey/git/foo/tmp');
+    expect(files.openPath).toBe('/home/alexey/git/foo/tmp/a.mp3');
+    expect(files.openMode).toBe('audio');
+    expect(files.error).toBeNull();
+  });
+
+  it('enters a directory rather than trying to open it as a file', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: 0, type: 'dir' });
+    const files = useFilesStore();
+    await files.open(CONN, '/home/alexey');
+
+    await files.revealPath(CONN, '/home/alexey/git');
+
+    expect(files.cwd).toBe('/home/alexey/git');
+    expect(files.openPath).toBeNull();
+    expect(readBinary).not.toHaveBeenCalled();
+  });
+
+  it('says so when the optimistically-linked path does not exist', async () => {
+    // Terminal output is linkified without ever being stat'ed, so a dead link
+    // is a NORMAL outcome and has to arrive as a message rather than silence.
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockRejectedValue(new Error('No such file'));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/alexey');
+    const before = files.cwd;
+
+    await files.revealPath(CONN, '/home/alexey/gone.mp3');
+
+    expect(files.error).toContain('gone.mp3');
+    expect(files.error).toContain('No such file');
+    // And the user is left where they were, not somewhere half-navigated.
+    expect(files.cwd).toBe(before);
+    expect(files.openPath).toBeNull();
+  });
+
+  it('reports a path that will not even resolve', async () => {
+    realPath.mockImplementation((_c, p) =>
+      p === '/home/alexey' ? Promise.resolve(p) : Promise.reject(new Error('Permission denied')),
+    );
+    const files = useFilesStore();
+    await files.open(CONN, '/home/alexey');
+
+    await files.revealPath(CONN, '/root/secret.txt');
+
+    expect(files.error).toContain('/root/secret.txt');
+    expect(files.error).toContain('Permission denied');
   });
 });

@@ -19,10 +19,11 @@
 // `v-if` on the tab, so the draft, caret and staged attachments survive a tab
 // switch. It is hidden (v-show) on Files, which has its own surface.
 // See docs/COMPOSER.md §11.
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useConnectionStore } from '../stores/connection';
 import { useSessionsStore } from '../stores/sessions';
+import { useFilesStore } from '../stores/files';
 import { useComposerStore } from '../stores/composer';
 import { useSettingsStore } from '../stores/settings';
 import AppIcon from '../components/AppIcon.vue';
@@ -37,10 +38,26 @@ const route = useRoute();
 const router = useRouter();
 const connection = useConnectionStore();
 const sessions = useSessionsStore();
+const files = useFilesStore();
 const composer = useComposerStore();
 const settings = useSettingsStore();
 
 const tab = ref<'terminal' | 'conversation' | 'files'>('terminal');
+
+/**
+ * A path clicked in the terminal brings the Files tab forward.
+ *
+ * The store only PARKS the request; it cannot act on it, because FilesView is
+ * behind a v-if and has to be mounted first. FilesView takes the request in its
+ * own onMounted, AFTER files.open() has restored the remembered directory —
+ * which would otherwise run second and undo the reveal.
+ */
+watch(
+  () => files.reveal,
+  (target) => {
+    if (target != null) tab.value = 'files';
+  },
+);
 
 /** Session name from the route — the single source of truth for this view. */
 const sessionName = computed(() => String(route.params['session'] ?? ''));

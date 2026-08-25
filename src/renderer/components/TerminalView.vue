@@ -32,6 +32,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api } from '../ipc';
 import { useShellsStore } from '../stores/shells';
+import { createPathLinkProvider } from '../terminalLinks';
 import { useSettingsStore } from '../stores/settings';
 import { resolveMonoStack } from '../fonts';
 import { isTypingKey } from '../../shared/composerText';
@@ -471,6 +472,21 @@ onMounted(async () => {
     term.onResize(({ cols, rows }) => {
       if (shellId) void api.shell.resize(shellId, cols, rows);
     }),
+    // Path links, registered AFTER WebLinksAddon above, deliberately: xterm
+    // gives an EARLIER provider priority over a later one for the same cells
+    // and drops intersecting lower-priority links, so a URL stays a web link
+    // even if the path detector were fooled by one. It is not — terminalPaths
+    // rejects any token containing `://` before it peels anything — but two
+    // independent guarantees are worth having for a thing this easy to get
+    // subtly wrong.
+    //
+    // Bound once, like everything else in this array and for the same reason:
+    // the session the pane shows is read through a getter at CLICK time, so a
+    // switch that reuses this terminal needs no re-registration and cannot
+    // stack a second provider.
+    term.registerLinkProvider(
+      createPathLinkProvider(term, () => ({ sessionName: targetSession.value })),
+    ),
   ];
   term.attachCustomKeyEventHandler(onCustomKey);
   containerEl.value?.addEventListener('mousedown', onTerminalMouseDown);
