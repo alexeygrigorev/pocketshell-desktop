@@ -106,9 +106,33 @@ function createWindow(): void {
     }
   });
 
-  // Open external links in the system browser, never in-app.
+  // Open external links in the system browser, never in-app — and only if
+  // they are web links.
+  //
+  // `shell.openExternal` hands the URL to the OS to dispatch by SCHEME, and
+  // this handler used to pass whatever it was given. Two consequences, one
+  // visible and one not:
+  //
+  //   - A click that produced no real URL still reached here as
+  //     `about:blank` (that is what Electron reports when `window.open` has
+  //     nothing usable), so Windows popped "We can't open this 'about'
+  //     link — your device needs a new app to open this link".
+  //   - More seriously, the renderer linkifies TERMINAL OUTPUT, which is
+  //     bytes from a remote host. Anything that host can print, it could
+  //     get handed to the OS shell: `file:`, `ms-`, a custom protocol
+  //     registered by some other installed app. A remote box should not be
+  //     able to pick which local program opens.
+  //
+  // So the scheme is allow-listed, parsing is guarded (a malformed URL
+  // throws in the URL constructor rather than falling through), and
+  // everything else is dropped with a log rather than silently ignored —
+  // a link that does nothing at all is its own bug report.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isWebUrl(url)) {
+      void shell.openExternal(url);
+    } else {
+      console.warn('[pocketshell] refused to open non-web link:', url);
+    }
     return { action: 'deny' };
   });
 
@@ -169,3 +193,19 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   registry.clear();
 });
+
+/**
+ * True only for `http:` and `https:`.
+ *
+ * Deliberately an allow-list rather than a deny-list of known-bad schemes:
+ * the set of protocols an arbitrary Windows install has registered is
+ * unknowable from here, so anything not explicitly a web link is refused.
+ */
+function isWebUrl(raw: string): boolean {
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}

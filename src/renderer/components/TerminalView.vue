@@ -392,7 +392,22 @@ onMounted(async () => {
   term = new Terminal(TERMINAL_OPTIONS);
   fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
-  term.loadAddon(new WebLinksAddon());
+  // An explicit activation handler, not the addon default.
+  //
+  // WebLinksAddon defaults to `window.open(uri)`, which in Electron reaches
+  // the main process window-open handler — and when the addon has nothing
+  // usable to open, that arrives as `about:blank` and gets dispatched to the
+  // OS, which is the "we can't open this 'about' link" dialog. Main now
+  // allow-lists the scheme, but filtering here as well means a bad match
+  // never leaves the renderer at all, and the check sits next to the thing
+  // that produced the URL. Terminal output is remote bytes; a link in it is
+  // a suggestion from another machine, not an instruction.
+  term.loadAddon(
+    new WebLinksAddon((event, uri) => {
+      if (!/^https?:\/\//i.test(uri)) return;
+      window.open(uri, '_blank', 'noopener,noreferrer');
+    }),
+  );
   term.open(containerEl.value!);
   fitAddon.fit();
 
