@@ -14,6 +14,12 @@
 // it that hiding would spare the reader. See the root row in the template for
 // why that is deliberate and what a future collapse must not do.
 //
+// It does carry a `+`, revealed on hover or focus, which creates a session
+// under that root — and that is not a contradiction of the paragraph above. A
+// chevron would promise a STATE the row does not have; a `+` promises an
+// action, which it does. The panel's foot button went when this arrived; see
+// the end of the template.
+//
 // ## Why the session level went, and why this is not revision 2 again
 //
 // Revision 3 made this `root -> folder -> session`, and the load-bearing
@@ -62,6 +68,8 @@ import { useSessionsStore } from '../stores/sessions';
 import { useSettingsStore } from '../stores/settings';
 import {
   groupSessionsIntoRoots,
+  inferHome,
+  rootHostPath,
   type SessionDirectory,
   type SessionRootFolder,
 } from '../sessionGrouping';
@@ -106,12 +114,26 @@ const connection = useConnectionStore();
 const projects = useProjectsStore();
 const sessions = useSessionsStore();
 const settings = useSettingsStore();
-/** Whether the folder-first creation dialog is open. */
-const creatingSession = ref(false);
 
 /**
- * The host-actions overflow menu — Ports, Usage and Settings
- * (docs/DESIGN.md §5.3c).
+ * The folder-first creation dialog: null when shut, otherwise the directory it
+ * opens the browser AT.
+ *
+ * One piece of state for TWO controls, because they are one flow entered at two
+ * depths. The header's `+` is "a session anywhere" and starts at `$HOME`
+ * (`startIn: null`); a root row's `+` is "a session under `git`" and starts
+ * there. Neither guesses a folder — the root is known and the folder is not, so
+ * the picker still opens; it just opens one level in.
+ *
+ * A boolean plus a separate path ref would let the two disagree — dialog open,
+ * path stale from the last root — which is precisely the class of bug that puts
+ * a session in the wrong directory. Held as one object, they cannot.
+ */
+const creating = ref<{ startIn: string | null } | null>(null);
+
+/**
+ * The host-actions overflow menu — Ports and Usage (docs/DESIGN.md §5.3c,
+ * revised by §5.3d).
  *
  * The user circled the panel's foot row and drew an arrow to this header:
  * "we can move this things there". Moving them is easy; fitting them is not.
@@ -122,14 +144,20 @@ const creatingSession = ref(false);
  * So they move as ONE control, and this is what makes the move affordable
  * rather than merely possible. It also settles the objection ca79ae2 raised
  * against putting them here in the first place: "two unlabelled overlay glyphs
- * would be a memory test". Inside a menu they keep their WORDS — `Ports`,
- * `Usage`, `Settings` — so nothing is reduced to a glyph, and the strip spends
- * one 14px mark instead of ~150px of buttons.
+ * would be a memory test". Inside a menu they keep their WORDS — `Port
+ * forwarding`, `Provider usage` — so nothing is reduced to a glyph, and the
+ * strip spends one 14px mark instead of ~150px of buttons.
  *
  * The `SESSIONS` label goes with them, and it is the cheapest thing in the row:
  * it labels a panel whose contents are self-evidently folders, on a window
  * whose title already carries the host. Its width pays for the new control
  * outright.
+ *
+ * SETTINGS is no longer one of the items. The user asked for the gear back as
+ * its own control ("… then refresh then settings then hide"), and that does not
+ * reopen the argument above — the objection was about glyphs nobody can read,
+ * and the gear is the one mark of the three that is already icon-only across
+ * this whole app. The two that need words still have them, here.
  */
 const hostMenuAnchor = ref<Box | null>(null);
 const hostMenuButton = ref<HTMLElement | null>(null);
@@ -164,8 +192,19 @@ function openPanel(name: HostPanel): void {
  *
  * If the fetch fails, grouping infers a home from the paths instead of dropping
  * every session into `other` (see `inferHome`).
+ *
+ * The inference is applied HERE rather than left to `groupSessionsIntoRoots`,
+ * which used to do it privately, because a second consumer arrived that needs
+ * the same answer: `rootHostPath`, which turns a root's `~/git` key back into
+ * an absolute directory for the root row's `+`. Two callers deriving `$HOME`
+ * separately is how the panel and the workspace once ended up keying one folder
+ * two ways. `groupSessionsIntoRoots` still infers when handed null, so this is
+ * a widening of where the answer is visible, not a change to it — passing an
+ * already-inferred home through it is idempotent.
  */
-const home = computed(() => projects.home);
+const home = computed(
+  () => projects.home ?? inferHome(sessions.sessions.map((s) => s.path)),
+);
 
 /**
  * Clock for the relative timestamps. The activity values only change when the
@@ -221,6 +260,22 @@ function rootTooltip(root: SessionRootFolder): string {
     return `${root.key}\nregistered in Settings — nothing running here`;
   }
   return `${root.key}\n${count}`;
+}
+
+/**
+ * The absolute host directory a root's `+` would start the picker in, or null
+ * when the root names no directory we can resolve.
+ *
+ * Null has two causes and they are not the same. `other` is a BUCKET — the
+ * sessions that matched no root — so there is no place to create anything in;
+ * the template does not render a `+` on it at all. The second is a `~`-keyed
+ * root on a host whose `$HOME` never resolved and could not be inferred from
+ * the paths either, and there the `+` renders DISABLED rather than vanishing:
+ * the control is real, the host is temporarily unable to answer, and a button
+ * that disappears on a failed fetch reads as a feature that is not there.
+ */
+function rootAddPath(root: SessionRootFolder): string | null {
+  return rootHostPath(root.key, home.value);
 }
 
 /**
@@ -284,7 +339,7 @@ async function onRefresh(): Promise<void> {
  * directory that does not exist.
  */
 async function onSessionStarted(name: string): Promise<void> {
-  creatingSession.value = false;
+  creating.value = null;
   if (connection.connectionId) await sessions.refresh(connection.connectionId);
   for (const root of roots.value) {
     const dir = root.directories.find((d) => d.rows.some((r) => r.session.name === name));
@@ -382,20 +437,56 @@ function fmtRelative(epochSeconds: number): string {
       <button class="icon-btn" title="Back to hosts" @click="emit('back')">
         <AppIcon name="arrow-left" :size="14" />
       </button>
+      <!-- ORDER: `+`, then overflow, refresh, settings, hide.
+           The last four are the user's, given as "here have ... then refresh
+           then settings then hide" against a screenshot of this strip. The `+`
+           leads because it is the panel's primary action and the other four are
+           chrome; their relative order is exactly as asked.
+
+           WIDTH, at the 200px drag floor, because this strip is now full:
+           six --control-h squares (6×28 = 168) plus five --sp-1 gaps (20) is
+           188px, in a content box of 200 − 8 − 4 = 188. It fits EXACTLY, with
+           no shrink and nothing clipped, and that is why the right padding is
+           --sp-1 against the left's --sp-2 (see .tree-header). There is no room
+           for a seventh: the next control added here has to displace one, the
+           way the `SESSIONS` word paid for the overflow mark in §5.3c. -->
       <div class="header-actions">
-        <button class="icon-btn" :disabled="sessions.loading" title="Refresh" @click="onRefresh">
-          <AppIcon name="refresh" :size="14" :class="{ spin: sessions.loading }" />
+        <!-- The general `+`: a session in ANY folder, nothing pre-filled. It is
+             what replaced the panel's full-width foot button, and it is the
+             reason that removal is safe — this control is on screen whatever
+             the panel holds, including when it holds nothing at all, so there
+             is never a window with no way to create a session. -->
+        <button
+          class="icon-btn"
+          title="New session in any folder"
+          @click="creating = { startIn: null }"
+        >
+          <AppIcon name="plus" :size="14" />
         </button>
+        <!-- Two items now, not three: the gear left this menu for the slot two
+             along. Ports and Usage stay, because they are the two that need
+             their WORDS (docs/DESIGN.md §5.3c). -->
         <button
           ref="hostMenuButton"
           class="icon-btn"
           :class="{ on: hostMenuAnchor !== null }"
-          title="Ports, Usage, Settings"
+          title="Ports, Usage"
           aria-haspopup="menu"
           :aria-expanded="hostMenuAnchor !== null"
           @click="toggleHostMenu"
         >
           <AppIcon name="more-horizontal" :size="14" />
+        </button>
+        <button class="icon-btn" :disabled="sessions.loading" title="Refresh" @click="onRefresh">
+          <AppIcon name="refresh" :size="14" :class="{ spin: sessions.loading }" />
+        </button>
+        <!-- The gear, back out of the overflow menu at the user's request. It
+             is the one of the three that can be icon-only without becoming a
+             memory test: this exact mark opens settings on the host picker and
+             everywhere else in the app, so it is recognised rather than
+             remembered. -->
+        <button class="icon-btn" title="Settings" @click="openPanel('settings')">
+          <AppIcon name="settings" :size="14" />
         </button>
         <button class="icon-btn" title="Hide session panel" @click="emit('collapse')">
           <!-- VS Code's "toggle sidebar" mark: truer to the action than a
@@ -439,6 +530,37 @@ function fmtRelative(epochSeconds: number): string {
           <span class="dot" :class="{ active: root.active }" />
           <span class="folder-label" :class="{ bucket: root.other }">{{ root.label }}</span>
           <span class="folder-count muted">{{ root.sessionCount }}</span>
+          <!-- Per-root `+`: create a session UNDER THIS ROOT. It opens the same
+               folder picker the header's `+` does, one level in — the root is
+               known, the folder is not, and guessing a directory from a root is
+               how you get a session in the wrong place.
+
+               NOT on `other`. That row is a bucket for paths that matched no
+               root, not a directory, so there is nowhere for the picker to
+               start; the header's `+` already covers "somewhere else".
+
+               `@click.stop` even though the row takes no click today. The row
+               is deliberately inert (see the comment above), but "deliberately"
+               is a decision that can be revisited, and a `+` that also selects
+               the row it sits on is a bug that would arrive silently the moment
+               it were. One modifier now, or a mystery later.
+
+               `:title` carries the destination, because the mark alone cannot
+               say WHICH root it belongs to once the eye is on the right of the
+               row rather than the left. -->
+          <button
+            v-if="!root.other"
+            class="icon-btn sm root-add"
+            :disabled="rootAddPath(root) === null"
+            :title="
+              rootAddPath(root) === null
+                ? `cannot resolve $HOME on this host, so ${root.label} has no directory to start in`
+                : `New session in ${root.key}`
+            "
+            @click.stop="creating = { startIn: rootAddPath(root) }"
+          >
+            <AppIcon name="plus" :size="12" />
+          </button>
         </div>
 
         <ul class="dir-list">
@@ -505,21 +627,24 @@ function fmtRelative(epochSeconds: number): string {
       <p v-if="!roots.length && !sessions.loading" class="empty muted">no sessions</p>
     </div>
 
-    <!-- Folder-first, not name-first: this opens the picker rather than a text
-         field, because the session name is DERIVED from the folder and typing
-         one produced sessions that no other client could group. -->
-    <div class="new-session">
-      <button class="new-session-btn" title="New session" @click="creatingSession = true">
-        <AppIcon name="plus" :size="14" />
-        New session
-      </button>
-    </div>
+    <!-- The full-width `New session` button that used to sit here is GONE. It
+         was the panel's one primary action and it spent a bordered 44px foot
+         row saying so, permanently, for a flow that now has two better doors:
+         the `+` in the header (any folder) and the `+` on each root (this
+         root). Both are always on screen, so nothing was traded away — and the
+         foot row's real cost was that it answered "where?" with a browse
+         starting at `$HOME` even when the user had just pointed at `git`.
+
+         Folder-first, not name-first, still: the dialog opens a picker rather
+         than a text field, because the session name is DERIVED from the folder
+         and typing one produced sessions that no other client could group. -->
     <p v-if="sessions.error" class="error">{{ sessions.error }}</p>
 
     <NewSessionDialog
-      v-if="creatingSession"
+      v-if="creating"
+      :start-in="creating.startIn"
       @started="onSessionStarted"
-      @close="creatingSession = false"
+      @close="creating = null"
     />
   </div>
 </template>
@@ -542,16 +667,27 @@ function fmtRelative(epochSeconds: number): string {
   container-type: inline-size;
 }
 /* The workspace's top-left row, same --topbar-h as the session bar across the
-   splitter, so the two headers read as one line. Padding is --sp-2, not
-   --sp-3: ghost icon buttons carry their own inner inset, and the old padding
-   plus theirs pushed the back arrow visibly off the panel's left rhythm. */
+   splitter, so the two headers read as one line.
+
+   The LEFT padding is --sp-2, not --sp-3: ghost icon buttons carry their own
+   inner inset, and the old padding plus theirs pushed the back arrow visibly
+   off the panel's left rhythm.
+
+   The RIGHT padding is --sp-1, and the asymmetry is doing work rather than
+   drifting. The left end is a single arrow whose glyph lines up with the dots
+   and labels below it; the right end is a RUN of five ghost squares, each
+   already carrying ~7px of its own optical inset, so a further 8px there is
+   inset on top of inset. Halving it is also exactly what makes the strip fit
+   the 200px drag floor with nothing shrunk — the arithmetic is in the template,
+   above `.header-actions`. The alignment argument and the width arithmetic want
+   the same thing, which is the only reason to spend an asymmetry on it. */
 .tree-header {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
   height: var(--topbar-h);
   flex: 0 0 auto;
-  padding: 0 var(--sp-2);
+  padding: 0 var(--sp-1) 0 var(--sp-2);
   border-bottom: 1px solid var(--border);
 }
 .header-actions {
@@ -577,9 +713,13 @@ function fmtRelative(epochSeconds: number): string {
 /* A <div>, so the button reset this used to carry — background, border, color,
    text-align, cursor, font-family/size/line-height — is all gone: everything in
    that list is either the element's own default or inherited from `body`. Only
-   the weight is a real decision and it stays. There is no `:hover` rule either:
-   a lift under the cursor advertises a click, and this row no longer takes
-   one. */
+   the weight is a real decision and it stays.
+
+   The row still gets no BACKGROUND on hover: a lift under the cursor advertises
+   a click, and this row does not take one. The `:hover` rule it does have
+   reveals the `+` inside it and touches nothing else, which says the opposite
+   of a lift — the row is inert, and the one thing in it that is not says so by
+   appearing. */
 .folder-header {
   display: flex;
   align-items: center;
@@ -611,6 +751,54 @@ function fmtRelative(epochSeconds: number): string {
   font-size: var(--fs-100);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+/* ── The per-root `+`: revealed, not persistent ────────────────────────────
+   HOVER- AND FOCUS-REVEALED, and this is the decision the control turned on.
+
+   Persistent was the alternative and it is affordable on width — the root
+   labels are short words (`git`, `tmp`) and a 24px square leaves plenty at the
+   200px floor. What it is not affordable on is NOISE: one `+` per root is a
+   column of identical marks running down a panel whose entire job is to be
+   scanned, repeating an affordance that is identical on every row. VS Code's
+   tree-row actions reach the same conclusion for the same reason.
+
+   Two rules make the reveal honest rather than merely quiet:
+
+     - it is `opacity`, never `display`. The square is always laid out, so the
+       root label never reflows when the cursor arrives — a row that changes
+       width under the pointer is worse than a mark that was always there.
+     - `:focus-visible` reveals it too, so it is fully reachable by keyboard and
+       VISIBLE once reached. A hover-only affordance is one a keyboard user can
+       tab into and not see, which is the failure mode this pattern usually
+       ships with.
+
+   `@media (hover: none)` shows it unconditionally: a pointer that cannot hover
+   would otherwise never reveal it at all.
+
+   What it is deliberately NOT conditioned on is whether the root is empty. An
+   empty registered root is the `+`'s most useful case, but `directories.length`
+   changes under the sessions store's refresh timer, so keying visibility off it
+   would make the control appear and disappear as sessions come and go — the
+   same trap the root rows' own comment records about expansion state. Every
+   root row carries the same mark, always, in the same place. */
+.root-add {
+  flex: none;
+  margin-left: var(--sp-1);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.folder-header:hover .root-add,
+.root-add:focus-visible {
+  opacity: 1;
+}
+/* `.folder-header` clips (`overflow: hidden`), which would eat a +2px ring. */
+.root-add:focus-visible {
+  outline-offset: -2px;
+}
+@media (hover: none) {
+  .root-add {
+    opacity: 1;
+  }
 }
 .dir-list {
   list-style: none;
@@ -757,40 +945,6 @@ function fmtRelative(epochSeconds: number): string {
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
-}
-.new-session {
-  display: flex;
-  gap: var(--sp-2);
-  padding: var(--sp-3);
-  border-top: 1px solid var(--border);
-}
-/* Full-width because it is the panel's one primary action, and bordered
-   because a ghost control at the foot of a scrolling list reads as debris.
-   WCAG 1.4.11: --border-strong is the 4.12:1 control boundary. */
-.new-session-btn {
-  flex: 1;
-  height: var(--control-h);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: var(--fs-300);
-  font-weight: var(--fw-medium);
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
-}
-.new-session-btn:hover {
-  color: var(--accent);
-  border-color: var(--accent-dim);
-  background: var(--accent-soft);
 }
 .error {
   padding: 0 var(--sp-3) var(--sp-2);

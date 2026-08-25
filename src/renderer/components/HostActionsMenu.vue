@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// HostActionsMenu: the three host-scoped destinations — Ports, Usage, Settings
-// — as one menu, in one place, used from two triggers.
+// HostActionsMenu: the host-scoped OVERLAY destinations that need words —
+// Ports and Usage — as one menu, in one place, used from two triggers.
 //
-// It is a component rather than three `<li>`s written twice because it has
+// It is a component rather than two `<li>`s written twice because it has
 // exactly two call sites that must not drift: the session panel's header
 // (where the user asked for these controls to live) and the COLLAPSED RAIL
 // (which exists precisely so host controls are not stranded off-screen when the
@@ -15,11 +15,18 @@
 // ca79ae2 put these at the panel's foot and argued against a header row in one
 // line: "two unlabelled overlay glyphs would be a memory test". That objection
 // is right and it is not answered by moving the buttons — it is answered by not
-// having buttons. Inside a menu, Ports and Usage keep their words; the strip
-// spends a single 14px overflow mark; and the gear stays icon-only beside its
-// own label, as it is app-wide.
+// having buttons. Inside a menu, Ports and Usage keep their words, and the
+// strip spends a single 14px overflow mark for both.
+//
+// ## Why SETTINGS is no longer in here
+//
+// The user asked for the strip to read `⋯ · refresh · settings · hide`, which
+// promotes the gear back out to its own control. That does not reopen the
+// argument above, it sits outside it: the objection was about glyphs nobody can
+// read, and the gear is the one mark in this trio that is already icon-only
+// everywhere else in the app. Ports and Usage stay. The rail grew its own gear
+// at the same time, so the collapsed state still reaches all three.
 import PopupMenu from './PopupMenu.vue';
-import AppIcon from './AppIcon.vue';
 import type { Box } from '../../shared/popupPlacement';
 import { HOST_PANEL_ITEMS, type HostPanel } from '../hostPanels';
 
@@ -41,20 +48,16 @@ const emit = defineEmits<{ select: [panel: HostPanel]; close: [] }>();
     @close="emit('close')"
   >
     <!-- Rendered from HOST_PANEL_ITEMS rather than written out, so the two
-         triggers and the workspace's own `panel` ref share one vocabulary. -->
+         triggers and the workspace's own `panel` ref share one vocabulary.
+         No icons and no separator: both rows are host-level overlays, both are
+         named in words, and there is nothing left in the list to set apart now
+         that the app-level gear has its own control on both surfaces. -->
     <ul>
-      <template v-for="item in HOST_PANEL_ITEMS" :key="item.panel">
-        <!-- Settings is APP-level while the pair above is host-level, so it
-             sits below a rule. Same distinction the retired foot row drew by
-             pushing the gear to the far corner. -->
-        <li v-if="item.appLevel" class="menu-sep" />
-        <li>
-          <button class="menu-item" @click="emit('select', item.panel)">
-            <AppIcon v-if="item.appLevel" name="settings" :size="14" />
-            {{ item.label }}
-          </button>
-        </li>
-      </template>
+      <li v-for="item in HOST_PANEL_ITEMS" :key="item.panel">
+        <button class="menu-item" @click="emit('select', item.panel)">
+          {{ item.label }}
+        </button>
+      </li>
     </ul>
   </PopupMenu>
 </template>

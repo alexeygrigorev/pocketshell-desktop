@@ -784,7 +784,7 @@ The visual spec follows Android `FolderListScreen.kt`:
 | Row tooltip | three lines: session name, full folder path, absolute time |
 | `.session-row:hover` | `background: var(--state-hover)` |
 | `.session-row.current` | `background: var(--state-selected)`, plus a 2px `--accent` left rail; **remove** the current cyan-tinted hover so hover and selection stop looking alike |
-| Footer | a full-width `New session` button opening the folder-first picker. The bare name field it replaced is **deleted**: the name is derived from the folder, never typed |
+| Footer | ~~a full-width `New session` button opening the folder-first picker~~ — **deleted, see §5.3d.** Creation moved onto the rows: a `+` per root and a `+` in the header. The bare name field the button itself replaced stays deleted for the original reason: the name is derived from the folder, never typed |
 | Retired | The `attached` text tag (dot + weight + sort position say it) and the absolute `.session-time`. `.folder-header`, `.disclosure` and the 28px child indent were retired with the leaf tree and are back at the root level; `.folder-count` stays retired — the root header carries a bare integer, not a `· N sessions` label |
 
 **Gap to flag:** Android sorts agent sessions above plain shells and puts an
@@ -797,6 +797,11 @@ trailing column) so adding the field later is a data change, not a layout
 change.
 
 ### 5.3c Host actions move to the panel HEADER (revised again, implemented)
+
+> **Partly revised by §5.3d.** The gear was pulled back out of the overflow menu
+> as its own strip control, at the user's request. The argument below is kept
+> because it still decides Ports and Usage, which stay in the menu — see §5.3d
+> for why the gear is the exception rather than a reversal.
 
 The user circled the panel's foot row — Ports, Usage, the gear — and drew an
 arrow up to the header: "we can move this things there."
@@ -834,6 +839,80 @@ The overlays themselves do not move; only their triggers do. Settings stays
 independently reachable from the host PICKER, where a user looks for a
 startup-scoped setting.
 
+### 5.3d Session creation on the rows, and the strip's final order (implemented)
+
+Two user asks, one strip. Kept together because they land on the same six
+controls and the width budget only closes if they are read together.
+
+**Ask 1 — the `+`s.** "a `+` near git, near `tmp` … and just a plus to create a
+random session in any place. then we don't need 'new session' button anymore."
+The full-width foot button is gone; a hover/focus-revealed `+` sits on each root
+row and a persistent `+` leads the header strip. The reasoning, the `other`
+exclusion, the disabled-not-hidden failure case and the decision NOT to chain
+the agent dialog are all in **docs/SESSIONLIST.md §0a and §13** — that file owns
+the panel's row spec, and this section owns only the strip.
+
+**Ask 2 — the order.** "here have ⋯ then refresh then settings then hide." Two
+things follow, and the second partly reverses §5.3c.
+
+1. **Reorder.** The strip reads, left to right:
+
+   | | | |
+   |---|---|---|
+   | `arrow-left` | leading slot | leave this host's sessions |
+   | `plus` | actions, first | new session in any folder |
+   | `more-horizontal` | actions | Port forwarding, Provider usage |
+   | `refresh` | actions | reload the session list |
+   | `settings` | actions | app settings |
+   | `panel-left` | actions, last | hide the panel |
+
+   The last four are the user's order verbatim. The `+` leads the group because
+   it is the panel's primary action and the other four are chrome.
+
+2. **The gear leaves the overflow menu.** §5.3c is *revised, not overturned*.
+   Its argument was never "put these in a menu"; it was "two unlabelled overlay
+   glyphs would be a memory test", and that objection applies to Ports and Usage
+   only. The gear is the one of the three that is already icon-only everywhere
+   in this app — the host picker, the composer's own surfaces — so it is
+   recognised rather than remembered, and it costs one 14px slot instead of a
+   labelled button. **Ports and Usage stay in the menu, with their words.** The
+   menu is now two items and needs no separator: the rule under it existed to
+   set the app-level entry apart from the host-level pair, and the app-level
+   entry is what left.
+
+**The collapsed rail gets its own gear.** While Settings was a menu row, the
+rail reached it for free through its one overflow button. Promoting the gear out
+of the list would otherwise have made the collapsed panel offer strictly less
+than the expanded one — the single failure the rail exists to prevent (§5.3b).
+The rail now mirrors the header: overflow, then gear. It gets **no `+`**: the
+rail is an escape hatch, and creating a session is something you do while
+looking at the list you are adding to, which is one click away on its top
+button.
+
+**Width, at the 200px drag floor — and this strip is now FULL.**
+
+```
+  6 controls × --control-h (28)          = 168
++ 5 gaps     × --sp-1      (4)           =  20
+                                           ---
+                                           188
+  panel floor                             200
+- padding-left  --sp-2 (8)               =   8
+- padding-right --sp-1 (4)               =   4
+                                           ---
+  content box                             188
+```
+
+It fits exactly, with nothing shrunk and nothing clipped. The asymmetric
+padding is what closes it, and it is independently right: the left end is a
+single arrow whose glyph aligns with the dots and labels below it, while the
+right end is a run of five ghost squares each already carrying ~7px of its own
+optical inset, so a further 8px there is inset on top of inset.
+
+There is no seventh slot. The next control added here has to displace one — the
+way the `SESSIONS` word paid for the overflow mark in §5.3c — or move the panel
+floor, which the drag clamp and `.tree`'s `min-width` both pin at 200.
+
 ### 5.3b Host workspace chrome — NO topbar (revised, implemented)
 
 The host topbar — back, collapse, `hetzner · alexey@135.181.114.209`,
@@ -848,7 +927,7 @@ redistributed, none deleted:
 | Host label (`name · user@hostname`) | **the OS window title** | The native title bar was already spending its row saying the static word "PocketShell". Built by the pure `src/shared/windowTitle.ts`, applied over `win:setTitle`; the renderer drives it because the title mirrors the *view*, not the connection (Back keeps the link alive while the picker shows). Also puts the host in the taskbar and Alt-Tab. |
 | Back arrow | leading slot of the session panel's `SESSIONS` header | An arrow beside `SESSIONS` reads as "leave this host's sessions". The header row was already paying `--topbar-h`. |
 | Collapse toggle (`panel-left`) | trailing slot of the same header, beside Refresh | The hide control sits on the thing it hides. |
-| Ports / Usage / Settings | **revised — see §5.3c.** Originally a `.host-actions` row at the panel's **foot**, below "New session": host-scoped controls on the host-scoped surface, bottom-most = most global (the VS Code gear-at-the-bottom register, gear far right). Ports and Usage kept text labels because two unlabeled overlay glyphs would be a memory test. ~150px of controls, fitting the 200px floor. |
+| Ports / Usage / Settings | **revised — see §5.3c, then §5.3d.** Originally a `.host-actions` row at the panel's **foot**, below "New session": host-scoped controls on the host-scoped surface, bottom-most = most global (the VS Code gear-at-the-bottom register, gear far right). Ports and Usage kept text labels because two unlabeled overlay glyphs would be a memory test. ~150px of controls, fitting the 200px floor. **Now:** Ports and Usage in the header's overflow menu, Settings as its own gear beside it. |
 | Disconnect | the **host picker**, on the connected host's row | Every disconnect already navigated to the picker; the button now lives at its destination, labeled, beside where the connection was opened. The connected row also gets the §5.2 `--success` dot, and clicking it re-enters the workspace **without re-dialling** (a second dial would orphan the live connection). |
 | Missing-tools notice | unchanged — the workspace's top strip | Rendered only when a tool is absent, so the usual cost is zero rows. |
 
@@ -856,7 +935,10 @@ redistributed, none deleted:
 collapse would take the expand toggle — and with it every host control — off
 screen. Collapsing now leaves a ~36px rail (`--surface`, right hairline)
 holding the expand toggle and the back arrow, so both stay one click away
-while ~90% of the panel's width still goes to the terminal.
+while ~90% of the panel's width still goes to the terminal. It also carries the
+header's overflow control and, since §5.3d, the header's gear — the rail's rule
+is that it must not offer less than the expanded panel, so a control promoted
+out of the overflow menu has to be added here by hand.
 
 Alignment note: the `SESSIONS` header and the session bar across the splitter
 are both `--topbar-h`, so the window's top row reads as one line broken only
@@ -1044,8 +1126,88 @@ existing selectors and the Android `docs/mockups/conversation.html`:
   crumb row was the loudest thing on the Files screen while being pure
   navigation, and it contradicted §5.2's own rule that accent is reserved for
   *selected*
+- **The current folder is not a link** (**revised**). It renders as
+  `--fg`/`--fw-medium` against the ancestors' `--fg-secondary`, carries
+  `aria-current="page"`, and has no hover state. NN/g's breadcrumb guideline #5
+  ("the breadcrumb corresponding to the current page should not be a link"),
+  USWDS and the ARIA authoring practices all say so, and here the click would
+  have navigated to the directory already on screen. The weight lift is the
+  same "you are here" signal GNOME's path bar gives its `current-dir` button
+  while dimming everything to its left. Still no `--accent`: §5.2 reserves that
+  for the selected *row*
+- **Breadcrumb overflow — see §5.7.1**
 - `.editor` → `--font-mono`, `--fs-300`, `background: var(--term-bg)`,
   `color: var(--term-fg)`
+
+#### 5.7.1 Breadcrumb overflow — collapse segments, never characters
+
+The strip is one line at every width the splitter reaches (180px–640px), and
+it gets there by **dropping whole path segments into a menu**, not by cutting
+letters out of the segments it keeps. `src/renderer/fileListView.ts`
+(`buildCrumbs`) owns the rule, is fed a measured width by a `ResizeObserver` in
+`FileTree.vue`, and is unit-tested across widths and depths.
+
+**What this replaces.** `2f684dd` collapsed the path to a fixed four cells
+*and then* ran every survivor through `splitLabel`, so a 250px pane rendered
+
+```
+~ / … /v…previews / olya-…        [search] [edit] [refresh]
+```
+
+for `~/git/red-stamp/tmp/voice-previews/olya-merin` — two truncations of one
+fact stacked, with the folder the user was standing in the one that got cut.
+It is the same failure `b841362` deleted from the session rows. The cause was
+that the collapse was *structural*: four cells is wrong at 180px and wasteful
+at 640px, so character truncation was left to finish a job the collapse should
+have done.
+
+**The ladder**, in order, and each rung has a source:
+
+| | Rung | Why |
+|---|---|---|
+| 1 | Everything fits → show everything | Carbon: "The full breadcrumb path should remain visible when there's enough horizontal space." VS Code never collapses at all |
+| 2 | Reserve the `…` first | It is the only route back to what is about to be hidden, so it outranks every segment it stands for |
+| 3 | Reserve the root (`~` or `/`) next | One character, and the only cell saying which anchor you are under. Reserving it *before* ancestors is also what keeps the strip monotonic under a drag — filling ancestors first meant widening the pane could take the `~` away |
+| 4 | Fill ancestors right-to-left, whole names only | A name that does not fit goes to the menu; what remains is always an unbroken run ending at the current folder, because a gap *between* two shown cells names a parent that is not the parent |
+| 5 | Only the current folder ever truncates its text | And only when it alone exceeds the strip. `splitLabel`, so the tail survives — the app's one truncation rule, now applied to one cell instead of four |
+
+At the 180px floor this bottoms out at `… / olya-merin`, which is exactly what
+Carbon prescribes for the narrowest viewport ("start with the overflow first,
+followed by one breadcrumb"), what Atlassian calls the end of its degradation
+ladder ("only the most recent item remains"), and what VS Code exposes as a
+permanent setting (`breadcrumbs.filePath: "last"`).
+
+**Rejected.** VS Code's horizontally scrolling strip with the tail pinned
+(`DomScrollableElement` + `reveal(last)`) is the cleanest design in the survey
+and needs an affordance and a gesture this pane cannot spare. Nautilus's
+per-ancestor middle ellipsis (7 characters, `PANGO_ELLIPSIZE_MIDDLE`) is a real
+precedent for the old behaviour but is paid for by a path bar that scrolls;
+dropping the ancestor whole says the same thing without inventing a directory
+name that does not exist. A per-item character cap (Fluent's 30 characters,
+GitLab Pajamas' 128px) assumes a container where 30 characters is a fraction of
+the width; the whole strip here is about 22.
+
+**Recovery, three ways**, because collapsing this hard is only safe if nothing
+is lost: the `…` opens a menu of the hidden folders, each still a link; the
+strip's `title` carries the full path; and the editable path bar (pencil, or
+`Ctrl+L`) takes a typed one. The menu rather than the tooltip alone is NN/g's
+rule — information a user needs in order to *act* has to be on screen, and
+hover is not available to everyone.
+
+**Sources.** NN/g [breadcrumb guidelines](https://www.nngroup.com/articles/breadcrumbs/)
+and [tooltip guidelines](https://www.nngroup.com/articles/tooltip-guidelines/);
+[IBM Carbon breadcrumb](https://carbondesignsystem.com/components/breadcrumb/usage/)
+and [overflow content](https://carbondesignsystem.com/patterns/overflow-content/);
+[Adobe Spectrum](https://spectrum.adobe.com/page/breadcrumbs/);
+[Microsoft Fluent 2](https://fluent2.microsoft.design/components/web/react/core/breadcrumb/usage);
+[WinUI BreadcrumbBar](https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/breadcrumbbar);
+[GitHub Primer](https://primer.style/components/breadcrumbs);
+[Atlassian](https://atlassian.design/components/breadcrumbs/breadcrumbs/usage);
+[USWDS](https://designsystem.digital.gov/components/breadcrumb/);
+[GitLab Pajamas](https://design.gitlab.com/components/breadcrumb/);
+[Grafana's truncation spec](https://github.com/grafana/grafana/issues/62266);
+GNOME Nautilus `src/nautilus-pathbar.c`; VS Code
+`src/vs/base/browser/ui/breadcrumbs/breadcrumbsWidget.ts`.
 
 ### 5.8 Iconography — no character ever does an icon's job
 

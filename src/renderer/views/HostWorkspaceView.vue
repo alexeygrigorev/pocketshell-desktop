@@ -235,20 +235,38 @@ async function onRefreshUsage(): Promise<void> {
              hidden (ca79ae2). Now that Ports/Usage/Settings live in the panel
              HEADER rather than its foot, the rail has to carry them too, or
              collapsing the panel would take all three off screen.
-             It carries the same OVERFLOW control the header does, not three
-             icons: a 36px rail has no room for text, and inventing a glyph
+
+             It MIRRORS the header's arrangement rather than inventing its own:
+             the overflow control for Ports and Usage, then the gear. Not three
+             icons — a 36px rail has no room for text, and inventing a glyph
              apiece for "ports" and "usage" is precisely the memory test
-             ca79ae2 refused. The menu opens with words either way. -->
+             ca79ae2 refused, so those two keep their words inside the menu. The
+             gear is the exception for the same reason it is one in the header:
+             it is already this app's settings mark everywhere else.
+
+             The gear is here BECAUSE it left the menu. When Settings was a menu
+             row, the rail got it for free from the one overflow button; pulling
+             it out of the list would otherwise have made the collapsed panel
+             offer strictly less than the expanded one, which is the single
+             failure this rail exists to prevent.
+
+             There is no `+` here on purpose. The rail is an ESCAPE HATCH — show
+             the panel, go back, reach the host overlays — and creating a
+             session is a thing you do while looking at the list you are about
+             to add to. One click on the top button brings that list back. -->
         <div class="rail-sep" />
         <button
           ref="railMenuButton"
           class="icon-btn"
-          title="Ports, Usage, Settings"
+          title="Ports, Usage"
           aria-haspopup="menu"
           :aria-expanded="railMenuAnchor !== null"
           @click="toggleRailMenu"
         >
           <AppIcon name="more-horizontal" :size="14" />
+        </button>
+        <button class="icon-btn" title="Settings" @click="panel = 'settings'">
+          <AppIcon name="settings" :size="14" />
         </button>
         <HostActionsMenu
           v-if="railMenuAnchor"

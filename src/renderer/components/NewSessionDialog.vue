@@ -35,6 +35,26 @@ import { displayPath, joinPosix, useProjectsStore } from '../stores/projects';
 import type { RepoEntry } from '../../main/projects/repos';
 import type { StartSessionResult } from '../../main/projects/ProjectsService';
 
+const props = withDefaults(
+  defineProps<{
+    /**
+     * An ABSOLUTE host directory to open the browser AT, instead of `$HOME`.
+     *
+     * Set by the `+` on a session-panel ROOT row (`git`, `tmp`, …), where the
+     * user has already said which root and only the folder under it is still
+     * open. Null — the general `+`, and every other caller — keeps the original
+     * behaviour: land on `$HOME`, or stay wherever the browser was left.
+     *
+     * It must be absolute. The browse goes over SFTP, which runs no shell, so a
+     * `~` in here would name a literal directory called `~`; the panel resolves
+     * its root keys with `rootHostPath` before passing them down and does not
+     * open this dialog at all when that resolution fails.
+     */
+    startIn?: string | null;
+  }>(),
+  { startIn: null },
+);
+
 const emit = defineEmits<{
   /** The session is live on the host; open it. */
   started: [session: string];
@@ -145,7 +165,26 @@ const alreadyOnHost = computed(() => selectedRepoEntry.value?.local != null);
 
 onMounted(async () => {
   if (!connId.value) return;
-  await projects.loadHome(connId.value);
+  if (props.startIn) {
+    // `$HOME` is still resolved, because the name preview and every displayed
+    // path are written relative to it — but the browser lands on the ROOT the
+    // user pressed `+` on rather than on home, which is the whole point of the
+    // prop.
+    //
+    // `cwd` is cleared FIRST, and that is not tidiness. The browser's cwd lives
+    // in the projects STORE, so it survives this dialog closing: without the
+    // clear, a browse that fails — a registered root that is not on this host,
+    // which is a state the panel renders deliberately — would leave the picker
+    // pointed at wherever it was left last time, and `Start session` would
+    // cheerfully create a session in a folder the user never chose. Cleared, a
+    // failed browse leaves no target at all, the Start button stays dead, and
+    // `browseError` says why.
+    projects.cwd = '';
+    await projects.ensureHome(connId.value);
+    await projects.browse(connId.value, props.startIn);
+  } else {
+    await projects.loadHome(connId.value);
+  }
   await projects.loadRepos(connId.value);
 });
 

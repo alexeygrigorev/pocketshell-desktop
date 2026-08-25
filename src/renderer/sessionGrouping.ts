@@ -771,6 +771,39 @@ export function directoryKey(folderPath: string, home: string | null): string {
 }
 
 /**
+ * The ABSOLUTE host path a ROOT KEY names, or null when it names none.
+ *
+ * This is the inverse of the home-relative rewrite {@link directoryKey}
+ * performs, and it exists for exactly one caller: the `+` on a root row, which
+ * has to hand a real directory to the folder picker. A root key is a GROUPING
+ * key — `~/git` — and `~` is a shell's expansion. The picker browses over SFTP,
+ * which runs no shell, so `~/git` passed through as-is names a directory that
+ * does not exist and the browse fails with a confusing "no such file".
+ *
+ * Null rather than a guess in the three cases where there is no honest answer:
+ *
+ *   - the `other` bucket is not a directory at all — it is where paths that
+ *     matched no root went, and there is nothing to create a session *in*;
+ *   - {@link UNTRACKED_PATH} is the same, one level down;
+ *   - a `~`-rooted key on a host whose `$HOME` we never learned. Substituting
+ *     the literal `~` would put the session somewhere the user did not pick.
+ *
+ * A configured root that resolved to an absolute path outside `$HOME`
+ * (`/srv/apps`) passes straight through: that spelling needs no expansion.
+ */
+export function rootHostPath(key: string, home: string | null): string | null {
+  if (key === OTHER_ROOT || key === UNTRACKED_PATH) return null;
+  const homePrefix = normaliseHome(home);
+  if (key === '~' || key === '$HOME') return homePrefix;
+  if (key.startsWith('~/')) {
+    if (homePrefix === null) return null;
+    const rest = key.slice(2).replace(/\/+$/, '');
+    return rest ? `${homePrefix}/${rest}` : homePrefix;
+  }
+  return key.startsWith('/') ? key : null;
+}
+
+/**
  * Recover a session's ROOT from its NAME when no working directory was
  * reported at all.
  *

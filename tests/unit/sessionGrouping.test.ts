@@ -18,6 +18,7 @@ import {
   resolveRoots,
   rootForPath,
   rootFromSessionName,
+  rootHostPath,
   SESSION_ROOTS_MAX,
   type SessionRootFolder,
 } from '../../src/renderer/sessionGrouping';
@@ -909,5 +910,63 @@ describe('groupSessionsIntoRoots with registered roots', () => {
       '~/git',
     ]);
     expect(roots.map((r) => r.label)).toEqual(['git']);
+  });
+});
+
+describe('rootHostPath', () => {
+  /**
+   * The inverse of `directoryKey`, and the reason the session panel's per-root
+   * `+` can hand the folder picker a directory that exists.
+   *
+   * The bug it prevents is specific: the picker browses over SFTP, which runs
+   * no shell, so a `~` reaching it is a literal directory name. A root key is
+   * `~/git` by construction — that spelling is what folds tmux's two forms of
+   * one directory into a single node — so something has to expand it, once, in
+   * a place both the panel and the tests can see.
+   */
+  const home = '/home/alexey';
+
+  it('expands a home-relative root key against $HOME', () => {
+    expect(rootHostPath('~/git', home)).toBe('/home/alexey/git');
+    expect(rootHostPath('~/git/work', home)).toBe('/home/alexey/git/work');
+  });
+
+  it('round-trips with directoryKey, which is the property that matters', () => {
+    const absolute = '/home/alexey/git';
+    expect(rootHostPath(directoryKey(absolute, home), home)).toBe(absolute);
+  });
+
+  it('resolves the bare home key to $HOME itself', () => {
+    expect(rootHostPath('~', home)).toBe(home);
+  });
+
+  it('passes an absolute root outside $HOME straight through', () => {
+    // A registered `/srv/apps` keys absolutely, because there is nothing to
+    // rewrite it against — and nothing to expand either.
+    expect(rootHostPath('/srv/apps', home)).toBe('/srv/apps');
+  });
+
+  it('has no answer for the `other` bucket or an untracked session', () => {
+    // Neither is a directory. The panel renders no `+` on `other` at all;
+    // this is the guard behind that decision rather than a duplicate of it.
+    expect(rootHostPath(OTHER_ROOT, home)).toBeNull();
+    expect(rootHostPath(UNTRACKED_PATH, home)).toBeNull();
+  });
+
+  it('refuses to expand `~` when $HOME is unknown, rather than guessing', () => {
+    // The failure the panel shows as a disabled `+`. Substituting a literal
+    // `~` would create the session in a directory called `~` under wherever
+    // SFTP happened to be — silently, and only discoverable later.
+    expect(rootHostPath('~/git', null)).toBeNull();
+    expect(rootHostPath('~', null)).toBeNull();
+    expect(rootHostPath('~', '   ')).toBeNull();
+  });
+
+  it('tolerates a trailing slash on $HOME, which normaliseHome strips', () => {
+    expect(rootHostPath('~/git', '/home/alexey/')).toBe('/home/alexey/git');
+  });
+
+  it('rejects a relative key, which is not a root anything can resolve', () => {
+    expect(rootHostPath('git', home)).toBeNull();
   });
 });

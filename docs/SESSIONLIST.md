@@ -84,6 +84,55 @@ docs/WORKSPACE.md §6.
 
 ---
 
+## 0a. Revision 5 — creation moves onto the rows (implemented)
+
+The user, on the panel:
+
+> "I also want to have a `+` near git, near `tmp` (another project root in
+> hetzner) and just a plus to create a random session in any place. then we
+> don't need 'new session' button anymore"
+
+Three changes, and the third is only safe because the first two ship with it.
+
+**A `+` on every root row.** It opens the same folder-first picker the foot
+button opened, rooted at THAT root: the user has said which root, and the
+folder under it is still an open question, so the picker still opens — it just
+opens one level in. It does not guess a directory from a root, because guessing
+is how a session ends up somewhere the user did not choose.
+
+The root key is home-relative by construction (§8) and the picker browses over
+SFTP, which runs no shell, so `~/git` has to be expanded before it is handed
+over — `rootHostPath` in `sessionGrouping.ts`, the inverse of `directoryKey`.
+Two cases have no honest answer and are handled differently on purpose: the
+`other` bucket gets **no `+` at all** (it is where paths that matched no root
+went, not a directory), and a `~`-keyed root on a host whose `$HOME` neither
+resolved nor could be inferred from the session paths gets a **disabled** `+`
+whose tooltip says why. A control that vanishes on a failed fetch reads as a
+feature that is not there.
+
+**Revealed on hover or focus, never persistent.** One `+` per root is a column
+of identical marks down a panel whose whole job is to be scanned. It is
+`opacity`, not `display`, so the square is always laid out and the label never
+reflows under the cursor; `:focus-visible` reveals it, so it is reachable AND
+visible by keyboard; `@media (hover: none)` shows it unconditionally. It is
+deliberately **not** conditioned on whether the root is empty — an empty
+registered root is the `+`'s most useful case, but `directories.length` moves
+under the refresh timer, and keying visibility off it is the same trap §3a
+records about expansion state.
+
+**A general `+` in the header strip**, opening the picker with nothing
+pre-filled. This is what makes the removal safe: it is on screen whatever the
+panel holds, including a host with no sessions at all, so there is never a
+window with no way to create a session.
+
+**The foot button is deleted.** It spent a bordered 44px row, permanently, on
+one action — and it answered "where?" with a browse starting at `$HOME` even
+when the user had just pointed at `git`.
+
+**What did NOT change: the panel's `+` does not choose an agent.** See §13.
+
+---
+
 ## Revision 3, and why revisions 1 and 2 were wrong
 
 **What changes.** The directory level stops being conditional. Every
@@ -362,11 +411,18 @@ A `<button>`, so collapse is keyboard-reachable and `aria-expanded` is real.
 | 2 | Status dot | The same 8px dot the session row uses, `--success` when **any** session under the root is attached. This is the collapsed root's only way to say "something live is in here", which is the state where it matters |
 | 3 | Root label | `--font-ui` `--fs-300` `--fw-semibold`, `flex: 0 1 auto; min-width: 0`, end-ellipsis. The `other` bucket renders `--fw-regular` `--fg-secondary` instead: it is a bucket, not a directory the user could navigate to |
 | 4 | Count | Bare integer, `--fs-100` `--fg-muted` `tabular-nums`, `margin-left: auto`. **Not** `· 3 sessions` — the number is the whole message, and the phrase form retreats to the header tooltip |
+| 5 | New session | **Revision 5.** `AppIcon name="plus"` at 12px in an `.icon-btn.sm`, trailing the count. `@click.stop`, `opacity: 0` until the row is hovered or the button itself is `:focus-visible`. Absent on `other`; disabled when `rootHostPath` cannot resolve the root. See §0a |
 
 **Header tooltip:** `~/git` + `3 sessions`. The path is written home-relative
 because the grouping key *is* home-relative (§8). The `other` header says
 `sessions outside $HOME, or with no known folder` instead, since it has no one
 path to name.
+
+**Revision 4 note on field 1:** the disclosure mark is gone with the collapse,
+and revision 5's `+` is not its replacement. A chevron promises a STATE the row
+does not have; a `+` promises an ACTION, which it does. The row itself is still
+inert, and still takes no hover background — the only `:hover` rule it carries
+reveals the button inside it.
 
 ### 3b. Directory header row — every directory, whatever it holds
 
@@ -978,3 +1034,52 @@ one ahead of time is a legitimate thing to want.
 Rejections are sentences, not a silent no-op, and the two reasons a
 well-formed path can still be refused — already registered, list is full — are
 told apart, because they call for different next actions.
+
+---
+
+## 13. Why the panel's `+` does not ask which agent
+
+Two dialogs exist and they were deliberately kept apart (commit `00eb3e7`):
+
+| Dialog | Question it answers |
+|---|---|
+| `NewSessionDialog` | **which folder** — browse, create or clone one |
+| `LaunchSessionDialog` | **which agent**, in a folder already chosen |
+
+Revision 5's `+` controls could plausibly ask both, and they do not. They open
+`NewSessionDialog` and stop. The reasons are ordered from cheapest to
+load-bearing:
+
+1. **The second question already has a better place to be asked.** Creating
+   from the panel lands the user in that folder's workspace, on the new
+   session's tab, where the workspace's own `+` answers "which agent" one click
+   away — for this session and every later one. Chaining would ask it twice.
+
+2. **`NewSessionDialog` ends on a banner that must not be interrupted.** Its
+   outcome does not auto-dismiss, deliberately: `via: 'tmux-fallback'` means
+   the session was created with **no memory cap**, and `code: 'folder-missing'`
+   guards a real helper trap. A chained dialog would either preempt that or
+   stack on top of it.
+
+3. **The two have incompatible ORDERINGS, and this is the real objection.**
+   `NewSessionDialog` creates the session when Start is pressed.
+   `LaunchSessionDialog`'s whole design is that it creates nothing — it emits a
+   validated choice and the caller creates, so "cancel costs nothing" and a
+   malformed launch is caught *before* anything exists on the host. That
+   property is the fix for the bug it was written to replace. Chaining
+   folder → agent AFTER the create inverts it: cancelling the agent step would
+   leave a stray session behind. Chaining it before would mean deferring
+   `NewSessionDialog`'s commit, which is the one path all three of its routes
+   converge on.
+
+4. **The launch mechanism is not the panel's to run.** Setting `@ps_agent_kind`
+   means typing the wrapper command *inside* the session once its PTY exists,
+   which is why `pendingLaunch` and `LAUNCH_TIMEOUT_MS` live in
+   `FolderWorkspaceView` next to the terminal. The panel has no terminal. A
+   second copy of the trickiest part of that flow is exactly the drift the two
+   dialogs were split to avoid.
+
+**If it ever should chain,** the shape is: `NewSessionDialog` gains a mode that
+resolves a folder and *emits* it without starting anything, the panel then
+raises `LaunchSessionDialog`, and only the confirm creates. That is a change to
+the commit path, not a wiring change, and it is why it is not in revision 5.
