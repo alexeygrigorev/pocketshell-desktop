@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { TmuxClientPool } from '../../src/main/ssh/TmuxClientPool';
+import { TmuxClientPool, switchFailureReason } from '../../src/main/ssh/TmuxClientPool';
 import type { SshService } from '../../src/main/ssh/SshService';
+import {
+  SWITCH_CLIENT_NOT_READY_EXIT,
+  SWITCH_NO_CLIENT_EXIT,
+} from '../../src/shared/attachCommand';
 import type { ExecResult, ShellId } from '../../src/shared/types';
 
 /**
@@ -20,7 +24,7 @@ interface FakeCall {
   detail: string;
 }
 
-function makeSsh(opts: { switchExit?: () => number } = {}): {
+function makeSsh(opts: { switchExit?: () => number; switchStderr?: string } = {}): {
   ssh: SshService;
   calls: FakeCall[];
   /** Ids handed out by openTrackedShell, in order. */
@@ -40,7 +44,7 @@ function makeSsh(opts: { switchExit?: () => number } = {}): {
     exec: async (_connectionId: string, command: string): Promise<ExecResult> => {
       calls.push({ kind: 'exec', detail: command });
       const exitCode = opts.switchExit ? opts.switchExit() : 0;
-      return { stdout: '', stderr: '', exitCode };
+      return { stdout: '', stderr: exitCode === 0 ? '' : (opts.switchStderr ?? ''), exitCode };
     },
     openTrackedShell: async (
       _connectionId: string,
@@ -207,6 +211,121 @@ describe('TmuxClientPool', () => {
     expect(pool.currentSession('c1')).toBeNull();
     const after = await pool.attach('c1', 'beta', sink);
     expect(after.switched).toBe(false);
+  });
+});
+
+/**
+ * The settle budget, which is the fix for "switching makes no difference".
+ *
+ * A join publishes its tty as its FIRST act and only becomes a tmux client
+ * once `tmuxctl` — Python — has started and exec'd `tmux attach`, ~330 ms
+ * later on a loopback fixture and 1.5-2 s on a real host. In that window every
+ * signal the pool can see says the fast path is available, and `switch-client`
+ * alone knows better. The pool used to read that as "this host cannot switch",
+ * close the PTY and re-join — which opened an identical window, so a user
+ * clicking through sessions at ordinary speed never got a single switch and
+ * every click paid the full re-attach. The budget is how the switch is told it
+ * may wait for the client it is about to be handed.
+ */
+describe('TmuxClientPool — waiting out a join before declaring failure', () => {
+  const waitOf = (command: string): number => {
+    const tries = Number(/n=(\d+);/.exec(command)?.[1]);
+    return Number.isFinite(tries) ? tries : -1;
+  };
+
+  it('lets the first switch after a join wait for the client', async () => {
+    const { ssh, calls } = makeSsh();
+    const pool = new TmuxClientPool(ssh);
+
+    await pool.attach('c1', 'alpha', sink);
+    await pool.attach('c1', 'beta', sink);
+
+    const exec = calls.find((c) => c.kind === 'exec');
+    // More than the single look a zero budget buys: this switch is allowed to
+    // outlast a join that has not finished attaching.
+    expect(waitOf(exec!.detail)).toBeGreaterThan(1);
+  });
+
+  it('stops waiting once a switch has proved the client exists', async () => {
+    // A client that has been switched once is known to tmux. A later switch
+    // that cannot find it has lost it — the user detached from inside tmux —
+    // and waiting for it back would only delay the re-join.
+    const { ssh, calls } = makeSsh();
+    const pool = new TmuxClientPool(ssh);
+
+    await pool.attach('c1', 'alpha', sink);
+    await pool.attach('c1', 'beta', sink); // proves the client
+    await pool.attach('c1', 'gamma', sink);
+
+    const execs = calls.filter((c) => c.kind === 'exec');
+    expect(waitOf(execs[0]!.detail)).toBeGreaterThan(1);
+    expect(waitOf(execs[1]!.detail)).toBe(1);
+  });
+
+  it('gives each fresh join its own budget', async () => {
+    // The re-join a failed switch forces is a NEW client with a NEW window to
+    // come up in. Carrying the old client's "proven" flag over would make the
+    // very next switch fail for exactly the reason the budget exists to cover.
+    let fail = true;
+    const { ssh, calls } = makeSsh({
+      switchExit: () => {
+        const code = fail ? 1 : 0;
+        fail = false;
+        return code;
+      },
+    });
+    const pool = new TmuxClientPool(ssh);
+
+    await pool.attach('c1', 'alpha', sink);
+    await pool.attach('c1', 'beta', sink); // fails -> re-joins
+    await pool.attach('c1', 'gamma', sink);
+
+    const execs = calls.filter((c) => c.kind === 'exec');
+    expect(waitOf(execs.at(-1)!.detail)).toBeGreaterThan(1);
+  });
+});
+
+describe('TmuxClientPool — making the fallback visible', () => {
+  it("prints tmux own reason into the pane it re-joins", async () => {
+    // "It still is not fast" was the entire bug report, because a fallback
+    // that only writes a log line is a fallback nobody can report. The re-join
+    // says why, in the terminal the user is already looking at.
+    const { ssh, calls } = makeSsh({
+      switchExit: () => 1,
+      switchStderr: "can't find session: beta\n",
+    });
+    const pool = new TmuxClientPool(ssh);
+
+    await pool.attach('c1', 'alpha', sink);
+    await pool.attach('c1', 'beta', sink);
+
+    const rejoin = calls.filter((c) => c.kind === 'open').at(-1)!.detail;
+    expect(rejoin).toContain('[PocketShell]');
+    expect(rejoin).toContain("can'\\''t find session: beta");
+    expect(rejoin).toContain('re-joining');
+  });
+
+  it('explains the two codes tmux never says itself', async () => {
+    for (const [exitCode, expected] of [
+      [SWITCH_NO_CLIENT_EXIT, 'no tmux client'],
+      [SWITCH_CLIENT_NOT_READY_EXIT, 'never came up'],
+    ] as const) {
+      expect(switchFailureReason(exitCode, '')).toContain(expected);
+    }
+    // And tmux's own words win wherever it supplied any, because they are what
+    // a user can search for.
+    expect(switchFailureReason(1, "can't find client: /dev/pts/19\n")).toBe(
+      "can't find client: /dev/pts/19",
+    );
+  });
+
+  it('leaves an ordinary first join unannotated', async () => {
+    const { ssh, calls } = makeSsh();
+    const pool = new TmuxClientPool(ssh);
+
+    await pool.attach('c1', 'alpha', sink);
+
+    expect(calls.find((c) => c.kind === 'open')!.detail).not.toContain('[PocketShell] %s');
   });
 });
 
