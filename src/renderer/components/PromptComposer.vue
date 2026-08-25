@@ -63,12 +63,17 @@ import OverlayPanel from './OverlayPanel.vue';
 import DoodleCanvas from './DoodleCanvas.vue';
 import RemoteImagePicker from './RemoteImagePicker.vue';
 import {
+  attachmentDisplayName,
   COMPOSER_STRINGS,
   insertAtCaret,
   insertCommandText,
   railToggle,
   slashQueryFor,
 } from '../../shared/composerText';
+import {
+  absoluteAttachmentPath,
+  replaceStagedAttachment,
+} from '../../shared/composerAttachments';
 import {
   composerTiming,
   deliverPayload,
@@ -488,8 +493,24 @@ async function pasteFromSystemClipboard(): Promise<void> {
   await stageFiles(files);
 }
 
+/**
+ * Only a drag carrying FILES may light this up.
+ *
+ * It used to accept any drag at all, which was harmless while nothing else in
+ * the window was draggable. Tabs are now (docs/WORKSPACE.md §15), and the tab
+ * strip sits directly above this card — so dragging a tab past the composer
+ * made it announce itself as a drop target for something it cannot accept. The
+ * `drop` handler already found no files and did nothing; what was wrong was the
+ * promise, not the outcome.
+ *
+ * `types.includes('Files')` is the standard test and is available during
+ * `dragover`, unlike `dataTransfer.files`, which the browser deliberately keeps
+ * empty until the drop. A tab drag carries only this app's own mime type, so it
+ * fails the test without either side having to know about the other.
+ */
 function onDragOver(e: DragEvent): void {
   if (!e.dataTransfer) return;
+  if (!Array.from(e.dataTransfer.types).includes('Files')) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = 'copy';
   dragActive.value = true;
@@ -511,28 +532,62 @@ async function onDrop(e: DragEvent): Promise<void> {
 // ---------------------------------------------------------------------------
 // Doodle / annotate
 //
-// Four sources, one canvas. Whatever the origin, the image reaches
-// DoodleCanvas as a `data:` URL and leaves it as PNG bytes, which drop
-// straight into the `{kind:'bytes'}` staging path the clipboard already uses.
-// No new upload code, no new remote-path logic — an annotated screenshot is
-// an attachment like any other by the time it leaves this component.
+// FIVE sources, one canvas. Whatever the origin, the image reaches
+// DoodleCanvas as a URL and leaves it as PNG bytes, which drop straight into
+// the `{kind:'bytes'}` staging path the clipboard already uses. No new upload
+// code, no new remote-path logic — an annotated screenshot is an attachment
+// like any other by the time it leaves this component.
+//
+// The fifth source is an image the user ALREADY ATTACHED, and it is the one
+// that behaves differently on the way out. The other four produce a NEW tile;
+// this one REPLACES an existing one, because "annotate the screenshot I just
+// pasted" is an edit, not a second attachment. See `replaceWithAnnotation`
+// for why that has to be a swap in place rather than a remove-and-reattach.
 // ---------------------------------------------------------------------------
 
-type DoodleStep = 'closed' | 'source' | 'remote' | 'draw';
+type DoodleStep = 'closed' | 'source' | 'loading' | 'remote' | 'draw';
 
 const doodleStep = ref<DoodleStep>('closed');
 const doodleBackdrop = ref<string | null>(null);
 const doodleName = ref<string | null>(null);
 const doodleError = ref<string | null>(null);
 
+/**
+ * The remote path of the staged attachment this drawing will REPLACE, or null
+ * when the drawing is a new attachment.
+ *
+ * A path rather than an index: the tile list is the user's, and it can change
+ * shape under a long-running upload. Matching on identity means a replacement
+ * either lands on the right tile or lands nowhere at all, where an index could
+ * quietly overwrite whatever slid into that position.
+ */
+const doodleReplacing = ref<string | null>(null);
+
+/** The annotated PNG is on its way to the host; the sheet stays open for it. */
+const doodleSaving = ref(false);
+
+/**
+ * The live sheet, for the one thing the parent cannot decide on its own:
+ * whether closing is safe. See `dismissDoodle`.
+ *
+ * Typed by the one method it is reached for rather than by
+ * `InstanceType<typeof DoodleCanvas>`: the SFC's instance type resolves to
+ * `any` outside vue-tsc, which turns every use of it into an unsafe-call lint
+ * error. Naming the contract explicitly is both stricter and more honest about
+ * what the parent is allowed to do with the child.
+ */
+const doodleCanvas = ref<{ requestClose: () => void } | null>(null);
+
 const doodleTitle = computed(() =>
   doodleStep.value === 'remote'
     ? 'Choose an image on the host'
-    : doodleStep.value === 'draw'
-      ? doodleBackdrop.value
-        ? 'Annotate'
-        : 'Doodle'
-      : 'Draw or annotate',
+    : doodleStep.value === 'loading'
+      ? 'Annotate'
+      : doodleStep.value === 'draw'
+        ? doodleBackdrop.value
+          ? 'Annotate'
+          : 'Doodle'
+        : 'Draw or annotate',
 );
 
 /**
@@ -572,6 +627,7 @@ function openDoodle(): void {
   doodleBackdrop.value = null;
   doodleName.value = null;
   doodleError.value = null;
+  doodleReplacing.value = null;
   doodleStep.value = 'source';
 }
 
@@ -580,6 +636,35 @@ function closeDoodle(): void {
   doodleBackdrop.value = null;
   doodleName.value = null;
   doodleError.value = null;
+  doodleReplacing.value = null;
+  doodleSaving.value = false;
+}
+
+/**
+ * Every way out of the doodle overlay, funnelled through the canvas.
+ *
+ * `OverlayPanel` closes on Escape and on a backdrop click, and until now both
+ * went straight to `closeDoodle`, which unmounts the sheet and takes the
+ * drawing with it — no confirmation, no undo, because undo lives inside the
+ * component that just disappeared. Backdrop clicks are the easy mouse error to
+ * make against a modal, and this modal is one the user may have spent a minute
+ * drawing in.
+ *
+ * The decision belongs to the canvas rather than here, because only the canvas
+ * knows whether there is anything to lose. It answers immediately for an empty
+ * sheet, so a doodle opened by mistake still closes with one Escape.
+ *
+ * This fixes the discard for EVERY doodle source, not just the annotate-an-
+ * attachment path that prompted it: the loss is the same whether the strokes
+ * were drawn over a pasted screenshot or over a blank sheet.
+ */
+function dismissDoodle(): void {
+  const canvas = doodleCanvas.value;
+  if (doodleStep.value === 'draw' && canvas) {
+    canvas.requestClose();
+    return;
+  }
+  closeDoodle();
 }
 
 function startBlank(): void {
@@ -647,17 +732,186 @@ async function onRemotePick(picked: { path: string; name: string }): Promise<voi
   }
 }
 
+/**
+ * Open an image the user ALREADY ATTACHED, so it can be marked up in place.
+ *
+ * ## Where the pixels come from, and why there are two answers
+ *
+ * Attachments are staged EAGERLY — `AttachmentStager` uploads the bytes when
+ * the file is pasted, dropped or picked, not when the prompt is sent — so by
+ * the time a tile exists the host already has an authoritative copy. That
+ * makes the remote read a correct fallback for every tile, including ones
+ * restored from localStorage in a later run of the app.
+ *
+ * But it is a round trip, and for the case the user actually hits most — a
+ * screenshot pasted five seconds ago — the exact same bytes are already in
+ * this renderer, held open by the object URL behind the tile's thumbnail. So
+ * the local preview is tried first: no network, no failure mode, instant even
+ * on a dead connection. The remote read only runs for tiles that never carried
+ * a preview (the paperclip picker attaches by path) or lost it to a restart.
+ *
+ * The remote path needs un-abbreviating first. The stager hands back `~/`-form
+ * display paths because that is the form worth pasting into a prompt, and SFTP
+ * has no shell to expand a tilde — see `absoluteAttachmentPath`.
+ */
+async function startFromAttachment(remotePath: string): Promise<void> {
+  const attachment = attachments.value.find((a) => a.remotePath === remotePath);
+  if (!attachment) return;
+
+  doodleError.value = null;
+  doodleBackdrop.value = null;
+  doodleName.value = attachment.displayName;
+  doodleReplacing.value = remotePath;
+
+  const preview = attachment.previewDataUrl;
+  if (preview !== undefined) {
+    doodleStep.value = 'draw';
+    doodleBackdrop.value = preview;
+    return;
+  }
+
+  // Only now is the overlay worth opening on its own: a remote read is the one
+  // branch slow enough to need somewhere to say so, and somewhere to put an
+  // error that is not the source chooser (which would be a confusing answer to
+  // "annotate this tile").
+  doodleStep.value = 'loading';
+  try {
+    const home = await api.sftp.realPath(props.connectionId, '.');
+    const bytes = await api.sftp.readBinary(
+      props.connectionId,
+      absoluteAttachmentPath(remotePath, home),
+    );
+    // A tile only reaches here when `classifyByName` called it an image, so the
+    // extension is a good enough mime hint; the decoder sniffs the truth.
+    doodleBackdrop.value = await bytesToDataUrl(bytes, mimeForName(attachment.displayName));
+    doodleStep.value = 'draw';
+  } catch (e) {
+    doodleError.value = e instanceof Error ? e.message : 'Could not open that image.';
+  }
+}
+
 /** The finished drawing joins the staged tiles as ordinary PNG bytes. */
 async function onDoodleCommit(result: {
   data: Uint8Array;
   dataUrl: string;
   name: string;
 }): Promise<void> {
+  const target = doodleReplacing.value;
+  if (target !== null) {
+    await replaceWithAnnotation(target, result);
+    return;
+  }
   closeDoodle();
   await stageSources(
     [{ kind: 'bytes', data: result.data, name: result.name, mimeType: 'image/png' }],
     [result.dataUrl],
   );
+}
+
+/**
+ * Upload the annotated PNG and swap it for the tile it was drawn from.
+ *
+ * ## Replace, not keep-alongside
+ *
+ * The user said "annotate the image I attached", which is a sentence about ONE
+ * image. Keeping both would double every attachment anyone marks up, and the
+ * prompt would then carry a clean copy and a scribbled copy of the same
+ * screenshot with nothing to tell the agent which one to believe. The
+ * annotated version supersedes the original, and the recovery path is the
+ * sheet's own undo stack while it is still open — which is why cancelling now
+ * asks before it throws that stack away.
+ *
+ * ## Why the swap has to be in place
+ *
+ * The remote paths are folded into the prompt in TILE ORDER at send time
+ * (§5.1). A draft that says "compare the first screenshot with the second" is
+ * a statement about this list's ordering, so annotating the first must not
+ * move it to the end — which is exactly what remove-then-reattach would do,
+ * and is why this does not simply call `removeAttachment` and `stage`.
+ *
+ * ## Why the staging call is here and not in the store
+ *
+ * The store's `stage` is a batch APPEND with a single-flight guard and its own
+ * error banner; none of those three things is right for this. A replacement is
+ * one file, it must land at a known index, and its failure belongs on the
+ * still-open sheet — where the drawing survives and Attach can simply be
+ * pressed again — rather than in a banner behind a modal the user cannot see
+ * past.
+ *
+ * ## What happens to the original on the host
+ *
+ * Nothing, deliberately. It stops being referenced by any tile, and
+ * `AttachmentRetentionPolicy` is the thing that owns the lifetime of files in
+ * `~/.pocketshell/attachments` — it keeps the newest 20 per scope and expires
+ * the rest. Deleting eagerly would mean a new privileged IPC channel that can
+ * remove remote files, to reclaim a screenshot inside a directory that already
+ * prunes itself, and the pruner's 24-hour protect window means such a delete
+ * would be the ONLY way that file could go early. Not worth the channel.
+ */
+async function replaceWithAnnotation(
+  target: string,
+  result: { data: Uint8Array; dataUrl: string; name: string },
+): Promise<void> {
+  doodleError.value = null;
+  doodleSaving.value = true;
+  try {
+    const staged = await api.attachments.stage({
+      connectionId: props.connectionId,
+      scopeKey: props.sessionName,
+      sources: [
+        { kind: 'bytes', data: result.data, name: result.name, mimeType: 'image/png' },
+      ],
+    });
+    const path = staged.paths[0];
+    if (path === undefined) {
+      doodleError.value =
+        staged.error ?? COMPOSER_STRINGS.attachmentFailed('the upload did not land');
+      return;
+    }
+
+    const session = composer.ensure(key.value);
+    const superseded = session.attachments.find((a) => a.remotePath === target)?.previewDataUrl;
+    const next = replaceStagedAttachment(session.attachments, target, {
+      remotePath: path,
+      displayName: attachmentDisplayName(path),
+      mimeType: 'image/png',
+      previewDataUrl: result.dataUrl,
+    });
+    // The tile vanished under the upload. Unreachable through the UI today —
+    // the sheet is modal, so neither `×` nor Discard nor Send is clickable
+    // while it is open — but if it ever becomes reachable, doing nothing is
+    // the right answer: re-adding an attachment the user has just removed
+    // would be a worse surprise than losing a drawing they walked away from.
+    if (next === null) {
+      closeDoodle();
+      return;
+    }
+    session.attachments = next;
+    // Direct assignment, then an explicit flush. The store debounces its own
+    // writes through a private scheduler; this reaches the same blob through
+    // the public one. See the report note about folding this into a
+    // `replaceAttachment` store action once that file is free.
+    composer.persistNow();
+    // The superseded tile was the last holder of its object URL, and an object
+    // URL pins the whole decoded image until it is revoked. Annotating a 4 MB
+    // screenshot would otherwise keep the original resident for the life of the
+    // window ALONGSIDE the annotated copy that replaced it — and re-annotating
+    // repeatedly would stack one such copy per pass. Safe here specifically
+    // because the sheet has already finished with it: the backdrop was decoded
+    // into an `HTMLImageElement` at load time and the canvas is about to
+    // unmount.
+    if (superseded !== undefined && superseded.startsWith('blob:')) {
+      URL.revokeObjectURL(superseded);
+    }
+    closeDoodle();
+  } catch (e) {
+    doodleError.value =
+      e instanceof Error
+        ? COMPOSER_STRINGS.attachmentFailed(e.message)
+        : COMPOSER_STRINGS.attachmentFailed('upload failed');
+  } finally {
+    doodleSaving.value = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -729,10 +983,20 @@ function openComposer(): void {
  *
  * `dismiss` rather than `setMode('hidden')` because everything routed here is
  * the USER putting the composer away — Escape, the chord, the toggle, the
- * card's close — and that suppresses the typing intercept until an explicit
- * summons (§12.2). The one close that does NOT come through here is
- * `closeComposerOnSend`, which lives in the store and deliberately leaves
- * typing armed.
+ * card's close — and that is a fact worth naming even now that it no longer
+ * changes what the next keystroke does (§12.2).
+ *
+ * It USED to suppress the typing intercept, so that continuing to type after
+ * Escape reached the shell. The user reported that as a bug and they are right:
+ * Escape's job is to put the panel away, and typing afterwards means the same
+ * thing it means from any other closed state. The plain-terminal hatch moved to
+ * a press in the terminal, which is the gesture that actually says "I am
+ * working at the shell" — see the store's `typingSuppressed`.
+ *
+ * The focus half is what makes the two coexist. Escape hands the keyboard back
+ * to the pane, so every NON-printable key (Ctrl-C, the arrows, Enter, tmux's
+ * prefix) reaches the shell immediately; only a printable one brings the panel
+ * back, carrying the character.
  */
 function hideComposer(): void {
   composer.dismiss();
@@ -769,10 +1033,25 @@ function hideComposer(): void {
  * stealing it back to the terminal would fight the user's own pointer.
  */
 function onOutsidePointerDown(e: MouseEvent): void {
-  if (mode.value === 'hidden' || !isEmpty.value) return;
   const root = rootEl.value;
   const target = e.target;
-  if (!root || !(target instanceof Node) || root.contains(target)) return;
+  const inside = root != null && target instanceof Node && root.contains(target);
+
+  if (inside) {
+    // The counterpart of a press in the terminal, which arms the suppression
+    // (docs/COMPOSER.md §12.2). Pressing in here says "I am working in the
+    // composer", so a suppression armed a moment ago at the shell stops
+    // speaking — the intent follows the pointer, and the pointer just moved.
+    //
+    // Checked BEFORE the early returns below, deliberately: those exist to
+    // decide whether an OUTSIDE press dismisses, and an inside press must still
+    // be heard when the card is closed (the pinned toggle is inside the root)
+    // or when the draft has content.
+    composer.allowTypingToOpen();
+    return;
+  }
+
+  if (mode.value === 'hidden' || !isEmpty.value) return;
   composer.setMode('hidden');
 }
 
@@ -1205,6 +1484,7 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
             :attachments="attachments"
             :disabled="state.sendInFlight"
             @remove="(p: string) => composer.removeAttachment(key, p)"
+            @annotate="startFromAttachment"
           />
         </div>
       </div>
@@ -1297,7 +1577,7 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
       <OverlayPanel
         :title="doodleTitle"
         size="md"
-        @close="closeDoodle"
+        @close="dismissDoodle"
       >
         <div v-if="doodleStep === 'source'" class="doodle-sources">
           <p v-if="doodleError" class="doodle-error">{{ doodleError }}</p>
@@ -1330,13 +1610,30 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
           @close="doodleStep = 'source'"
         />
 
-        <DoodleCanvas
-          v-else
-          :backdrop="doodleBackdrop"
-          :backdrop-name="doodleName"
-          @commit="onDoodleCommit"
-          @close="closeDoodle"
-        />
+        <!-- Fetching an attached image back off the host. Its own step rather
+             than a spinner over an empty canvas, because a blank sheet that
+             turns into a screenshot looks like the wrong thing opened, and a
+             failed read needs somewhere to be read that is not the source
+             chooser. -->
+        <div v-else-if="doodleStep === 'loading'" class="doodle-loading">
+          <p v-if="doodleError" class="doodle-error">{{ doodleError }}</p>
+          <p v-else class="muted">Opening {{ doodleName }}&hellip;</p>
+        </div>
+
+        <div v-else class="doodle-draw">
+          <!-- The sheet's own `loadError` covers a backdrop that would not
+               decode; this covers the upload on the way back out, which the
+               canvas has no way to know about. -->
+          <p v-if="doodleError" class="doodle-error">{{ doodleError }}</p>
+          <DoodleCanvas
+            ref="doodleCanvas"
+            :backdrop="doodleBackdrop"
+            :backdrop-name="doodleName"
+            :saving="doodleSaving"
+            @commit="onDoodleCommit"
+            @close="closeDoodle"
+          />
+        </div>
       </OverlayPanel>
     </div>
   </div>
@@ -1858,5 +2155,14 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
   margin: 0 0 var(--sp-1);
   font-size: var(--fs-200);
   color: var(--error);
+}
+/* The sheet's own layout is a column that must not be disturbed by the error
+   line above it, so the wrapper is a column too rather than a bare div. */
+.doodle-draw,
+.doodle-loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
 }
 </style>

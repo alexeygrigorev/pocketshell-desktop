@@ -54,6 +54,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import type { AppIconName } from './AppIcon.vue';
+import { doodleAttachmentName } from '../../shared/composerAttachments';
 import {
   arrowHead,
   constrainToAngle,
@@ -70,18 +71,38 @@ import {
 const props = withDefaults(
   defineProps<{
     /**
-     * The image to annotate, as a `data:` URL, or null for a blank canvas.
+     * The image to annotate, as a URL an `<img>` can load, or null for a blank
+     * canvas.
      *
-     * A data URL specifically, not an object URL: the renderer's CSP allows
-     * `data:` under img-src, and routing every source (clipboard, local file,
-     * remote file) through the same form means the backdrop path does not care
-     * where the image came from.
+     * Normally a `data:` URL: routing the clipboard, a local file and a remote
+     * file through one form means the backdrop path does not care where the
+     * image came from. The one exception is an image ALREADY STAGED as an
+     * attachment, whose tile thumbnail is an object URL minted from the very
+     * `File` the user dropped — re-encoding those bytes to base64 to satisfy a
+     * self-imposed rule would buy nothing, and `fetch`ing a `blob:` URL to do
+     * it is blocked by the renderer's `connect-src 'self'` anyway.
+     *
+     * Both forms are permitted by `img-src 'self' data: blob:` (see
+     * src/renderer/index.html) and — this is the part that matters — both are
+     * SAME-ORIGIN, so neither taints the canvas and `toBlob` still works. A
+     * cross-origin `http:` backdrop would load and then fail at export, which
+     * is why nothing here ever constructs one.
      */
     backdrop?: string | null;
     /** Original filename of the backdrop, used to name the attachment. */
     backdropName?: string | null;
+    /**
+     * The host is uploading the committed drawing right now.
+     *
+     * Owned by the parent because the upload is: this component's job ends at
+     * PNG bytes. It exists so the sheet can stay OPEN across the round trip
+     * when replacing an attachment, rather than closing optimistically and
+     * having nowhere to put the drawing if the upload fails — the same rule
+     * the composer's own send path follows (§16.1, #745).
+     */
+    saving?: boolean;
   }>(),
-  { backdrop: null, backdropName: null },
+  { backdrop: null, backdropName: null, saving: false },
 );
 
 const emit = defineEmits<{
@@ -780,6 +801,63 @@ function clear(): void {
   repaint();
 }
 
+// ---------------------------------------------------------------------------
+// Closing without losing the drawing
+// ---------------------------------------------------------------------------
+
+/**
+ * The "really throw this away?" state.
+ *
+ * Until this existed, every route out of the sheet except Attach destroyed the
+ * markup silently: Cancel, the overlay's `✕`, a stray click on the backdrop,
+ * and Escape. On a blank sheet that is merely annoying. On a screenshot the
+ * user attached, opened, and spent a minute drawing on, a mis-aimed click
+ * outside a modal — the single easiest mouse error there is — deleted all of
+ * it with no undo, because undo lives INSIDE the component that just
+ * unmounted.
+ *
+ * The guard is deliberately not a `window.confirm`: that blocks the renderer,
+ * looks nothing like the rest of the app, and cannot be tested. It is a bar in
+ * the sheet's own footer, which also keeps the drawing visible behind the
+ * question being asked about it.
+ *
+ * The rule is the app's usual one (§12.2): Escape never destroys work. So
+ * Escape ARMS the guard, and a second Escape dismisses the guard rather than
+ * confirming it — the safe direction on the key people press without reading.
+ * Discarding takes a deliberate click on a button that says Discard.
+ */
+const confirmingClose = ref(false);
+
+/** True once there is anything on the sheet worth a confirmation. */
+const isDirty = computed(() => !isEmpty.value);
+
+/**
+ * Ask to close. The parent routes EVERY dismissal through here — its own
+ * Cancel button, the overlay's `✕`, its backdrop click and its Escape — so
+ * there is exactly one place that decides whether work is about to be lost.
+ */
+function requestClose(): void {
+  // A second Escape (or `✕`) while the question is up answers "keep editing".
+  if (confirmingClose.value) {
+    confirmingClose.value = false;
+    return;
+  }
+  // An upload in flight owns the drawing until it lands; closing over the top
+  // of it would leave a committed annotation with nowhere to go.
+  if (props.saving) return;
+  if (!isDirty.value) {
+    emit('close');
+    return;
+  }
+  // A caret still open is part of the drawing: flush it so the confirmation is
+  // asked about what the user can actually see.
+  commitText();
+  confirmingClose.value = true;
+}
+
+/** The parent owns the overlay chrome, so it needs the same door. */
+defineExpose({ requestClose });
+
 function onKeydown(e: KeyboardEvent): void {
   // Ctrl/Cmd+Z only. Escape is the overlay's to handle, and it already does —
   // except while a text editor is open, where the textarea stops it first.
@@ -795,8 +873,10 @@ function attachmentName(): string {
     .replace(/[-:]/g, '')
     .replace(/\.\d+Z$/, '')
     .replace('T', '-');
-  const source = props.backdropName?.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]+/g, '-');
-  return source ? `annotated-${source}-${stamp}.png` : `doodle-${stamp}.png`;
+  // The stripping rules live in the pure module: re-annotating an already
+  // annotated attachment is a supported second pass, and the name it starts
+  // from carries decorations from both this surface and the stager.
+  return doodleAttachmentName(props.backdropName ?? null, stamp);
 }
 
 async function commit(): Promise<void> {
@@ -991,16 +1071,28 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <footer class="actions">
+    <!-- The confirmation REPLACES the action row rather than stacking above it,
+         so the buttons that answer the question are the only buttons there
+         are. Leaving Attach and Cancel live underneath a "discard?" prompt
+         would offer three answers to a two-answer question. -->
+    <footer v-if="confirmingClose" class="actions confirm">
+      <p class="hint warn">Discard this drawing? It cannot be recovered.</p>
+      <button class="btn" @click="confirmingClose = false">Keep editing</button>
+      <button class="btn danger" @click="emit('close')">Discard</button>
+    </footer>
+    <footer v-else class="actions">
       <p v-if="loadError" class="error">{{ loadError }}</p>
+      <p v-else-if="saving" class="hint">Uploading the annotated image&hellip;</p>
       <p v-else-if="editing" class="hint">Enter for a new line, Esc or Ctrl+Enter to finish</p>
       <p v-else-if="tool === 'text'" class="hint">Click the sheet to write; click text to edit it</p>
       <p v-else-if="tool === 'arrow' || tool === 'line'" class="hint">
         Drag from tail to head; hold Shift for 45&deg; steps
       </p>
       <p v-else class="hint">{{ backdropName || 'Blank sheet' }}</p>
-      <button class="btn" @click="emit('close')">Cancel</button>
-      <button class="btn primary" :disabled="busy" @click="commit">Attach</button>
+      <button class="btn" :disabled="saving" @click="requestClose">Cancel</button>
+      <button class="btn primary" :disabled="busy || saving" @click="commit">
+        {{ saving ? 'Saving…' : 'Attach' }}
+      </button>
     </footer>
   </div>
 </template>
@@ -1182,6 +1274,18 @@ onBeforeUnmount(() => {
 .error {
   color: var(--error);
 }
+/* The discard confirmation borrows the composer's "Not sent" banner treatment
+   rather than inventing one: same tokens, same meaning — a row that is asking
+   about losing something. */
+.actions.confirm {
+  padding: var(--sp-2);
+  background: var(--error-soft);
+  border: 1px solid var(--error);
+  border-radius: var(--r-md);
+}
+.hint.warn {
+  color: var(--fg);
+}
 .btn {
   height: var(--control-h);
   padding: 0 var(--sp-3);
@@ -1204,5 +1308,18 @@ onBeforeUnmount(() => {
 .btn:disabled {
   opacity: var(--disabled-opacity);
   cursor: default;
+}
+/* Outlined, not filled: the safe answer (Keep editing) is the plain button, so
+   the destructive one must not also be the loudest thing in the row. Same
+   treatment as the composer's own `.discard`. */
+.btn.danger {
+  background: transparent;
+  border-color: var(--error);
+  color: var(--error);
+  font-weight: var(--fw-medium);
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--error);
+  color: var(--on-accent);
 }
 </style>

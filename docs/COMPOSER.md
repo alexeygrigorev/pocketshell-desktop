@@ -1446,11 +1446,12 @@ it back (§26.1). This is the phone's rhythm, asked for explicitly.
 
 ## 27. The doodle / annotate surface
 
-`DoodleCanvas.vue`, reached from the composer's attach row through a source
-chooser (blank sheet, clipboard, a local file, a file on the host). Whatever the
-source, the image arrives as a `data:` URL and leaves as PNG bytes that go
-straight into the `{kind:'bytes'}` staging path the clipboard already uses — no
-new upload, remote-path, tile or send code (§17, §23.4).
+`DoodleCanvas.vue`, reached two ways: from the composer's attach row through a
+source chooser (blank sheet, clipboard, a local file, a file on the host), and
+from the pencil on an image tile that is **already staged** (§27.7). Whatever
+the source, the image arrives as a URL an `<img>` can load and leaves as PNG
+bytes that go straight into the `{kind:'bytes'}` staging path the clipboard
+already uses — no new upload, remote-path, tile or send code (§17, §23.4).
 
 ### 27.1 The document, and what "attached" means
 
@@ -1561,3 +1562,84 @@ pixels are not CSS pixels. `--fs-300` text on a phone screenshot would be
 follows the selected mark weight instead (4x, the same ratio as the arrowhead),
 so a caption and the arrow pointing at it read as one hand. The ratio is a named
 constant in the pure module and is unit-tested.
+
+### 27.7 Annotating an image that is already attached
+
+The request was "when I attached an image I want to be able to annotate on it",
+clarified as *on an already-attached image*. That is a different act from the
+four source-chooser routes, and the difference is entirely on the way out: the
+others produce a NEW tile, this one **replaces** an existing one.
+
+**The affordance.** A pencil appears on image tiles only, decided by
+`classifyByName(remotePath)` — the same classifier the Files tab uses. Not by
+"does the tile have a thumbnail": a tile only carries a preview when it came
+from a paste or a drop, so that rule would offer annotation on a dropped
+screenshot and refuse it on the identical file attached through the paperclip
+(which stages by path and never mints one), or on either after a restart
+(previews are deliberately not persisted). The remote name always survives. The
+pencil sits *before* the `×`, so the destructive control keeps the corner
+muscle memory expects.
+
+**Where the pixels come from.** Staging is EAGER — the bytes are uploaded when
+the file is attached, not when the prompt is sent (§17) — so the host always
+has an authoritative copy, and `sftp:readBinary` under
+`absoluteAttachmentPath()` is a correct fallback for any tile, including one
+restored from a previous run. But it is a round trip, and for the case people
+actually hit (a screenshot pasted five seconds ago) the same bytes are already
+in the renderer behind the tile's object URL. So the local preview is tried
+first: instant, and it works with the connection down. Only tiles with no
+preview pay for the read, behind a `loading` step that also gives a failed read
+somewhere to be reported that is not the source chooser.
+
+**Replace, not keep alongside.** "Annotate it" is a sentence about one image.
+Keeping both would double every attachment anyone marks up and hand the agent a
+clean copy and a scribbled copy of the same screenshot with nothing to say which
+to believe. The swap is **in place**, and that is the load-bearing detail: paths
+are folded into the prompt in tile order at send time (§5.1), so a draft that
+says "compare the first screenshot with the second" is a statement about the
+list's ordering. Remove-then-reattach — the only thing the store's existing
+actions can express between them — would silently move the image to the end.
+`replaceStagedAttachment()` in `src/shared/composerAttachments.ts` is the
+ordering rule, pure and unit-tested; it reports `null` rather than appending
+when the target is gone, because re-adding an attachment the user has since
+removed is worse than losing the drawing.
+
+The original on the host is left where it is. Nothing references it, and
+`AttachmentRetentionPolicy` already owns the lifetime of everything under
+`~/.pocketshell/attachments`. Deleting eagerly would mean a new privileged IPC
+channel that removes remote files, to reclaim one screenshot from a directory
+that prunes itself.
+
+**Re-annotating works, and starts from the flattened result.** That is the
+honest behaviour: the second pass draws on the PNG the first pass produced, not
+on its vector items, which are not persisted anywhere. The visible cost is the
+filename, which by then carries this surface's `annotated-…-<stamp>` and the
+stager's own `<stamp>-<ordinal>-` prefix; `doodleAttachmentName()` strips both
+before it adds one of each, so the name is stable under any number of passes
+instead of growing a decoration per pass.
+
+### 27.8 Cancelling no longer destroys the drawing
+
+Every route out of the sheet except Attach used to discard silently: the Cancel
+button, the overlay's `✕`, a click on the backdrop, and Escape. Backdrop clicks
+against a modal are the easiest mouse error there is, and the undo stack that
+would otherwise be the recovery (§27.4) lives *inside* the component the close
+unmounts. On a blank sheet that is an annoyance; on a screenshot the user
+attached and then spent a minute marking up it is the loss of all of it.
+
+So `DoodleCanvas` owns the decision now and the parent routes every dismissal
+through `requestClose()`, exposed for exactly that. An empty sheet still closes
+on one Escape — a doodle opened by mistake must not argue. A sheet with work on
+it raises a confirmation in its own footer, replacing the action row rather than
+stacking above it, so the buttons that answer the question are the only buttons
+there are. An open caption is flushed into the document first, so it counts as
+work.
+
+Escape keeps its meaning from §12.2 — *it never destroys work*. It arms the
+confirmation, and a second Escape **dismisses the confirmation** rather than
+confirming it: the safe direction on the key people press without reading.
+Discarding takes a deliberate click on a button labelled Discard.
+
+This is fixed for every doodle source, not just the new one. `OverlayPanel` was
+not changed; it still emits `close` for Escape and for a backdrop click, and the
+composer decides what that means.

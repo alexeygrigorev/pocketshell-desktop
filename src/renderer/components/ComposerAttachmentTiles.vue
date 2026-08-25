@@ -9,6 +9,7 @@
 // Each tile shows the file NAME only, never the full remote path
 // (PromptComposerViewModel.kt:2675).
 import AppIcon from './AppIcon.vue';
+import { classifyByName } from '../fileKind';
 import type { StagedAttachment } from '../stores/composer';
 
 defineProps<{
@@ -17,7 +18,31 @@ defineProps<{
   disabled?: boolean;
 }>();
 
-const emit = defineEmits<{ (e: 'remove', remotePath: string): void }>();
+const emit = defineEmits<{
+  (e: 'remove', remotePath: string): void;
+  (e: 'annotate', remotePath: string): void;
+}>();
+
+/**
+ * Can this tile be opened in the doodle surface?
+ *
+ * `classifyByName` rather than a rule of this component's own. There were
+ * already two ways to ask "is this an image" — `previewFor` in PromptComposer
+ * (`mimeType.startsWith('image/')`, off a live `File`) and the Files tab's
+ * classifier — and a third would be the one that drifts. The classifier is the
+ * right one of the two because it answers from the NAME: a tile only carries a
+ * preview when it came from a paste or a drop, so keying off `previewDataUrl`
+ * would offer annotation on a dropped screenshot and refuse it on the same
+ * file chosen through the paperclip, or on either one after a restart (the
+ * preview is deliberately never persisted). The remote path always survives.
+ *
+ * It also gets the negatives right for free, which is the point of the gate: a
+ * PDF, an mp3 and a zip are `pdf`, `audio` and `binary`, and none of them has
+ * pixels a canvas could paint.
+ */
+function canAnnotate(attachment: StagedAttachment): boolean {
+  return classifyByName(attachment.remotePath).kind === 'image';
+}
 </script>
 
 <template>
@@ -26,6 +51,21 @@ const emit = defineEmits<{ (e: 'remove', remotePath: string): void }>();
       <img v-if="a.previewDataUrl" class="thumb" :src="a.previewDataUrl" alt="" />
       <AppIcon v-else class="glyph" name="file" />
       <span class="name">{{ a.displayName }}</span>
+      <!-- Images only. The button sits BEFORE the remove `×` so the
+           destructive control keeps the corner it has always had — a tile
+           whose rightmost button changed meaning depending on file type is how
+           you get a muscle-memory click that deletes an attachment. -->
+      <button
+        v-if="canAnnotate(a)"
+        class="annotate"
+        type="button"
+        :disabled="disabled"
+        :title="`Annotate ${a.displayName}`"
+        :aria-label="`Annotate ${a.displayName}`"
+        @click="emit('annotate', a.remotePath)"
+      >
+        <AppIcon name="edit-2" />
+      </button>
       <button
         class="remove"
         type="button"
@@ -80,6 +120,7 @@ const emit = defineEmits<{ (e: 'remove', remotePath: string): void }>();
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.annotate,
 .remove {
   flex: 0 0 auto;
   width: 18px;
@@ -94,14 +135,17 @@ const emit = defineEmits<{ (e: 'remove', remotePath: string): void }>();
   font-size: var(--fs-100);
   cursor: pointer;
 }
+.annotate :deep(.app-icon),
 .remove :deep(.app-icon) {
   width: 11px;
   height: 11px;
 }
+.annotate:hover:not(:disabled),
 .remove:hover:not(:disabled) {
   background: var(--state-active);
   color: var(--fg);
 }
+.annotate:disabled,
 .remove:disabled {
   opacity: var(--disabled-opacity);
   cursor: default;

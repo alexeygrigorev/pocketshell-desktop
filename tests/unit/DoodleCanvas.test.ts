@@ -615,3 +615,143 @@ describe('what actually reaches the attachment', () => {
     expect(wrapper.emitted('commit')).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Closing
+// ---------------------------------------------------------------------------
+
+/**
+ * Cancelling must not destroy a drawing without asking.
+ *
+ * Every route out of this sheet except Attach used to discard silently:
+ * Cancel, and — through the parent — the overlay's `✕`, a backdrop click and
+ * Escape. Backdrop clicks are the easiest mouse error there is against a
+ * modal, and the undo stack that would otherwise be the recovery lives inside
+ * the component the close unmounts. So the guard is tested from both sides:
+ * that it fires when there is work, and that it stays out of the way when
+ * there is not.
+ */
+function footerButton(wrapper: VueWrapper, label: string) {
+  return wrapper.findAll('button').find((b) => b.text() === label);
+}
+
+describe('closing the sheet', () => {
+  it('closes immediately when the sheet is empty', async () => {
+    const wrapper = await open();
+    await footerButton(wrapper, 'Cancel')?.trigger('click');
+    await flush();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
+  it('asks before throwing a drawing away', async () => {
+    const wrapper = await open();
+    await pickTool(wrapper, 'Arrow');
+    await drag(wrapper, { x: 10, y: 10 }, { x: 200, y: 200 });
+
+    await footerButton(wrapper, 'Cancel')?.trigger('click');
+    await flush();
+
+    expect(wrapper.emitted('close')).toBeUndefined();
+    expect(wrapper.text()).toContain('Discard this drawing?');
+  });
+
+  it('keeps the drawing when the question is answered "keep editing"', async () => {
+    const wrapper = await open();
+    await pickTool(wrapper, 'Arrow');
+    await drag(wrapper, { x: 10, y: 10 }, { x: 200, y: 200 });
+    await footerButton(wrapper, 'Cancel')?.trigger('click');
+    await flush();
+
+    await footerButton(wrapper, 'Keep editing')?.trigger('click');
+    await flush();
+
+    expect(wrapper.emitted('close')).toBeUndefined();
+    // The sheet is still live and still holds the arrow: Attach encodes it.
+    await footerButton(wrapper, 'Attach')?.trigger('click');
+    await flush();
+    expect(frame(encoded).filter((o) => o.op === 'fill')).toHaveLength(1);
+  });
+
+  it('closes on a deliberate Discard', async () => {
+    const wrapper = await open();
+    await pickTool(wrapper, 'Arrow');
+    await drag(wrapper, { x: 10, y: 10 }, { x: 200, y: 200 });
+    await footerButton(wrapper, 'Cancel')?.trigger('click');
+    await flush();
+
+    await footerButton(wrapper, 'Discard')?.trigger('click');
+    await flush();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
+  /**
+   * A caption still being typed is part of the drawing. Without the flush, a
+   * sheet whose only content was an open editor would report itself empty and
+   * close without asking — the same class of bug as attaching mid-sentence.
+   */
+  it('counts an open caption as work worth confirming', async () => {
+    const wrapper = await open();
+    await pickTool(wrapper, 'Text');
+    await click(wrapper, { x: 40, y: 40 });
+    await type(wrapper, 'nearly done');
+
+    await footerButton(wrapper, 'Cancel')?.trigger('click');
+    await flush();
+
+    expect(wrapper.emitted('close')).toBeUndefined();
+    expect(wrapper.text()).toContain('Discard this drawing?');
+  });
+
+  /**
+   * The parent routes the overlay's `✕`, its backdrop click and Escape through
+   * the same door, so the guard covers them all without OverlayPanel knowing
+   * this tool exists.
+   */
+  it('exposes the same guard to the overlay chrome', async () => {
+    const wrapper = await open();
+    await pickTool(wrapper, 'Arrow');
+    await drag(wrapper, { x: 10, y: 10 }, { x: 200, y: 200 });
+
+    (wrapper.vm as unknown as { requestClose: () => void }).requestClose();
+    await flush();
+    expect(wrapper.emitted('close')).toBeUndefined();
+    expect(wrapper.text()).toContain('Discard this drawing?');
+
+    // A SECOND Escape answers "keep editing", not "discard". Escape is the key
+    // people press without reading, so it must fall on the safe side.
+    (wrapper.vm as unknown as { requestClose: () => void }).requestClose();
+    await flush();
+    expect(wrapper.emitted('close')).toBeUndefined();
+    expect(wrapper.text()).not.toContain('Discard this drawing?');
+  });
+
+  it('refuses to close while the annotated image is uploading', async () => {
+    const wrapper = await open();
+    await wrapper.setProps({ saving: true });
+    (wrapper.vm as unknown as { requestClose: () => void }).requestClose();
+    await flush();
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Naming
+// ---------------------------------------------------------------------------
+
+describe('the attachment name', () => {
+  it('names the annotation after the image it was drawn on', async () => {
+    context = makeContext();
+    const wrapper = mount(DoodleCanvas, {
+      attachTo: document.body,
+      props: { backdropName: '20260825-101500-01-shot.png' },
+    });
+    await flush();
+    await footerButton(wrapper, 'Attach')?.trigger('click');
+    await flush();
+
+    const committed = wrapper.emitted('commit')?.[0]?.[0] as { name: string };
+    // The stager's own prefix is stripped; see composerAttachments.test.ts for
+    // the full rule and the repeated-annotation case.
+    expect(committed.name).toMatch(/^annotated-shot-\d{8}-\d{6}\.png$/);
+  });
+});
