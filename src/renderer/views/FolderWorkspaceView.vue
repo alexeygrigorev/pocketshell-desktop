@@ -15,14 +15,24 @@
 // Four structural notes, three of them inherited from the view this replaces
 // because the reasons have not changed:
 //
-//   - ONE TerminalView, re-pointed, not one per session tab. Main keeps a
-//     single attached tmux client per connection and moves it with
-//     `switch-client` (src/main/ssh/TmuxClientPool.ts), so a second live
-//     TerminalView would be two components fighting over one client. Switching
-//     session tabs therefore changes `session-key`, which is exactly the path
-//     the pool's fast switch was built for.
-//   - The terminal stays mounted (`v-show`, not `v-if`) while a Files tab is
-//     showing; unmounting it would close the SSH shell and drop the attach.
+//   - ONE TerminalView PER SESSION TAB the user has visited, all of them left
+//     mounted, only the active one shown. Main keeps a tmux client per session
+//     and holds it for the life of the tab (src/main/ssh/TmuxClientPool.ts), so
+//     each pane already holds its own session's screen and moving between tabs
+//     is a `v-show` and nothing else — no SSH, no redraw, no bytes.
+//
+//     This is the reverse of what this file said until now, and the reason is
+//     measured. One re-pointed TerminalView meant every tab click cost a
+//     `tmux switch-client` exec plus a full-screen repaint over SSH: p50 210 ms
+//     on the user's host when it worked, and it mostly did not, falling back to
+//     a ~2 s re-join. A switch cannot be made to feel like changing tabs in an
+//     editor, because an editor does not ask another machine for the tab.
+//
+//     Panes are mounted LAZILY — a tab gets its TerminalView the first time it
+//     is selected, never before. Mounting one while hidden would have xterm's
+//     FitAddon measure a 0x0 box and push its 2x1 minimum at the remote.
+//   - The terminals stay mounted (`v-show`, not `v-if`) while a Files tab is
+//     showing; unmounting one would close its SSH shell and drop the attach.
 //   - Identity and tabs share ONE bar, for the 40px of window it gives back to
 //     the pane.
 //   - `.workspace-body` is the composer's stage: the card floats over the tab
@@ -223,14 +233,47 @@ function sessionTabTitle(session: string): string {
   return lines.join('\n');
 }
 
-/** The session tab that is (or was last) showing — what the terminal holds. */
+/** The session tab that is (or was last) showing — which pane is visible. */
 const terminalSession = ref<string | null>(null);
+/**
+ * Every session tab that has been visited, in visit order — one mounted
+ * TerminalView each, for as long as this workspace is open.
+ *
+ * Append-only on purpose. A tab is added the first time it is selected and is
+ * never removed while the workspace lives, because removing it is precisely the
+ * cost this design exists to avoid: unmounting closes the SSH shell, and coming
+ * back would pay a full `tmuxctl` join (1.5-2 s on the user's host). The list is
+ * bounded by the session tabs of ONE folder, and main bounds the channels
+ * underneath it independently — the pool evicts its least recently used client
+ * when a connection runs out of SSH channels, and a pane whose shell was
+ * evicted re-joins itself when it is next looked at.
+ *
+ * A session that disappears from the tab bar keeps its entry here and simply
+ * renders nothing, since the `v-for` is over tabs that still exist.
+ */
+const openedSessions = ref<string[]>([]);
 watch(
   activeSession,
   (name) => {
-    if (name) terminalSession.value = name;
+    if (!name) return;
+    terminalSession.value = name;
+    if (!openedSessions.value.includes(name)) openedSessions.value.push(name);
   },
   { immediate: true },
+);
+
+/**
+ * The session tabs that currently have a mounted pane, in tab-bar order.
+ *
+ * Filtered from `tabs` rather than iterated from `openedSessions` so a session
+ * that was killed on the host stops rendering the moment it leaves the bar,
+ * and so the panes sit in the same order as the tabs they belong to.
+ */
+const sessionPanes = computed(() =>
+  tabs.value.filter(
+    (tab): tab is Extract<WorkspaceTab, { kind: 'session' }> =>
+      tab.kind === 'session' && openedSessions.value.includes(tab.session),
+  ),
 );
 
 const summary = computed(
@@ -626,13 +669,25 @@ function onCloseFolder(): void {
 // Terminal / composer plumbing — unchanged from the per-session workspace
 // ---------------------------------------------------------------------------
 /**
- * Template ref on the terminal, so the composer's Escape ladder can un-focus.
- * Typed by the one method we call rather than `InstanceType<typeof
- * TerminalView>`: `*.vue` is declared as a `DefineComponent<…, any>` in
- * env.d.ts, so that instance type collapses to `any` and takes the call site
- * with it.
+ * The panes, by session name, so the composer's Escape ladder can un-focus the
+ * one on screen.
+ *
+ * A MAP rather than a template ref, because there is now a pane per visited
+ * session tab. A `v-for` with a plain string `ref` collects an ARRAY in DOM
+ * order, which would have to be indexed by position and would silently point at
+ * the wrong pane the moment a tab appeared or disappeared; a session name
+ * cannot drift like that.
+ *
+ * `el` is `unknown` for the same reason the old ref named only the method it
+ * called: `*.vue` is declared as a `DefineComponent<…, any>` in env.d.ts, so
+ * naming the instance type here would collapse the call site to `any` instead
+ * of checking anything.
  */
-const terminalRef = ref<{ focus: () => void } | null>(null);
+const terminalRefs = new Map<string, { focus: () => void }>();
+function setTerminalRef(session: string, el: unknown): void {
+  if (el) terminalRefs.set(session, el as { focus: () => void });
+  else terminalRefs.delete(session);
+}
 /** Same reasoning for the composer, whose `typeInto` the terminal feeds. */
 const composerRef = ref<{ typeInto: (text: string) => void } | null>(null);
 
@@ -660,7 +715,8 @@ function onTyped(text: string): void {
 /** Put the keyboard back in the pane after a key or button closed the composer. */
 function onFocusTerminal(): void {
   if (activeTab.value?.kind !== 'session') return;
-  terminalRef.value?.focus();
+  const session = terminalSession.value;
+  if (session) terminalRefs.get(session)?.focus();
 }
 
 </script>
@@ -769,18 +825,28 @@ function onFocusTerminal(): void {
 
     <div class="workspace-body">
       <div class="tab-body">
-        <!-- Terminal: kept mounted so switching to a Files tab never drops the
-             attach. `session-key` is what re-points it, which is the same path
-             the pool's fast switch was built for. -->
+        <!-- One terminal per visited session tab, all kept mounted. Hiding
+             rather than re-pointing is what makes a tab switch instant, and
+             keeping them mounted while a Files tab shows is what stops a tab
+             switch dropping an attach. `v-for` over the TABS, so a session that
+             was killed on the host stops rendering; `openedSessions` is what
+             makes it lazy, so no pane is ever mounted while hidden. -->
         <div v-show="activeTab?.kind === 'session'" class="terminal-area">
-          <TerminalView
-            v-if="connection.connectionId && terminalSession"
-            ref="terminalRef"
-            :connection-id="connection.connectionId"
-            :session-key="terminalSession"
-            :intercept-typing="interceptTyping"
-            @typed="onTyped"
-          />
+          <div
+            v-for="tab in sessionPanes"
+            :key="tab.id"
+            v-show="tab.session === terminalSession"
+            class="terminal-slot"
+          >
+            <TerminalView
+              v-if="connection.connectionId"
+              :ref="(el) => setTerminalRef(tab.session, el)"
+              :connection-id="connection.connectionId"
+              :session-key="tab.session"
+              :intercept-typing="interceptTyping && tab.session === terminalSession"
+              @typed="onTyped"
+            />
+          </div>
         </div>
 
         <FilesView
@@ -1010,6 +1076,18 @@ function onFocusTerminal(): void {
   min-height: 0;
 }
 .terminal-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+/*
+ * One of these per live session pane. They are siblings in the same flex row
+ * and all but one are `display: none`, so the visible one takes the whole area
+ * exactly as the single terminal used to. `min-width: 0` for the usual reason —
+ * a flex item defaults to `min-width: auto` and would refuse to shrink below
+ * its content, which for an xterm canvas means the pane can grow but not shrink.
+ */
+.terminal-slot {
   flex: 1;
   min-width: 0;
   display: flex;

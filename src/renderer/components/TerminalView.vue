@@ -8,21 +8,26 @@
 //   - xterm resize       -> shell.resize
 // On unmount it closes the shell.
 //
-// TWO WAYS TO GET A PTY, and the difference is the whole point of this
-// component's shape. For a tmux session it calls `shell.attachSession`, which
-// main answers either with a brand-new PTY or — far more often — with the SAME
-// PTY it already gave us, having pointed the attached tmux client at the other
-// session instead (src/main/ssh/TmuxClientPool.ts). Anything else (a bare
-// shell) still goes through `shell.open`.
+// ONE OF THESE PER SESSION TAB, and staying mounted is the whole point. For a
+// tmux session it calls `shell.attachSession`, and main answers with a PTY that
+// belongs to that session for as long as the tab lives
+// (src/main/ssh/TmuxClientPool.ts). Anything else (a bare shell) still goes
+// through `shell.open`.
 //
-// The consequence for this file is that a session change may NOT close
-// anything: closing first would destroy the very client main is about to
-// reuse, and would put back the ~250 ms re-join the pool exists to avoid. So
-// the order is ask-then-adopt, and only a genuinely different ShellId costs a
-// terminal reset. On a switch the terminal is left completely alone: tmux
-// redraws every row of the client itself, and `reset()` would clear the DEC
-// private modes (mouse reporting above all) that the still-attached tmux
-// client set and is relying on.
+// The workspace keeps a TerminalView mounted for every session tab the user has
+// visited and merely HIDES the inactive ones, so switching tabs moves no bytes
+// and asks the host nothing: each xterm already holds its own session's screen.
+// What this replaced was one TerminalView re-pointed by `session-key`, which
+// cost a `tmux switch-client` exec plus a full-screen repaint over SSH on every
+// click — p50 210 ms on the user's own host, and most attempts failed outright
+// and paid a full re-join instead.
+//
+// `session-key` therefore no longer changes underneath a folder-workspace pane,
+// but the watcher on it stays: nothing here assumes it is fixed, and a caller
+// with a genuinely re-pointable pane still needs it.
+//
+// The ask-then-adopt order in `showTarget` stays too. It costs nothing, and it
+// is what stops a re-attach closing a PTY main was about to hand back.
 //
 // Clipboard: selecting with the mouse copies on mouse-up (see onDocumentMouseUp);
 // Ctrl/Cmd-Shift-V and right-click paste.
@@ -169,6 +174,26 @@ let registeredKey: string | null = null;
 let unsubscribeData: (() => void) | null = null;
 let unsubscribeExit: (() => void) | null = null;
 /**
+ * True once main has said this PTY is gone.
+ *
+ * A tab's shell can die without the tab going anywhere. The pool evicts the
+ * least recently used client when a connection runs out of SSH channels —
+ * sshd's `MaxSessions` is 10 by default and is a hard ceiling — and the tmux
+ * SESSION survives that untouched on the host, because it lives in the tmux
+ * server rather than in our client. So a dead shell in a tab the user has not
+ * closed is a recoverable state, and {@link scheduleFit} is where it recovers.
+ */
+let shellGone = false;
+/**
+ * Whether the pane measured zero the last time it was looked at, i.e. it is
+ * behind a `v-show`.
+ *
+ * Only the hidden -> visible EDGE may re-attach. Re-attaching on any resize of
+ * a visible pane would silently rejoin a session the user had deliberately
+ * exited, which is the one case where a dead pane is the correct outcome.
+ */
+let paneHidden = false;
+/**
  * xterm-side handlers. These are bound ONCE against the stable `term` and read
  * the current `shellId` from the closure. Binding them per-shell (as an earlier
  * version did) stacked a new onData/onResize on every session switch, so each
@@ -226,6 +251,7 @@ function bindShellStream(): void {
   });
   unsubscribeExit = api.shell.onExited(({ shellId: id }) => {
     if (id === shellId && term) {
+      shellGone = true;
       term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n');
     }
   });
@@ -301,6 +327,7 @@ async function showTarget(): Promise<void> {
     unbindShellStream();
     if (previousId) term.reset();
     shellId = result.shellId;
+    shellGone = false;
     bindShellStream();
   }
   // Otherwise the same PTY came back and tmux redrew every row of it itself.
@@ -520,8 +547,26 @@ function scheduleFit(): void {
     fitFrame = 0;
     // Skip degenerate geometry: a v-show'd pane measures 0 and fit() would
     // then push a 1x1 PTY at the remote.
-    if (!containerEl.value?.clientHeight || !containerEl.value.clientWidth) return;
+    //
+    // This guard carries far more weight now that INACTIVE session tabs stay
+    // mounted behind a `v-show` instead of there being one pane. It is what
+    // keeps a hidden tab from telling its tmux session it is two columns wide —
+    // and a hidden tab is now the normal state of most of them.
+    if (!containerEl.value?.clientHeight || !containerEl.value.clientWidth) {
+      paneHidden = true;
+      return;
+    }
+    const wasHidden = paneHidden;
+    paneHidden = false;
     fitAddon?.fit();
+    // Coming back to a tab whose PTY the pool evicted to stay under the channel
+    // budget. Re-joining on this EDGE rather than on the exit itself is what
+    // keeps it from fighting the user: a session they exited on purpose stays
+    // exited, because that pane never became hidden.
+    if (wasHidden && shellGone) {
+      shellGone = false;
+      void showTarget();
+    }
   });
 }
 
