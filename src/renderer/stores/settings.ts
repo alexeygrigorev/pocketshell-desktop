@@ -6,6 +6,7 @@ import {
   sanitiseFontFamily,
   TERMINAL_FONT_SIZE_DEFAULT,
 } from '../fonts';
+import { normaliseRootList, normaliseRootPath, SESSION_ROOTS_MAX } from '../sessionGrouping';
 
 /**
  * App-level preferences — the settings screen's model.
@@ -30,7 +31,10 @@ import {
  *      The parser is what makes a hand-edited or half-written blob survivable:
  *      a value that fails it falls back to that key's default and the REST OF
  *      THE BLOB IS STILL HONOURED. Never write a parser that trusts the stored
- *      type; it is user-writable JSON on disk, not a value we produced.
+ *      type; it is user-writable JSON on disk, not a value we produced. If the
+ *      value is a collection, degrade per ENTRY too — see `asRootList` — and
+ *      note that a reference-typed default is copied on the way out
+ *      ({@link applyDefault}) so instances are never shared.
  *   3. Render a control for it in `views/SettingsView.vue`.
  * There is no fourth step: persistence, restore and validation are generic over
  * the specs, so nothing here needs touching per key.
@@ -93,6 +97,22 @@ export interface AppSettings {
   terminalFontSize: number;
   /** File-editor text size, in px. Separate from the terminal's — see fonts.ts. */
   editorFontSize: number;
+  /**
+   * The top level of the session panel's tree: the project roots the user has
+   * registered, in the order they registered them (`~/git`, `~/tmp`, …).
+   * Sessions under none of them collect in the panel's `other` bucket.
+   *
+   * **Empty is meaningful and is the default.** With no roots registered the
+   * panel derives roots from `$HOME`'s children exactly as it always has, so
+   * an existing install sees no change until somebody configures something —
+   * see `sessionGrouping.groupSessionsIntoRoots`.
+   *
+   * App-level rather than per-host, unlike the phone's `project_roots` table,
+   * because a root is written home-relative and `~/git` names the same place
+   * on every host. A per-host list would make the user re-register the same
+   * three roots on each box they connect to.
+   */
+  sessionRoots: string[];
 }
 
 /**
@@ -122,6 +142,22 @@ function asHostAlias(raw: unknown): string | null | undefined {
   return trimmed === '' ? null : trimmed;
 }
 
+/**
+ * The registered session roots, or `undefined` for a blob this build cannot
+ * trust at all.
+ *
+ * Only a non-array is rejected outright, because that is the one shape with no
+ * salvageable meaning. Inside an array, damage is per ENTRY: `normaliseRootList`
+ * drops what is not a usable root path, drops repeats and caps the length, so
+ * one hand-edited garbage entry costs that entry and not the user's whole root
+ * list. The path rules themselves live in `sessionGrouping.ts` — the module
+ * that already owns what a path means — rather than being restated here where
+ * they could drift.
+ */
+function asRootList(raw: unknown): string[] | undefined {
+  return Array.isArray(raw) ? normaliseRootList(raw) : undefined;
+}
+
 /** The registry the loader, the defaults and the validator are all generic over. */
 export const SETTING_SPECS: SettingSpecs = {
   // Both composer defaults are TRUE: typing into a terminal that fronts an
@@ -138,6 +174,9 @@ export const SETTING_SPECS: SettingSpecs = {
   monospaceFontFamily: { default: null, parse: sanitiseFontFamily },
   terminalFontSize: { default: TERMINAL_FONT_SIZE_DEFAULT, parse: parseFontSize },
   editorFontSize: { default: EDITOR_FONT_SIZE_DEFAULT, parse: parseFontSize },
+  // Empty means "derive roots from $HOME", which is what shipped before this
+  // setting existed — the same rule the typography defaults follow.
+  sessionRoots: { default: [], parse: asRootList },
 };
 
 const STORAGE_KEY = 'pocketshell.settings.v1';
@@ -158,7 +197,14 @@ function settingKeys(): (keyof AppSettings)[] {
  * result are exactly `AppSettings[K]` and the target slot accepts them.
  */
 function applyDefault<K extends keyof AppSettings>(out: Partial<AppSettings>, key: K): void {
-  out[key] = SETTING_SPECS[key].default;
+  const value = SETTING_SPECS[key].default;
+  // `sessionRoots` is the first default that is a REFERENCE rather than a
+  // primitive. Handing out the spec's own array would mean every defaulted
+  // settings object shares one instance, so a mutation anywhere rewrites the
+  // default itself — a bug that would only surface on the second load. Copy on
+  // the way out. The cast is the same narrowing the loops below need: the
+  // compiler cannot see that a copy of `AppSettings[K]` is an `AppSettings[K]`.
+  out[key] = (Array.isArray(value) ? [...value] : value) as AppSettings[K];
 }
 
 function applyParsed<K extends keyof AppSettings>(
@@ -253,9 +299,41 @@ export const useSettingsStore = defineStore('settings', () => {
     values[key] = value;
   }
 
+  /**
+   * Register a session root, returning whether the list changed.
+   *
+   * The rules live here rather than in the settings screen so that every route
+   * into the list — the Add field, a suggestion chip, a future import — normalises
+   * and dedupes identically. A rejected value is not an error worth throwing:
+   * the caller shows the field's own validation, and `false` is the whole
+   * report it needs.
+   *
+   * The list is REPLACED rather than pushed to. Nothing depends on that for
+   * reactivity (the watcher is deep), but it also means `applyDefault`'s shared
+   * empty array can never be mutated by this path.
+   */
+  function addSessionRoot(path: string): boolean {
+    const root = normaliseRootPath(path);
+    if (root === null) return false;
+    if (values.sessionRoots.includes(root)) return false;
+    if (values.sessionRoots.length >= SESSION_ROOTS_MAX) return false;
+    values.sessionRoots = [...values.sessionRoots, root];
+    return true;
+  }
+
+  /**
+   * Unregister a root. Matches on the STORED spelling, which is what the
+   * settings list renders — removing `~/git` does not remove a separately
+   * registered `/home/alexey/git`, because those are two entries the user made
+   * two decisions about, even though one host folds them onto one branch.
+   */
+  function removeSessionRoot(path: string): void {
+    values.sessionRoots = values.sessionRoots.filter((root) => root !== path);
+  }
+
   // `toRefs` is what makes step 1 of "how to add a setting" sufficient: every
   // key of AppSettings becomes a writable ref on the store automatically, so
   // consumers write `useSettingsStore().typingOpensComposer` and nothing in
   // this file enumerates the keys by hand.
-  return { ...toRefs(values), set };
+  return { ...toRefs(values), set, addSessionRoot, removeSessionRoot };
 });

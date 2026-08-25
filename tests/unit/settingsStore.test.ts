@@ -162,3 +162,74 @@ describe('degrading a stored blob', () => {
     expect(coerceSettings({ defaultHost: 'hetzner' }).defaultHost).toBe('hetzner');
   });
 });
+
+describe('session roots', () => {
+  it('defaults to an empty list, which means "derive roots from $HOME"', () => {
+    expect(useSettingsStore().sessionRoots).toEqual([]);
+  });
+
+  it('hands every caller its own array, never the spec default itself', () => {
+    // A shared reference here would let one mutation rewrite the default for
+    // every future load — a bug that only shows up on the second boot.
+    const a = settingsDefaults();
+    a.sessionRoots.push('~/git');
+    expect(settingsDefaults().sessionRoots).toEqual([]);
+  });
+
+  it('adds, normalises and persists a root', () => {
+    const settings = useSettingsStore();
+    expect(settings.addSessionRoot('  ~/git/  ')).toBe(true);
+    expect(settings.sessionRoots).toEqual(['~/git']);
+    expect(stored()['sessionRoots']).toEqual(['~/git']);
+  });
+
+  it('keeps registered order, which is what the panel renders in', () => {
+    const settings = useSettingsStore();
+    settings.addSessionRoot('~/tmp');
+    settings.addSessionRoot('~/git');
+    expect(settings.sessionRoots).toEqual(['~/tmp', '~/git']);
+  });
+
+  it('refuses a duplicate and a path anchored to nothing', () => {
+    const settings = useSettingsStore();
+    expect(settings.addSessionRoot('~/git')).toBe(true);
+    expect(settings.addSessionRoot('~/git/')).toBe(false);
+    expect(settings.addSessionRoot('git')).toBe(false);
+    expect(settings.addSessionRoot('')).toBe(false);
+    expect(settings.sessionRoots).toEqual(['~/git']);
+  });
+
+  it('removes by the stored spelling', () => {
+    const settings = useSettingsStore();
+    settings.addSessionRoot('~/git');
+    settings.addSessionRoot('~/tmp');
+    settings.removeSessionRoot('~/git');
+    expect(settings.sessionRoots).toEqual(['~/tmp']);
+    // A spelling that was never registered is a no-op, not an error.
+    settings.removeSessionRoot('/home/alexey/tmp');
+    expect(settings.sessionRoots).toEqual(['~/tmp']);
+  });
+
+  it('survives a restart', () => {
+    useSettingsStore().addSessionRoot('~/git');
+    setActivePinia(createPinia());
+    expect(useSettingsStore().sessionRoots).toEqual(['~/git']);
+  });
+
+  it('degrades a corrupt list per ENTRY, not per key', () => {
+    expect(coerceSettings({ sessionRoots: ['~/git', 7, 'relative', '~/tmp/'] }).sessionRoots).toEqual(
+      ['~/git', '~/tmp'],
+    );
+  });
+
+  it('falls back to the default when the value is not a list at all', () => {
+    expect(coerceSettings({ sessionRoots: '~/git' }).sessionRoots).toEqual([]);
+    expect(coerceSettings({ sessionRoots: null }).sessionRoots).toEqual([]);
+  });
+
+  it('keeps the rest of the blob when only the root list is corrupt', () => {
+    const settings = coerceSettings({ sessionRoots: 3, defaultHost: 'hetzner' });
+    expect(settings.sessionRoots).toEqual([]);
+    expect(settings.defaultHost).toBe('hetzner');
+  });
+});

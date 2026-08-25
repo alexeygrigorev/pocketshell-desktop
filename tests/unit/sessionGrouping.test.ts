@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   UNTRACKED_LABEL,
   UNTRACKED_PATH,
+  bestRootForPath,
   canonicalisePath,
   defaultLabelForPath,
+  normaliseRootList,
+  normaliseRootPath,
   OTHER_LABEL,
   OTHER_ROOT,
   directoryKey,
@@ -11,8 +14,11 @@ import {
   groupSessionsIntoRoots,
   inferHome,
   isAgentSession,
+  pathWithinRoot,
+  resolveRoots,
   rootForPath,
   rootFromSessionName,
+  SESSION_ROOTS_MAX,
   type SessionRootFolder,
 } from '../../src/renderer/sessionGrouping';
 import type { SessionAgentKind, SessionSummary } from '../../src/shared/types';
@@ -359,14 +365,49 @@ describe('groupSessionsIntoRoots', () => {
     expect(dir!.rows[0]!.session.name).toBe('git-dtc-website');
   });
 
-  it('keeps a single-session directory flat — no branch, no extra row', () => {
+  it('gives a single-session directory a node of its own, with the session inside it', () => {
+    // docs/SESSIONLIST.md revision 3: the directory level is unconditional.
+    // Revisions 1 and 2 collapsed this case into one row, which at the real
+    // 1:1 distribution collapsed the entire tree into a flat list.
     const [git] = groupSessionsIntoRoots(
       [session('git-dataops', '/home/alexey/git/dataops', 100)],
       home,
     );
     expect(git!.directories).toHaveLength(1);
-    expect(git!.directories[0]!.rows).toHaveLength(1);
     expect(git!.directories[0]!.path).toBe('~/git/dataops');
+    expect(git!.directories[0]!.label).toBe('dataops');
+    expect(git!.directories[0]!.rows.map((r) => r.session.name)).toEqual(['git-dataops']);
+  });
+
+  it('shapes every real directory the same way, whatever it holds', () => {
+    // The guard against a fourth revision quietly reintroducing a size test:
+    // one node per directory, its sessions as children, at every size.
+    const [git] = groupSessionsIntoRoots(
+      [
+        session('git-solo', '/home/alexey/git/solo', 400),
+        session('git-pair-a', '/home/alexey/git/pair', 300),
+        session('git-pair-b', '/home/alexey/git/pair', 200),
+      ],
+      home,
+    );
+    expect(git!.directories.map((d) => [d.label, d.rows.length])).toEqual([
+      ['solo', 1],
+      ['pair', 2],
+    ]);
+    // Every session is reachable at depth three, none as a direct root child.
+    expect(sessionNames(git!)).toEqual(['git-solo', 'git-pair-a', 'git-pair-b']);
+  });
+
+  it('names every leaf by its session name, so a header never repeats itself', () => {
+    // A leaf carries `nameHead + nameTail` whether or not it has siblings —
+    // revision 2 only split the name for branch children.
+    const [git] = groupSessionsIntoRoots(
+      [session('git-dtc-website', '/home/alexey/git/merry-sniffing-token', 100)],
+      home,
+    );
+    const [dir] = git!.directories;
+    expect(dir!.label).toBe('merry-sniffing-token');
+    expect(dir!.rows[0]!.nameHead + dir!.rows[0]!.nameTail).toBe('git-dtc-website');
   });
 
   it('branches a directory holding more than one session, listing them by name', () => {
@@ -519,11 +560,15 @@ describe('groupSessionsIntoRoots', () => {
   });
 
   it('renders an untracked session as its own row, under its own name', () => {
+    // `untracked` — never `rows.length` — is what the renderer reads to draw
+    // the single-row orphan (§3d). There is no directory here to draw a level
+    // for, and a header would print the session name twice on adjacent rows.
     const [other] = groupSessionsIntoRoots([session('foreign-0', null, 100)], home);
     const [dir] = other!.directories;
     expect(dir!.untracked).toBe(true);
     expect(dir!.label).toBe('foreign-0');
     expect(dir!.rows).toHaveLength(1);
+    expect(dir!.rows[0]!.nameHead + dir!.rows[0]!.nameTail).toBe('foreign-0');
   });
 
   it('never merges untracked sessions into one Untracked branch', () => {
@@ -599,5 +644,270 @@ describe('groupSessionsIntoRoots', () => {
 
   it('returns nothing for an empty session list', () => {
     expect(groupSessionsIntoRoots([], home)).toEqual([]);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Registered roots — the configured top level (docs/SESSIONLIST.md §12)
+ * ------------------------------------------------------------------------- */
+
+describe('normaliseRootPath', () => {
+  it('keeps the spelling the user typed, trailing slashes aside', () => {
+    // `~/git` and `/home/alexey/git` stay DIFFERENT stored strings: settings
+    // are app-level and $HOME is per-host, so there is no home to fold them
+    // against until a connection exists. resolveRoots does that, per host.
+    expect(normaliseRootPath('~/git')).toBe('~/git');
+    expect(normaliseRootPath('~/git/')).toBe('~/git');
+    expect(normaliseRootPath('  ~/git//  ')).toBe('~/git');
+    expect(normaliseRootPath('/home/alexey/git')).toBe('/home/alexey/git');
+    expect(normaliseRootPath('~')).toBe('~');
+    expect(normaliseRootPath('/')).toBe('/');
+  });
+
+  it('refuses anything that is not anchored to / or ~', () => {
+    expect(normaliseRootPath('git')).toBeNull();
+    expect(normaliseRootPath('./git')).toBeNull();
+    expect(normaliseRootPath('')).toBeNull();
+    expect(normaliseRootPath('   ')).toBeNull();
+  });
+
+  it('refuses .. rather than resolving it', () => {
+    // Resolving needs a real filesystem, and a root that names a different
+    // directory depending on where it resolves from is not a root.
+    expect(normaliseRootPath('~/git/../tmp')).toBeNull();
+    expect(normaliseRootPath('/home/alexey/..')).toBeNull();
+    // A component that merely CONTAINS dots is fine.
+    expect(normaliseRootPath('~/git/..hidden')).toBe('~/git/..hidden');
+  });
+
+  it('refuses control characters and non-strings', () => {
+    expect(normaliseRootPath('~/git\nrm -rf')).toBeNull();
+    expect(normaliseRootPath(42)).toBeNull();
+    expect(normaliseRootPath(null)).toBeNull();
+    expect(normaliseRootPath(['~/git'])).toBeNull();
+  });
+});
+
+describe('normaliseRootList', () => {
+  it('drops bad entries without losing the good ones', () => {
+    expect(normaliseRootList(['~/git', 'nonsense', 42, '~/tmp/'])).toEqual(['~/git', '~/tmp']);
+  });
+
+  it('drops exact repeats, keeping the first', () => {
+    expect(normaliseRootList(['~/git', '~/git/', '~/tmp'])).toEqual(['~/git', '~/tmp']);
+  });
+
+  it('caps a pathological list', () => {
+    const many = Array.from({ length: SESSION_ROOTS_MAX + 10 }, (_, i) => `~/r${i}`);
+    expect(normaliseRootList(many)).toHaveLength(SESSION_ROOTS_MAX);
+  });
+});
+
+describe('pathWithinRoot (FolderTreeProjection.kt:310)', () => {
+  it('matches the root itself and anything below it', () => {
+    expect(pathWithinRoot('~/git', '~/git')).toBe(true);
+    expect(pathWithinRoot('~/git/dataops', '~/git')).toBe(true);
+    expect(pathWithinRoot('~/git/a/b/c', '~/git')).toBe(true);
+  });
+
+  it('respects the / boundary, so ~/git never claims ~/gitlab', () => {
+    expect(pathWithinRoot('~/gitlab', '~/git')).toBe(false);
+    expect(pathWithinRoot('~/gitlab/thing', '~/git')).toBe(false);
+  });
+
+  it('handles the degenerate roots', () => {
+    expect(pathWithinRoot('~/git/x', '~')).toBe(true);
+    expect(pathWithinRoot('/var/log', '/')).toBe(true);
+  });
+});
+
+describe('resolveRoots', () => {
+  const home = '/home/alexey';
+
+  it('folds the tilde and absolute spellings of one root onto one key', () => {
+    // Duplicates must not produce two identical branches. The phone dedupes on
+    // the STORED spelling and does render both; we dedupe on the resolved key.
+    const resolved = resolveRoots(['~/git', '/home/alexey/git'], home);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]!.key).toBe('~/git');
+    expect(resolved[0]!.label).toBe('git');
+  });
+
+  it('resolves ~ without needing $HOME at all', () => {
+    expect(resolveRoots(['~/git'], null).map((r) => r.key)).toEqual(['~/git']);
+  });
+
+  it('leaves a root outside $HOME absolute', () => {
+    const [root] = resolveRoots(['/srv/apps'], home);
+    expect(root!.key).toBe('/srv/apps');
+    expect(root!.label).toBe('apps');
+  });
+
+  it('keeps registered order and drops unusable entries', () => {
+    expect(resolveRoots(['~/tmp', 'garbage', '~/git'], home).map((r) => r.label)).toEqual([
+      'tmp',
+      'git',
+    ]);
+  });
+
+  it('grows two roots that share a basename apart', () => {
+    expect(resolveRoots(['~/git/work', '~/clients/work'], home).map((r) => r.label)).toEqual([
+      'git/work',
+      'clients/work',
+    ]);
+  });
+});
+
+describe('bestRootForPath', () => {
+  const home = '/home/alexey';
+  const roots = resolveRoots(['~/git', '~/git/work'], home);
+
+  it('gives a nested path to the LONGEST matching root', () => {
+    expect(bestRootForPath('/home/alexey/git/work/thing', home, roots)!.key).toBe('~/git/work');
+    expect(bestRootForPath('/home/alexey/git/dataops', home, roots)!.key).toBe('~/git');
+  });
+
+  it('matches a session sitting exactly on a root', () => {
+    expect(bestRootForPath('/home/alexey/git/work', home, roots)!.key).toBe('~/git/work');
+  });
+
+  it('treats the two spellings of one directory identically', () => {
+    expect(bestRootForPath('~/git/dataops', home, roots)!.key).toBe(
+      bestRootForPath('/home/alexey/git/dataops', home, roots)!.key,
+    );
+  });
+
+  it('returns null for a path under no root, and for an untracked one', () => {
+    expect(bestRootForPath('/var/log', home, roots)).toBeNull();
+    expect(bestRootForPath('/home/alexey/gitlab/x', home, roots)).toBeNull();
+    expect(bestRootForPath(UNTRACKED_PATH, home, roots)).toBeNull();
+  });
+});
+
+describe('groupSessionsIntoRoots with registered roots', () => {
+  const home = '/home/alexey';
+
+  /** Every session under a root, in render order, across its directories. */
+  function names(root: SessionRootFolder): string[] {
+    return root.directories.flatMap((d) => d.rows.map((r) => r.session.name));
+  }
+
+  it('falls back to deriving roots from $HOME when none are registered', () => {
+    // The default, and every existing install: nothing configured must NOT
+    // mean an empty tree or one giant `other`. The phone does dump everything
+    // into `Other folders` here; we deliberately do not.
+    const roots = groupSessionsIntoRoots(
+      [session('git-a', '/home/alexey/git/a', 300), session('tmp-b', '/home/alexey/tmp/b', 200)],
+      home,
+      [],
+    );
+    expect(roots.map((r) => r.label)).toEqual(['git', 'tmp']);
+    expect(roots.every((r) => !r.configured)).toBe(true);
+  });
+
+  it('uses the registered roots when there are any, in registered order', () => {
+    // Registered order, not recency: `git` is older than `tmp` here and still
+    // renders first, because a declared list is itself an ordering and the
+    // store's refresh timer must not be able to reshuffle the top level.
+    const roots = groupSessionsIntoRoots(
+      [session('git-a', '/home/alexey/git/a', 100), session('tmp-b', '/home/alexey/tmp/b', 900)],
+      home,
+      ['~/git', '~/tmp'],
+    );
+    expect(roots.map((r) => r.label)).toEqual(['git', 'tmp']);
+    expect(roots.every((r) => r.configured)).toBe(true);
+  });
+
+  it('sends everything under no registered root to other, still pinned last', () => {
+    const roots = groupSessionsIntoRoots(
+      [
+        session('git-a', '/home/alexey/git/a', 100),
+        // Under $HOME, but under no registered root — the new `other` case.
+        session('work-b', '/home/alexey/work/b', 900),
+        session('var-c', '/var/log', 800),
+      ],
+      home,
+      ['~/git'],
+    );
+    expect(roots.map((r) => r.label)).toEqual(['git', OTHER_LABEL]);
+    expect(names(roots[1]!)).toEqual(['work-b', 'var-c']);
+  });
+
+  it('keeps a registered root that holds nothing, and marks it configured', () => {
+    // A root the user registered is a statement of intent, not a fact derived
+    // from the session list — including on a host where it does not exist.
+    const roots = groupSessionsIntoRoots([session('git-a', '/home/alexey/git/a', 100)], home, [
+      '~/git',
+      '~/tmp',
+    ]);
+    expect(roots.map((r) => r.label)).toEqual(['git', 'tmp']);
+    const tmp = roots[1]!;
+    expect(tmp.sessionCount).toBe(0);
+    expect(tmp.directories).toEqual([]);
+    expect(tmp.configured).toBe(true);
+  });
+
+  it('renders a root that is registered twice in two spellings exactly once', () => {
+    const roots = groupSessionsIntoRoots([session('git-a', '/home/alexey/git/a', 100)], home, [
+      '~/git',
+      '/home/alexey/git/',
+    ]);
+    expect(roots.map((r) => r.label)).toEqual(['git']);
+    expect(roots[0]!.sessionCount).toBe(1);
+  });
+
+  it('files a session into the deepest registered root that claims it', () => {
+    const roots = groupSessionsIntoRoots(
+      [
+        session('git-work-x', '/home/alexey/git/work/x', 300),
+        session('git-y', '/home/alexey/git/y', 200),
+      ],
+      home,
+      ['~/git', '~/git/work'],
+    );
+    // Two roots, two labels — `work` is not grown, because nothing collides
+    // with it. What matters is where each session landed.
+    expect(roots.map((r) => r.label)).toEqual(['git', 'work']);
+    expect(names(roots[0]!)).toEqual(['git-y']);
+    expect(names(roots[1]!)).toEqual(['git-work-x']);
+  });
+
+  it('does not let a registered root claim a sibling with the same prefix', () => {
+    const roots = groupSessionsIntoRoots([session('gitlab-a', '/home/alexey/gitlab/a', 100)], home, [
+      '~/git',
+    ]);
+    expect(roots.map((r) => r.label)).toEqual(['git', OTHER_LABEL]);
+    expect(names(roots[1]!)).toEqual(['gitlab-a']);
+  });
+
+  it('still nests three levels under a registered root', () => {
+    const roots = groupSessionsIntoRoots(
+      [
+        session('git-dataops', '/home/alexey/git/dataops', 300),
+        session('git-pocketshell', '/home/alexey/git/pocketshell', 200),
+      ],
+      home,
+      ['~/git'],
+    );
+    expect(roots[0]!.directories.map((d) => [d.label, d.rows.length])).toEqual([
+      ['dataops', 1],
+      ['pocketshell', 1],
+    ]);
+  });
+
+  it('lets a registered root receive a name-recovered session it holds nothing else of', () => {
+    // §4.6, with configured roots: a root the USER declared is better evidence
+    // than one we inferred, so the heuristic may file into an empty one.
+    const roots = groupSessionsIntoRoots([session('tmp-scratch', null, 200)], home, ['~/tmp']);
+    expect(roots.map((r) => r.label)).toEqual(['tmp']);
+    expect(roots[0]!.directories[0]!.inferredRoot).toBe(true);
+  });
+
+  it('ignores a corrupt entry in the registered list instead of losing the tree', () => {
+    const roots = groupSessionsIntoRoots([session('git-a', '/home/alexey/git/a', 100)], home, [
+      'nonsense',
+      '~/git',
+    ]);
+    expect(roots.map((r) => r.label)).toEqual(['git']);
   });
 });

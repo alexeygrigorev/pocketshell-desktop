@@ -21,11 +21,21 @@
 // So: one view, mounted inside `OverlayPanel` by two callers. It renders no
 // heading of its own — the overlay chrome owns the title (see UsageView's
 // `embedded` prop and the duplicated-heading note in OverlayPanel).
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
 import { useConnectionStore } from '../stores/connection';
+import { useProjectsStore } from '../stores/projects';
+import { useSessionsStore } from '../stores/sessions';
 import { useSettingsStore } from '../stores/settings';
 import { defaultHostStatus } from '../autoConnect';
+import {
+  canonicalisePath,
+  inferHome,
+  normaliseRootPath,
+  OTHER_ROOT,
+  rootForPath,
+  SESSION_ROOTS_MAX,
+} from '../sessionGrouping';
 import {
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
@@ -36,6 +46,8 @@ import {
 } from '../fonts';
 
 const connection = useConnectionStore();
+const projects = useProjectsStore();
+const sessions = useSessionsStore();
 const settings = useSettingsStore();
 
 onMounted(async () => {
@@ -59,6 +71,71 @@ function onDefaultHostChange(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   // '' is the "no default" option; the store's parser normalises it to null.
   settings.set('defaultHost', value === '' ? null : value);
+}
+
+/* --- Session roots -------------------------------------------------------
+ * The session panel's top level. Empty means "derive roots from $HOME", which
+ * is what the panel did before this control existed, so this section is
+ * additive: a user who never opens it sees no change.
+ * ---------------------------------------------------------------------- */
+
+const rootDraft = ref('');
+const rootError = ref<string | null>(null);
+
+/**
+ * Roots offered as suggestions: the ones the CURRENT host's sessions are
+ * actually running under, minus what is already registered.
+ *
+ * This exists because a text field alone asks the user to remember paths on a
+ * machine they are not looking at. Their real roots are, by definition, where
+ * their sessions already are — so the app can just read them off the session
+ * list it already has. There is no remote directory scan behind this: the
+ * panel opens with no connection at all from the host picker, and a suggestion
+ * list that is sometimes empty is better than one that sometimes blocks on
+ * SSH. The phone solves it the other way, with a remote directory scan over
+ * three guessed parents (WatchedFoldersViewModel.kt:397).
+ */
+const rootSuggestions = computed<string[]>(() => {
+  const paths = sessions.sessions.map((session) => session.path);
+  const home = projects.home ?? inferHome(paths);
+  const out: string[] = [];
+  for (const path of paths) {
+    const { key } = rootForPath(canonicalisePath(path), home);
+    if (key === OTHER_ROOT) continue;
+    if (settings.sessionRoots.includes(key)) continue;
+    if (!out.includes(key)) out.push(key);
+  }
+  return out.sort();
+});
+
+const rootsFull = computed(() => settings.sessionRoots.length >= SESSION_ROOTS_MAX);
+
+/**
+ * Add whatever is in the field. The store owns normalisation and dedupe, so
+ * the only work here is turning its `false` into a sentence — and the two
+ * reasons it can refuse a *well-formed* path need telling apart, because
+ * "already registered" and "list is full" call for different next actions.
+ */
+function onAddRoot(): void {
+  const value = rootDraft.value;
+  if (!value.trim()) return;
+  if (normaliseRootPath(value) === null) {
+    rootError.value = 'Use an absolute path, or one under ~ — for example ~/git.';
+    return;
+  }
+  if (!settings.addSessionRoot(value)) {
+    rootError.value = rootsFull.value
+      ? `That is the limit of ${SESSION_ROOTS_MAX} roots. Remove one first.`
+      : 'That root is registered already.';
+    return;
+  }
+  rootDraft.value = '';
+  rootError.value = null;
+}
+
+function onRemoveRoot(path: string): void {
+  settings.removeSessionRoot(path);
+  rootError.value = null;
 }
 
 /**
@@ -137,6 +214,61 @@ function onSizeChange(key: 'terminalFontSize' | 'editorFontSize', event: Event):
           more, so PocketShell starts on the host list until you pick a new default.
         </span>
       </p>
+    </section>
+
+    <section class="group">
+      <h3 class="group-title">Session panel</h3>
+
+      <div class="row stacked">
+        <div class="row-text">
+          <span class="row-label">Project roots</span>
+          <p class="row-hint">
+            The top level of the session tree: <code>~/git</code>, <code>~/tmp</code>, or
+            any folder you keep projects in. Every session below a root is grouped under
+            it, by the folder it runs in. Sessions under no root collect in
+            <em>other</em>, at the bottom. Leave this empty and PocketShell works the
+            roots out from where your sessions are, as it always has.
+          </p>
+        </div>
+
+        <ul v-if="settings.sessionRoots.length" class="roots">
+          <li v-for="root in settings.sessionRoots" :key="root" class="root">
+            <span class="root-path">{{ root }}</span>
+            <button class="icon-btn" :title="`Remove ${root}`" @click="onRemoveRoot(root)">
+              <AppIcon name="trash-2" :size="14" />
+            </button>
+          </li>
+        </ul>
+
+        <div class="add-root">
+          <input
+            v-model="rootDraft"
+            class="control grow"
+            type="text"
+            list="root-suggestions"
+            placeholder="~/git"
+            :disabled="rootsFull"
+            aria-label="Add a project root"
+            @keydown.enter.prevent="onAddRoot"
+          />
+          <!-- Where the user's roots actually are, read off the running
+               sessions. Typing is still allowed: a root you have not started a
+               session in yet cannot be suggested, and registering one ahead of
+               time is a legitimate thing to want. -->
+          <datalist id="root-suggestions">
+            <option v-for="path in rootSuggestions" :key="path" :value="path" />
+          </datalist>
+          <button class="add-btn" :disabled="rootsFull" @click="onAddRoot">
+            <AppIcon name="plus" :size="14" />
+            Add
+          </button>
+        </div>
+
+        <p v-if="rootError" class="notice">
+          <AppIcon name="alert-triangle" :size="14" />
+          <span>{{ rootError }}</span>
+        </p>
+      </div>
     </section>
 
     <section class="group">
@@ -297,6 +429,84 @@ function onSizeChange(key: 'terminalFontSize' | 'editorFontSize', event: Event):
 }
 .row:last-child {
   border-bottom: none;
+}
+/* A list plus an editor cannot sit in the label-left/control-right shape the
+   other rows use — it needs the full width — so this row stacks instead. */
+.row.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+}
+.roots {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.root {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--row-h);
+  padding: 0 var(--sp-1) 0 var(--sp-3);
+  border-bottom: 1px solid var(--border-soft);
+}
+.root:last-child {
+  border-bottom: none;
+}
+/* The stored spelling, verbatim and in mono: this is the string the panel
+   matches against, so showing it in anything else would be a paraphrase. */
+.root-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-200);
+}
+.add-root {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.control.grow {
+  flex: 1;
+  max-width: none;
+  font-family: var(--font-mono);
+}
+/* Bordered, matching the session panel's `New session` button: it is the one
+   primary action in this section and a ghost control beside a text field
+   reads as a hint rather than a button. */
+.add-btn {
+  flex: none;
+  height: var(--control-h);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
+  font-weight: var(--fw-medium);
+}
+.add-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: var(--accent-soft);
+}
+.add-btn:disabled,
+.control:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .row-text {
   display: flex;

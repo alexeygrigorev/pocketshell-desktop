@@ -17,20 +17,29 @@
  * ## Three projections over one set of rules (docs/SESSIONLIST.md)
  *
  * The panel renders {@link groupSessionsIntoRoots}: a tree whose top level is
- * the ROOT directory under `$HOME` (`git`, `tmp`, …) plus an `other`
- * catch-all, and whose second level is the DIRECTORY each session runs in.
+ * a ROOT plus an `other` catch-all, and whose second level is the DIRECTORY
+ * each session runs in.
  *
- * The root level is the phone's *watched-roots* level, synthesised rather than
- * read from a project-roots table the desktop does not have.
+ * The root level is the phone's *watched-roots* level, and it now works the
+ * phone's way: the user REGISTERS roots (`settings.sessionRoots`), and
+ * whatever falls under none of them goes to `other`. When nothing is
+ * registered — the default, and every existing install — roots are still
+ * SYNTHESISED from `$HOME`'s children, so the panel looks exactly as it did
+ * before anybody visited Settings. See the block above {@link normaliseRootPath}
+ * for the ported matching semantics and the three deliberate divergences.
  *
  * The directory level is NOT `groupSessionsByFolder`, and the difference is
- * the whole point. §1 of the spec measured a 1:1 folder:session distribution
- * (11 folders, 11 sessions) and concluded a folder HEADER costs a row to say
- * nothing — true, and still true. So there is no header: a directory holding
- * exactly one session IS that session's row, at zero extra cost, and a branch
- * appears only where a directory genuinely holds more than one session and the
- * names are the only thing telling them apart. The measurement that killed the
- * old leaf level is exactly the measurement that makes this one free.
+ * that it is scoped to a root and keyed home-relative.
+ *
+ * Every directory is a node with its sessions as children, whatever it holds.
+ * §1 of the spec measured a 1:1 folder:session distribution (11 folders, 11
+ * sessions) and two revisions concluded from it that a directory holding one
+ * session should collapse into that session's row. The measurement was real;
+ * the conclusion was wrong in practice, because at that distribution the
+ * collapse fires on nearly every node and what renders is a flat list under
+ * one header — not the `git -> folder -> session` tree the user asked for
+ * three times (docs/SESSIONLIST.md, revision 3). The projection below is
+ * therefore uniform, and the renderer no longer branches on `rows.length`.
  *
  * `groupSessionsByFolder` stays exported as the phone-parity anchor for the
  * leaf level, and `canonicalisePath` / `defaultLabelForPath` remain the shared
@@ -203,10 +212,10 @@ export interface SessionRow {
   /**
    * The SESSION NAME, split for middle truncation the same way `label` is.
    *
-   * This is what a branch child renders (a directory with two or more sessions
-   * lists them by name), and the split matters most there: siblings in one
-   * directory share a prefix by construction — `git-pocketshell` and
-   * `git-pocketshell-quse` — so an end-ellipsis would render them identically.
+   * This is what every LEAF row renders, and the split matters most where a
+   * directory holds siblings: they share a prefix by construction —
+   * `git-pocketshell` and `git-pocketshell-quse` — so an end-ellipsis would
+   * render them identically.
    */
   nameHead: string;
   nameTail: string;
@@ -216,8 +225,8 @@ export interface SessionRow {
    * the whole reason the two-level tree read as duplicated.
    *
    * Only {@link flattenSessions} still consumes this. The tree answers the
-   * same question structurally: a lone session is named by its directory and
-   * its name lives in the tooltip, and siblings are named by the branch.
+   * same question structurally: the directory is said once, by the header, and
+   * every leaf below it is named by its session name.
    */
   showName: boolean;
   /** Canonical folder path, or {@link UNTRACKED_PATH}. */
@@ -385,19 +394,20 @@ export const OTHER_ROOT = '::other::';
 export const OTHER_LABEL = 'other';
 
 /**
- * One directory under a root — the panel's second level, and the level that
- * NAMES a row.
+ * One directory under a root — the panel's middle level.
  *
- * A directory with exactly one session is not a header with a child: it is a
- * single row, labelled by the directory, that selects that session. Only a
- * directory holding two or more sessions becomes a collapsible branch, and
- * then its children are the session NAMES, because at that point the names are
- * the only thing separating them.
+ * Always a collapsible node, never folded into its own child, however few
+ * sessions it holds: `rows.length` is a count, not a rendering mode. Its
+ * children are the session NAMES, at every size, because the header has
+ * already said the directory and repeating it is what made the old rows read
+ * as doubled.
  *
  * A session with no known working directory is modelled as a degenerate
- * directory of its own — label = its session name, `untracked`, never a branch
- * — so the renderer has exactly one row grammar instead of a second loose-row
- * list threaded through the same sort.
+ * directory of its own — label = its session name, `untracked`, exactly one
+ * row — so the renderer sorts one list instead of threading a second loose-row
+ * array through the same comparator. It is the one node the panel draws as a
+ * single row, because there is no directory there to draw a level for; see
+ * SessionTree.vue.
  */
 export interface SessionDirectory {
   /** Stable list and expansion key. Unique within a root. */
@@ -441,6 +451,191 @@ export interface SessionRootFolder {
   active: boolean;
   /** True for the catch-all, which is pinned last and reads as a bucket. */
   other: boolean;
+  /**
+   * True when this root came from the user's registered list rather than from
+   * the shape of the paths. Only a registered root can have `sessionCount: 0`
+   * — a derived root exists BECAUSE a session is in it — so this is what lets
+   * the panel say "registered, nothing running here" instead of drawing a
+   * header with nothing under it and no explanation.
+   */
+  configured: boolean;
+}
+
+/* ---------------------------------------------------------------------------
+ * Registered roots — the top level, when the user has configured one
+ *
+ * The phone calls these WATCHED ROOTS and stores them per host in a Room table
+ * (`project_roots`: `{hostId, label, path}`, ProjectRootEntity.kt:26-32). The
+ * desktop stores them app-level, in `stores/settings.ts`, for one reason: a
+ * registered root is written home-relative (`~/git`), and `~/git` means the
+ * same place on every host the user connects to. A per-host table would make
+ * the user re-register the same three roots on each box.
+ *
+ * Matching semantics are ported from FolderTreeProjection.kt verbatim, because
+ * that is the behaviour the user already knows from the phone:
+ *   - prefix match on a `/` boundary, so `~/git` never claims `~/gitlab`
+ *     (`pathWithinRoot`, :310);
+ *   - longest match wins when roots nest, first-registered breaking a tie
+ *     (`bestRootForPath`, :475);
+ *   - a session sitting exactly ON the root belongs to it;
+ *   - anything matching no root goes to `other`, pinned last (:276);
+ *   - a registered root with no sessions still renders (:179-241).
+ *
+ * Three deliberate divergences, all recorded in docs/SESSIONLIST.md §12:
+ *   - the phone's no-roots fallback dumps EVERYTHING into `Other folders`
+ *     (:253-274). We keep deriving roots from `$HOME` instead, so a user who
+ *     has configured nothing sees exactly what they saw before.
+ *   - the phone dedupes roots by their STORED spelling, so `~/git` and
+ *     `/home/me/git` survive as two identical-looking nodes. We dedupe on the
+ *     resolved key, so they cannot.
+ *   - the phone collapses a session's directory to the FIRST segment under its
+ *     root (`projectPathUnderRoot`, :538). We keep the full directory the
+ *     session actually runs in; see §12 for the argument, which is close.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Upper bound on the registered-root list, applied when settings are parsed.
+ *
+ * Not a UI limit anybody should reach — it is a guard on a hand-editable JSON
+ * blob, so a corrupt or pathological array cannot make the panel render
+ * thousands of headers.
+ */
+export const SESSION_ROOTS_MAX = 32;
+
+/**
+ * Clean one registered root into the form that gets STORED, or null if it is
+ * not usable as a root at all.
+ *
+ * Stored roots keep the spelling the user typed — `~/git` stays `~/git`,
+ * `/home/alexey/git` stays absolute — because settings are app-level while
+ * `$HOME` is per-host, so at write time there is no home to rewrite against.
+ * The two spellings are folded together later and per host by
+ * {@link resolveRoots}, through `directoryKey`: the same rule that already
+ * folds tmux's two spellings of one directory into one node. One rule applied
+ * twice, rather than a second normalisation free to drift from it.
+ */
+export function normaliseRootPath(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  // A control character cannot be in a path the user meant to type, and a
+  // newline inside a stored root would corrupt every listing that prints it.
+  if ([...value].some((ch) => ch < ' ')) return null;
+  const canonical = canonicalisePath(value);
+  if (canonical === UNTRACKED_PATH) return null;
+  // `..` is refused rather than resolved: resolving it needs a real filesystem,
+  // and a root that names a different directory depending on where it is
+  // resolved from is not a root. The phone refuses it too
+  // (WatchedFoldersViewModel.kt:368-388).
+  if (canonical.split('/').includes('..')) return null;
+  // Anchored, as on the phone: absolute, or under `~`. A bare `git` would be
+  // relative to nothing this panel can name.
+  if (canonical !== '~' && !canonical.startsWith('~/') && !canonical.startsWith('/')) return null;
+  return canonical;
+}
+
+/**
+ * Clean a whole stored list: drop what {@link normaliseRootPath} rejects, drop
+ * exact repeats, and cap the length.
+ *
+ * Dedupe here is exact-string only. `~/git` and `/home/alexey/git` are still
+ * two entries at this point and are collapsed by {@link resolveRoots} once a
+ * host's `$HOME` is known — which is the only place that question has an
+ * answer.
+ */
+export function normaliseRootList(values: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    if (out.length >= SESSION_ROOTS_MAX) break;
+    const root = normaliseRootPath(value);
+    if (root !== null && !out.includes(root)) out.push(root);
+  }
+  return out;
+}
+
+/** A registered root, resolved against one host's `$HOME`. */
+export interface ResolvedRoot {
+  /** Home-relative comparison key (`~/git`), or an absolute path outside home. */
+  key: string;
+  /** Header label: the root's own name, grown on collision. */
+  label: string;
+  /** The stored spelling, kept for the header tooltip. */
+  source: string;
+}
+
+/**
+ * Two registered roots can share a basename (`~/git/work`, `~/clients/work`).
+ * Give every member of a colliding set its home-relative path instead, so no
+ * two headers read identically. Deliberately simpler than the directory
+ * level's `disambiguateLabels`: a root list is short, user-authored, and the
+ * user can rename the collision away by registering a different root.
+ */
+function labelRootsApart(roots: ResolvedRoot[]): void {
+  const counts = new Map<string, number>();
+  for (const root of roots) counts.set(root.label, (counts.get(root.label) ?? 0) + 1);
+  for (const root of roots) {
+    if ((counts.get(root.label) ?? 0) < 2) continue;
+    root.label = root.key.startsWith('~/') ? root.key.slice(2) : root.key;
+  }
+}
+
+/**
+ * Resolve the stored root list against a host's `$HOME`, in registered order.
+ *
+ * Deduping happens on the RESOLVED key, which is what stops `~/git` and
+ * `/home/alexey/git` — the same directory, two spellings, both perfectly
+ * reasonable things for a user to type — rendering as two identical branches.
+ * The phone dedupes on the stored spelling and does render both.
+ */
+export function resolveRoots(roots: readonly string[], home: string | null): ResolvedRoot[] {
+  const resolved: ResolvedRoot[] = [];
+  const seen = new Set<string>();
+  for (const source of roots) {
+    const canonical = normaliseRootPath(source);
+    if (canonical === null) continue;
+    const key = directoryKey(canonical, home);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    resolved.push({ key, label: defaultLabelForPath(key), source: canonical });
+  }
+  labelRootsApart(resolved);
+  return resolved;
+}
+
+/**
+ * Is `path` at or below `root`? Port of `pathWithinRoot`
+ * (FolderTreeProjection.kt:310).
+ *
+ * The `/` boundary is the whole point: a plain `startsWith` would let `~/git`
+ * swallow `~/gitlab`, and a user who registers one of those and not the other
+ * means it.
+ */
+export function pathWithinRoot(path: string, root: string): boolean {
+  if (path === root) return true;
+  return path.startsWith(root.endsWith('/') ? root : `${root}/`);
+}
+
+/**
+ * Which registered root claims this working directory, or null for none.
+ *
+ * **Longest match wins**, so registering both `~/git` and `~/git/work` puts a
+ * session in `~/git/work/thing` under `work` rather than under `git` — the
+ * more specific declaration is the more deliberate one. A tie is impossible
+ * between distinct keys of equal length that both match, but the comparison is
+ * strict `>` regardless, so the FIRST-registered root wins one if it ever
+ * arises; that is `maxByOrNull`'s behaviour on the phone.
+ */
+export function bestRootForPath(
+  folderPath: string,
+  home: string | null,
+  roots: readonly ResolvedRoot[],
+): ResolvedRoot | null {
+  if (folderPath === UNTRACKED_PATH) return null;
+  const key = directoryKey(folderPath, home);
+  let best: ResolvedRoot | null = null;
+  for (const root of roots) {
+    if (!pathWithinRoot(key, root.key)) continue;
+    if (best === null || root.key.length > best.key.length) best = root;
+  }
+  return best;
 }
 
 /** Trim a `$HOME` value to a comparable prefix; blank becomes "unknown". */
@@ -605,10 +800,11 @@ function compareRoots(a: SessionRootFolder, b: SessionRootFolder): number {
  * directory holding an attached session first, then most-recent activity
  * descending, then a case-insensitive label.
  *
- * Attached-first is lifted to this level rather than dropped, because at the
- * 1:1 distribution the directory row IS the session row — demoting the key
- * would move the session the user is currently in off the top of its root,
- * which is the one thing the sort exists to prevent.
+ * Attached-first is lifted to this level rather than dropped: at the 1:1
+ * distribution a directory is a one-session node, so demoting the key would
+ * move the session the user is currently in off the top of its root, which is
+ * the one thing the sort exists to prevent. The header now sits above that
+ * session rather than being it, which changes nothing about the ordering.
  */
 function compareDirectories(a: SessionDirectory, b: SessionDirectory): number {
   const byAttached = Number(b.active) - Number(a.active);
@@ -624,32 +820,68 @@ function compareDirectories(a: SessionDirectory, b: SessionDirectory): number {
  * @param home the host's `$HOME`, or null — in which case it is inferred from
  *   the paths ({@link inferHome}) rather than surrendering every row to
  *   `other`.
+ * @param roots the user's REGISTERED roots (`settings.sessionRoots`), in the
+ *   order they were registered. Empty — the default — keeps the original
+ *   behaviour of deriving roots from `$HOME`'s children, so nothing changes
+ *   for a user who has configured nothing.
  *
- * Roots sort by most-recent activity descending, as folders do on the phone,
- * with `other` pinned last however recent it is: it is a bucket, not a place,
- * and letting it float to the top would put the least-organised rows where the
- * eye lands first. Rows keep the flat list's global order within each root.
+ * **Root order** depends on which mode is in play. Registered roots render in
+ * REGISTERED ORDER: a declared list is itself an ordering, and re-sorting it
+ * by recency would reshuffle the panel's top level under the sessions store's
+ * refresh timer. Derived roots have no declared order, so they keep the
+ * most-recent-activity sort. Either way `other` is pinned last, however recent
+ * it is: it is a bucket, not a place, and letting it float to the top would
+ * put the least-organised rows where the eye lands first. Rows keep the flat
+ * list's global order within each root.
  */
 export function groupSessionsIntoRoots(
   sessions: SessionSummary[],
   home: string | null = null,
+  roots: readonly string[] = [],
 ): SessionRootFolder[] {
   const resolvedHome = normaliseHome(home) ?? inferHome(sessions.map((s) => s.path));
+  const configured = resolveRoots(roots, resolvedHome);
+  const configuredKeys = new Set(configured.map((root) => root.key));
   const rows = buildRows(sessions);
 
-  // Pass 1: the roots that exist from REAL paths. The name heuristic below can
-  // only file into these, so it can place a session but never invent a place.
+  // Pass 1: the roots the NAME heuristic (§4.6) is allowed to file into.
+  //
+  // Configured: the registered list. A root the user declared is BETTER
+  // evidence than one we inferred, so a no-cwd session called `tmp-scratch`
+  // reaches a registered `~/tmp` even when nothing else is running there.
+  // Derived: only roots that exist from REAL paths, which is what stops the
+  // heuristic inventing a place rather than merely placing a session.
   const rootLabels = new Map<string, string>();
-  for (const row of rows) {
-    if (row.untracked) continue;
-    const { key, label } = rootForPath(row.folderPath, resolvedHome);
-    if (key !== OTHER_ROOT) rootLabels.set(label, key);
+  if (configured.length > 0) {
+    for (const root of configured) rootLabels.set(root.label, root.key);
+  } else {
+    for (const row of rows) {
+      if (row.untracked) continue;
+      const { key, label } = rootForPath(row.folderPath, resolvedHome);
+      if (key !== OTHER_ROOT) rootLabels.set(label, key);
+    }
+  }
+
+  /** Where a row's working directory belongs, before the name heuristic. */
+  function placeRow(row: SessionRow): { key: string; label: string } {
+    if (configured.length === 0) return rootForPath(row.folderPath, resolvedHome);
+    const match = bestRootForPath(row.folderPath, resolvedHome, configured);
+    if (match === null) return { key: OTHER_ROOT, label: OTHER_LABEL };
+    return { key: match.key, label: match.label };
   }
 
   // Pass 2: place every row, then group its root's rows into directories.
   const byRoot = new Map<string, { key: string; label: string; rows: SessionRow[] }>();
+  // Registered roots are seeded EMPTY, before any row is placed, so a root the
+  // user declared still renders when nothing is running in it — including on a
+  // host where the directory does not exist at all. A registered root is a
+  // statement of intent, not a fact derived from the session list, and a
+  // setting that silently shows nothing reads as a broken setting.
+  for (const root of configured) {
+    byRoot.set(root.key, { key: root.key, label: root.label, rows: [] });
+  }
   for (const row of rows) {
-    let placement = rootForPath(row.folderPath, resolvedHome);
+    let placement = placeRow(row);
     if (row.untracked) {
       const recovered = rootFromSessionName(row.session.name, rootLabels.keys());
       const key = recovered !== null ? rootLabels.get(recovered) : undefined;
@@ -681,11 +913,21 @@ export function groupSessionsIntoRoots(
       mostRecentActivity: directories.reduce((max, d) => Math.max(max, d.mostRecentActivity), 0),
       active: directories.some((d) => d.active),
       other: bucket.key === OTHER_ROOT,
+      configured: configuredKeys.has(bucket.key),
     });
   }
 
-  const rooted = folders.filter((f) => !f.other).sort(compareRoots);
+  const rooted = folders.filter((f) => !f.other);
   const other = folders.filter((f) => f.other);
+  if (configured.length > 0) {
+    // Registered order. Every non-`other` key here came from `configured` —
+    // `placeRow` and the name heuristic can only produce registered keys or
+    // `other` — so the lookup always hits.
+    const rank = new Map(configured.map((root, index) => [root.key, index]));
+    rooted.sort((a, b) => (rank.get(a.key) ?? 0) - (rank.get(b.key) ?? 0));
+  } else {
+    rooted.sort(compareRoots);
+  }
   return [...rooted, ...other];
 }
 

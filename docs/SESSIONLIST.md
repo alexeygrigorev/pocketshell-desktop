@@ -7,8 +7,8 @@ asked for the folder view back:
 > "for the left side panel — I want something like a folder view. git /
 > sessions … tmp / sessions other sessions. like we have in the app"
 
-and **revised again** — this document — when the user circled a row rendering
-as `● m…ng-token  git-dtc-website…  20h` and said:
+**revised a second time** when the user circled a row rendering as
+`● m…ng-token  git-dtc-website…  20h` and said:
 
 > "this should be the directory, not session name. but if we have multiple
 > things in a directory then we have another branch in the tree where we show
@@ -18,30 +18,66 @@ plus, on the same panel, three sessions sitting in `other`:
 
 > "these things are actually under git/ too."
 
-**What revision 2 changes.** The second level stops being a flat list of
-session rows and becomes a list of **directories**. A directory holding one
-session is that session's row, labelled by the directory. A directory holding
-two or more becomes a **branch** whose children are the session names. And a
-session whose cwd the host never reported is filed under the root its **name**
-names, instead of falling into `other` (§4.6).
+and **revised a third time — this document —** after the user reported
+"session grouping still doesn't work" for the **third** time and spelled the
+requirement out:
 
-**Why this does not contradict §1.** §1 measured a 1:1 folder:session
-distribution and concluded a folder *header* costs a row to say nothing. That
-conclusion is untouched and is the reason this design is shaped the way it is:
-there is **no header at 1:1**. The directory row *is* the session row, so the
-common case costs exactly zero extra rows and zero extra chevrons — the same
-row count the flat list had. The branch appears only where a directory really
-does hold more than one session, i.e. precisely where the old leaf header had
-something to say and the flat row had to fall back on a dimmed secondary name
-(the old §4.3). Revision 1 answered §1 by moving the header *up* to the root;
-revision 2 answers it by making the level *conditional*. Both readings of §1
-are the same reading: **spend a row only where there is fan-out.**
+> "git -> folder -> session"
 
-Sections rewritten by revision 2: §2 (the position), §3b/§3c (row anatomy),
-§4 (all of it — the label rules move up a level), §6 (sort and expansion),
-§8 (implementation), §9, §10, §11. Sections unchanged and still binding: §1
-(the measurement), §3a (the root header), §5 (middle truncation), §7 (panel
-width, except the container-query note in §3c).
+## Revision 3, and why revisions 1 and 2 were wrong
+
+**What changes.** The directory level stops being conditional. Every
+directory renders as its own header row with its sessions nested beneath it,
+always, so the panel is `root -> directory -> session` at every node. The
+directory row is no longer selectable as a session: clicking it expands or
+collapses, and selecting happens on the leaf.
+
+**Why the previous two revisions got this wrong, and it was not the
+measurement.** §1 is kept verbatim below and every number in it still holds:
+11 folders, 11 sessions, 1:1. Revision 1 read that as "move the header up to
+the root". Revision 2 read it as "emit no header at 1:1 — the directory row
+*is* the session row". Both were arguing the same defensible principle,
+written into revision 2's §10.2 as **"spend a row only where there is
+fan-out"**, and both were arguing it about the wrong thing.
+
+The mistake is visible only when you apply the conditional to the measured
+distribution instead of to a sketch. At 1:1 the conditional fires on **every**
+node. What revision 2's §2 sketch draws as a tree with one illustrative branch
+renders, on the user's actual host, as a single `git` header over a flat list
+of twelve rows — the exact view revision 1 was written to replace, with a
+chevron on top. That is what the user was looking at all three times they said
+grouping does not work.
+
+So the error was in the unit being optimised. A row count is a cost; it is not
+the deliverable. **The deliverable is that the user can see the structure** —
+which directory each session lives in, and which directories exist — and a
+tree whose nodes collapse whenever they hold exactly one child does not read
+as a tree at all. It reads as a list that has been decorated. Revision 2's
+argument that the collapsed row "costs exactly what the flat row cost" is
+true, and it is beside the point: what it cost was the structure.
+
+**What §1 still buys.** One thing, and it is kept (§3b field 4): the bare
+count is dropped from a directory header holding one session. `1` beside a
+header whose only child is drawn on the very next row genuinely is the dead
+field §1 identified, and dropping it hands the label back some of the width
+the new indent level takes.
+
+**Superseded reasoning is kept, not deleted.** Revisions 1 and 2 both revised
+by overwriting, which is how the same wrong conclusion got re-derived twice
+from the same correct measurement. The old arguments now sit under
+`~~struck~~` headings so the next reader can see what was tried and why it
+failed against real data rather than in the abstract.
+
+Revision 3 also lands a **second, separate request** from the user, in §12: the
+ROOT level stops being derived from `$HOME` and becomes a list the user
+registers in Settings, which is the phone's "watched roots". The two interact —
+§12.4 records the decisions they force on each other — but they are independent
+changes and §12 can be read on its own.
+
+Sections rewritten by revision 3: §2, §3 (all of it — the anatomy and the
+indent budget), §4.1/§4.3/§4.4, §5 (one bullet), §6, §7 (the container-query
+floor), §8, §9, §10, §11. New: §12. Sections unchanged and still binding: §1
+(the measurement), §4.2, §4.5, §4.6.
 
 Line numbers cited below are from the commits named beside them and may drift.
 
@@ -98,80 +134,115 @@ an "Other folders" catch-all (pocketshell clone:
 hold all 11). The desktop ported only the fallback path where the degenerate
 level *is* the top level (sessionGrouping.ts:11-15).
 
-## 2. Position: two levels, and every row is named by a DIRECTORY
+## 2. Position: three levels, unconditionally
 
-**Group sessions by the first path component under `$HOME` — `git`, `tmp` —
-with an `other` catch-all. Inside a root, group by the working DIRECTORY. A
-directory with one session renders as one row, labelled by the directory, that
-selects that session. A directory with two or more renders as a collapsible
-branch whose children are the session names.**
+**Group sessions by ROOT — the roots the user registered in Settings (§12), or
+`$HOME`'s children when they have registered none — with an `other` catch-all.
+Inside a root, group by the working DIRECTORY. Every directory is a
+collapsible header row whose children are its sessions, named by session name.
+There is no size at which a level disappears.**
 
 ```
-v git                      root header  (unchanged, §3a)
-    dtc-website            one session here -> the directory row IS its row
-  v pocketshell            two sessions here -> a branch
-      git-pocketshell      the session name, and only here
-      git-pocketshell-quse
-    dataops
-> other                    unchanged catch-all
+v git                        12
+  v dtc-website
+      git-dtc-website               21h
+  v pocketshell                2
+      git-pocketshell               21h
+      git-pocketshell-quse          20h
+  v dataops
+      git-dataops                   22h
+> other                         3
 ```
 
-### Why the level is free at 1:1
+Read the `dtc-website` and `dataops` nodes: one session each, and each still
+gets its header and its child. That is the whole of revision 3.
 
-§1's measurement is the load-bearing input, not an obstacle. It says: at 11
-folders and 11 sessions, a folder *header* buys nothing, and since the session
-name is derived from the folder path (`~/git/dataops` → `git-dataops`,
-sessionName.ts:66-95) the header and the row were the same fact twice.
+### What the levels cost, honestly
 
-This design pays that bill by **not emitting a header at 1:1**. The directory
-and the session are one row. Compared with revision 1's flat list the common
-case is not one row heavier, one indent deeper, or one chevron busier — it is
-byte-for-byte the same row, with a better label:
+| Distribution | Rev 1 (flat) | Rev 2 (conditional) | Rev 3 (this) |
+|---|---|---|---|
+| 11 folders, 1 session each | 11 rows | 11 rows | 1 + 11 + 11 = **23 rows** |
+| 1 folder, 3 sessions | 3 rows + a dimmed name each | 1 branch + 3 rows | 1 branch + 3 rows |
 
-| Distribution | Rev 1 (flat rows) | Rev 2 (directories) |
-|---|---|---|
-| 11 folders, 1 session each | 11 rows | **11 rows** |
-| 1 folder, 3 sessions | 3 rows, each with a dimmed secondary name | 1 branch + 3 rows |
+Row one is the trade and it is not a small one: at the measured distribution
+this design is roughly double the rows of the design it replaces, all of them
+above the fold of a scrolling panel. It is accepted because **rows are not
+what the panel is short of** — it scrolls, and the sessions store caps at what
+one host runs. What the panel was short of was any way to see which directory
+a session was in without hovering it, and that is what the extra row buys.
+Collapse is the escape hatch and it is remembered (§6), so a user who wants
+revision 2's density can collapse a directory and keep it collapsed.
 
-The second line is the trade, and it is the one the user asked for by name. It
-is also strictly better than what it replaces: the old §4.3 handled the
-multi-session folder by turning the secondary session-name field on for every
-one of its rows, which is the doubled `label + dimmed name` row the user
-circled. A branch says the folder **once**, at the top, and then says only what
-differs.
+### ~~Why the level is free at 1:1~~ (revision 2, superseded)
 
-### Why the primary label is the directory, never the session name
+*Kept for the record. This is the argument that produced the panel the user
+rejected three times; it is wrong in the way described at the top of this
+document, not in its arithmetic.*
 
-The session name is *derived from the path*, so as a row label it is a lossy
-restatement of the folder with a root prefix bolted on (`git-dataops` for
-`~/git/dataops`, already sitting under a header that says `git`). The folder
-basename is shorter, more distinctive, and it is what the user navigates by.
-The name survives in the tooltip, always, and gets its own rows in a branch.
+> §1's measurement is the load-bearing input, not an obstacle. It says: at 11
+> folders and 11 sessions, a folder *header* buys nothing, and since the
+> session name is derived from the folder path (`~/git/dataops` →
+> `git-dataops`, sessionName.ts:66-95) the header and the row were the same
+> fact twice.
+>
+> This design pays that bill by **not emitting a header at 1:1**. The
+> directory and the session are one row. Compared with revision 1's flat list
+> the common case is not one row heavier, one indent deeper, or one chevron
+> busier — it is byte-for-byte the same row, with a better label.
+>
+> The multi-session line is the trade, and it is the one the user asked for by
+> name. It is also strictly better than what it replaces: the old §4.3 handled
+> the multi-session folder by turning the secondary session-name field on for
+> every one of its rows, which is the doubled `label + dimmed name` row the
+> user circled. A branch says the folder **once**, at the top, and then says
+> only what differs.
 
-**The dimmed secondary name field is retired.** It existed to answer "which
-session is this?" on a row named by a folder, and both cases it covered now
-have a better answer: siblings get a branch, and a lone session does not need
-disambiguating from anything. Retiring it also removes the middle-truncation
-collision the user circled — two competing labels fighting over ~150px.
+The last paragraph survives revision 3 intact and is now the rule at every
+size: the directory is said once, by its header, and the rows below it say
+only what differs.
+
+### Why the header label is the directory, never the session name
+
+The session name is *derived from the path*, so as a header label it would be
+a lossy restatement of the folder with a root prefix bolted on (`git-dataops`
+for `~/git/dataops`, already sitting under a header that says `git`). The
+folder basename is shorter, more distinctive, and it is what the user
+navigates by. The name is not lost: it labels the leaf row directly beneath,
+and the tooltip carries both in full.
+
+**The dimmed secondary name field stays retired.** It existed to answer "which
+session is this?" on a row named by a folder, and revision 3 answers it
+structurally at every size: the folder names the header, the name names the
+leaf, and neither row carries two labels fighting over ~150px — which is the
+middle-truncation collision the user circled.
 
 ### Still rejected
 
-- **A header per leaf folder** — §1, and the reason this document exists.
-  A *conditional* branch is not that: it appears only above ≥2 sessions.
+- **~~A header per leaf folder~~** — this was §1's conclusion and revision 2's
+  rejected option. **Revision 3 adopts it.** See the top of this document for
+  why: §1's row-count argument is real, and it was never the thing the user
+  was asking about.
 - **Group by agent kind or recency bucket** — agent kind is already a badge
   and recency is already the sort.
 - **Recovering the DIRECTORY from a session name** — see §4.6. The derivation
   is not invertible, and a guessed directory row is worse than none.
-- **A third directory level (nesting `~/git/a/b` under `~/git/a`)** — nothing
-  in the real data has it, and it would reintroduce §1's dead row for every
-  intermediate directory that holds no session of its own.
+- **A FOURTH level (nesting `~/git/a/b` under `~/git/a`)** — nothing in the
+  real data has it, and unlike the directory level it would spend a row on a
+  node holding **no session of its own**, which is a genuinely empty row
+  rather than a structural one. The user asked for three levels and named
+  them; this is where the nesting stops.
+- **Auto-collapsing a directory once the list is long** — a rule that removes
+  the level again at exactly the distribution that motivated it. Collapse is
+  manual, and remembered (§6).
 
-The desktop still has no project-roots table, so roots are **synthesised from
-the session paths** rather than read from one (§8). That is a real difference
-from the phone and is recorded as one: the desktop can only ever show roots
-that currently hold a session, where the phone also lists sessionless project
-folders to create into. The `New session` footer button is what covers the
-gap — creation is folder-first through its own picker.
+**Superseded by §12:** this paragraph used to read "the desktop still has no
+project-roots table, so roots are synthesised from the session paths rather
+than read from one… the desktop can only ever show roots that currently hold a
+session, where the phone also lists sessionless project folders to create
+into." That gap is now closed: roots are registered in Settings, and a
+registered root renders whether or not anything is running in it. Synthesis
+from `$HOME` survives as the no-roots-configured default, which is what keeps
+an install that never visits Settings looking exactly as it did.
 
 `sessionGrouping.ts` keeps all three projections. `canonicalisePath` /
 `defaultLabelForPath` / `sessionActivity` remain the shared label and ordering
@@ -180,11 +251,46 @@ the LEAF level even though nothing renders it; and the root projection and the
 flat projection are built from one shared row builder (§8), so they cannot
 disagree about what a folder is called.
 
-## 3. Row anatomy
+## 3. Row anatomy and the indent budget
 
-**Three** row types now, all height `--row-h` (28px, docs/DESIGN.md:535).
-Budget at the 280px default (HostWorkspaceView.vue:36); every selectable row
-keeps the 2px selection rail slot + accent rail for `current`.
+**Three** row types, all height `--row-h` (28px, docs/DESIGN.md:535), plus one
+degenerate fourth (§3d). Budget at the 280px default
+(HostWorkspaceView.vue:36); every selectable row keeps the 2px selection rail
+slot + accent rail for `current`.
+
+### 3.0 The indent budget
+
+Three levels have to fit above the 200px panel floor (§7), so the step is the
+smallest one that still reads as nesting: **8px**, which is VS Code's own tree
+step. The column all three row types share is the **dot**, because it is the
+one element every row has; each label then follows its dot at a constant 16px
+(an 8px dot plus an `--sp-2` gap), so the labels inherit the same rhythm
+without a second set of numbers to keep in sync.
+
+| Level | Chevron box | Dot | Label |
+|---|---|---|---|
+| Root header (§3a) | 8–22 | **30** | 46 |
+| Directory header (§3b) | 20–34 | **38** | 54 |
+| Session row (§3c) | — | **46** | 62 |
+
+Arithmetic, so it can be checked rather than trusted: a header's left inset
+plus the 14px chevron box plus a 4px gap lands its dot (`8+14+8=30` for the
+root, whose gap is the full `--sp-2`; `20+14+4=38` for the directory, whose
+`.disclosure` carries `margin-right: -4px` to trim the shared gap). A row
+without a chevron simply starts at its dot. Both indented row types spend 2px
+of their inset on the selection-rail slot.
+
+**What the level costs the leaf.** Its label starts at 62 where revision 2's
+single-session row started at 46 — 16px, and the leaf now carries a full
+session name where that row carried a short directory basename. Two things pay
+for it: the container-query floor moves 250 → 270 (§7), so the timestamp is
+already gone by the time width is genuinely scarce; and a one-session
+directory header drops its `1` count (§3b field 4). At the 200px floor the
+leaf has `200 − 62 − 10 = 128px` for label and badge — about 13 characters
+next to a `claude` badge, which is why middle truncation (§5) is load-bearing
+here rather than decorative: what survives is `git-…ell-quse`, the half that
+separates a session from its sibling. At the 280px default the leaf gets
+208px, which clears the longest name in the real data set untruncated.
 
 ### 3a. Root header row
 
@@ -202,57 +308,69 @@ because the grouping key *is* home-relative (§8). The `other` header says
 `sessions outside $HOME, or with no known folder` instead, since it has no one
 path to name.
 
-### 3b. Directory row (one session) — the common case
+### 3b. Directory header row — every directory, whatever it holds
 
-Selects the session. `class="session-row"`, exactly as the flat row was.
+A `<button class="dir-header">`, so collapse is keyboard-reachable and
+`aria-expanded` is real, followed by a `<ul>` of §3c rows.
 
-| # | Field | Spec | Width at 280px |
-|---|-------|------|----------------|
-| 1 | Left inset | 2px rail slot + **28px child indent**, which puts the row's dot exactly under its root header's dot and the row label under the header label. (28, not `--sp-4`: the header is `--sp-2` + a 14px disclosure box + an `--sp-2` gap = 30px to its dot.) | 30px |
-| 2 | Status dot | 8px circle. `--success` when attached, `--fg-muted` otherwise. This plus sort position (§6) **replaces** the `attached` text tag, which stays retired | 8px + 8px gap |
-| 3 | **Directory** label | The directory's own name — its trailing path component, never the full path and never the session name. `--font-ui` `--fs-300`; `--fw-semibold` when attached. Middle-truncates (§5). Wins the width fight: `flex: 1; min-width: 0` | ~190-230px (flex) |
-| 4 | Agent badge | Unchanged (POLISH.md §7 chip metric). `flex: none` | 0-56px |
-| 5 | Relative time | `--fs-100` `--fg-secondary` `tabular-nums`, right-aligned, `flex: none` (§6) | ~36px max |
-| 6 | Right padding | `--row-pad-x` | 10px |
-
-**Field 4 of revision 1 — the dimmed secondary session name — is deleted.**
-That is the single biggest width win in this revision: worst case now leaves
-the label ~190px instead of ~90px, so `ai-dev-tools-zoomcamp` (21 chars, the
-longest label in the real data set) has room to spare and the middle-truncation
-in the screenshot simply stops firing at the default width.
-
-An **untracked** session (no reported cwd) still renders in this row type, with
-its own name as the label in `--font-mono` — it has no directory to be named
-after, so its name is the only label there is. See §4.6 for where it is filed.
-
-**Tooltip** (native `title`): `<session name>\n<full folder path>\n<absolute
-time>`, unchanged. This is now the *only* place a lone session's name is
-written, which is the point — it was never the operational fact, and the
-tooltip always carried it.
-
-### 3c. Directory branch (two or more sessions)
-
-A `<button class="dir-header">` — collapse is keyboard-reachable and
-`aria-expanded` is real — followed by a nested `<ul>` of session rows.
+**It does not select a session.** Clicking it toggles, and that is the whole
+of its click behaviour — the session it used to stand in for at 1:1 now has a
+row of its own on the very next line, so there is nothing for a click here to
+disambiguate. `select` is emitted from leaves only, and it still carries a
+`SessionSummary`, so `HostWorkspaceView.onSelectSession` is untouched.
 
 | # | Field | Spec |
 |---|-------|------|
-| 1 | Left inset + disclosure | 2px rail + 10px, so the 14px `chevron-right` box sits at 12-26 and a 4px gap lands the dot at **30 — the same column as a §3b row's dot and the root header's**. Two row types alternate freely down the list; a stepped dot would read as jitter |
-| 2 | Status dot | **Aggregate**: `--success` when *any* session in the directory is attached. Same rule §3a gives the root header, for the same reason — a collapsed branch's only way to say "something live is in here" |
-| 3 | Directory label | Identical to §3b field 3, so the branch and its single-session siblings are visibly the same kind of thing |
-| 4 | Count | Bare integer, `--fs-100` `--fg-muted`, `margin-left: auto`. Always ≥2 |
-| 5 | Relative time | **The newest activity in the directory** — which is also the key it sorts on (§6), so a branch can never display an older time than a branch below it. The alternative (no time) makes a collapsed branch the one row in the panel that cannot answer "was this touched recently?", which is the question the panel exists to answer |
+| 1 | Left inset + disclosure | 2px rail + 18px, so the 14px `chevron-right` box sits at 20–34 and a 4px gap lands the dot at **38**, one 8px step right of the root's. Revision 2 pinned this dot at 30 because directory headers and single-session directory rows alternated down the list and a stepped dot would have read as jitter; there is no such alternation now |
+| 2 | Status dot | **Aggregate**: `--success` when *any* session in the directory is attached. Same rule §3a gives the root header, for the same reason — a collapsed node's only way to say "something live is in here" |
+| 3 | Directory label | The directory's own name — its trailing path component, never the full path and never a session name. `--font-ui` `--fs-300`. Middle-truncates (§5). Wins the width fight: `flex: 1 1 auto; min-width: 0` |
+| 4 | Count | Bare integer, `--fs-100` `--fg-muted` — **only from 2 up**. This is the one place §1's measurement still binds: a `1` beside a header whose only child is drawn on the next row is exactly the dead field §1 named, and dropping it hands the label back width the new level took |
+| 5 | Relative time | **The newest activity in the directory** — which is also the key it sorts on (§6), so a header can never display an older time than a header below it. The alternative (no time) makes a collapsed directory the one row in the panel that cannot answer "was this touched recently?", which is the question the panel exists to answer |
 
-**Branch child row:** `class="session-row child"`, `padding-left: 44px` (dot at
-46, one level in from the branch label). Label is the **session name** in
-`--font-mono`, middle-truncated (§5) — and this is where middle truncation
-earns its keep most, because siblings share a derived prefix by construction:
-`git-pocketshell` vs `git-pocketshell-quse`. Dot, badge, and time are the §3b
-fields unchanged.
+**Header tooltip:** the directory's full path + `1 session` / `3 sessions`.
+The phrase form lives only here; the visible count is a bare integer or
+nothing.
 
-A child row is ~16px deeper than a §3b row and so truncates sooner. Accepted:
-the branch is the rare case, and its label is the one place a full session name
-genuinely has to fit.
+### 3c. Session row — the leaf, and the only selectable row
+
+`class="session-row child"`, `padding-left: 44px` (dot at 46, one step in from
+its header's). Label is the **session name** in `--font-mono`,
+middle-truncated (§5) — and this is where middle truncation earns its keep
+most, because siblings share a derived prefix by construction:
+`git-pocketshell` vs `git-pocketshell-quse`.
+
+| # | Field | Spec | Width at 280px |
+|---|-------|------|----------------|
+| 1 | Left inset | 2px rail slot + 44px | 46px |
+| 2 | Status dot | 8px circle. `--success` when attached, `--fg-muted` otherwise. This plus sort position (§6) **replaces** the `attached` text tag, which stays retired | 8px + 8px gap |
+| 3 | Session name | `--font-mono` `--fs-300`; `--fw-semibold` when attached. `flex: 1 1 auto; min-width: 0` | ~208px (flex) |
+| 4 | Agent badge | Unchanged (POLISH.md §7 chip metric). `flex: none` | 0–56px |
+| 5 | Relative time | `--fs-100` `--fg-secondary` `tabular-nums`, right-aligned, `flex: none` (§6) | ~36px max |
+| 6 | Right padding | `--row-pad-x` | 10px |
+
+**The dimmed secondary name field of revision 1 stays deleted.** The leaf now
+carries the name as its *primary* label, which is the same width win by a
+different route: one label per row, never two competing over ~150px.
+
+**Tooltip** (native `title`): `<session name>\n<full folder path>\n<absolute
+time>`, unchanged. It is no longer the only place the name is written, but it
+is the only place the name is written *untruncated*, beside the path its
+header does not repeat.
+
+### 3d. Orphan row — a session with no directory at all
+
+`class="session-row orphan"`, `padding-left: 36px` — the **directory** dot
+column (38), with the chevron column simply left empty, the way any tree draws
+a childless node. Otherwise identical to §3c, selectable, label in
+`--font-mono`.
+
+This is the one node the panel draws as a single row, and it is **not** the
+conditional collapse coming back. The test is not "this directory holds one
+session"; it is "there is no directory". A session whose cwd the host never
+reported has no folder to put a level at, and its only available label *is*
+its session name — so a header above it would print that name twice on
+adjacent rows, which is the doubled row that started this whole document. See
+§4.4 and §4.6 for how these sessions are labelled and where they are filed.
 
 ## 4. Display-label rules
 
@@ -266,32 +384,35 @@ src/shared/sessionNameParts.ts:21-27; see §8 for why it lives there).
    question: *is this session name just its folder restated?* That question
    now has a structural answer at each level, so the *test* no longer gates
    any rendering:
-   - a **lone session** never shows its name on the row at all. There is
-     nothing to disambiguate it from, so the question does not arise;
-   - a **branch child** always shows its name. Its siblings share the
-     directory by construction, so the name is the only thing that separates
-     them — this is the old rule 3 (multi-session folder), generalised from
-     "show the secondary anyway" to "the name IS the row".
+   - a **directory header** never shows a session name. It is a directory, and
+     what it holds is one row down;
+   - a **leaf row** always shows its name, whether it has siblings or not.
+     Revision 2 made this conditional on having siblings; revision 3 does not,
+     because the leaf is now the only row a session has and a row with no
+     label is not an option.
 
    `isDerivedName` stays exported and tested. It still gates
    `flattenSessions`'s `showName`, and it is the shared statement of what
    "derived" means, which §4.6's heuristic leans on.
 2. **Divergence** (worktree, custom name): folder `merry-sniffing-token`
-   holding session `git-dtc-website`. **Revised: the row shows the folder
-   only**, and the name retreats to the tooltip. Revision 1 showed both, and
-   that row — `● m…ng-token  git-dtc-website…  20h` — is the screenshot the
-   user circled. Two labels, both truncated, neither readable. The folder is
-   the fact the user navigates by; the name is a lookup key.
-3. **Multi-session directory:** superseded by the branch (§3c). What was a
-   per-row secondary field is now one branch label plus N name rows.
+   holding session `git-dtc-website`. The row the user circled —
+   `● m…ng-token  git-dtc-website…  20h` — put both on one line, both
+   truncated, neither readable. Revision 3 puts them on two lines and gives
+   each its own: the header says `merry-sniffing-token`, the leaf under it
+   says `git-dtc-website`, and neither is fighting the other for width. This
+   case is the clearest single argument for the level.
+3. **Multi-session directory:** one header label plus N name rows — which is
+   now simply the general rule with N > 1, not a separate case.
 4. **Untracked** (`path === null` → `UNTRACKED_PATH`): the label is the
    session name itself in `--font-mono`, and each untracked session is its own
-   single-session node. They are deliberately **not** merged into one
-   `Untracked` branch: that branch's children would be the same names its
-   parent could not show, i.e. a level of nesting that hides the one fact the
-   row carries. (The phone does merge them — `Other folders` → `Untracked` →
-   sessions, FolderTreeProjection.kt:152-166, 243-250. We diverge knowingly;
-   see §4.6, which mostly empties that bucket anyway.)
+   node, drawn as the §3d orphan row. Two things stay deliberate here. They
+   are **not** merged into one `Untracked` branch — that branch's children
+   would be the same names its parent could not show. (The phone does merge
+   them — `Other folders` → `Untracked` → sessions,
+   FolderTreeProjection.kt:152-166, 243-250. We diverge knowingly; see §4.6,
+   which mostly empties that bucket anyway.) And they are **not** given a
+   directory header of their own, for the reason in §3d: the header and the
+   child would carry the identical string.
 5. **Label collision** (two directories, same basename — `~/git/foo` and
    `~/git/nested/foo`): a post-pass prepends parent segments to the colliding
    labels until unique (`git/foo`, `nested/foo`). **The pass now runs over
@@ -353,15 +474,16 @@ the two-span CSS trick** — no measurement code:
 - Overflow then produces `pocketshell-desktop` → (extreme squeeze)
   `poc…-desktop`, `ai-dev-tools-zoomcamp` → `ai-dev-…zoomcamp`: the
   distinguishing tail always survives.
-- **Revised: the same split now also applies to the session NAME**, because a
-  branch child is labelled by it (§3c). The old bullet here said the secondary
-  name could end-truncate since the tooltip redeemed it; that was true of a
-  dimmed field beside a primary label, and false of a row's only label. It is
-  also the case with the strongest need: siblings in one directory share a
-  derived prefix by construction (`git-pocketshell` /
-  `git-pocketshell-quse`), so an end-ellipsis renders them identically.
-  `SessionRow` therefore carries `nameHead` / `nameTail` beside
-  `labelHead` / `labelTail`, from the same `splitLabel`.
+- **The same split also applies to the session NAME**, because every leaf is
+  labelled by it (§3c). Revision 1's bullet here said the secondary name could
+  end-truncate since the tooltip redeemed it; that was true of a dimmed field
+  beside a primary label, and false of a row's only label. Revision 2 applied
+  the split to branch children only; revision 3 applies it to every leaf,
+  which is now every session. It is also the case with the strongest need:
+  siblings in one directory share a derived prefix by construction
+  (`git-pocketshell` / `git-pocketshell-quse`), so an end-ellipsis renders
+  them identically. `SessionRow` therefore carries `nameHead` / `nameTail`
+  beside `labelHead` / `labelTail`, from the same `splitLabel`.
 - Tooltip always carries both strings in full (§3).
 
 ## 6. Timestamp, sort, and finding "the session I was just in"
@@ -378,28 +500,36 @@ the room at 280px.
 
 **Directory sort, applied within each root:** *any session attached* desc →
 most-recent activity desc → case-insensitive label asc. **Row sort inside a
-branch:** `attached` desc → activity desc (`sessionActivity`) → name asc — the
-old row sort, unchanged, now scoped to the branch. **Root sort:** most-recent
-activity of any session under the root, desc → case-insensitive label asc,
-with `other` pinned last however recent it is (it is a bucket, not a place,
-and floating it to the top would put the least-organised rows where the eye
-lands first).
+directory:** `attached` desc → activity desc (`sessionActivity`) → name asc —
+the old row sort, unchanged, now scoped to the directory. **Root sort:**
+most-recent activity of any session under the root, desc → case-insensitive
+label asc, with `other` pinned last however recent it is (it is a bucket, not
+a place, and floating it to the top would put the least-organised rows where
+the eye lands first).
 
-- *Attached first* is the "session I was just in" answer, and revision 2
-  **lifts it to the directory level** rather than dropping it. At the 1:1
-  distribution the directory row *is* the session row, so demoting the key
-  would move the session the user is currently in off the top of its root —
-  the one thing the sort exists to prevent.
+- *Attached first* is the "session I was just in" answer, and it is **lifted
+  to the directory level** rather than dropped. At the 1:1 distribution a
+  directory is a one-session node, so demoting the key would move the session
+  the user is currently in off the top of its root — the one thing the sort
+  exists to prevent. Revision 3 changes nothing here: the header now sits
+  above that session rather than being it.
 - The sort is not *global*. A root that has not been touched in a week sits
   below one touched a minute ago even if it holds the second-most-recent
   session. That is the price of the levels, paid knowingly.
+- **Expansion is default-on, collapse is manual and remembered.** The state is
+  a set of *collapsed* keys, so a node the user has never touched is open —
+  which is what makes the tree legible on first sight rather than a wall of
+  chevrons to click through.
 - Every ancestor of the **open** session is force-expanded on navigation —
-  its root *and* its branch — so the current row is never hidden. It is
+  its root *and* its directory — so the current row is never hidden. It is
   expanded on *navigation only*, watched on `props.activeSession`, never on
   the root list. The store refreshes on a timer, so a watch on the list would
-  re-expand on every tick and make the node impossible to collapse. **The new
+  re-expand on every tick and make the node impossible to collapse. **The
   directory level walks into exactly the same trap** and is wired the same
-  way; the two levels share one watcher for that reason.
+  way; the two levels share one watcher for that reason. Revision 3 makes this
+  trap materially more dangerous, because the directory level now exists at
+  every node instead of at the rare multi-session one: wire it to the list and
+  *nothing in the panel* can be collapsed.
 - Collapse state is one `Set` holding both levels, with directory keys
   namespaced `dir:`. Without the prefix a session sitting directly in `~/git`
   would produce a directory key byte-identical to its own root's key, and
@@ -416,22 +546,29 @@ lands first).
 
 ## 7. Panel width
 
-- **Default 280px stands**; the session row is still sized to render the real
-  data untruncated there, indent included (§3b).
+- **Default 280px stands**; the leaf row is still sized to render the real
+  data untruncated there, all three levels of indent included (§3.0).
 - **Persist it.** Done: `localStorage` key `pocketshell.sessionPanelWidth`,
   clamped to `MIN/MAX_PANEL_WIDTH` on read as well as on write, written once
   per drag rather than per `mousemove`.
 - **Minimum:** `MIN_PANEL_WIDTH = 200`, and `.tree`'s `min-width` matches it
-  (it used to say 240, contradicting the clamp). **Revised: the
-  container-query floor moves from 230px to 250px** — the 28px child indent
-  costs the row 18px against the flat version, so it runs out of width that
-  much sooner. Below it the *timestamp* drops first (`@container (width <
-  250px) { .row-time { display: none } }`); it is the least operational
-  field, and a recency-sorted list already carries most of what it says. Dot,
-  label, and badge survive to the 200px floor. **Revised again: the rule stays
-  unscoped**, so a branch header drops its aggregate age at the same width its
-  children drop theirs — a branch still showing a time above rows that had
-  theirs removed would read as the branch's own, separate fact.
+  (it used to say 240, contradicting the clamp). The container-query floor has
+  now moved twice, by the same arithmetic each time: **230 → 250** when
+  revision 1's flat row gained the 28px root indent (18px), and **250 → 270**
+  in revision 3, when the leaf gained another 16px of indent *and* swapped a
+  short directory basename for a full session name. Below the floor the
+  *timestamp* drops first (`@container (width < 270px) { .row-time { display:
+  none } }`); it is the least operational field, and a recency-sorted list
+  already carries most of what it says. Dot, label, and badge survive to the
+  200px floor. **The rule stays unscoped**, so a directory header drops its
+  aggregate age at the same width its children drop theirs — a header still
+  showing a time above rows that had theirs removed would read as the header's
+  own, separate fact.
+- 270 leaves only 10px of headroom under the 280px default, which is tight and
+  is recorded as such in §11: one drag narrower and the times go. The
+  alternative was to leave the floor at 250 and let the leaf label truncate
+  instead, which trades a field the sort order already implies for the field
+  that identifies the row. Times lose.
 
 ## 8. Implementation notes
 
@@ -441,9 +578,11 @@ lands first).
     panel renders. `SessionRootFolder = { key, label, directories,
     sessionCount, mostRecentActivity, active, other }`, and
     `SessionDirectory = { key, path, label, labelHead, labelTail, rows,
-    mostRecentActivity, active, untracked, inferredRoot }`. `rows.length === 1`
-    is the whole branch/no-branch test — there is no separate flag to keep in
-    sync with the array.
+    mostRecentActivity, active, untracked, inferredRoot }`. **Revision 3
+    changes no field here.** The projection was already uniform; it was the
+    renderer that branched on `rows.length === 1`, and that test is gone.
+    `rows.length` is now a count and nothing else — the only thing that still
+    reads it is the header's `≥ 2` count field (§3b).
   - `flattenSessions(sessions): SessionRow[]` — the tree's degenerate case and
     the row model's direct test surface.
   - `groupSessionsByFolder(sessions): SessionFolder[]` — the phone-parity LEAF
@@ -472,12 +611,14 @@ lands first).
   and the *displayed* path stay separate.
 - **A no-cwd session is modelled as a degenerate directory.** Key
   `"::untracked:: <name>"`, path `UNTRACKED_PATH`, label = the session name,
-  `untracked: true`, exactly one row, never a branch. That is what lets §4.6's
-  name-recovered rows sit *alongside* directory rows in one sorted list under
-  a root, with one row grammar in the template, instead of a second loose-row
-  array threaded through the same sort. `inferredRoot` is set by the pairing
-  `untracked && root !== other` — there is no other way an untracked row can
-  be anywhere but `other`.
+  `untracked: true`, exactly one row. That is what lets §4.6's name-recovered
+  rows sit *alongside* directory nodes in one sorted list under a root,
+  instead of a second loose-row array threaded through the same sort.
+  `inferredRoot` is set by the pairing `untracked && root !== other` — there
+  is no other way an untracked row can be anywhere but `other`. The renderer
+  reads `dir.untracked` (never `rows.length`) to draw it as the §3d orphan
+  row: the model says "there is no directory here", and that is the only
+  question the template is allowed to ask about a node's shape.
 - **`other` is honest, not a dumping ground.** After §4.6 it holds: paths
   outside `$HOME` (`/var/log`, `/srv/app` — they genuinely share no parent
   with the rest), sessions sitting in `$HOME` itself (no root folder to be
@@ -503,37 +644,39 @@ lands first).
   `src/main/projects/sessionName.ts` for that module's callers, so the
   renderer's redundancy test (§4.1) runs the derivation's own regex instead of
   a duplicate. Covered by tests/unit/sessionNameParts.test.ts.
-- **Design gates** (tests/unit/designGates.test.ts): no new hex — every color
-  above is an existing token; no character-as-icon — the disclosure is
-  `AppIcon name="chevron-right"` rotated 90°, never `▸`, and the dot remains a
-  styled span.
-- **In SessionTree.vue.** Root `<section>`/header/chevron, the `collapsed`
-  state, and the 28px indent are unchanged from revision 1. New: the
-  `dir-branch` / `dir-header` pair with its own chevron and the dot-column
-  arithmetic in §3c, the `dir:` key namespace, the two-level expand watcher,
-  and `dirTooltip`. **Deleted:** `.row-name` and every reference to it — the
-  dimmed secondary name field is gone (§4.1). `sessionCountLabel` is back, but
-  only as a tooltip helper for both header levels; the visible counts stay bare
-  integers. The `attached` text tag stays retired.
+- **In SessionTree.vue.** Root `<section>`/header/chevron and the `collapsed`
+  state are unchanged since revision 1; the `dir-header` pair, the `dir:` key
+  namespace, the two-level expand watcher and `dirTooltip` are unchanged since
+  revision 2. **Revision 3 deletes exactly one thing and moves three numbers.**
+  Deleted: the `v-if="dir.rows.length === 1"` arm and the whole single-session
+  row it rendered. Moved: `.dir-header` padding-left 10 → 18 (dot 30 → 38),
+  `.session-row` padding-left 28 → 44 as the base rather than a `.nested`
+  override, and the container query 250 → 270. Added: `.session-row.orphan`
+  (§3d) and the `≥ 2` guard on the header count. The outer `<ul>` is now
+  `.dir-list` and the inner one `.session-list`, because the two lists no
+  longer hold the same kind of thing. `.row-name` stays deleted and the
+  `attached` text tag stays retired.
 - **Design gates** (tests/unit/designGates.test.ts): no new hex — every colour
-  above is an existing token; no character-as-icon — the branch disclosure is
-  the same `AppIcon name="chevron-right"` rotated 90°, never `▸`, and both dots
-  remain styled spans.
+  above is an existing token; no character-as-icon — both disclosures are
+  `AppIcon name="chevron-right"` rotated 90°, never `▸`, and every dot remains
+  a styled span.
 
 ## 9. Documentation to revise
 
-- **sessionGrouping.ts header comment** — done: it now records that the second
-  level is the DIRECTORY, and why that does not reintroduce §1's dead row.
-- **SessionTree.vue header comment** — done: it carries the tree sketch from
-  §2 and the "free at 1:1" argument.
+- **sessionGrouping.ts header comment** — done: it records that the projection
+  is uniform and that the renderer no longer branches on `rows.length`.
+- **SessionTree.vue header comment** — done: it carries the three-level sketch
+  from §2, states that revisions 1 and 2 were wrong and why, and explains the
+  one node type (§3d) that is still a single row.
 - **docs/DESIGN.md, session-panel anatomy** — **still outstanding**, and now
-  wrong in a second way. Its blockquote still reads "Superseded by
+  wrong in a third way. Its blockquote still reads "Superseded by
   docs/SESSIONLIST.md (implemented). The two-level tree below is gone… The
   panel is now flat", and its table still retires `.folder-header` /
-  `.disclosure` / the 28px indent. All three are back; there is now a *second*
-  disclosure (`.dir-header`); the container-query floor is 250px not 230px;
-  and `.row-name` should be retired in its place. Left unedited only because
-  the file has been dirty under concurrent editors across both revisions.
+  `.disclosure` / the 28px indent. All three are back; there are now *two*
+  disclosures; the indent is 8px per level to a 46px leaf inset, not 28px; the
+  container-query floor is 270px not 230px; and `.row-name` should be retired
+  in its place. Left unedited only because the file has been dirty under
+  concurrent editors across all three revisions.
 - **docs/POLISH.md** — §7's chip metric is unchanged and the `attached` chip
   stays retired. §2.6/§4's disclosure entry (`▸` → `AppIcon
   name="chevron-right"`, POLISH.md:239, 370) is live again and now applies at
@@ -542,28 +685,32 @@ lands first).
 - **docs/screenshots** — `polish-02`/`polish-13` are older still, and
   `projects-20`…`projects-24` document a layout that no longer ships.
   Recapture against a fixture with two or more `$HOME` roots, ≥10 one-session
-  directories under one of them, **one directory holding 2+ sessions** (the
-  branch), a worktree-divergent name, one out-of-`$HOME` session, and one
-  session with no reported cwd whose name names a real root (§4.6).
+  directories under one of them (the case all three revisions have argued
+  about and none has photographed), one directory holding 2+ sessions, a
+  worktree-divergent name, one out-of-`$HOME` session, and one session with no
+  reported cwd whose name names a real root (§4.6).
 
 ## 10. The load-bearing four
 
-1. **Every row is named by a directory.** Root headers name `$HOME`'s
-   children; the second level names the working directory. A session name is
-   a row label in exactly one place — inside a branch — and a tooltip line
-   everywhere else.
-2. **The branch is conditional, which is what reconciles this with §1.** One
-   session in a directory costs one row, the same row the flat list spent.
-   Two or more buy a branch, which is the only place there is anything to
-   disambiguate. Spend a row only where there is fan-out.
-3. **`other` earns its name, and §4.6 shrinks it.** A session with no reported
-   cwd is filed under the root its name names, provided that root exists from
-   a real path; only the genuinely unplaceable stay in the bucket, pinned
-   last.
+1. **Three levels, always.** Root → directory → session, with no size at which
+   a level folds away. A directory holding one session still gets its header
+   and its child; the only single-row node is a session that has no directory
+   at all (§3d).
+2. **~~The branch is conditional, which is what reconciles this with §1.~~**
+   Struck. This was revision 2's load-bearing claim and it is what produced a
+   panel the user rejected three times: at the measured 1:1 distribution the
+   condition fires everywhere and the tree renders as a flat list. §1's
+   measurement is real; "spend a row only where there is fan-out" is a fine
+   rule for a row budget and the wrong rule for a structure the user has
+   asked to see. What survives of §1 is the `1` count, dropped from a
+   one-session header (§3b field 4).
+3. **A directory row toggles; it never selects.** `select` is emitted from
+   leaves only and still carries a `SessionSummary`, so
+   `HostWorkspaceView.onSelectSession` never learns any of this happened.
 4. **The expand-on-navigate watcher is on the active session at BOTH levels.**
    The store ticks on a timer; a watcher on the node list makes a node
-   impossible to collapse. This trap is level-agnostic and the new level walks
-   straight into it.
+   impossible to collapse. The trap is level-agnostic, and now that every
+   directory is a node, falling into it would freeze the entire panel open.
 
 ## 11. Not evaluated
 
@@ -571,17 +718,33 @@ lands first).
 attempted; unit tests and typecheck are the only verification.
 
 - All width arithmetic uses nominal font metrics (13px UI ≈ 6.5px/char,
-  11px ≈ 5.5px/char). The **250px** container-query breakpoint and the branch
-  child's extra 16px of indent both need a live check at the user's DPI.
-- The dot-column arithmetic in §3c (root chevron at 8 / branch chevron at 12 /
-  both dots at 30) is arithmetic, not a screenshot. If it is off by a pixel it
-  will read as jitter, because the two row types alternate freely.
+  11px ≈ 5.5px/char). The **270px** container-query breakpoint and the leaf's
+  62px label inset need a live check at the user's DPI — and 270 sits only
+  10px under the 280px default, so if the metrics are optimistic the times
+  will disappear at a width the user thinks of as "normal".
+- **Whether an 8px step reads as nesting at all** at 13px UI type. It is VS
+  Code's step, but VS Code draws indent guide lines and this panel does not.
+  If it reads flat, the honest fixes are a guide line or 10-12px steps with a
+  higher container-query floor — not a return to collapsing the level.
+- The dot-column arithmetic in §3.0 (dots at 30 / 38 / 46) is arithmetic, not
+  a screenshot.
+- **Whether the doubled row count is felt.** At the measured distribution this
+  design draws ~23 rows where revision 2 drew 12. Nothing in the panel breaks,
+  but "I have to scroll now" is a real complaint and the answer to it —
+  collapse the directories you are not using — has to be discoverable enough
+  to count as an answer.
 - Whether any real host produces the label-collision case in §4.5, which is
   now scoped per root *and* moved to directories, and therefore rarer still.
-- **How often the branch case actually occurs.** §1 measured 1:1 across the
-  board; the user's screenshot shows at least one directory with two sessions.
-  If the true rate is ~1 branch per host the level is nearly free, which is
-  the assumption this design is built on. Worth confirming on the real panel.
+- **App-level roots against several differently-shaped hosts** (§12.2.4). A
+  user whose boxes do not share a layout gets every registered root on every
+  host, some of them permanently empty. The honest fixes if that bites are a
+  per-host override or hiding an empty root behind a toggle — not making the
+  root list per-host by default, which is the cost the phone pays.
+- **Whether §12.2.3 is the wrong call.** The phone collapses a session's
+  folder to the first segment under its root, so `~/git/pocketshell/tools`
+  groups under `pocketshell`; we keep the full directory and show `tools` as a
+  sibling of `pocketshell`. If the user's real tree has sessions running below
+  a project's own root, ours will read as flatter than it is.
 - **How many of the `other` sessions §4.6 actually rescues**, and whether the
   root it picks is right. The user named three (`git-dtc-website-import`,
   `git-red-stamp-sound`, `git-game-tester`); all three should land under
@@ -615,3 +778,143 @@ meaningfully more than `rootFromSessionName`, and it fails closed (empty
 registry → today's behaviour) rather than fails wrong. **Left for the user to
 decide.** §4.6 is deliberately shaped so it can be deleted the day the
 registry lands.
+
+## 12. Registered roots — the top level, configured
+
+Added alongside revision 3, on a second request from the user:
+
+> "I also want to add other roots (like ~/tmp) and have a part of the tree for
+> other sessions that don't start with existing roots. like in pocketshell app.
+> the roots are registered in the settings"
+
+**The root level stops being derived and becomes declared.** The user registers
+roots in Settings — `~/git`, `~/tmp`, anything — and those are the panel's top
+level, in the order they registered them. Everything under no registered root
+goes to `other`, which keeps its existing job and its pinned-last position.
+
+This is the phone's **watched roots** concept, which is what §1 named as the
+reason the phone does not have the desktop's problem: "The phone does not have
+this problem because its top level is *watched project roots*, not individual
+folders." The desktop implemented only the phone's no-watched-roots fallback
+and synthesised a root level from `$HOME`'s children instead (the old §2 note,
+"the desktop still has no project-roots table"). §12 closes that gap.
+
+### 12.1 What is ported from the phone, exactly
+
+Matching semantics come from `FolderTreeProjection.kt` and are ported
+verbatim, because they are the behaviour the user already knows:
+
+| Rule | Phone | Here |
+|---|---|---|
+| Prefix match on a `/` boundary — `~/git` never claims `~/gitlab` | `pathWithinRoot`, :310 | `pathWithinRoot` |
+| Longest match wins when roots nest; first-registered breaks a tie | `bestRootForPath`, :475-479 | `bestRootForPath` |
+| A session sitting exactly ON a root belongs to it | `pathWithinRoot`, :310 | same |
+| Unmatched folders go to a synthetic `other` root, appended last | :165-167, :276 | unchanged from §6 |
+| A registered root with no sessions still renders | roots are built by iterating the root list, :179-241 | roots are seeded before rows are placed |
+| Label = the root's trailing segment | `defaultLabelForPath`, :41-50 | same function, already shared |
+
+### 12.2 Where we diverge, and why
+
+1. **No-roots fallback.** The phone, with zero watched roots, puts *everything*
+   into one `Other folders` node (`FolderTreeProjection.kt:253-274`). We keep
+   deriving roots from `$HOME`'s children instead. The phone's behaviour is
+   defensible there because its onboarding pushes the user through the watched-
+   folders screen; here it would mean every existing install woke up one
+   morning to the single undifferentiated bucket that revision 1 was written to
+   destroy. Empty means "derive", and the panel a user who never opens Settings
+   sees is byte-identical to the one they had.
+2. **Deduplication is on the RESOLVED key, not the stored spelling.** The phone
+   dedupes with `distinctBy { it.path }` over stored paths
+   (`FolderTreeProjection.kt:449`), so registering both `~/git` and
+   `/home/me/git` gives two nodes that look identical and split the sessions
+   between them by longest-match. `resolveRoots` folds them, because two
+   identical branches is a bug however it is arrived at.
+3. **The directory level keeps the FULL directory.** The phone collapses a
+   session's folder to the first segment under its root
+   (`projectPathUnderRoot`, :538), so `~/git/pocketshell/tools` groups under
+   `pocketshell`. That is genuinely attractive: it makes the middle level mean
+   *project*, and it bounds the tree to three levels by construction, which is
+   §2's own goal. We did not take it, for now, because the middle level's
+   meaning — "the directory this session actually runs in" — is what §3b's
+   label, §4.5's collision pass and §3c's tooltip are all built on, and
+   changing it is a third redesign of a level neither user request mentioned.
+   **This is the divergence most likely to be wrong**, and it is cheap to
+   revisit: it is one projection of the directory key.
+4. **Roots are app-level, not per host.** The phone keys `project_roots` by
+   `hostId` (`ProjectRootEntity.kt:26-32`). A registered root is written
+   home-relative and `~/git` names the same place on every host, so a per-host
+   list would mostly make the user register the same three roots repeatedly.
+   The cost is real and is recorded in §11: a user whose boxes genuinely have
+   different layouts gets every root on every host, some of them empty.
+5. **No ordering hack.** The phone has no `order` column and encodes position
+   as a `[NN] ` prefix inside the label
+   (`WatchedFoldersViewModel.kt:428-451`). A JSON array has an order already.
+6. **Suggestions come from the session list, not a remote scan.** The phone
+   runs a remote `ls` over three guessed parents
+   (`WatchedFoldersViewModel.kt:397`). The Settings panel opens from the host
+   picker with no connection at all, so it reads the roots off the sessions
+   already loaded — which is, by definition, where the user's roots are.
+
+### 12.3 Storage and normalisation
+
+`settings.sessionRoots: string[]`, default `[]`, in the existing
+`pocketshell.settings.v1` blob. Its parser rejects only a NON-ARRAY outright;
+inside an array, damage is per entry (`normaliseRootList`), so one hand-edited
+line costs that line and not the user's root list — the same per-key degradation
+rule the store already applies per setting, one level down.
+
+**Two forms, and the split is the point.**
+
+- The **stored** form is what the user typed, cleaned: trimmed, trailing
+  slashes dropped, `..` refused rather than resolved, control characters
+  refused, and anchored to `/` or `~`. `~/git` and `/home/alexey/git` are still
+  two different stored strings, because settings are app-level while `$HOME` is
+  per-host and at write time there is no home to fold them against.
+- The **resolved** form is `directoryKey(stored, home)` — *the same function*
+  that already folds tmux's two spellings of one directory into one node (§8).
+  Reusing it rather than writing a second normalisation is what stops the two
+  rules drifting: if `~` resolution ever changes, it changes in one place.
+  Dedupe happens here, on the resolved key.
+
+### 12.4 Decisions the two features force on each other
+
+- **An empty registered root still renders**, with a `0` count and a muted
+  "no sessions here yet" line under it. A registered root is a statement of
+  intent, not a fact derived from the session list — it is the user saying
+  "this is where my work lives", which stays true on a host where nothing is
+  running there and on a host where the directory does not exist. A setting
+  that silently shows nothing reads as a broken setting. `SessionRootFolder`
+  carries `configured` so the panel can say "registered in Settings — nothing
+  running here" rather than leaving a bare `0` to be interpreted.
+- **Registered roots render in registered order; derived roots keep the
+  recency sort** (§6). A declared list is itself an ordering, and re-sorting it
+  by activity would let the sessions store's refresh timer reshuffle the
+  panel's top level under the user's cursor — the same class of problem as the
+  expansion watcher in §6, one level up. With nothing declared, recency is the
+  only ordering there is.
+- **The §4.6 name heuristic files into registered roots.** Its rule was "only
+  roots that exist from real paths", so it could place a session but never
+  invent a place. A REGISTERED root is stronger evidence than an inferred one,
+  so with roots configured the candidate set is the registered list — which
+  means a no-cwd session called `tmp-scratch` reaches `~/tmp` even when nothing
+  else is running there. The constraint is unchanged in spirit: the heuristic
+  still cannot create a root, it can only file into one that already exists.
+- **Nesting is longest-match.** Register `~/git` and `~/git/work` and a session
+  in `~/git/work/thing` lands under `work`: the more specific declaration is
+  the more deliberate one.
+
+### 12.5 The Settings control
+
+A `Session panel` group holding one stacked row: the registered list, each
+entry showing its **stored spelling** in `--font-mono` (that string is what the
+panel matches against, so rendering a paraphrase of it would be a lie) with a
+`trash-2` remove button, then a text field plus an `Add` button. The field is
+backed by a `<datalist>` of the roots the current host's sessions are running
+under, minus what is already registered — a user should not have to remember
+paths on a machine they are not looking at. Typing is still allowed, because a
+root you have not yet started a session in cannot be suggested and registering
+one ahead of time is a legitimate thing to want.
+
+Rejections are sentences, not a silent no-op, and the two reasons a
+well-formed path can still be refused — already registered, list is full — are
+told apart, because they call for different next actions.

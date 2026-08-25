@@ -104,26 +104,28 @@ test.describe('session-scoped navigation + terminal wiring', () => {
   });
 
   test('the host shows a folder session panel and no host-level tabs', async () => {
-    // The panel groups by the root directory under $HOME, then by the
-    // DIRECTORY each session runs in (docs/SESSIONLIST.md §2). Both fixture
-    // sessions sit in $HOME ITSELF, which has no root folder to be named
-    // after, so the whole fixture lands in the `other` bucket — and since they
-    // share one directory, that directory is a BRANCH (`testuser`) whose two
-    // children are named by session. A fixture with sessions under `~/git` and
-    // `~/tmp`, one of them alone in its folder, would exercise the common
-    // single-session case; this one pins the branch case.
+    // The panel is `root -> directory -> session`, three levels, always
+    // (docs/SESSIONLIST.md §2). Both fixture sessions sit in $HOME ITSELF,
+    // which has no root folder to be named after, so the whole fixture lands
+    // in the `other` bucket, under one directory node.
     await expect(page.locator('.session-panel')).toBeVisible();
     await expect(page.locator('.folder-header')).toHaveCount(1);
     await expect(page.locator('.folder-header .folder-label')).toHaveText('other');
     await expect(page.locator('.folder-header .folder-count')).toHaveText('2');
     await expect(page.locator('.dir-header')).toHaveCount(1);
-    // `$HOME` itself: the directory key collapses to `~`, so the branch takes
+    // `$HOME` itself: the directory key collapses to `~`, so the header takes
     // `defaultLabelForPath`'s named fallback rather than the account name.
     await expect(page.locator('.dir-header .label')).toHaveText('~ (home)');
     await expect(page.locator('.session-row')).toHaveCount(2);
-    // Every session row under a branch is labelled by its own session name —
-    // the branch already said the directory, so the row never repeats it.
+    // EVERY session row is a leaf under a directory header — a directory never
+    // stands in for its session, however few it holds. The fixture cannot show
+    // the one-session directory (both its sessions share `~`), so this pins
+    // the invariant the counts can prove: no session row is left loose.
     await expect(page.locator('.session-row.child')).toHaveCount(2);
+    await expect(page.locator('.session-row.orphan')).toHaveCount(0);
+    // The row is labelled by its own session name; the header already said the
+    // directory, so the row never repeats it.
+    await expect(page.locator('.session-row.child .label').first()).not.toHaveText('~ (home)');
     await expect(page.locator('.row-name')).toHaveCount(0);
     // The `attached` tag stays retired — the dot, the weight and the sort say it.
     await expect(page.locator('.session-row .tag')).toHaveCount(0);
@@ -131,6 +133,19 @@ test.describe('session-scoped navigation + terminal wiring', () => {
     await expect(page.locator('.workspace > .body > nav.tabs')).toHaveCount(0);
     // Nothing selected yet -> the right pane shows the empty state.
     await expect(page.locator('.session-placeholder')).toBeVisible();
+  });
+
+  test('clicking a directory row toggles it and never opens a session', async () => {
+    // The directory row stopped being selectable in docs/SESSIONLIST.md
+    // revision 3: its session has a row of its own directly beneath it now, so
+    // a click here can only mean "expand/collapse". `v-show` keeps the rows in
+    // the DOM, hence toBeHidden rather than a count of 0.
+    await page.locator('.dir-header').first().click();
+    await expect(page.locator('.session-row').first()).toBeHidden();
+    await expect(page.locator('.session-workspace')).toHaveCount(0);
+    await expect(page.locator('.session-placeholder')).toBeVisible();
+    await page.locator('.dir-header').first().click();
+    await expect(page.locator('.session-row').first()).toBeVisible();
   });
 
   test('Ports and Usage are host header buttons that open overlays', async () => {
