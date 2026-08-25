@@ -89,6 +89,7 @@ export const ipc = {
   },
   agent: {
     log: 'agent:log', // agent-log --json for an engine+session
+    sessionLog: 'agent:sessionLog', // the conversation of ONE tmux session, id resolved for us
     resumable: 'agent:resumable', // sessions resumable
     profiles: 'agent:profiles', // profiles list --json
     envList: 'agent:envList', // env list --dir --json

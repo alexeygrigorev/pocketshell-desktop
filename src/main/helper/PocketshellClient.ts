@@ -26,6 +26,13 @@ import {
 import { pathAwareCommand } from './bootstrap.js';
 import { shellQuote, shellQuoteRemotePath } from './shellQuote.js';
 import {
+  TRANSCRIPT_PROBE_COMMAND,
+  describeUnresolved,
+  parseTranscriptProbe,
+  pickTranscript,
+  type TranscriptEngine,
+} from '../agents/transcripts.js';
+import {
   createSessionCommand,
   fallbackCreateSessionCommand,
   reposCloneCommand,
@@ -64,6 +71,43 @@ export interface CloneOutcome {
   /** Set on failure so the UI can distinguish "install gh" from a git error. */
   state?: Exclude<ReposScopeState, 'ok'>;
 }
+
+/**
+ * The Conversation tab's whole answer for one session.
+ *
+ * A discriminated union rather than a bag of nullables, so a caller cannot
+ * render `lines` without having gone through `ok` first — and so the failure
+ * arm is *required* to carry an `error` sentence. An empty conversation pane
+ * with no explanation is the exact bug this shape rules out.
+ */
+export type SessionConversation =
+  | {
+      ok: true;
+      engine: TranscriptEngine;
+      /** The `agent-log --session` id we resolved for this tmux session. */
+      transcriptId: string;
+      /** Absolute path of the transcript on the host. */
+      path: string;
+      /** Raw JSONL lines, oldest first, for `renderConversation`. */
+      lines: string[];
+      /**
+       * False when the transcript was matched by engine + recency alone
+       * because its path cannot encode a cwd (codex/opencode). The UI says so
+       * rather than implying certainty it does not have.
+       */
+      cwdVerified: boolean;
+      error: null;
+    }
+  | {
+      ok: false;
+      engine: null;
+      transcriptId: null;
+      path: null;
+      lines: [];
+      cwdVerified: false;
+      /** Always set, always showable to the user. */
+      error: string;
+    };
 
 /**
  * One-shot helper invocations over a connected host. Stateless: pass the
@@ -278,6 +322,93 @@ export class PocketshellClient {
     );
     if (res.exitCode !== 0) return null; // 66 = not found
     return parseAgentLogJson(res.stdout);
+  }
+
+  /**
+   * The conversation belonging to ONE tmux session, resolved end to end.
+   *
+   * This is what the Conversation tab calls, and it exists because
+   * {@link agentLog} cannot be called from a session name alone: `--session`
+   * wants the engine's transcript id, which no helper listing returns. See
+   * agents/transcripts.ts for why the id is recovered from the on-disk layout.
+   *
+   * Two round-trips in the happy path (probe, then `agent-log`) and never
+   * more. Every failure comes back as `ok: false` with a sentence fit to show
+   * the user — a caller must never be able to render an empty pane because
+   * this returned "nothing" without saying why.
+   */
+  async sessionConversation(
+    connectionId: string,
+    opts: { session: string; engine: TranscriptEngine | null; cwd: string | null },
+  ): Promise<SessionConversation> {
+    const fail = (error: string): SessionConversation => ({
+      ok: false,
+      engine: null,
+      transcriptId: null,
+      path: null,
+      lines: [],
+      cwdVerified: false,
+      error,
+    });
+
+    // The probe's exit code is deliberately ignored: `ls` reports non-zero
+    // whenever ANY of its fixed globs matched nothing, which is the normal
+    // state of a host that has only one of the three engines installed.
+    const probe = await this.ssh.exec(connectionId, pathAwareCommand(TRANSCRIPT_PROBE_COMMAND));
+    const candidates = parseTranscriptProbe(probe.stdout, opts.cwd);
+    const pick = pickTranscript(candidates, opts.engine, opts.cwd);
+    if (!pick) {
+      return fail(describeUnresolved(opts.session, opts.engine, opts.cwd, candidates.length));
+    }
+
+    const envelope = await this.agentLog(
+      connectionId,
+      pick.engine,
+      pick.id,
+      opts.cwd ?? undefined,
+    );
+    if (envelope && envelope.lines.length) {
+      return {
+        ok: true,
+        engine: pick.engine,
+        transcriptId: pick.id,
+        path: envelope.path || pick.path,
+        lines: envelope.lines,
+        cwdVerified: pick.cwdVerified,
+        error: null,
+      };
+    }
+
+    // `agent-log` came back empty for a file we can see. Rather than report
+    // "no conversation" for a transcript that demonstrably exists, read it
+    // directly — the helper's search roots are its own business and have
+    // drifted from the documented contract before (see the 0.4.8 -> 0.4.44
+    // notes in docs/ANALYSIS.md). Only if BOTH routes come up empty is there
+    // genuinely nothing to show.
+    const tail = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(`tail -n 4000 ${shellQuote(pick.path)}`),
+    );
+    const lines = tail.stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('{'));
+    if (lines.length) {
+      return {
+        ok: true,
+        engine: pick.engine,
+        transcriptId: pick.id,
+        path: pick.path,
+        lines,
+        cwdVerified: pick.cwdVerified,
+        error: null,
+      };
+    }
+    return fail(
+      `Found this session's ${pick.engine} transcript (${pick.path}) but could not read any ` +
+        `conversation out of it: \`pocketshell agent-log --engine ${pick.engine} --session ` +
+        `${pick.id}\` returned nothing and the file has no JSON lines.`,
+    );
   }
 
   /**

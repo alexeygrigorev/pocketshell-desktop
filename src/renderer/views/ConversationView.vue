@@ -1,24 +1,64 @@
 <script setup lang="ts">
-// ConversationView: renders an agent's conversation log as a clean message
-// list (user/assistant prose + collapsible tool calls). Lets the user pick
-// the engine + session id, then loads via `pocketshell agent-log`.
-import { ref, computed, onMounted } from 'vue';
+// ConversationView: the conversation of the session the user is looking at,
+// rendered as a message list (user/assistant prose + collapsible tool calls).
+//
+// There is no conversation picker, by design. The tab is mounted inside a
+// session workspace and the session IS the selection — asking the user to
+// choose again was never a feature, it was a workaround for the fact that
+// `pocketshell agent-log --session S` wants the ENGINE'S transcript id (a
+// claude uuid, a codex rollout stem) and not the tmux session name the route
+// carries. Passing the tmux name straight through matched nothing, exit 66
+// came back as "no log", and the panel went blank — so the engine dropdown
+// and the free-text id field were the only way anyone ever got a transcript
+// on screen. The mapping is now resolved main-side from the session's cwd and
+// its recorded `@ps_agent_kind` (src/main/agents/transcripts.ts).
+//
+// Two things this view therefore owes the user:
+//   - it RELOADS when the selected session changes. The tab is re-created on
+//     a tab switch, but switching sessions in the left panel while the
+//     Conversation tab is already open only changes the route param, leaving
+//     this component mounted — a `watch` on the prop, not `onMounted`, is
+//     what covers both.
+//   - it never renders an empty pane in silence. Every failure to resolve or
+//     load has a sentence attached to it.
+import { computed, ref, watch } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import AppIcon from '../components/AppIcon.vue';
 import { useAgentsStore } from '../stores/agents';
+import { useSessionsStore } from '../stores/sessions';
 import type { ConversationBlock } from '../../main/agents/conversation';
 
 const props = defineProps<{
-  /** Session whose log to preload — set when rendered inside a session workspace. */
+  /** The selected session's tmux name — the only input this view takes. */
   sessionId?: string;
 }>();
 
 const connection = useConnectionStore();
+const sessions = useSessionsStore();
 const agents = useAgentsStore();
 const connId = computed(() => connection.connectionId);
+const sessionName = computed(() => props.sessionId?.trim() ?? '');
 
-const engine = ref<'claude' | 'codex' | 'opencode'>('claude');
-const sessionInput = ref(props.sessionId ?? '');
+/**
+ * The session row, which is where the cwd and the recorded agent kind live.
+ * Those two are the whole input to transcript resolution, so this view cannot
+ * do anything useful until the sessions store has them.
+ */
+const summary = computed(
+  () => sessions.sessions.find((s) => s.name === sessionName.value) ?? null,
+);
+
+/**
+ * Why the badge is there when it is: codex and opencode keep the project
+ * directory inside the transcript rather than in its path, so the match rests
+ * on "this session's engine, most recently written" and the user is told that
+ * instead of being shown a confident-looking header.
+ */
+const unverifiedHint = computed(
+  () =>
+    `${agents.source?.engine ?? 'These'} transcripts do not record the project directory ` +
+    'in their path, so this is the newest one for this engine on the host.',
+);
 
 const expanded = ref<Set<string>>(new Set());
 function toggle(key: string): void {
@@ -26,22 +66,42 @@ function toggle(key: string): void {
   else expanded.value.add(key);
 }
 
-async function onLoad(): Promise<void> {
-  if (!connId.value || !sessionInput.value.trim()) return;
-  await agents.loadLog(connId.value, engine.value, sessionInput.value.trim());
+async function load(): Promise<void> {
+  const id = connId.value;
+  if (!id) {
+    agents.fail('Not connected to a host.');
+    return;
+  }
+  if (!sessionName.value) {
+    agents.fail('No session selected.');
+    return;
+  }
+  // A deep link or a window reload can reach this tab before the session list
+  // has been fetched. Refreshing is not optional politeness: without the row
+  // there is no cwd and no agent kind, and resolution would be a guess.
+  if (!summary.value) await sessions.refresh(id);
+  const row = summary.value;
+  if (!row) {
+    agents.fail(
+      `Session "${sessionName.value}" is not in this host's session list — ` +
+        'it may have been closed. Reconnect or pick another session.',
+    );
+    return;
+  }
+  await agents.loadForSession(id, row);
 }
 
-async function onLoadResumable(): Promise<void> {
-  if (!connId.value) return;
-  await agents.loadResumable(connId.value);
-}
-
-onMounted(() => {
-  void onLoadResumable();
-  // Scoped to a session: load its log straight away instead of making the
-  // user retype the id the route already knows.
-  if (sessionInput.value) void onLoad();
-});
+// `immediate` covers the mount; the watch covers the case the tab stays
+// mounted while the route's session param changes underneath it. The
+// connection id is in the key too, so reconnecting reloads rather than
+// leaving the previous host's transcript on screen.
+watch(
+  () => [connId.value, sessionName.value] as const,
+  () => {
+    void load();
+  },
+  { immediate: true },
+);
 
 function blockKey(i: number, j: number): string {
   return `${i}-${j}`;
@@ -53,33 +113,25 @@ function isText(b: ConversationBlock): boolean {
 
 <template>
   <div class="conversation">
+    <!-- Not a picker: a receipt. It says which transcript is on screen, which
+         is the only way the user can tell a stale conversation from a wrong
+         one — and it is the honest place to admit an unverified match. -->
     <div class="bar">
-      <select v-model="engine">
-        <option value="claude">claude</option>
-        <option value="codex">codex</option>
-        <option value="opencode">opencode</option>
-      </select>
-      <input
-        v-model="sessionInput"
-        placeholder="session id"
-        class="session-input"
-        @keyup.enter="onLoad"
-      />
-      <button class="load-btn" :disabled="agents.loading" @click="onLoad">
-        {{ agents.loading ? '…' : 'Load' }}
-      </button>
-    </div>
-
-    <div v-if="agents.resumable.length" class="resumable">
-      <span class="muted label">resumable:</span>
+      <template v-if="agents.source">
+        <span class="engine">{{ agents.source.engine }}</span>
+        <span class="transcript" :title="agents.source.path">{{ agents.source.transcriptId }}</span>
+        <span v-if="!agents.source.cwdVerified" class="unverified" :title="unverifiedHint">
+          newest for this engine
+        </span>
+      </template>
+      <span v-else class="muted transcript">{{ sessionName || 'no session' }}</span>
       <button
-        v-for="r in agents.resumable.slice(0, 8)"
-        :key="`${r.engine}-${r.project}-${r.when}`"
-        class="resume-chip"
-        @click="engine = r.engine as 'claude' | 'codex' | 'opencode'; sessionInput = ''; onLoad()"
-        :title="r.label"
+        class="icon-btn refresh"
+        title="Reload this session's conversation"
+        :disabled="agents.loading"
+        @click="load"
       >
-        {{ r.engine }} · {{ r.project }} · {{ r.when }}
+        <AppIcon name="refresh" :class="{ spin: agents.loading }" />
       </button>
     </div>
 
@@ -107,9 +159,12 @@ function isText(b: ConversationBlock): boolean {
           </div>
         </template>
       </div>
-      <p v-if="!agents.messages.length && !agents.loading" class="muted empty">
-        load a session to see the conversation
+      <p v-if="agents.loading && !agents.messages.length" class="muted empty">
+        loading this session's conversation…
       </p>
+      <!-- The error is the empty state. There is no "nothing here" copy to
+           fall through to, because "nothing here" with no reason is exactly
+           the failure this view used to have. -->
       <p v-if="agents.error" class="error">{{ agents.error }}</p>
     </div>
   </div>
@@ -127,79 +182,49 @@ function isText(b: ConversationBlock): boolean {
 }
 .bar {
   display: flex;
+  align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
+  height: var(--control-h);
+  flex: 0 0 auto;
+  padding: 0 var(--sp-3);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
-.bar select,
-.session-input,
-.load-btn {
-  height: var(--control-h);
-  background: var(--surface-2);
-  /* WCAG 1.4.11: controls need a >=3:1 boundary; --border is 1.49:1. */
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
-  color: var(--fg);
-  padding: 0 var(--sp-2);
-  font-family: var(--font-ui);
-  font-size: var(--fs-300);
+.engine {
+  font-family: var(--font-mono);
+  font-size: var(--fs-100);
+  font-weight: var(--fw-semibold);
+  color: var(--agent);
 }
-.session-input {
+/* The id, with the full host path on the tooltip: a uuid is long enough to
+   need truncating and the path is longer still, but the path is what makes
+   the claim checkable, so it stays reachable rather than displayed. */
+.transcript {
   flex: 1;
   min-width: 0;
   font-family: var(--font-mono);
-}
-.session-input::placeholder {
-  color: var(--fg-muted);
-}
-.load-btn {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: var(--accent);
-  padding: 0 var(--sp-3);
-  font-weight: var(--fw-semibold);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease);
-}
-.load-btn:hover:not(:disabled) {
-  background: var(--accent-dim);
-  color: var(--fg);
-}
-.load-btn:disabled {
-  opacity: var(--disabled-opacity);
-  cursor: default;
-}
-.resumable {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  padding: var(--sp-2) var(--sp-3);
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
-.label {
-  font-size: var(--fs-100);
+  font-size: var(--fs-200);
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* One badge metric across the app (docs/POLISH.md §7). */
-.resume-chip {
+.unverified {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-1);
+  flex: 0 0 auto;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  color: var(--accent);
+  color: var(--fg-muted);
   padding: 0 var(--sp-1);
   line-height: var(--lh-100);
   min-height: var(--control-h-sm);
   font-size: var(--fs-100);
-  cursor: pointer;
-  font-family: var(--font-mono);
-  transition: background var(--dur-fast) var(--ease);
 }
-.resume-chip:hover {
-  background: var(--state-active);
+.refresh {
+  flex: 0 0 auto;
 }
 .messages {
   flex: 1;

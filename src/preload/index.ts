@@ -12,6 +12,8 @@ import type {
   StageAttachmentsResult,
 } from '../shared/types.js';
 import type { UsageRow } from '../main/helper/parsers.js';
+import type { SessionConversation } from '../main/helper/PocketshellClient.js';
+import type { TranscriptEngine } from '../main/agents/transcripts.js';
 import type { DirEntry, FileStat, TransferProgress } from '../main/sftp/SftpService.js';
 import type { RemotePort } from '../main/portfwd/PortScanner.js';
 import type { ForwardState } from '../main/portfwd/Forwarder.js';
@@ -469,6 +471,19 @@ const api = {
       path: string;
       session: string;
     } | null> => ipcRenderer.invoke(ipc.agent.log, connectionId, engine, session, cwd),
+
+    /**
+     * The conversation of ONE tmux session.
+     *
+     * The renderer only ever knows a session — the transcript id `agent-log`
+     * wants is resolved main-side (see main/agents/transcripts.ts). `engine`
+     * and `cwd` are what the session list already knows about the session and
+     * may both be null; the resolver then refuses rather than guesses.
+     */
+    sessionLog: (
+      connectionId: string,
+      opts: { session: string; engine: TranscriptEngine | null; cwd: string | null },
+    ): Promise<SessionConversation> => ipcRenderer.invoke(ipc.agent.sessionLog, connectionId, opts),
 
     /** List resumable AI-CLI conversations. */
     resumable: (connectionId: string): Promise<

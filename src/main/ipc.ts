@@ -14,6 +14,7 @@ import { runBootstrap } from './helper/bootstrap.js';
 import { readSshConfig } from './ssh-config/SshConfigParser.js';
 import { KnownHosts } from './ssh-config/KnownHosts.js';
 import type { UsageRow } from './helper/parsers.js';
+import type { TranscriptEngine } from './agents/transcripts.js';
 import { SftpService, type DirEntry, type FileStat, type TransferProgress } from './sftp/SftpService.js';
 import { ForwardService } from './portfwd/ForwardService.js';
 import type { RemotePort } from './portfwd/PortScanner.js';
@@ -586,6 +587,18 @@ export function registerIpcHandlers(deps: {
       cwd?: string,
     ) => {
       return helper.agentLog(connectionId, engine, session, cwd);
+    },
+  );
+  // What the Conversation tab uses: it knows a tmux session, not a transcript
+  // id, and the mapping between the two is not something the helper exposes.
+  ipcMain.handle(
+    ipc.agent.sessionLog,
+    async (
+      _evt,
+      connectionId: string,
+      opts: { session: string; engine: TranscriptEngine | null; cwd: string | null },
+    ) => {
+      return helper.sessionConversation(connectionId, opts);
     },
   );
   ipcMain.handle(ipc.agent.resumable, async (_evt, connectionId: string) => {

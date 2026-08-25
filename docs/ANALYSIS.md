@@ -169,6 +169,16 @@ phone's `list-sessions` + `list-panes` pair. Verified on tmux 3.4 and 3.6b.
   encoded as `/` → `-`. OpenCode's SQLite is opened **read-only /
   immutable** so the live WAL is never locked. Live panes (cwd+engine
   match) are tagged `running` and refused for resume (never double-attach).
+- **`agent-log --session S`** takes the ENGINE's transcript id — the stem of
+  the JSONL file (`demo-claude`, a claude uuid, a codex rollout name) — and
+  **not** the tmux session name. Nothing the helper lists returns that id:
+  `sessions list` is IDX/SESSION/CREATED and `sessions resumable` is
+  ENGINE/PROJECT/WHEN/LABEL, neither of which carries it. A session-scoped
+  caller therefore has to recover it from the on-disk layout itself
+  (`src/main/agents/transcripts.ts`), keyed on the session's cwd and its
+  recorded `@ps_agent_kind`. Only claude's path encodes the cwd; codex and
+  opencode keep it inside the file, so for those the match is by engine plus
+  recency and the UI says so.
 - **`agent <kind>`** strips ~71 provider API-key env vars (subscription
   billing), merges `.env`/`.envrc`, suppresses codex's update-check modal
   and claude's trust dialog (seeds `~/.claude.json`), then `exec`s the
