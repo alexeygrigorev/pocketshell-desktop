@@ -41,6 +41,7 @@ import {
   type ReposListOptions,
 } from '../projects/commands.js';
 import {
+  annotateHelperRejection,
   classifyReposFailure,
   isHelperMissing,
   parseReposJson,
@@ -194,13 +195,20 @@ export class PocketshellClient {
    * phone's layer 2 is handled server-side and its layer 1 is the helper's
    * business, not ours.
    *
-   * What is left is the one case the helper cannot handle for us: the helper
-   * is not installed at all, or is too old to have the subcommand. That is
-   * detected by {@link isHelperMissing} — narrowly, so a genuine create
-   * failure is reported rather than being silently downgraded to an uncapped
-   * session — and only then do we run the raw tmux create. `via` in the result
-   * tells the caller which path ran, so the UI can say "created without a
-   * memory cap" honestly.
+   * What is left is the one case the helper cannot handle for us: `pocketshell`
+   * is not installed on the host at all. That is detected by
+   * {@link isHelperMissing} — and only then do we run the raw tmux create.
+   * `via` in the result tells the caller which path ran, so the UI can say
+   * "created without a memory cap" honestly.
+   *
+   * The predicate is deliberately narrow, and got narrower: it used to also
+   * fire on Click's "No such command" / "No such option" (helper too old for
+   * the subcommand), which is exactly the input this fallback must NOT accept.
+   * Falling back trades the repo's `cgroups.toml` memory cap for no cap at all
+   * and still reports `ok: true`, so a mistyped flag would have looked like a
+   * successful create while quietly ignoring a budget the repo declared for
+   * itself. Those exits now return `ok: false` with the host's line plus the
+   * explanation from {@link annotateHelperRejection}.
    */
   async createSession(
     connectionId: string,
@@ -218,12 +226,15 @@ export class PocketshellClient {
         .find((l) => l.length > 0);
       return { ok: true, name: printed ?? opts.name, via: 'helper', error: null };
     }
-    if (!isHelperMissing(res.exitCode, `${res.stdout}\n${res.stderr}`)) {
+    const output = `${res.stdout}\n${res.stderr}`;
+    if (!isHelperMissing(res.exitCode, output)) {
+      const hostMessage =
+        res.stderr.trim() || res.stdout.trim() || `sessions create exited ${res.exitCode}`;
       return {
         ok: false,
         name: null,
         via: 'helper',
-        error: res.stderr.trim() || res.stdout.trim() || `sessions create exited ${res.exitCode}`,
+        error: annotateHelperRejection(hostMessage, output),
       };
     }
     const fallback = await this.ssh.exec(

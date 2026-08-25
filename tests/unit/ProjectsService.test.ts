@@ -431,4 +431,55 @@ describe('PocketshellClient.createSession — real fixture output', () => {
     });
     expect(out).toEqual({ ok: true, name: 'fixture-probe-2', via: 'helper', error: null });
   });
+
+  it('falls back to raw tmux when the helper binary is absent', async () => {
+    // The one case the fallback still exists for: no `pocketshell` on PATH.
+    // The session comes up WITHOUT a memory cap, which is why `via` has to say
+    // `tmux-fallback` — the dialog turns that into a sentence for the user.
+    const { ssh, commands } = fakeSsh([
+      (c) => (c.includes('sessions create') ? fail(127, 'sh: pocketshell: not found') : null),
+      (c) => (c.includes('tmux new-session') ? ok('') : null),
+    ]);
+    const out = await new PocketshellClient(ssh).createSession(CONN, {
+      name: 's',
+      cwd: '/home/testuser/git/x',
+    });
+    expect(out).toEqual({ ok: true, name: 's', via: 'tmux-fallback', error: null });
+    expect(commands.some((c) => inner(c).includes('tmux new-session -A -d'))).toBe(true);
+  });
+
+  it('does NOT fall back when the helper rejects the command — that would drop the memory cap', async () => {
+    // Click exits 2 with "No such command" for a subcommand the installed
+    // helper does not have. That used to trigger this fallback as an
+    // old-helper shim, which meant a command WE got wrong was laundered into a
+    // successful-looking, uncapped session. Against 0.4.44 it is a real fault,
+    // so it must fail loudly and never reach raw tmux.
+    const { ssh, commands } = fakeSsh([
+      (c) => (c.includes('sessions create') ? fail(2, "Error: No such command 'sessions'.") : null),
+      (c) => (c.includes('tmux new-session') ? ok('') : null),
+    ]);
+    const out = await new PocketshellClient(ssh).createSession(CONN, {
+      name: 's',
+      cwd: '/home/testuser/git/x',
+    });
+    expect(out.ok).toBe(false);
+    expect(out.via).toBe('helper');
+    expect(out.error).toContain("No such command 'sessions'.");
+    expect(out.error).toContain('pocketshell --version');
+    expect(commands.some((c) => c.includes('tmux new-session'))).toBe(false);
+  });
+
+  it('reports a rejected option instead of quietly creating an uncapped session', async () => {
+    const { ssh, commands } = fakeSsh([
+      (c) => (c.includes('sessions create') ? fail(2, 'Error: No such option: --cwd') : null),
+      (c) => (c.includes('tmux new-session') ? ok('') : null),
+    ]);
+    const out = await new PocketshellClient(ssh).createSession(CONN, {
+      name: 's',
+      cwd: '/home/testuser/git/x',
+    });
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain('drifted');
+    expect(commands.some((c) => c.includes('tmux new-session'))).toBe(false);
+  });
 });

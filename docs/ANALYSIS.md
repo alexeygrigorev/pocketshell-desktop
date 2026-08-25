@@ -312,6 +312,21 @@ These carry over because they are product-shaping, not Android-specific:
 | D7 | Recurring jobs run server-side | Jobs UI delegates to `pocketshell jobs`; desktop never schedules. |
 | D21 | No background work (carve-out: tunnels) | Desktop has no battery constraint, but long-running state still lives on the remote (tmux) and reconnects on focus. |
 
+> **D22, applied to the v0.4.8 shims.** The `block_reason` field, the bare-array
+> `profiles list` shape and the `--muted` alias went first. The last one to go
+> was version *sniffing*: `isHelperMissing` (`src/main/projects/repos.ts`) used
+> to answer true for Click's exit-2 `No such command` / `No such option` as
+> well as for the shell's 127, on the reading "a helper too old for the
+> subcommand is as good as no helper". Against 0.4.44 that reading is dead —
+> every subcommand and option this app sends exists — so those exits now mean
+> a fault, and are reported as one with an explanatory line appended to the
+> host's own message (`describeHelperRejection`). It mattered most on
+> `sessions create`, whose only fallback is a raw `tmux new-session` with **no
+> memory cap**: while the shim stood, a command this client built wrong would
+> have been laundered into a successful-looking, uncapped session. The
+> fallback itself stays, gated on the one thing it was ever for — no
+> `pocketshell` binary on PATH.
+
 **Decisions we deliberately diverge on** (desktop context):
 
 | Area | Android | Desktop | Why |

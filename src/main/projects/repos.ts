@@ -231,22 +231,92 @@ export function classifyReposFailure(
   if (isHelperMissing(exitCode, text)) {
     return { state: 'helper-missing', error: message };
   }
-  return { state: 'failed', error: message };
+  // A Click usage error is a REAL failure, not an absent helper: `failed`
+  // carries an error tone in the UI where `helper-missing` reads as "this host
+  // just doesn't have it". The host's own line goes out annotated so the user
+  // is told which of the two it is.
+  return { state: 'failed', error: annotateHelperRejection(message, text) };
 }
 
 /**
- * Is this exit the host telling us `pocketshell` itself is absent (or too old
- * to know the subcommand), rather than the command running and failing?
+ * Is this exit the host telling us the `pocketshell` BINARY is absent, rather
+ * than the command running and failing?
  *
- * 127 from `/bin/sh` is "command not found"; Click exits 2 with "No such
- * command" for a subcommand an older helper does not have. Both mean "this
- * host cannot do it", which is the signal the create path falls back on —
- * and it is deliberately narrow, so a genuine runtime failure is surfaced
- * instead of being silently downgraded.
+ * One question only: did the shell fail to find the executable. 127 from
+ * `/bin/sh` is "command not found", and the `gh` guard above it is needed
+ * because the helper's own "`gh` is not installed" message also exits 127 —
+ * see {@link classifyReposFailure}.
+ *
+ * ## What used to be here, and why it is gone
+ *
+ * This also returned true for Click's exit-2 `No such command` / `No such
+ * option`, on the theory that a helper too old to have the subcommand is, to
+ * us, as good as no helper. That was back-compat by intent and it is now
+ * removed under D22 (no backwards-compat, hard cuts only): hosts run 0.4.44,
+ * which has every subcommand and every option this app sends, so those exits
+ * can no longer mean "old helper". They can only mean we built the invocation
+ * wrong, or `pocketshell` on that host is not the helper we think it is.
+ *
+ * Keeping them here was actively unsafe rather than merely obsolete, because
+ * this predicate is the trigger for the create fallback in
+ * ../helper/PocketshellClient.ts (`createSession`): a true answer drops to a
+ * raw `tmux new-session`, which creates the
+ * session with NO memory cap and reports `ok`. A wrong flag on `sessions
+ * create` would therefore have been laundered into a successful-looking create
+ * that quietly ignored the repo's `cgroups.toml` budget. Those exits are now
+ * explained by {@link describeHelperRejection} and surfaced as failures.
+ *
+ * Still deliberately narrow in the other direction too: a genuine runtime
+ * failure of a command that DID run must be reported, never downgraded.
  */
 export function isHelperMissing(exitCode: number, output: string): boolean {
   const lower = output.toLowerCase();
   if (lower.includes('is not installed')) return false; // a gh message, not a helper one
-  if (exitCode === 127 && /pocketshell[^\n]*not found|command not found/.test(lower)) return true;
-  return /no such command|no such option/.test(lower);
+  return exitCode === 127 && /pocketshell[^\n]*not found|command not found/.test(lower);
+}
+
+/**
+ * Explain a Click usage error from the helper, or null when the output is not
+ * one.
+ *
+ * Click exits **2** for both of these, and they are different bugs on our side:
+ *
+ *  - `Error: No such command 'sessions'.` — the group has no such subcommand.
+ *    Against 0.4.44 this means the `pocketshell` on that host is not the helper
+ *    (a namesake on PATH, a half-installed shim), because every subcommand we
+ *    call exists in the version the app targets.
+ *  - `Error: No such option: --cwd` — the subcommand exists but rejected a flag
+ *    we passed. That is drift between this client and the installed helper, of
+ *    exactly the kind ANALYSIS.md's drift table records (`sessions resumable
+ *    --json` was removed upstream while the docs still promised it).
+ *
+ * They were previously lumped together AND swallowed as `helper-missing`. They
+ * are kept apart here because the fix differs — check the host's install vs.
+ * fix the command we build — and the raw Click line names neither, so a user
+ * reading "No such option: --cwd" in a dialog has nothing to act on. The host's
+ * own text is still shown; this only adds the sentence that makes it legible.
+ */
+export function describeHelperRejection(output: string): string | null {
+  const lower = output.toLowerCase();
+  if (lower.includes('no such command')) {
+    return "The `pocketshell` on this host does not have that subcommand — check `pocketshell --version` there (this app targets 0.4.44).";
+  }
+  if (lower.includes('no such option')) {
+    return "The host's `pocketshell` rejected an option this app passed — the app and the installed helper have drifted.";
+  }
+  return null;
+}
+
+/**
+ * A host failure message with the usage-error explanation appended, when there
+ * is one.
+ *
+ * Both call sites (repos classification and session creation) compose it the
+ * same way, so they share this rather than each inventing their own wording.
+ * The newline collapses to a space in the renderer's `<p>` and keeps the two
+ * sentences apart in a log.
+ */
+export function annotateHelperRejection(hostMessage: string, output: string): string {
+  const reason = describeHelperRejection(output);
+  return reason === null ? hostMessage : `${hostMessage}\n${reason}`;
 }

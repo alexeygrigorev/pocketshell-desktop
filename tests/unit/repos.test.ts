@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  annotateHelperRejection,
   classifyReposFailure,
+  describeHelperRejection,
   isHelperMissing,
   mergeRepos,
   parseReposJson,
@@ -175,9 +177,28 @@ describe('classifyReposFailure', () => {
     expect(classifyReposFailure(127, '', 'sh: pocketshell: not found').state).toBe(
       'helper-missing',
     );
-    expect(classifyReposFailure(2, '', "Error: No such command 'repos'.").state).toBe(
-      'helper-missing',
-    );
+  });
+
+  it('reports an unknown subcommand as a FAILURE, not as an absent helper', () => {
+    // Was `helper-missing` while the v0.4.8 shim stood ("too old to know the
+    // subcommand"). Against 0.4.44 that reading is dead: `repos` exists, so
+    // this is a real fault on the host or in the command we built, and the UI
+    // must show it in an error tone rather than as "this host just has no
+    // helper".
+    const out = classifyReposFailure(2, '', "Error: No such command 'repos'.");
+    expect(out.state).toBe('failed');
+    expect(out.error).toContain("No such command 'repos'."); // the host's own line survives
+    expect(out.error).toContain('pocketshell --version'); // …plus something to act on
+  });
+
+  it('reports a rejected option as a failure too, with its own wording', () => {
+    const out = classifyReposFailure(2, '', 'Error: No such option: --json');
+    expect(out.state).toBe('failed');
+    expect(out.error).toContain('drifted');
+  });
+
+  it('leaves an ordinary failure message untouched', () => {
+    expect(classifyReposFailure(1, '', 'boom').error).toBe('boom');
   });
 
   it('reports anything else as a plain failure, keeping the host message', () => {
@@ -193,11 +214,22 @@ describe('classifyReposFailure', () => {
 });
 
 describe('isHelperMissing', () => {
-  it('is true for the shell 127 and for an unknown subcommand', () => {
+  it('is true for the shell 127 — the binary is not on PATH', () => {
     expect(isHelperMissing(127, 'sh: pocketshell: not found')).toBe(true);
     expect(isHelperMissing(127, '/bin/sh: 1: pocketshell: command not found')).toBe(true);
-    expect(isHelperMissing(2, "Error: No such command 'sessions'.")).toBe(true);
-    expect(isHelperMissing(2, "Error: No such option: --cwd")).toBe(true);
+  });
+
+  it('is FALSE for a Click usage error — the old-helper shim is gone', () => {
+    // These were true while `isHelperMissing` doubled as a version check. They
+    // must be false now: this predicate is what makes `createSession` drop to
+    // an UNCAPPED raw tmux create, so a command we got wrong must never be
+    // able to reach that path.
+    expect(isHelperMissing(2, "Error: No such command 'sessions'.")).toBe(false);
+    expect(isHelperMissing(2, 'Error: No such option: --cwd')).toBe(false);
+  });
+
+  it('needs the 127, not just the words — a helper that PRINTS them still ran', () => {
+    expect(isHelperMissing(1, 'fatal: command not found in $PATH')).toBe(false);
   });
 
   it('is false for the gh 127, which is a different absence entirely', () => {
@@ -209,5 +241,44 @@ describe('isHelperMissing', () => {
   it('is false for a genuine runtime failure — never downgrade one silently', () => {
     expect(isHelperMissing(1, 'tmuxctl: failed to start session')).toBe(false);
     expect(isHelperMissing(3, 'session is live')).toBe(false);
+  });
+});
+
+describe('describeHelperRejection', () => {
+  it('tells an unknown subcommand and a rejected option apart', () => {
+    // Two different bugs: "the pocketshell on that host is not the helper" vs
+    // "this client and the installed helper have drifted". Lumping them was
+    // the shape of the removed shim; the fixes are not the same.
+    const command = describeHelperRejection("Error: No such command 'sessions'.");
+    const option = describeHelperRejection('Error: No such option: --cwd');
+    expect(command).toContain('subcommand');
+    expect(option).toContain('option');
+    expect(command).not.toBe(option);
+  });
+
+  it('matches the Click wording whatever case or quoting it arrives in', () => {
+    expect(describeHelperRejection('error: no such command')).not.toBeNull();
+    expect(describeHelperRejection("Error: No such option '--json'")).not.toBeNull();
+  });
+
+  it('is null for anything that is not a usage error', () => {
+    expect(describeHelperRejection('tmuxctl: failed to start session')).toBeNull();
+    expect(describeHelperRejection('sh: pocketshell: not found')).toBeNull();
+    expect(describeHelperRejection('')).toBeNull();
+  });
+});
+
+describe('annotateHelperRejection', () => {
+  it('keeps the host message first and appends the explanation', () => {
+    const out = annotateHelperRejection(
+      "Error: No such command 'repos'.",
+      "Error: No such command 'repos'.",
+    );
+    expect(out.startsWith("Error: No such command 'repos'.")).toBe(true);
+    expect(out.split('\n')).toHaveLength(2);
+  });
+
+  it('returns the host message unchanged when there is nothing to explain', () => {
+    expect(annotateHelperRejection('boom', 'boom')).toBe('boom');
   });
 });
