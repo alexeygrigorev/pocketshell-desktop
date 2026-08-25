@@ -1,0 +1,10 @@
+IDX  SESSION               CREATED
+1    git-caf_-guide        2026-08-25 09:14:02 
+2    git-dataops           2026-08-25 08:51:33 
+3    git-game-tester       2026-08-24 19:02:10 
+4    git-od-ds             2026-08-24 11:40:55 
+
+Join a session: tmuxctl <id> or tmuxctl <session>
+Create a new one: tmuxctl :<session>
+Use current folder: tmuxctl - or tmuxctl -name
+Help: tmuxctl --help

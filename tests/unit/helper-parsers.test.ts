@@ -206,6 +206,92 @@ describe('mergeSessionEnrichment', () => {
   });
 });
 
+/**
+ * The shape that left sessions with a null path — captured, not invented.
+ *
+ * `v0.4.44-tmux-list-panes-mangled.txt` and `v0.4.44-sessions-list-mangled.txt`
+ * are the two sides of the join as a single host really produces them when
+ * sshd exports no locale. Reproduced on the fixture image (tmux 3.4) by
+ * creating four sessions and running both commands verbatim; the sessions-list
+ * side is rendered in tmuxctl's own `f"{idx:<4} {name:<21} {created:<20}"`
+ * because tmuxctl's list dies on that image for an unrelated reason (#6).
+ *
+ * The four rows are the four things that used to go wrong, one each:
+ *
+ *   git-café-guide   non-ASCII name, so the two tmux clients spell it
+ *                    differently and the map lookup misses entirely
+ *   git-od-ds        a `::` inside both path columns, which shifted the
+ *                    scalar tail one field left
+ *   git-game-tester  a dead pane, so `pane_current_path` is empty and only
+ *                    `session_path` has the answer
+ *   git-dataops      the ordinary case, which must not regress
+ */
+describe('the missing-cwd capture', () => {
+  const panes = readV44('v0.4.44-tmux-list-panes-mangled.txt');
+  const list = readV44('v0.4.44-sessions-list-mangled.txt');
+
+  it('recovers a path for every session in the capture', () => {
+    const merged = mergeSessionEnrichment(parseSessionsList(list), parseSessionEnrichment(panes));
+    expect(merged).toHaveLength(4);
+    expect(merged.filter((s) => s.path === null)).toEqual([]);
+  });
+
+  it('joins a name the un-`-u`-ed tmux client sanitised to underscores', () => {
+    // `tmux list-sessions` (no -u, no UTF-8 locale) prints `git-caf_-guide`;
+    // `tmux -u list-panes -a` prints the real bytes. Same session, two
+    // spellings, and the exact-key lookup between them missed.
+    const merged = mergeSessionEnrichment(parseSessionsList(list), parseSessionEnrichment(panes));
+    const row = merged.find((s) => s.name === 'git-caf_-guide')!;
+    expect(row.path).toBe('/home/testuser/git/red-stamp-sound');
+    expect(row.agentKind).toBe('claude');
+  });
+
+  it('keeps a `::` inside a path whole, and the scalar tail with it', () => {
+    const map = parseSessionEnrichment(panes);
+    expect(map.get('git-od-ds')).toEqual({
+      // Not truncated at the delimiter, which is what the old left-to-right
+      // split did — it reported `/home/testuser/git/od`.
+      path: '/home/testuser/git/od::ds',
+      attached: false,
+      agentKind: null,
+    });
+  });
+
+  it('falls back to session_path for a pane with no live process', () => {
+    expect(parseSessionEnrichment(panes).get('git-game-tester')!.path).toBe(
+      '/home/testuser/git/game-tester',
+    );
+  });
+
+  it('refuses a lenient match that two sessions would both claim', () => {
+    // Attaching one session's directory to another is worse than the missing
+    // path this leniency exists to fix, so an ambiguous key is dropped.
+    const map = parseSessionEnrichment(
+      'git-á::1::1::/home/u/a::/home/u/a::0::\n' + 'git-é::1::1::/home/u/b::/home/u/b::0::\n',
+    );
+    const bare = parseSessionsList('1    git-_    2026-01-02 03:04:05\n');
+    expect(mergeSessionEnrichment(bare, map)[0]!.path).toBeNull();
+  });
+});
+
+describe('parseSessionEnrichment row splitting', () => {
+  it('keeps a row whose trailing fields are missing rather than dropping it', () => {
+    // A tmux too old for `#{@…}`, or a read cut short, loses the TAIL. The
+    // row still says where the session is, which is the one thing it is for.
+    const out = parseSessionEnrichment('main::1::1::/home/u/app::/home/u\n');
+    expect(out.get('main')).toEqual({ path: '/home/u/app', attached: false, agentKind: null });
+  });
+
+  it('still skips lines with no path column at all', () => {
+    expect(parseSessionEnrichment('main::1::1\nno server running\n')).toEqual(new Map());
+  });
+
+  it('trims the name so it matches the trimmed sessions-list name', () => {
+    const out = parseSessionEnrichment('  main::1::1::/home/u::/home/u::0::\n');
+    expect(out.has('main')).toBe(true);
+  });
+});
+
 describe('parseTmuxListSessionsFallback', () => {
   it('parses the ::-delimited tmux list-sessions shape', () => {
     const out = parseTmuxListSessionsFallback(

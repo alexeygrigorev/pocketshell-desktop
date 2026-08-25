@@ -1,0 +1,4 @@
+git-café-guide::1::1::/home/testuser/git/red-stamp-sound::/home/testuser/git/red-stamp-sound::0::claude
+git-dataops::1::1::/home/testuser/git/dataops::/home/testuser/git/dataops::0::
+git-game-tester::1::1::::/home/testuser/git/game-tester::0::
+git-od-ds::1::1::/home/testuser/git/od::ds::/home/testuser/git/od::ds::0::

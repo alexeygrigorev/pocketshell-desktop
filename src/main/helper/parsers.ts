@@ -108,6 +108,13 @@ const FIELD_SEP = '::';
  * because a `::` inside a path would otherwise swallow the fields after it —
  * here the parser splits a FIXED count of fields, so only the two path
  * columns can be ambiguous and the scalar tail is always recoverable.
+ *
+ * That reasoning holds, but only if the parser actually splits from BOTH
+ * ends, which it did not: it took the first seven fields left to right, so a
+ * `::` in a path shifted `session_attached` and `@ps_agent_kind` one place
+ * left and both were read out of a path fragment. {@link splitEnrichmentRow}
+ * takes the three leading scalars and the two trailing ones by position from
+ * their own end, which is what makes the tail genuinely recoverable.
  */
 export const SESSION_ENRICHMENT_COMMAND =
   'tmux -u list-panes -a -F ' +
@@ -169,20 +176,9 @@ export function parseSessionEnrichment(stdout: string): Map<string, SessionEnric
   /** Sessions whose active-pane row we have already seen (it wins outright). */
   const activeSeen = new Set<string>();
   for (const rawLine of stdout.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const parts = line.split(FIELD_SEP);
-    if (parts.length < 7) continue; // header noise / "no server running"
-    const [name, windowActive, paneActive, panePath, sessionPath, attached, kind] = parts as [
-      string,
-      string,
-      string,
-      string,
-      string,
-      string,
-      string,
-    ];
-    if (!name) continue;
+    const row = splitEnrichmentRow(rawLine);
+    if (!row) continue;
+    const { name, windowActive, paneActive, panePath, sessionPath, attached, kind } = row;
 
     const isActive = windowActive === '1' && paneActive === '1';
     if (activeSeen.has(name) && !isActive) continue;
@@ -198,6 +194,102 @@ export function parseSessionEnrichment(stdout: string): Map<string, SessionEnric
   return out;
 }
 
+/** One row of {@link SESSION_ENRICHMENT_COMMAND}, already de-shifted. */
+interface EnrichmentRow {
+  name: string;
+  windowActive: string;
+  paneActive: string;
+  panePath: string;
+  sessionPath: string;
+  attached: string;
+  kind: string;
+}
+
+/**
+ * Split one probe line into its seven fields, tolerating both of the shapes
+ * the old fixed left-to-right split got wrong.
+ *
+ * ## Too many fields
+ *
+ * A `::` inside either path column produces MORE than seven parts. Reading
+ * the first seven then shifted `session_attached` and `@ps_agent_kind` out of
+ * a path fragment, which quietly reported the session as detached and
+ * agent-less. Only the two path columns are ambiguous, so the three leading
+ * scalars are taken from the front, the two trailing ones from the back, and
+ * whatever is left in the middle is the two paths.
+ *
+ * Splitting that middle is the one genuinely ambiguous decision here, and it
+ * is resolved by what the two columns MEAN rather than by counting: the
+ * session's path is the directory the session was created in and the pane's
+ * is where its shell is now, so the former is almost always an ancestor of
+ * (or equal to) the latter. When more than one `::` sits in the middle we
+ * take the split that satisfies that relationship, and fall back to the first
+ * `::` when none does — which is the old behaviour, so the common case is
+ * unchanged.
+ *
+ * ## Too few fields
+ *
+ * `parts.length < 7` used to drop the line outright, which is the wrong
+ * default for a probe whose whole contract is "degrade, never cost us the
+ * row". A tmux too old to expand `#{@ps_agent_kind}` emits the literal text
+ * rather than an empty field, and a genuinely truncated line (an SSH read cut
+ * short) loses its TAIL, not its head — so a row that has at least the name
+ * and the two active flags still tells us where the session is. Missing
+ * trailing fields are treated as empty; a row with fewer than five fields
+ * carries no path at all and is still skipped, along with header noise and
+ * "no server running".
+ */
+function splitEnrichmentRow(rawLine: string): EnrichmentRow | null {
+  const line = rawLine.trim();
+  if (!line) return null;
+  const parts = line.split(FIELD_SEP);
+  // Below five there is no path column to read, so the row cannot do the one
+  // job it exists for. This is also what skips "no server running" and any
+  // banner a login shell printed before the probe's own output.
+  if (parts.length < 5) return null;
+
+  const name = (parts[0] ?? '').trim();
+  if (!name) return null;
+  const windowActive = parts[1] ?? '';
+  const paneActive = parts[2] ?? '';
+
+  // The tail is taken from the END so a `::` in a path cannot shift it. When
+  // the row is short the tail fields simply are not there, and empty is the
+  // right reading of both: no attach count means "not attached", no recorded
+  // option means "we did not launch this".
+  const hasKind = parts.length >= 7;
+  const hasAttached = parts.length >= 6;
+  const kind = hasKind ? (parts[parts.length - 1] ?? '') : '';
+  const attached = hasAttached ? (parts[parts.length - (hasKind ? 2 : 1)] ?? '') : '';
+
+  const middleEnd = parts.length - (hasKind ? 2 : hasAttached ? 1 : 0);
+  const middle = parts.slice(3, middleEnd);
+  const [panePath, sessionPath] = splitPathPair(middle);
+
+  return { name, windowActive, paneActive, panePath, sessionPath, attached, kind };
+}
+
+/**
+ * Recover `pane_current_path` and `session_path` from the middle fields.
+ *
+ * The normal case is exactly two entries and no decision to make. See
+ * {@link splitEnrichmentRow} for why the ancestor relationship is the
+ * tie-break when a path contained the delimiter.
+ */
+function splitPathPair(middle: string[]): [string, string] {
+  if (middle.length === 0) return ['', ''];
+  if (middle.length === 1) return [middle[0] ?? '', ''];
+  if (middle.length === 2) return [middle[0] ?? '', middle[1] ?? ''];
+  for (let cut = 1; cut < middle.length; cut++) {
+    const pane = middle.slice(0, cut).join(FIELD_SEP);
+    const session = middle.slice(cut).join(FIELD_SEP);
+    if (pane === session || pane.startsWith(session.endsWith('/') ? session : session + '/')) {
+      return [pane, session];
+    }
+  }
+  return [middle[0] ?? '', middle.slice(1).join(FIELD_SEP)];
+}
+
 /**
  * Fold the companion probe's data into the bare rows from `sessions list`.
  *
@@ -209,8 +301,9 @@ export function mergeSessionEnrichment(
   sessions: SessionSummary[],
   enrichment: Map<string, SessionEnrichment>,
 ): SessionSummary[] {
+  const lenient = lenientEnrichmentIndex(enrichment);
   return sessions.map((session) => {
-    const extra = enrichment.get(session.name);
+    const extra = enrichment.get(session.name) ?? lenient.get(asciiSanitised(session.name));
     if (!extra) return session;
     return {
       ...session,
@@ -221,6 +314,110 @@ export function mergeSessionEnrichment(
       agentKind: extra.agentKind,
     };
   });
+}
+
+/**
+ * Why the two halves of this join can disagree about a session's NAME.
+ *
+ * The names come from `pocketshell sessions list`, which shells out to
+ * `tmuxctl list`, which runs plain `tmux list-sessions`. The paths come from
+ * our own probe, which runs `tmux -u list-panes -a`. Same host, same tmux
+ * server, two different tmux CLIENTS — and a tmux client that has not been
+ * told it is on a UTF-8 terminal SANITISES every byte it prints, replacing
+ * each one outside ASCII with a single `_`. Captured on the fixture image
+ * (tmux 3.4, sshd exporting no locale), for a session named `git-café-guide`:
+ *
+ *   $ tmux list-sessions -F '#{session_name}'
+ *   git-caf_-guide
+ *   $ tmux -u list-panes -a -F '#{session_name}::…'
+ *   git-café-guide::…
+ *
+ * `-u` was added to the probe (issue #2160) so that PATHS survived exactly
+ * this mangling. What it also did, unnoticed, was move one side of the join
+ * key out of step with the other: the helper offers `git-caf_-guide`, the
+ * probe is filed under `git-café-guide`, `Map.get` misses, and the session
+ * keeps the `path: null` that `parseSessionsList` gave it. The row still
+ * lists — it just has no working directory, so the Files tab opens at the
+ * login home and the folder panel files it under `other`.
+ *
+ * Dropping `-u` would trade a broken name for a broken path and fix nothing.
+ * Matching leniently costs one extra index and fixes both: look the exact
+ * name up first, and only if that misses, look up the name with the same
+ * sanitisation the un-`-u`'d client would have applied.
+ *
+ * Control bytes are folded too, because the same client applies the same
+ * treatment to them — that is what breaks tmuxctl's own tab-delimited
+ * `list-sessions` on this fixture (tmuxctl issue #6).
+ *
+ * The substitution is per DISPLAY COLUMN, not per byte and not per character,
+ * which is worth stating because two of the three are wrong. Measured on the
+ * same image:
+ *
+ *   git-café-guide  ->  git-caf_-guide     (1 char, 2 bytes, 1 column)
+ *   git-ćé-x        ->  git-__-x           (2 chars, 4 bytes, 2 columns)
+ *   git-日本-y       ->  git-____-y         (2 chars, 6 bytes, 4 columns)
+ *
+ * So a CJK or emoji character costs two underscores and a Latin accent one.
+ * {@link displayColumns} models that; it does not have to be a complete
+ * wcwidth, because a name this gets wrong simply fails to match and keeps
+ * today's null path rather than acquiring a wrong one.
+ */
+function asciiSanitised(name: string): string {
+  let out = '';
+  for (const ch of name) {
+    const cp = ch.codePointAt(0)!;
+    out += cp >= 0x20 && cp < 0x7f ? ch : '_'.repeat(displayColumns(cp));
+  }
+  return out;
+}
+
+/**
+ * Terminal columns one code point occupies — enough of wcwidth to cover what
+ * turns up in a session name, which is a directory basename.
+ *
+ * The wide ranges are the East Asian Wide/Fullwidth blocks plus the emoji
+ * planes; everything else, control characters included, is one column.
+ */
+function displayColumns(cp: number): number {
+  const wide =
+    (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
+    (cp >= 0x2e80 && cp <= 0xa4cf) || // CJK radicals .. Yi
+    (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul syllables
+    (cp >= 0xf900 && cp <= 0xfaff) || // CJK compatibility ideographs
+    (cp >= 0xfe30 && cp <= 0xfe6f) || // CJK compatibility forms
+    (cp >= 0xff00 && cp <= 0xff60) || // fullwidth forms
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f300 && cp <= 0x1f9ff) || // emoji
+    (cp >= 0x20000 && cp <= 0x3fffd); // CJK extension planes
+  return wide ? 2 : 1;
+}
+
+/**
+ * Secondary index for {@link mergeSessionEnrichment}, keyed by the sanitised
+ * name.
+ *
+ * A key that two different sessions sanitise to is DROPPED rather than
+ * resolved arbitrarily. Attaching one session's working directory to another
+ * is a worse outcome than the missing path this is here to fix: a null path
+ * shows up as a session in the `other` bucket, while a wrong one silently
+ * opens the Files tab in someone else's project.
+ */
+function lenientEnrichmentIndex(
+  enrichment: Map<string, SessionEnrichment>,
+): Map<string, SessionEnrichment> {
+  const index = new Map<string, SessionEnrichment>();
+  const ambiguous = new Set<string>();
+  for (const [name, value] of enrichment) {
+    const key = asciiSanitised(name);
+    if (key === name) continue; // the exact lookup already covers it
+    if (index.has(key)) {
+      ambiguous.add(key);
+      continue;
+    }
+    index.set(key, value);
+  }
+  for (const key of ambiguous) index.delete(key);
+  return index;
 }
 
 /**
