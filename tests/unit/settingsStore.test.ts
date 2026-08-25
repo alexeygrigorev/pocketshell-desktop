@@ -43,6 +43,10 @@ describe('defaults', () => {
     expect(settings.editorFontSize).toBe(13);
   });
 
+  it('seeds zoom at 100%, so an upgrade changes nothing on screen', () => {
+    expect(useSettingsStore().zoomPercent).toBe(100);
+  });
+
   it('exposes every key of AppSettings on the store, not behind a container', () => {
     // The contract another agent is coding against: `settings.typingOpensComposer`.
     const settings = useSettingsStore();
@@ -160,6 +164,57 @@ describe('degrading a stored blob', () => {
     expect(coerceSettings({ defaultHost: 7 }).defaultHost).toBeNull();
     expect(coerceSettings({ defaultHost: null }).defaultHost).toBeNull();
     expect(coerceSettings({ defaultHost: 'hetzner' }).defaultHost).toBe('hetzner');
+  });
+});
+
+/**
+ * Zoom lives in this store rather than beside the code that calls Chromium,
+ * and these are the tests that say why: the keyboard chords and the settings
+ * screen both go through these actions, so there is one value and it is the
+ * one that persists.
+ */
+describe('zoom', () => {
+  it('steps up and down through the store, not around it', () => {
+    const settings = useSettingsStore();
+    settings.zoomIn();
+    expect(settings.zoomPercent).toBe(110);
+    settings.zoomOut();
+    expect(settings.zoomPercent).toBe(100);
+  });
+
+  it('resets to 100% from anywhere — the guaranteed way back', () => {
+    const settings = useSettingsStore();
+    for (let i = 0; i < 10; i++) settings.zoomOut();
+    expect(settings.zoomPercent).toBe(50);
+    settings.resetZoom();
+    expect(settings.zoomPercent).toBe(100);
+  });
+
+  it('cannot be stepped out of its bounds however long a key is held', () => {
+    const settings = useSettingsStore();
+    for (let i = 0; i < 50; i++) settings.zoomIn();
+    expect(settings.zoomPercent).toBe(200);
+    for (let i = 0; i < 50; i++) settings.zoomOut();
+    expect(settings.zoomPercent).toBe(50);
+  });
+
+  it('persists a keyboard zoom, so it survives a restart like any setting', () => {
+    // The chord path (main -> App.vue -> zoomIn) writes the SAME value the
+    // settings panel shows, which is the whole design point.
+    useSettingsStore().zoomIn();
+    expect(stored()['zoomPercent']).toBe(110);
+    setActivePinia(createPinia());
+    expect(useSettingsStore().zoomPercent).toBe(110);
+  });
+
+  it('clamps a hand-edited zoom instead of discarding it', () => {
+    localStorage.setItem(KEY, JSON.stringify({ zoomPercent: 5000 }));
+    expect(useSettingsStore().zoomPercent).toBe(200);
+  });
+
+  it('falls back to 100% when the stored zoom is not a number', () => {
+    localStorage.setItem(KEY, JSON.stringify({ zoomPercent: 'huge' }));
+    expect(useSettingsStore().zoomPercent).toBe(100);
   });
 });
 

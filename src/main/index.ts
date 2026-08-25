@@ -10,6 +10,8 @@ import { ForwardService } from './portfwd/ForwardService.js';
 import { ProjectsService } from './projects/ProjectsService.js';
 import { registerIpcHandlers } from './ipc.js';
 import { APP_TITLE } from '../shared/windowTitle.js';
+import { ipc } from '../shared/channels.js';
+import { zoomCommandForInput } from '../shared/zoomKeys.js';
 
 // Electron + ESM: __dirname is not defined for the bundled output under some
 // loaders; electron-vite emits CJS for main, so __dirname is available. We
@@ -138,6 +140,31 @@ function createWindow(): void {
       console.warn('[pocketshell] refused to open non-web link:', url);
     }
     return { action: 'deny' };
+  });
+
+  // Zoom chords. Recognised here, DECIDED in the renderer.
+  //
+  // Two jobs, and they are inseparable. The first is to catch every spelling
+  // of "zoom in" — Ctrl+=, Ctrl+Shift+=, a layout's dedicated +, the numeric
+  // keypad's + — which is the reported bug: Electron's default menu binds
+  // `CommandOrControl+Plus`, and `Plus` is SHIFTED `=`, so plain Ctrl+= hit
+  // nothing while Ctrl+- and Ctrl+0 worked. See src/shared/zoomKeys.ts.
+  //
+  // The second is `preventDefault()`, which is load-bearing rather than
+  // tidy-up: it suppresses the page's keydown AND the menu shortcut, and
+  // suppressing the menu shortcut is what stops the default menu's zoom roles
+  // driving Chromium's zoom directly, behind the settings store's back. With
+  // them live, Ctrl+- would move the window without the store ever hearing
+  // about it and the percentage in Settings would be a lie one keystroke
+  // later. That is why the intent is forwarded rather than applied here: main
+  // does not know the current zoom and must not guess it. The renderer's
+  // settings store steps its own value, persists it, and applies it — one
+  // value, one writer, no way for the two to disagree.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    const command = zoomCommandForInput(input);
+    if (!command) return;
+    event.preventDefault();
+    mainWindow?.webContents.send(ipc.win.zoomCommand, command);
   });
 
   // electron-vite: dev server URL in dev, built file in prod.

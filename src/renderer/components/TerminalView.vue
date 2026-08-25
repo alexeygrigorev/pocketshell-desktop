@@ -541,23 +541,41 @@ onBeforeUnmount(() => {
 // "re-open": main answers most of these by switching the tmux client that is
 // already attached, and the PTY behind this terminal survives untouched.
 /**
- * Font settings are live: no restart, and no remount of this component.
+ * Font AND zoom settings are live: no restart, and no remount of this
+ * component.
  *
  * THE REFIT IS NOT OPTIONAL. Changing the family or the size changes xterm's
  * cell size, so the grid it computed from the old cell is now wrong — rows get
  * clipped or a dead band opens under tmux's status line — and, worse, the PTY
  * on the far end is never told, so tmux keeps drawing to the old geometry.
  * That is the same class of failure as the sliced status line fixed in
- * 7d7cdad, arriving by a different route.
+ * 7d7cdad, arriving by a different route. Measured on this exact xterm
+ * (6.0.0) rather than assumed: 16px -> 24px takes an 800x600 pane from 87x30
+ * to 58x20 and the row box from 19px to 28px, and only after the fit.
+ *
+ * ZOOM gets there differently and still ends up here. A CSS pixel is
+ * zoom-invariant, so the cell does NOT change size in CSS px — what changes is
+ * how many of them fit, because the window's viewport in CSS px shrinks or
+ * grows. The container's ResizeObserver does see that and would usually fit on
+ * its own; zoom is watched anyway so the refit is a stated consequence of the
+ * setting rather than a side effect of an observer two layers away. It costs
+ * one coalesced fit.
+ *
+ * Reassigning the font options on a zoom-only change is free: xterm's
+ * OptionsService compares before it fires, so an identical value is a no-op
+ * and does not trigger a re-measure.
  *
  * `scheduleFit()` rather than a bare `fitAddon.fit()`: it coalesces to one fit
  * per frame, which also gives xterm a frame to re-measure the new cell, and it
  * skips the degenerate 0x0 measurement of a hidden pane that a bare fit would
- * push at the remote as a 1x1 terminal. The resize reaches the shell through
+ * push at the remote as a 1x1 terminal. (A pane hidden behind another tab is
+ * exactly that case, and it needs no retry latch: `v-show` toggling back on is
+ * itself a size change, so the ResizeObserver fires and fits with whatever the
+ * settings became while it was hidden.) The resize reaches the shell through
  * the already-bound `term.onResize` handler — there is nothing extra to send.
  */
 watch(
-  () => [settings.monospaceFontFamily, settings.terminalFontSize] as const,
+  () => [settings.monospaceFontFamily, settings.terminalFontSize, settings.zoomPercent] as const,
   ([family, size]) => {
     if (!term) return;
     term.options.fontFamily = resolveMonoStack(family);

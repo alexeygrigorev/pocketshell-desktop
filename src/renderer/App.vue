@@ -14,8 +14,10 @@
 // change repaints them on the next frame with no component involved and no
 // restart. xterm is the exception — it rasterises from an options object and
 // never reads the cascade — so TerminalView assigns its own font and re-fits.
-import { watchEffect } from 'vue';
+import { onBeforeUnmount, onMounted, watchEffect } from 'vue';
 import { fontCssVariables } from './fonts';
+import { zoomFactor } from './zoom';
+import { api } from './ipc';
 import { useSettingsStore } from './stores/settings';
 
 const settings = useSettingsStore();
@@ -29,6 +31,46 @@ watchEffect(() => {
   for (const [name, value] of Object.entries(vars)) {
     document.documentElement.style.setProperty(name, value);
   }
+});
+
+/**
+ * The ONE call that actually moves the window's zoom.
+ *
+ * Zoom cannot be a custom property like the three above — it is not a CSS fact
+ * at all but a property of the frame, so it goes through the preload's
+ * `webFrame.setZoomFactor`. What it shares with them is the shape that
+ * matters: a watcher on the settings store, in the root component, so the
+ * stored value is the only input and there is exactly one writer. Running
+ * immediately (as `watchEffect` does) is also what restores the user's zoom on
+ * launch, before the first frame the user sees.
+ */
+watchEffect(() => {
+  api.win.setZoom(zoomFactor(settings.zoomPercent));
+});
+
+/**
+ * Zoom chords, caught in main (see src/shared/zoomKeys.ts) because the page
+ * never gets to see them — the same `preventDefault()` that disarms Electron's
+ * default-menu zoom roles also suppresses the page keydown.
+ *
+ * They land on the store's actions rather than on `setZoom`, which is the
+ * whole point: pressing Ctrl+- and dragging the Settings stepper are the same
+ * write to the same value, so the panel cannot show a percentage the window is
+ * not actually at.
+ */
+let stopZoomCommands: (() => void) | null = null;
+
+onMounted(() => {
+  stopZoomCommands = api.win.onZoomCommand((command) => {
+    if (command === 'in') settings.zoomIn();
+    else if (command === 'out') settings.zoomOut();
+    else settings.resetZoom();
+  });
+});
+
+onBeforeUnmount(() => {
+  stopZoomCommands?.();
+  stopZoomCommands = null;
 });
 </script>
 

@@ -7,6 +7,7 @@ import {
   TERMINAL_FONT_SIZE_DEFAULT,
 } from '../fonts';
 import { normaliseRootList, normaliseRootPath, SESSION_ROOTS_MAX } from '../sessionGrouping';
+import { parseZoomPercent, stepZoomPercent, ZOOM_PERCENT_DEFAULT } from '../zoom';
 
 /**
  * App-level preferences — the settings screen's model.
@@ -98,6 +99,17 @@ export interface AppSettings {
   /** File-editor text size, in px. Separate from the terminal's — see fonts.ts. */
   editorFontSize: number;
   /**
+   * Whole-window zoom, as a percentage; 100 is unzoomed.
+   *
+   * THE SINGLE SOURCE OF TRUTH FOR ZOOM. The Ctrl+= / Ctrl+- / Ctrl+0 chords
+   * do not touch Chromium's zoom themselves — main forwards the intent here,
+   * this store steps the number, and exactly one watcher (App.vue) turns it
+   * into a `setZoom` call. That is what stops the Settings percentage and the
+   * keyboard drifting apart, which they would the instant either one was
+   * allowed its own copy of the value. See src/renderer/zoom.ts.
+   */
+  zoomPercent: number;
+  /**
    * The top level of the session panel's tree: the project roots the user has
    * registered, in the order they registered them (`~/git`, `~/tmp`, …).
    * Sessions under none of them collect in the panel's `other` bucket.
@@ -174,6 +186,9 @@ export const SETTING_SPECS: SettingSpecs = {
   monospaceFontFamily: { default: null, parse: sanitiseFontFamily },
   terminalFontSize: { default: TERMINAL_FONT_SIZE_DEFAULT, parse: parseFontSize },
   editorFontSize: { default: EDITOR_FONT_SIZE_DEFAULT, parse: parseFontSize },
+  // 100 for the same reason every typography default is what it is: an
+  // upgrade must change nothing on screen until the user asks it to.
+  zoomPercent: { default: ZOOM_PERCENT_DEFAULT, parse: parseZoomPercent },
   // Empty means "derive roots from $HOME", which is what shipped before this
   // setting existed — the same rule the typography defaults follow.
   sessionRoots: { default: [], parse: asRootList },
@@ -300,6 +315,34 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /**
+   * The three zoom moves, as ACTIONS rather than as arithmetic at the call
+   * sites.
+   *
+   * This is the mechanism behind "one source of truth", not a convenience. The
+   * keyboard path (main -> App.vue) and the Settings buttons both call these,
+   * so there is exactly one place that knows what a step is and exactly one
+   * value being stepped. Had the shortcuts been allowed to call Chromium
+   * directly — which is what Electron's default menu was doing, and the reason
+   * this work exists — the number in Settings would have gone stale on the
+   * first Ctrl+- and stayed stale, with no way to notice from either side.
+   *
+   * `resetZoom` deliberately assigns the constant rather than stepping toward
+   * it: Ctrl+0 must return to 100% from anywhere, including from a value that
+   * is not on the ladder at all.
+   */
+  function zoomIn(): void {
+    values.zoomPercent = stepZoomPercent(values.zoomPercent, 1);
+  }
+
+  function zoomOut(): void {
+    values.zoomPercent = stepZoomPercent(values.zoomPercent, -1);
+  }
+
+  function resetZoom(): void {
+    values.zoomPercent = ZOOM_PERCENT_DEFAULT;
+  }
+
+  /**
    * Register a session root, returning whether the list changed.
    *
    * The rules live here rather than in the settings screen so that every route
@@ -335,5 +378,5 @@ export const useSettingsStore = defineStore('settings', () => {
   // key of AppSettings becomes a writable ref on the store automatically, so
   // consumers write `useSettingsStore().typingOpensComposer` and nothing in
   // this file enumerates the keys by hand.
-  return { ...toRefs(values), set, addSessionRoot, removeSessionRoot };
+  return { ...toRefs(values), set, zoomIn, zoomOut, resetZoom, addSessionRoot, removeSessionRoot };
 });

@@ -17,6 +17,14 @@ export const ipc = {
    */
   win: {
     setTitle: 'win:setTitle',
+    /**
+     * Main -> renderer: the user pressed a zoom chord. Carries the INTENT
+     * ('in' | 'out' | 'reset'), never a zoom value, because main deliberately
+     * does not know what the current zoom is — the renderer's settings store
+     * is the only thing that does. See src/shared/zoomKeys.ts for why the
+     * chords are recognised in main at all.
+     */
+    zoomCommand: 'win:event:zoomCommand',
   },
   ssh: {
     listConfigHosts: 'ssh:listConfigHosts',

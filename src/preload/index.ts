@@ -1,5 +1,6 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, webFrame, type IpcRendererEvent } from 'electron';
 import { ipc } from '../shared/channels.js';
+import type { ZoomCommand } from '../shared/zoomKeys.js';
 import type {
   AttachmentSource,
   BootstrapResult,
@@ -53,6 +54,36 @@ const api = {
      */
     setTitle: (title: string): void => {
       ipcRenderer.send(ipc.win.setTitle, title);
+    },
+
+    /**
+     * Scale the whole renderer. `factor` is a multiplier, 1 being unzoomed.
+     *
+     * `webFrame`, not an IPC round-trip to `webContents.setZoomFactor`, and
+     * the difference is not style. This is SYNCHRONOUS: the layout is dirty
+     * before the call returns, so the terminal's re-fit — which runs on the
+     * next animation frame — is guaranteed to measure the new viewport rather
+     * than racing an IPC reply and fitting to the old one. `webFrame` is one
+     * of the modules a sandboxed preload keeps (verified on this Electron, not
+     * assumed: setting 1.5 moves devicePixelRatio 2 -> 3 and window.innerWidth
+     * 987 -> 658, and reads back as 1.5).
+     *
+     * Fire-and-forget like `setTitle`, for the same reason: there is no result
+     * worth awaiting, and the caller is a watcher on a settings value.
+     */
+    setZoom: (factor: number): void => {
+      webFrame.setZoomFactor(factor);
+    },
+
+    /**
+     * Subscribe to zoom chords the main process caught before the page could
+     * see them (see src/shared/zoomKeys.ts). The payload is an INTENT, not a
+     * value: the renderer owns the number. Returns an unsubscribe fn.
+     */
+    onZoomCommand: (handler: (command: ZoomCommand) => void): Unsubscribe => {
+      const listener = (_evt: IpcRendererEvent, command: ZoomCommand): void => handler(command);
+      ipcRenderer.on(ipc.win.zoomCommand, listener);
+      return () => ipcRenderer.removeListener(ipc.win.zoomCommand, listener);
     },
   },
 
