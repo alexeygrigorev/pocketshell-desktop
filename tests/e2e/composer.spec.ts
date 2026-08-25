@@ -255,7 +255,7 @@ test.describe('prompt composer panel', () => {
     // An earlier pass had only maximize here, to keep ONE closer in ONE place.
     // The user then asked for an X on the card: dismissing the surface you are
     // looking at and re-opening from a pinned icon turn out to be different
-    // acts, and only the second needs a fixed address (COMPOSER.md @S@21.4).
+    // acts, and only the second needs a fixed address (COMPOSER.md §21.4).
     const actions = page.locator('.composer .panel-action');
     await expect(actions).toHaveCount(2);
     await expect(actions.nth(1)).toHaveAttribute('aria-label', /close/i);

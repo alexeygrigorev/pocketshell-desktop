@@ -128,7 +128,16 @@ const composerRef = ref<{ typeInto: (text: string) => void } | null>(null);
  * the switch in Settings changes the very next keystroke.
  */
 const interceptTyping = computed(
-  () => settings.typingOpensComposer && composer.mode === 'hidden' && tab.value !== 'files',
+  () =>
+    settings.typingOpensComposer &&
+    composer.mode === 'hidden' &&
+    // A user who dismissed the composer asked for a plain terminal, and this is
+    // the only way to have one while the setting is on (§12.2). `Ctrl+``, the
+    // toggle, or a session switch arms it again. A composer closed by a
+    // DELIVERED SEND does not set this, so typing still brings it back — which
+    // is the whole rhythm `closeComposerOnSend` exists for.
+    !composer.typingSuppressed &&
+    tab.value !== 'files',
 );
 
 /** A keystroke the terminal withheld: it belongs in the draft, not the shell. */
@@ -137,9 +146,11 @@ function onTyped(text: string): void {
 }
 
 /**
- * Put the keyboard back in the pane — Escape rung 3, and every path that
- * closes the composer, which must hand focus back or the next keystroke has
- * nowhere to go and `typingOpensComposer` never fires.
+ * Put the keyboard back in the pane — every path that closes the composer with
+ * a key or a button, which must hand focus back or the terminal is left
+ * unusable behind a card that has just gone away. (A click-outside dismissal is
+ * the exception and deliberately does not come here: that click already decided
+ * where focus belongs.)
  *
  * It deliberately does NOT switch tabs any more. It used to, which was
  * defensible while this was only Escape's business; now that closing the panel

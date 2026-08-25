@@ -391,34 +391,28 @@ function onTerminalContextMenu(e: MouseEvent): void {
 }
 
 /**
- * True between swallowing a typing KEYDOWN and the KEYPRESS it produces.
- *
- * xterm consults this handler for keydown AND keypress, and it turns the
- * keypress into the byte it sends. Swallowing only the keydown would still let
- * the character reach the shell — and by keypress time `interceptTyping` has
- * already gone false, because the composer we just opened is no longer closed.
- * So the decision is latched on the keydown and spent on the keypress.
- */
-let swallowKeypress = false;
-
-/**
  * Intercept the clipboard chords, and (when asked) plain typing, before xterm
  * turns them into input bytes. Returning false tells xterm to leave the event
  * alone.
  */
 function onCustomKey(e: KeyboardEvent): boolean {
-  if (e.type === 'keypress') {
-    if (!swallowKeypress) return true;
-    swallowKeypress = false;
-    return false;
-  }
   if (e.type !== 'keydown') return true;
 
   // Typing opens the composer instead of reaching the shell. Everything
   // `isTypingKey` rejects — every chord, every named key, a bare space —
   // falls through to xterm untouched; see its contract for where that line is.
   if (props.interceptTyping === true && isTypingKey(e)) {
-    swallowKeypress = true;
+    // preventDefault IS THE FEATURE, not a precaution. Returning false only
+    // tells xterm to stop processing (`_keyDown` bails at the custom handler
+    // and, unlike `_keyPress`, never calls its own `cancel()`), so without this
+    // line the DOM event is left un-cancelled and the browser still performs
+    // the default action. By the time it does, `typed` has already opened the
+    // composer and focused its textarea — so the browser typed the character
+    // into it a SECOND time, on top of the copy `typeInto` planted. That is the
+    // doubled first letter: one keystroke, two paths. Cancelling here closes
+    // the native path, and suppresses the keypress event with it, which is why
+    // there is no longer a latch spanning keydown and keypress.
+    e.preventDefault();
     emit('typed', e.key);
     return false;
   }

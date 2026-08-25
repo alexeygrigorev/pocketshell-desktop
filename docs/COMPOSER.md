@@ -559,17 +559,102 @@ per session.
 | any | failed send | unchanged, banner shown |
 | any | session switch | **unchanged.** The panel does not open or close because you changed session; only which draft it shows changes (revised — see §12) |
 
-### 12.2 Escape ladder (ordered; first match wins)
+### 12.2 Escape closes it — and what that costs
 
-1. Slash dropdown open → close the dropdown only.
-2. `expanded` → `docked`.
-3. `docked` and the draft focused → blur, return focus to the terminal. Composer
-   stays visible.
-4. `docked` and not focused → `hidden`.
+**Escape closes the composer.** The user asked for the plain meaning of the key:
+*"esc should close the prompt composer."* Two rungs, first match wins:
 
-**Escape must never clear the draft.** This mirrors the phone's rule that the
-`×` preserves the draft for resend (`PromptComposerViewModel.kt:779-782`).
-Discarding is Discard's job and Discard's alone (§4.3).
+1. **Slash dropdown open** — close the dropdown only. It is the one thing more
+   local than the panel; Escape closes what you opened last, and picking a
+   command is not a reason to lose the whole composer.
+2. **Otherwise** — close it, and hand focus back to the terminal.
+
+**Escape never clears the draft.** That is Discard's job and Discard's alone
+(§4.3), and it survives every close.
+
+#### What the ladder used to be, and why it changed
+
+It had four rungs, and two of them existed to NOT close:
+
+```
+1. slash dropdown open   -> close the dropdown
+2. expanded              -> docked            (restore from maximized)
+3. draft focused         -> blur to the pane, composer STAYS OPEN
+4. not focused           -> hidden
+```
+
+Rung 3 was doing a second job. `typingOpensComposer` (§26.1) only intercepts
+while the composer is CLOSED, so "blur to the pane and leave it open" was the
+only way to get a plain terminal with that setting on — an escape hatch that
+cost no new chord and fell out of the ladder for free. It was a nice piece of
+design and it is why Escape did not close.
+
+It was also, from the user's side, Escape not doing what Escape does. So the
+hatch became **explicit** instead of emergent: a dismissal now suppresses the
+typing intercept (below), which is the same guarantee stated out loud, and the
+rungs standing between Escape and closing went with it. Restoring from maximized
+is still `Ctrl+Shift+↓` and the header button, and a dismissal remembers the
+mode, so re-opening a maximized composer gets it back maximized.
+
+#### Clicking outside closes it — but only when it is empty
+
+*"if composer is empty click outside of composer closes it."* Implemented with
+three guards, each of which is the whole safety of the feature:
+
+- **Empty only.** Empty means no draft text, no staged attachments, no failure
+  banner, nothing in flight. **Whitespace-only counts as empty** — the store
+  already refuses to send `payload.trim() === ''`, so three spaces are not work
+  by any definition the app already uses. With anything else present the click
+  does nothing: dismissing unsent work because the user clicked the terminal to
+  read something would be invisible until they went looking for it.
+- **Gated on the press, not the click.** The card is movable and resizable, and
+  both routinely travel outside its own bounds before the button comes up.
+  Keying on `mousedown` and on where it LANDED means an interaction that started
+  inside the composer can never dismiss it, however far it travels.
+- **Inside means inside `.composer-root`** — the card, its grips, its header,
+  the pinned toggle and the doodle overlay are all descendants. The toggle in
+  particular sits outside the CARD but inside the composer, so a naive handler
+  would close on its press and let its own click re-open, which reads as
+  nothing happening.
+
+It does **not** suppress the typing intercept, unlike Escape. A click elsewhere
+is incidental — the user reached for the terminal, not against the composer —
+and the composer was empty, so nothing was lost; typing afterwards almost
+certainly means they want it back. The rule that falls out, and the one to keep
+in mind when adding any future dismissal:
+
+> **A click dismisses the view. A key dismisses the intent.**
+
+It does not move focus either: the click already decided where focus goes.
+
+#### Closed is two states, not one
+
+The crux, and the reason there is a flag rather than an inference from
+`mode === 'hidden'`:
+
+| Closed by | Means | Next keystroke |
+|---|---|---|
+| **the user** — Escape, `Ctrl+\``, `Ctrl+Shift+K`, `Ctrl+Shift+↓`, the toggle, the card's close | "leave me alone" | goes to the **shell**. This is the plain-terminal hatch |
+| **a delivered send** (`closeComposerOnSend`, §26.2) | "that one's away, next?" | **re-opens** the composer, carrying that character |
+
+Sharing one boolean between those would make the two features cancel each other
+out, so `typingSuppressed` is set only by `dismiss()` and never by the send
+path. It is not persisted — it is a statement about this moment, not a
+preference.
+
+**What lifts the suppression:**
+
+- **`Ctrl+\``**, the summons the user explicitly endorsed (*"ctrl + ` is
+  okay"*), and any other opening: the toggle, `Ctrl+Shift+K`, `Ctrl+Shift+↑`, a
+  seed action. `setMode` clears the flag whenever it opens the panel, so no
+  caller has to remember to.
+- **A session switch.** A dismissal spoke for the pane the user was in; another
+  session is a different job and very often a different intent.
+
+Enter is deliberately **not** bound to open the composer. It was asked for and
+retracted in the same breath (*"enter should open" — "okay let's not do
+enter"*), and it could not have worked anyway: Enter at a shell prompt has to
+stay Enter, which is exactly why `isTypingKey` rejects it (§26.1).
 
 ### 12.3 A successful send does not hide the composer
 
@@ -1051,7 +1136,9 @@ I just click on the same thing."*
 |---|---|
 | Position | pinned `right: 0; bottom: 0` of the dock. Identical in every state — open, closed, card dragged elsewhere, card maximized |
 | Both states | open — chevron **down**, the direction the panel will travel. Closed — chevron **up** |
-| Size | a 24px (`--control-h-sm`) round button around a **14px** mark. Both sit on docs/POLISH.md §2.7's scale; 14 is its "dense chrome" size and this is the densest chrome in the app. Nothing smaller stays a comfortable pointer target |
+| Size | a 28px (`--control-h`) round button around a **16px** mark — docs/POLISH.md §2.7's DEFAULT scale, not its dense one, which is right for a primary affordance |
+| Surface | opaque `--surface-2`, a `--border-strong` edge and the card's elevation shadow. Not a taste call: DESIGN.md §4.2 requires `--border-strong` (4.12:1) wherever a boundary is the only thing identifying a control, and here it is the only thing separating the chip from the terminal behind it |
+| Inset | a further `--sp-3` inside the dock's own corner, so it visibly floats ON the terminal rather than hugging the pane's edge — and clears almost the whole tmux status row instead of sitting in it |
 | Never covered | `PaneBox.keepOut` (§21.1) is the toggle's measured box; `clampGeometry` lifts any card that would span it. A **corner hole in the card's placement**, not a band carved out of the pane |
 | Click target | the whole button. It is pinned, so it is never dragged: a click is unambiguously a click |
 
@@ -1079,10 +1166,23 @@ The pip follows docs/POLISH.md §2.4: a CSS circle, not a glyph, so it does not
 scale with font metrics, ringed in the panel surface so it reads against
 whatever terminal output is behind it.
 
-**Resting opacity.** The button sits at `opacity: 0.55` and lifts to 1 on hover
-and focus, so tmux's status line reads through the chrome until the chrome is
-wanted. A waiting draft overrides that and holds it at full opacity: that is
-exactly when it should stop deferring.
+**Small but not shy — superseding this section's own first answer.** The button
+began at 24px and `opacity: 0.55`, on the reasoning that an overlay drawing over
+tmux's status line should defer to it until wanted. The user, running it: *"the
+^ icon should be an overlay over the terminal not hiding in the corner it's
+almost invisible."*
+
+They were right, and the mistake was one of category. Deference is the correct
+instinct for decoration; this is the ONLY way to summon the composer once it is
+closed, so a control nobody can find is not subtle, it is broken. The fix was
+**contrast and placement, not size** — the user liked the compact icon and
+asked for it (*"let's make it smaller and an icon"*), so the old wide rail did
+not come back. It is now an opaque chip with a strong edge and real elevation,
+inset far enough to read as floating, at full opacity in every state.
+
+Hover and focus step the fill up the elevation ladder (`--surface-2` —
+`--surface-3`) and brighten the mark; a **waiting draft** brightens the mark
+too, so the pip is not carrying the news alone.
 
 **The card has a close button too — superseding this section's own earlier
 decision.** For one revision it did not: the header carried maximize/restore
@@ -1251,7 +1351,7 @@ lines and the `Attached files:` block — the bracketed-paste proof (§16.2).
 
 Both are switches in `stores/settings.ts` (`typingOpensComposer`,
 `closeComposerOnSend`), both default **on**, and both are read through the store
-on every use rather than copied at mount @D@ flipping either one takes effect on
+on every use rather than copied at mount — flipping either one takes effect on
 the next keystroke.
 
 They exist for one reason, stated by the user: on the phone the composer is the
@@ -1263,7 +1363,7 @@ is back.
 ### 26.1 `typingOpensComposer`
 
 A printable keystroke at a CLOSED composer opens it and lands in the draft
-instead of reaching the shell. **The character that triggered it is not lost** @D@
+instead of reaching the shell. **The character that triggered it is not lost** —
 having to retype the first letter of every prompt would defeat the point.
 
 Where it is decided:
@@ -1275,8 +1375,8 @@ Where it is decided:
 | Condition | `SessionWorkspaceView.vue` computes `settings.typingOpensComposer && composer.mode === 'hidden' && tab !== 'files'` and hands TerminalView the answer as `interceptTyping`. The terminal knows nothing about the composer or the settings; the composer knows nothing about the terminal's key handling |
 | Delivery | TerminalView emits `typed`; the workspace calls the composer's `typeInto(char)`, which opens on `lastOpenMode` and splices the character in at the remembered caret (`insertAtCaret`) |
 
-**Where the line is drawn, exactly.** `isTypingKey` returns false @D@ so the key
-goes straight to the shell @D@ for:
+**Where the line is drawn, exactly.** `isTypingKey` returns false — so the key
+goes straight to the shell — for:
 
 - **anything with Ctrl, Meta or Alt.** One rule covers Ctrl-C, Ctrl-D, Ctrl-Z,
   Ctrl-R, tmux's prefix and every app chord. A terminal that swallows Ctrl-C is
@@ -1292,25 +1392,32 @@ goes straight to the shell @D@ for:
 
 **The keypress latch.** xterm consults the handler for keydown *and* keypress,
 and it is the keypress it turns into a byte. Swallowing only the keydown would
-still let the character through @D@ and by keypress time the condition has gone
+still let the character through — and by keypress time the condition has gone
 false, because the composer we just opened is no longer closed. So the decision
 is latched on the keydown and spent on the keypress.
 
-**Escape hatches**, in order of immediacy:
+**How to get a plain terminal**, which is the question this feature has to have
+an answer to:
 
-1. **Escape.** Rung 3 of the ladder blurs the draft and returns focus to the
-   pane while leaving the composer OPEN @D@ and the intercept only fires while it
-   is closed. So one keypress gets a plain terminal back, with the draft
-   preserved. No new chord was invented for this; the ladder already did it.
+1. **Escape** (or `Ctrl+\``, or the toggle). Closing the composer YOURSELF
+   suppresses the intercept until an explicit summons, so typing goes to the
+   shell (§12.2). This is the hatch, and it is deliberately the same gesture a
+   user would already reach for.
 2. **The setting**, for turning the behaviour off entirely.
+
+An earlier revision had no explicit hatch: Escape's third rung blurred the draft
+and left the composer OPEN, and since the intercept only fires while it is
+closed, that bought a plain terminal for free. It was neat, but it depended on
+Escape not doing what Escape does everywhere else, and the user asked for the
+plain meaning of the key. The hatch is now stated rather than emergent.
 
 ### 26.2 `closeComposerOnSend`
 
 After a delivered send the composer closes itself, and the next keystroke brings
-it back (@S@26.1). This is the phone's rhythm, asked for explicitly.
+it back (§26.1). This is the phone's rhythm, asked for explicitly.
 
-- **Only a confirmed delivery closes it.** A failure @D@ including a timeout,
-  which @S@4.2 treats as a failure @D@ leaves the card open: the composed payload
+- **Only a confirmed delivery closes it.** A failure — including a timeout,
+  which §4.2 treats as a failure — leaves the card open: the composed payload
   is back in the draft and the "Not sent" banner is showing, and closing over
   the top of that would hide both, leaving an invisible unsent prompt and no
   explanation.
@@ -1321,7 +1428,7 @@ it back (@S@26.1). This is the phone's rhythm, asked for explicitly.
 - The rule lives in the store's `send(key, deliver, { closeOnDelivery })` rather
   than in the component, so the failure case is testable without a settings
   fixture. The component passes the setting in and, on a delivered-and-closed
-  send, hands focus to the terminal @D@ which is what arms @S@26.1 for the next
+  send, hands focus to the terminal — which is what arms §26.1 for the next
   keystroke.
 - It composes with `lastOpenMode`: a maximized composer that closes on send
   re-opens maximized.

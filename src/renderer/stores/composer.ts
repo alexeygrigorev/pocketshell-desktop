@@ -148,6 +148,28 @@ export const useComposerStore = defineStore('composer', () => {
    */
   const geometry = ref<ComposerGeometry>(restoredLayout.geometry);
 
+  /**
+   * The user dismissed the composer and MEANT it: typing must not bring it back
+   * (docs/COMPOSER.md §12.2).
+   *
+   * Deliberately a separate flag from `mode === 'hidden'`, because closed is not
+   * one state — it is two, and they want opposite things from the next
+   * keystroke:
+   *
+   *   closed by the USER (Escape, the chord, the toggle, the card's —)
+   *       "leave me alone." This is the escape hatch: it is the only way to get
+   *       a plain terminal while `typingOpensComposer` is on, so typing MUST go
+   *       to the shell until an explicit summons.
+   *   closed by a SEND (`closeComposerOnSend`)
+   *       "that one's away, next?" Typing is precisely how the composer is
+   *       meant to come back, so this must NOT suppress.
+   *
+   * Sharing one boolean between those two would make the two features cancel
+   * each other out. Not persisted: it is a statement about this moment, not a
+   * preference.
+   */
+  const typingSuppressed = ref(false);
+
   // -------------------------------------------------------------------------
   // Persistence — the desktop replacement for SavedStateHandle (:2544, :2558).
   // -------------------------------------------------------------------------
@@ -554,14 +576,45 @@ export const useComposerStore = defineStore('composer', () => {
   // -------------------------------------------------------------------------
 
   function setMode(next: ComposerMode): void {
-    if (next !== 'hidden') lastOpenMode.value = next;
+    if (next !== 'hidden') {
+      lastOpenMode.value = next;
+      // Any opening is a summons, and a summons ends the suppression whatever
+      // set it. That covers the chord, the toggle, a seed action and a restored
+      // session in one line, so no caller has to remember to clear it.
+      typingSuppressed.value = false;
+    }
     mode.value = next;
     schedulePersist();
   }
 
-  /** `hidden` -> the last non-hidden mode; anything else -> `hidden`. */
+  /**
+   * Close it BECAUSE THE USER SAID SO. The only difference from `setMode
+   * ('hidden')` is the suppression, and that difference is the whole point.
+   */
+  function dismiss(): void {
+    setMode('hidden');
+    typingSuppressed.value = true;
+  }
+
+  /**
+   * Let typing open it again without opening it now. For contexts that are new
+   * enough that a previous "leave me alone" no longer speaks for the user — a
+   * session switch, which is a different pane, a different job and very often a
+   * different intent.
+   */
+  function allowTypingToOpen(): void {
+    typingSuppressed.value = false;
+  }
+
+  /**
+   * `hidden` -> the last non-hidden mode; anything else -> `hidden`.
+   *
+   * The closing half goes through `dismiss`: reaching for the chord to put the
+   * composer away says exactly what reaching for Escape says.
+   */
   function toggleHidden(): void {
-    setMode(mode.value === 'hidden' ? lastOpenMode.value : 'hidden');
+    if (mode.value === 'hidden') setMode(lastOpenMode.value);
+    else dismiss();
   }
 
   /** `hidden -> docked -> expanded`. */
@@ -570,10 +623,10 @@ export const useComposerStore = defineStore('composer', () => {
     else if (mode.value === 'docked') setMode('expanded');
   }
 
-  /** `expanded -> docked -> hidden`. */
+  /** `expanded -> docked -> hidden`. The last step is a user dismissal. */
   function shrink(): void {
     if (mode.value === 'expanded') setMode('docked');
-    else if (mode.value === 'docked') setMode('hidden');
+    else if (mode.value === 'docked') dismiss();
   }
 
   /**
@@ -598,6 +651,7 @@ export const useComposerStore = defineStore('composer', () => {
     mode,
     lastOpenMode,
     geometry,
+    typingSuppressed,
     targetKey,
     ensure,
     setDraft,
@@ -615,6 +669,8 @@ export const useComposerStore = defineStore('composer', () => {
     restoreFailedSend,
     setConnectionDegraded,
     setMode,
+    dismiss,
+    allowTypingToOpen,
     toggleHidden,
     grow,
     shrink,

@@ -501,3 +501,67 @@ describe('close on send', () => {
     expect(composer.states[KEY]?.error).toBeNull();
   });
 });
+
+/**
+ * Closed is TWO states, not one (docs/COMPOSER.md §12.2). Which one it is
+ * decides what the next keystroke does, so the distinction is modelled rather
+ * than inferred.
+ */
+describe('dismissal vs a send-close', () => {
+  it('a user dismissal suppresses typing — this IS the plain-terminal hatch', () => {
+    composer.dismiss();
+    expect(composer.mode).toBe('hidden');
+    expect(composer.typingSuppressed).toBe(true);
+  });
+
+  it('a delivered send closes WITHOUT suppressing, so typing brings it back', async () => {
+    composer.setDraft(KEY, 'ship it');
+    await composer.send(KEY, async () => true, { closeOnDelivery: true });
+    expect(composer.mode).toBe('hidden');
+    expect(composer.typingSuppressed).toBe(false);
+  });
+
+  it('any opening lifts the suppression, whatever set it', () => {
+    composer.dismiss();
+    composer.setMode('docked');
+    expect(composer.typingSuppressed).toBe(false);
+  });
+
+  it('the toggle chord dismisses on the way down and summons on the way up', () => {
+    composer.toggleHidden();
+    expect(composer.mode).toBe('hidden');
+    expect(composer.typingSuppressed).toBe(true);
+    composer.toggleHidden();
+    expect(composer.mode).toBe('docked');
+    expect(composer.typingSuppressed).toBe(false);
+  });
+
+  it('shrinking past docked is a dismissal too', () => {
+    composer.setMode('expanded');
+    composer.shrink();
+    expect(composer.typingSuppressed).toBe(false);
+    composer.shrink();
+    expect(composer.mode).toBe('hidden');
+    expect(composer.typingSuppressed).toBe(true);
+  });
+
+  it('allowTypingToOpen arms it again without opening it', () => {
+    composer.dismiss();
+    composer.allowTypingToOpen();
+    expect(composer.typingSuppressed).toBe(false);
+    expect(composer.mode).toBe('hidden');
+  });
+
+  it('a dismissal still remembers docked-vs-maximized for the next summons', () => {
+    composer.setMode('expanded');
+    composer.dismiss();
+    composer.toggleHidden();
+    expect(composer.mode).toBe('expanded');
+  });
+
+  it('never destroys the draft', () => {
+    composer.setDraft(KEY, 'survivor');
+    composer.dismiss();
+    expect(composer.states[KEY]?.draft).toBe('survivor');
+  });
+});

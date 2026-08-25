@@ -147,6 +147,32 @@ const attachments = computed(() => state.value.attachments);
 /** Is there work in here the user would lose track of? Drives the toggle's pip. */
 const hasUnsent = computed(() => state.value.draft.length > 0 || attachments.value.length > 0);
 
+/**
+ * Nothing in here worth keeping — the gate on click-outside dismissal
+ * (§12.2). Deliberately stricter than `hasUnsent`, because the question is not
+ * "is there a pip to draw" but "may this vanish without telling anyone", and
+ * the answer has to be no for anything the user would go looking for later.
+ *
+ * Whitespace-only counts as empty: the store already treats it that way at send
+ * time (`payload.trim() === ''` refuses to send), so a draft of three spaces is
+ * not work by any definition the app already uses.
+ *
+ * A send in flight, a batch still uploading and a failure banner all count as
+ * NOT empty. The banner case is already covered by the restored payload sitting
+ * in the draft, but it is spelled out rather than inferred: silently discarding
+ * a prompt that just failed to send is the exact failure this guard exists for.
+ */
+const isEmpty = computed(() => {
+  const st = state.value;
+  return (
+    st.draft.trim() === '' &&
+    st.attachments.length === 0 &&
+    st.error === null &&
+    !st.sendInFlight &&
+    st.uploadingCount === 0
+  );
+});
+
 /** Chevron direction and copy for the fixed toggle — pure, so it can be pinned. */
 const toggle = computed(() => railToggle(mode.value !== 'hidden', hasUnsent.value));
 
@@ -226,6 +252,9 @@ watch(
   () => {
     caret.value = state.value.caret;
     slashDismissed.value = false;
+    // A dismissal spoke for the session the user was in. This is a different
+    // pane and very often a different job, so typing may summon it again.
+    composer.allowTypingToOpen();
     if (mode.value !== 'hidden') focusDraft();
   },
 );
@@ -546,15 +575,56 @@ function openComposer(): void {
 /**
  * Put the card away, and hand the keyboard back to the terminal.
  *
- * The focus half is not a nicety: with `typingOpensComposer` on, the intercept
- * that re-opens the composer lives on the terminal's own textarea, so a close
- * that left focus on the rail button (or nowhere) would leave the next
- * keystroke going nowhere and the feature looking broken. Every path that
- * closes the panel goes through here for that reason.
+ * The focus half is not a nicety: the terminal has to be usable the instant the
+ * card is gone, and the toggle keeps focus otherwise.
+ *
+ * `dismiss` rather than `setMode('hidden')` because everything routed here is
+ * the USER putting the composer away — Escape, the chord, the toggle, the
+ * card's close — and that suppresses the typing intercept until an explicit
+ * summons (§12.2). The one close that does NOT come through here is
+ * `closeComposerOnSend`, which lives in the store and deliberately leaves
+ * typing armed.
  */
 function hideComposer(): void {
-  composer.setMode('hidden');
+  composer.dismiss();
   emit('focus-terminal');
+}
+
+/**
+ * Click anywhere outside an EMPTY composer and it gets out of the way.
+ *
+ * Three things make this safe, and each of them is load-bearing:
+ *
+ *  - EMPTY only. Dismissing unsent work because the user clicked the terminal
+ *    to read something would be invisible data loss — the worst kind, because
+ *    nothing tells you until you go looking.
+ *  - MOUSEDOWN, not click, and gated on where the press LANDED. The card can be
+ *    dragged and resized, and both routinely travel outside its own bounds
+ *    before the button comes up; gating on the press means an interaction that
+ *    STARTED inside the composer can never dismiss it, however far it goes.
+ *  - Anything inside `.composer-root` is inside the composer — the card, the
+ *    grips, the header, the pinned toggle and the doodle overlay are all its
+ *    descendants. So the toggle's own click is never a "click outside": it is
+ *    ignored here and handled by the toggle, which is what stops a close here
+ *    racing a re-open there and reading as a flicker or as nothing at all.
+ *
+ * It does NOT suppress the typing intercept, and that is the interesting call.
+ * Escape and the chord are gestures aimed AT the composer and mean "leave me
+ * alone", so they suppress (§12.2). A click elsewhere is incidental — the
+ * user reached for the terminal, not against the composer — and the composer
+ * was empty, so nothing was lost. Typing afterwards almost certainly means they
+ * want it back, which is the premise of §26.1. The split is: a CLICK dismisses
+ * the view, a KEY dismisses the intent.
+ *
+ * It does not move focus either. The click already decided where focus goes;
+ * stealing it back to the terminal would fight the user's own pointer.
+ */
+function onOutsidePointerDown(e: MouseEvent): void {
+  if (mode.value === 'hidden' || !isEmpty.value) return;
+  const root = rootEl.value;
+  const target = e.target;
+  if (!root || !(target instanceof Node) || root.contains(target)) return;
+  composer.setMode('hidden');
 }
 
 /**
@@ -597,23 +667,25 @@ function toggleExpanded(): void {
 /**
  * The Escape ladder (§12.2), first match wins. Escape NEVER clears the draft —
  * that is Discard's job and Discard's alone.
+ *
+ * It used to have four rungs, two of which were about NOT closing: restore from
+ * maximized, then blur to the pane leaving the card up. The blur rung was also
+ * doing duty as the typing intercept's escape hatch, since the intercept only
+ * fires while the composer is closed. The user asked for the plain meaning of
+ * the key — "esc should close the prompt composer" — so the hatch became an
+ * explicit thing (a dismissal suppresses typing) and the rungs that stood
+ * between Escape and closing went with it. Restoring from maximized is still
+ * `Ctrl+Shift+↓` and the header button; a dismissal remembers the mode anyway,
+ * so re-opening a maximized composer gets it back maximized.
  */
-function escapeLadder(fromDraft: boolean): void {
+function escapeLadder(): void {
+  // The dropdown is the one thing more local than the panel: Escape closes the
+  // thing you opened last, and picking a slash command is not a reason to lose
+  // the whole composer.
   if (slashOpen.value) {
     slashDismissed.value = true;
     return;
   }
-  if (mode.value === 'expanded') {
-    composer.setMode('docked');
-    return;
-  }
-  if (fromDraft) {
-    // Rung 3: blur and hand focus back to the pane. The composer stays visible.
-    draftEl.value?.blur();
-    emit('focus-terminal');
-    return;
-  }
-  // Rung 4: focused somewhere in the composer chrome but not the draft.
   hideComposer();
 }
 
@@ -643,7 +715,7 @@ function onDraftKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
     e.preventDefault();
     e.stopPropagation();
-    escapeLadder(true);
+    escapeLadder();
     return;
   }
 
@@ -665,7 +737,7 @@ function onRootKeydown(e: KeyboardEvent): void {
   if (e.key !== 'Escape') return;
   if (e.target === draftEl.value) return; // already handled, and it stopped here
   e.preventDefault();
-  escapeLadder(false);
+  escapeLadder();
 }
 
 /**
@@ -847,6 +919,9 @@ const rootStyle = computed(() => {
 
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKey, { capture: true });
+  // Capture, so the press is seen wherever it lands — including inside the
+  // terminal, which is the case the user actually asked for.
+  window.addEventListener('mousedown', onOutsidePointerDown, { capture: true });
   measurePane();
   if (rootEl.value && typeof ResizeObserver !== 'undefined') {
     // The pane changes without a window resize too — the session panel's
@@ -864,6 +939,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKey, { capture: true });
+  window.removeEventListener('mousedown', onOutsidePointerDown, { capture: true });
   paneObserver?.disconnect();
   paneObserver = null;
   onDragEnd();
@@ -1059,7 +1135,7 @@ defineExpose({ focusDraft, openComposer, typeInto });
       :aria-expanded="mode !== 'hidden'"
       @click="onToggleRail"
     >
-      <AppIcon :name="toggle.icon" :size="14" />
+      <AppIcon :name="toggle.icon" />
       <span v-if="toggle.unsent" class="unsent-pip" aria-hidden="true"></span>
     </button>
 
@@ -1185,57 +1261,68 @@ defineExpose({ focusDraft, openComposer, typeInto });
  * at a single unmoving pixel and it alternates — which a control living on
  * the card could never do, because the card moves.
  *
- * It is deliberately SMALL. The composer is an overlay now: it takes no
- * terminal rows, but whatever it draws at rest sits on top of tmux's status
- * line. The rail used to spell out a label, the draft's first line, an
- * attachment count and a keyboard hint — the most intrusive possible resting
- * state. An icon is the least that still offers the affordance; the hint is in
- * the tooltip and the draft is in the pip.
+ * It is SMALL but it is not SHY, and that distinction cost a revision. It began
+ * as a 24px mark at `opacity: 0.55`, on the reasoning that an overlay drawing
+ * over tmux's status line should defer to it until wanted. The user, running
+ * it: *"the ^ icon should be an overlay over the terminal not hiding in the
+ * corner it's almost invisible."* They were right, and the error was one of
+ * category: this is not decoration that can afford to recede, it is the ONLY
+ * way to summon the composer once it is closed. A control nobody can find is
+ * broken, not subtle.
  *
- * 24px box, 14px mark: both are on docs/POLISH.md §2.7's scale (§2.7 allows
- * 16/14/12, and this is the app's densest chrome, so 14). Nothing smaller stays
- * a comfortable pointer target.
+ * So it is a CHIP, not a mark: an opaque `--surface-2` fill, a `--border-strong`
+ * edge and the card's own elevation shadow. `--border-strong` is not a taste
+ * call — DESIGN.md §4.2 requires it (4.12:1) wherever a boundary is the only
+ * thing identifying a control, and here it is the only thing separating a chip
+ * from the terminal behind it. At 28px/16px it is on POLISH.md §2.7's default
+ * scale rather than its dense one, which is right for a primary affordance.
+ *
+ * It is inset a further `--sp-3` from the dock's own corner, so it visibly
+ * floats ON the terminal instead of hugging the pane's edge, and that offset
+ * also lifts it clear of almost the whole status row rather than sitting in it.
+ *
+ * What it is NOT is the old wide rail: the user asked for "smaller and an icon"
+ * and liked that; the fix was contrast and placement, not size.
  *
  * It is pinned, so it is never dragged: a click here is unambiguously a click.
  */
 .rail {
   position: absolute;
-  right: 0;
-  bottom: 0;
+  right: var(--sp-3);
+  bottom: var(--sp-3);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--control-h-sm);
-  height: var(--control-h-sm);
+  width: var(--control-h);
+  height: var(--control-h);
   padding: 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
   border-radius: 50%;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  /* The card's own elevation, so the two read as one floating material and the
+     chip lifts off the terminal rather than sitting flat on it. */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   color: var(--fg-secondary);
   cursor: pointer;
-  /* Quiet at rest so the status line reads through it, solid the moment it is
-     aimed at. The status text underneath is the one line the user watches
-     constantly; this is chrome, and chrome should defer to it until wanted. */
-  opacity: 0.55;
   transition:
-    opacity var(--dur-fast) var(--ease),
     background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease);
 }
+/* The elevation ladder's next step up, which is what --surface-3 is for. */
 .rail:hover,
 .rail:focus-visible {
-  opacity: 1;
-  background: var(--surface-2);
+  background: var(--surface-3);
   color: var(--fg);
 }
-/* A draft waiting is exactly when this should stop deferring. */
+/* A waiting draft earns one more step of presence: the pip carries the fact,
+   the brighter mark makes it register without a second glance. */
 .rail.unsent {
-  opacity: 1;
+  color: var(--fg);
 }
 /* docs/POLISH.md §2.4: a status mark is a CSS circle, not a glyph, so it stops
-   scaling with font metrics. The ring is the panel surface, so the pip reads
-   against whatever terminal output happens to be behind the button. */
+   scaling with font metrics. The ring is the chip's own surface, so the pip
+   reads against the chip rather than against whatever is behind it. */
 .unsent-pip {
   position: absolute;
   top: -1px;
@@ -1244,7 +1331,7 @@ defineExpose({ focusDraft, openComposer, typeInto });
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 2px var(--surface);
+  box-shadow: 0 0 0 2px var(--surface-2);
 }
 .rail:hover {
   background: var(--surface-2);
