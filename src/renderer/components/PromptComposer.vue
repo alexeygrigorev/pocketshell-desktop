@@ -2,29 +2,40 @@
 // PromptComposer: the app's primary interaction surface — compose a prompt,
 // stage attachments, submit it into the session's tmux pane.
 //
-// CHROME: this is a VS Code *panel*, not a phone bottom sheet. It is docked to
-// the bottom of the session body and SPLITS the space with the tab content
-// above it — no scrim, no overlay, nothing occluded. A sash on its top edge
-// resizes it (row-resize cursor, min 190px, max 80% of the body), its height is
-// remembered per session across hide/show, and a small toolbar row carries the
-// panel title on the left with maximize/restore and close on the right.
-// `Ctrl+\`` toggles it, matching VS Code muscle memory; when it is closed a
-// persistent 32px rail stays behind so it can always be found by eye.
+// CHROME: this is a FLOATING card, not a phone bottom sheet and no longer a
+// docked bar. It hovers over the bottom-right of the session body — inset from
+// the edges on every side, its own rounded corners, an elevation shadow all
+// round, and only as wide as a prompt needs (~80 mono columns) so terminal
+// output stays readable beside it. A sash on its top edge resizes it
+// (row-resize cursor, min 190px, max 80% of the body), its height is remembered
+// per session across hide/show, and a small toolbar row carries the panel title
+// on the left with maximize/restore and close on the right. `Ctrl+\`` toggles
+// it, matching VS Code muscle memory; when it is closed it shrinks to a rail
+// PILL in the same corner, so the affordance never teleports and a preserved
+// draft can always be found by eye.
 //
-// It is mounted ONCE per session workspace, below the tab body and outside it,
-// so the draft, the caret and the staged tiles survive a Terminal/Conversation
-// tab switch. State lives in stores/composer.ts, keyed by session, so switching
-// sessions swaps records rather than destroying a draft.
+// The card overlays the terminal instead of splitting the pane with it, and
+// that is the point: see the block comment on `.composer-dock` in
+// SessionWorkspaceView.vue. The pane permanently reserves the pill's height
+// plus its inset, so the terminal's ROW COUNT never changes when the composer
+// opens, closes or is dragged — no SSH window-change, no remote tmux reflow.
+//
+// It is mounted ONCE per session workspace, outside the tab body, so the draft,
+// the caret and the staged tiles survive a Terminal/Conversation tab switch.
+// The draft, its attachments and the dragged height live in stores/composer.ts
+// keyed by session, so switching sessions swaps records rather than destroying
+// a draft; open-vs-closed does NOT, because that is a preference about the tool
+// rather than a fact about a session (§12).
 //
 // Three deliberate divergences from the Android original (docs/COMPOSER.md):
 //
-//  1. §12 — a third `hidden` mode that leaves a 32px rail behind, instead of the
+//  1. §12 — a third `hidden` mode that leaves a rail pill behind, instead of the
 //     phone's "the sheet is simply gone". A preserved "Not sent" draft must stay
-//     discoverable; the rail carries a draft dot and an attachment count.
+//     discoverable; the pill carries a draft dot and an attachment count.
 //  2. §12.3 — a SUCCESSFUL send does NOT hide the composer. The phone dismisses
 //     its sheet on delivery because a modal sheet occludes the terminal on a
-//     phone screen; here the composer is docked and is where the user works, so
-//     it stays open and focused, ready for the next prompt.
+//     phone screen; here the composer is where the user works, so it stays open
+//     and focused, ready for the next prompt.
 //  3. §16.2 — the payload is bracketed-paste framed by this renderer. Android
 //     gets that for free from `tmux -CC` control mode; we write into a plain PTY
 //     running `tmux attach`, and without the framing every line of an
@@ -99,8 +110,6 @@ watch(key, (k) => composer.ensure(k), { immediate: true });
 const FALLBACK: ComposerSessionState = {
   draft: '',
   attachments: [],
-  mode: 'docked',
-  lastOpenMode: 'docked',
   error: null,
   sendInFlight: false,
   uploadingCount: 0,
@@ -110,7 +119,8 @@ const FALLBACK: ComposerSessionState = {
 };
 
 const state = computed<ComposerSessionState>(() => composer.states[key.value] ?? FALLBACK);
-const mode = computed(() => state.value.mode);
+/** App-level, not per session — see the store's header comment. */
+const mode = computed(() => composer.mode);
 const attachments = computed(() => state.value.attachments);
 
 // ---------------------------------------------------------------------------
@@ -189,7 +199,7 @@ watch(
   () => {
     caret.value = state.value.caret;
     slashDismissed.value = false;
-    if (state.value.mode !== 'hidden') focusDraft();
+    if (mode.value !== 'hidden') focusDraft();
   },
 );
 
@@ -491,20 +501,19 @@ function onDiscard(): void {
 // ---------------------------------------------------------------------------
 
 function openComposer(): void {
-  const s = state.value;
-  composer.setMode(key.value, s.mode === 'hidden' ? s.lastOpenMode : s.mode);
+  if (mode.value === 'hidden') composer.setMode(composer.lastOpenMode);
   focusDraft();
 }
 
 /** The panel's maximize/restore button. Restoring returns the dragged height. */
 function toggleExpanded(): void {
-  composer.setMode(key.value, mode.value === 'expanded' ? 'docked' : 'expanded');
+  composer.setMode(mode.value === 'expanded' ? 'docked' : 'expanded');
   focusDraft();
 }
 
 /** The panel's close button. Closes to the rail; never discards (§12.2). */
 function closePanel(): void {
-  composer.setMode(key.value, 'hidden');
+  composer.setMode('hidden');
 }
 
 /**
@@ -517,7 +526,7 @@ function escapeLadder(fromDraft: boolean): void {
     return;
   }
   if (mode.value === 'expanded') {
-    composer.setMode(key.value, 'docked');
+    composer.setMode('docked');
     return;
   }
   if (fromDraft) {
@@ -527,7 +536,7 @@ function escapeLadder(fromDraft: boolean): void {
     return;
   }
   // Rung 4: focused somewhere in the composer chrome but not the draft.
-  composer.setMode(key.value, 'hidden');
+  composer.setMode('hidden');
 }
 
 function onDraftKeydown(e: KeyboardEvent): void {
@@ -590,14 +599,13 @@ function onRootKeydown(e: KeyboardEvent): void {
  */
 function onGlobalKey(e: KeyboardEvent): void {
   if (!(e.ctrlKey || e.metaKey)) return;
-  const k = key.value;
 
   // Ctrl+` — the VS Code panel chord, and the primary toggle here. Deliberately
   // NOT a Shift chord: it is the one users already have in their fingers, and
   // it collides with nothing the terminal needs.
   if (!e.shiftKey && e.key === '`') {
-    composer.toggleHidden(k);
-    if (state.value.mode !== 'hidden') focusDraft();
+    composer.toggleHidden();
+    if (mode.value !== 'hidden') focusDraft();
     e.preventDefault();
     e.stopPropagation();
     return;
@@ -606,13 +614,13 @@ function onGlobalKey(e: KeyboardEvent): void {
   if (!e.shiftKey) return;
   const lower = e.key.toLowerCase();
   if (lower === 'k') {
-    composer.toggleHidden(k);
-    if (state.value.mode !== 'hidden') focusDraft();
+    composer.toggleHidden();
+    if (mode.value !== 'hidden') focusDraft();
   } else if (e.key === 'ArrowUp') {
-    composer.grow(k);
+    composer.grow();
     focusDraft();
   } else if (e.key === 'ArrowDown') {
-    composer.shrink(k);
+    composer.shrink();
   } else if (lower === 'a') {
     void onAttachClick();
   } else {
@@ -629,6 +637,25 @@ function onGlobalKey(e: KeyboardEvent): void {
 let dragStartY = 0;
 let dragStartHeight = 0;
 
+/**
+ * The height `.composer`'s own `max-height: 80%` is a percentage OF — the dock's
+ * content box, i.e. the session body minus the float inset at top and bottom.
+ *
+ * Measuring the padding rather than assuming it matters: the drag clamp and the
+ * CSS cap have to agree, or dragging past the cap keeps growing the REMEMBERED
+ * height while the card visibly stops, and the panel then restores to a size it
+ * never had. (Before the dock spanned the body this read the card's own height
+ * as the room available for the card, so dragging upward clamped against 80% of
+ * the current height and walked the panel down to the floor instead.)
+ */
+function roomForCard(): number {
+  const dock = rootEl.value?.parentElement;
+  if (!dock) return window.innerHeight;
+  const style = getComputedStyle(dock);
+  const inset = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  return dock.clientHeight - (Number.isFinite(inset) ? inset : 0);
+}
+
 function onHandleDown(e: MouseEvent): void {
   if (!rootEl.value) return;
   e.preventDefault();
@@ -639,14 +666,13 @@ function onHandleDown(e: MouseEvent): void {
 }
 
 function onHandleMove(e: MouseEvent): void {
-  const bodyHeight = rootEl.value?.parentElement?.clientHeight ?? window.innerHeight;
   const raw = dragStartHeight + (dragStartY - e.clientY);
-  const max = Math.round(bodyHeight * MAX_HEIGHT_FRACTION);
+  const max = Math.round(roomForCard() * MAX_HEIGHT_FRACTION);
   const height = Math.max(MIN_HEIGHT, Math.min(raw, max));
   composer.setHeight(key.value, height);
   // A drag always produces a concrete remembered size, so it leaves the
   // maximized state — exactly like dragging the VS Code panel's sash.
-  if (state.value.mode !== 'docked') composer.setMode(key.value, 'docked');
+  if (mode.value !== 'docked') composer.setMode('docked');
 }
 
 function onHandleUp(): void {
@@ -664,17 +690,17 @@ function onHandleUp(): void {
  * maximized therefore lands back on exactly the height the user last dragged.
  */
 const rootStyle = computed(() => {
-  const s = state.value;
-  if (s.mode === 'hidden') return {};
-  if (s.mode === 'expanded') return { height: `${MAX_HEIGHT_FRACTION * 100}%` };
-  return { height: `${s.height ?? DEFAULT_HEIGHT}px` };
+  // `hidden` sizes itself from `.composer.hidden`, so it contributes no height.
+  if (mode.value === 'hidden') return {};
+  if (mode.value === 'expanded') return { height: `${MAX_HEIGHT_FRACTION * 100}%` };
+  return { height: `${state.value.height ?? DEFAULT_HEIGHT}px` };
 });
 
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKey, { capture: true });
   caret.value = state.value.caret;
   // The composer is the primary surface: land in it (§11).
-  if (state.value.mode !== 'hidden') focusDraft();
+  if (mode.value !== 'hidden') focusDraft();
 });
 
 onBeforeUnmount(() => {
@@ -920,39 +946,74 @@ defineExpose({ focusDraft, openComposer });
 </template>
 
 <style scoped>
-/* The panel is a flex sibling of the tab body, so opening it SHRINKS the
-   content above rather than covering it. Nothing is ever occluded. */
+/* ---- the floating card --------------------------------------------------
+ * The card is a flex item of `.composer-dock`, which spans the whole session
+ * body and pins it bottom-right (SessionWorkspaceView.vue). Everything that
+ * makes it read as HOVERING rather than as a bar lives here: it is inset from
+ * the pane's edges by the dock's padding, it closes its own corners, and its
+ * shadow falls on all four sides instead of only upward.
+ *
+ * `flex: 0 1 auto` — the inline `height` (the remembered px size, or 80% when
+ * maximized) is the basis; it may shrink to honour `max-height` and must never
+ * grow to fill the dock, which is body-height now.
+ */
 .composer {
   position: relative;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* ~80 columns of the draft's 13px mono, which is the width a prompt is
+     actually written at. Wider than that and the card stops being a card and
+     starts being the old full-bleed bar with corners. */
+  width: min(720px, 100%);
   background: var(--surface);
-  border-top: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  /* OverlayPanel's elevation, with the Y offset pulled in: that panel is
+     centred and can afford to cast 16px downward, while this one sits a --sp-3
+     gap off the bottom edge and would throw most of its shadow off the pane —
+     leaving the TOP edge, the one that has terminal text behind it, with no
+     separation at all. Same colour, same blur, so both read as one material. */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 /* Backstop for a short window: the remembered height is an absolute px value,
-   so without this a 500px-tall body plus a 600px panel would starve the
-   terminal above it entirely. */
+   so without this a 500px-tall body plus a 600px panel would cover the terminal
+   whole. Resolves against the dock, which is why the dock spans the body. */
 .composer.docked,
 .composer.expanded {
   max-height: 80%;
 }
+/* Chromium follows the element's own corners here, so the dashed accent traces
+   the card's radius rather than boxing it. */
 .composer.drag-over {
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
 }
 
-/* ---- closed: the rail, so the panel can always be found by eye ---------- */
+/* ---- closed: the rail pill, so the panel can always be found by eye ------
+ * It keeps the card's corner and its elevation and simply shrinks to its
+ * content, so closing the panel is the card contracting in place rather than
+ * the affordance jumping to a different edge of the window. Its height is the
+ * one the pane reserves permanently, so — unlike the open card — the pill
+ * never covers a terminal row.
+ */
+.composer.hidden {
+  width: auto;
+  max-width: min(720px, 100%);
+  height: var(--composer-rail-h, 32px);
+  border-radius: 999px;
+}
 .rail {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
-  height: 32px;
+  height: 100%;
   padding: 0 var(--sp-3);
   background: transparent;
   border: none;
+  border-radius: inherit;
   color: var(--fg-muted);
   font-family: var(--font-ui);
   font-size: var(--fs-200);
@@ -1007,12 +1068,15 @@ defineExpose({ focusDraft, openComposer });
   flex: 0 0 auto;
 }
 
-/* ---- the sash: VS Code's row-resize strip on the panel's top edge ------- */
+/* ---- the sash: VS Code's row-resize strip on the panel's top edge -------
+   The card is not `overflow: hidden` — the slash dropdown deliberately escapes
+   above it — so the one child that paints to a corner has to close it itself. */
 .sash {
   flex: 0 0 auto;
   height: 6px;
   cursor: row-resize;
   background: transparent;
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
   transition: background var(--dur-fast) var(--ease);
 }
 .sash:hover {

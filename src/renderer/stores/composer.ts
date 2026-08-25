@@ -12,7 +12,7 @@ import {
 import { composerTiming, withTimeout } from '../../shared/composerSend';
 
 /**
- * Prompt-composer state, one record per session.
+ * Prompt-composer state: one record per session, plus ONE app-level visibility.
  *
  * The Android original keeps a SINGLE activity-scoped ViewModel shared by every
  * session on a host (PromptComposerViewModel.kt:813-820), which is why it needs
@@ -22,11 +22,23 @@ import { composerTiming, withTimeout } from '../../shared/composerSend';
  * it was not authored in — while being strictly better, because switching away
  * and back restores your prompt instead of destroying it.
  *
+ * The split between what is keyed and what is not is the whole design here:
+ *
+ *   per session   draft, staged attachments, caret, dragged height, the error
+ *                 banner, in-flight flags. These are FACTS ABOUT A SESSION —
+ *                 your half-written prompt for `build` has no business showing
+ *                 up in `main`.
+ *   app level     open / closed / maximized. That is a PREFERENCE ABOUT THE
+ *                 TOOL. Keying it per session meant a session you had never
+ *                 opened the composer on started from `blankState()` — open —
+ *                 so closing the panel and switching sessions brought it
+ *                 straight back, which is exactly what the user reported.
+ *
  * Every action below maps one-for-one onto a Kotlin method so the port stays
  * auditable; the citations are in the doc comments.
  */
 
-/** Three modes, per session, persisted (docs/COMPOSER.md §12). */
+/** Three modes, app-wide, persisted (docs/COMPOSER.md §12). */
 export type ComposerMode = 'hidden' | 'docked' | 'expanded';
 
 export interface StagedAttachment {
@@ -41,9 +53,6 @@ export interface StagedAttachment {
 export interface ComposerSessionState {
   draft: string;
   attachments: StagedAttachment[];
-  mode: ComposerMode;
-  /** The mode to restore when the rail is re-opened. */
-  lastOpenMode: 'docked' | 'expanded';
   error: string | null;
   sendInFlight: boolean;
   /** 0 = idle. Mirrors Android's AttachmentUploadState. */
@@ -55,24 +64,34 @@ export interface ComposerSessionState {
   caret: number;
 }
 
-/** Fields worth surviving an app restart (§23.6). */
+/** Per-session fields worth surviving an app restart (§23.6). */
 interface PersistedState {
   draft: string;
   attachments: Omit<StagedAttachment, 'previewDataUrl'>[];
-  mode: ComposerMode;
-  lastOpenMode: 'docked' | 'expanded';
   height: number | null;
   caret: number;
 }
 
+/** The app-level half: whether the panel is showing, and how, when it is. */
+interface PersistedVisibility {
+  mode: ComposerMode;
+  lastOpenMode: 'docked' | 'expanded';
+}
+
 const STORAGE_KEY = 'pocketshell.composer.v1';
+/**
+ * Deliberately a SECOND key rather than a version bump of the first. The
+ * per-session blob keeps its shape and its name, so the drafts a user already
+ * has on disk survive this change; the two fields that moved out of it simply
+ * stop being read there. An old blob's leftover `mode` is ignored, which is the
+ * correct migration — a per-session mode is exactly what is being retired.
+ */
+const VISIBILITY_KEY = 'pocketshell.composer.visibility.v1';
 
 function blankState(): ComposerSessionState {
   return {
     draft: '',
     attachments: [],
-    mode: 'docked',
-    lastOpenMode: 'docked',
     error: null,
     sendInFlight: false,
     uploadingCount: 0,
@@ -102,6 +121,12 @@ export const useComposerStore = defineStore('composer', () => {
   const batches = new Map<string, Batch>();
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
+  const restoredVisibility = loadVisibility();
+  /** Open / closed / maximized — ONE value for the app, not one per session. */
+  const mode = ref<ComposerMode>(restoredVisibility.mode);
+  /** What `hidden` re-opens into, so docked-vs-maximized survives a close. */
+  const lastOpenMode = ref<'docked' | 'expanded'>(restoredVisibility.lastOpenMode);
+
   // -------------------------------------------------------------------------
   // Persistence — the desktop replacement for SavedStateHandle (:2544, :2558).
   // -------------------------------------------------------------------------
@@ -118,8 +143,6 @@ export const useComposerStore = defineStore('composer', () => {
           ...blankState(),
           draft: value.draft ?? '',
           attachments: (value.attachments ?? []).map((a) => ({ ...a })),
-          mode: value.mode ?? 'docked',
-          lastOpenMode: value.lastOpenMode ?? 'docked',
           height: value.height ?? null,
           caret: value.caret ?? 0,
         };
@@ -128,6 +151,23 @@ export const useComposerStore = defineStore('composer', () => {
     } catch {
       // A corrupt blob must never stop the app booting.
       return {};
+    }
+  }
+
+  /** Defaults to `docked`: the composer is the app's primary surface (§11). */
+  function loadVisibility(): PersistedVisibility {
+    const fallback: PersistedVisibility = { mode: 'docked', lastOpenMode: 'docked' };
+    if (typeof localStorage === 'undefined') return fallback;
+    try {
+      const raw = localStorage.getItem(VISIBILITY_KEY);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw) as Partial<PersistedVisibility>;
+      return {
+        mode: parsed.mode ?? fallback.mode,
+        lastOpenMode: parsed.lastOpenMode ?? fallback.lastOpenMode,
+      };
+    } catch {
+      return fallback;
     }
   }
 
@@ -142,7 +182,10 @@ export const useComposerStore = defineStore('composer', () => {
     if (typeof localStorage === 'undefined') return;
     const out: Record<string, PersistedState> = {};
     for (const [key, s] of Object.entries(states.value)) {
-      if (s.draft === '' && s.attachments.length === 0 && s.mode === 'docked') continue;
+      // A record that says nothing is not worth a line in the blob. `ensure()`
+      // touches a key for every session merely visited, so without this the map
+      // grows one empty entry per session, forever.
+      if (s.draft === '' && s.attachments.length === 0 && s.height === null) continue;
       out[key] = {
         draft: s.draft,
         attachments: s.attachments.map(({ remotePath, displayName, mimeType }) => ({
@@ -150,14 +193,16 @@ export const useComposerStore = defineStore('composer', () => {
           displayName,
           ...(mimeType === undefined ? {} : { mimeType }),
         })),
-        mode: s.mode,
-        lastOpenMode: s.lastOpenMode,
         height: s.height,
         caret: s.caret,
       };
     }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
+      localStorage.setItem(
+        VISIBILITY_KEY,
+        JSON.stringify({ mode: mode.value, lastOpenMode: lastOpenMode.value }),
+      );
     } catch {
       // Quota or a locked profile — losing a draft on restart beats throwing.
     }
@@ -423,7 +468,7 @@ export const useComposerStore = defineStore('composer', () => {
     s.error = null;
     s.uploadingCount = 0;
     s.caret = 0;
-    if (s.mode === 'hidden') setMode(key, s.lastOpenMode);
+    if (mode.value === 'hidden') setMode(lastOpenMode.value);
     schedulePersist();
   }
 
@@ -451,33 +496,33 @@ export const useComposerStore = defineStore('composer', () => {
 
   // -------------------------------------------------------------------------
   // Visibility state machine (desktop only — docs/COMPOSER.md §12.1)
+  //
+  // NO `key` parameter, and that is the point: whether the composer is showing
+  // is one answer for the whole app. Closing it on one session and finding it
+  // open on the next is the bug this shape removes.
   // -------------------------------------------------------------------------
 
-  function setMode(key: string, mode: ComposerMode): void {
-    const s = ensure(key);
-    if (mode !== 'hidden') s.lastOpenMode = mode;
-    s.mode = mode;
+  function setMode(next: ComposerMode): void {
+    if (next !== 'hidden') lastOpenMode.value = next;
+    mode.value = next;
     schedulePersist();
   }
 
   /** `hidden` -> the last non-hidden mode; anything else -> `hidden`. */
-  function toggleHidden(key: string): void {
-    const s = ensure(key);
-    setMode(key, s.mode === 'hidden' ? s.lastOpenMode : 'hidden');
+  function toggleHidden(): void {
+    setMode(mode.value === 'hidden' ? lastOpenMode.value : 'hidden');
   }
 
   /** `hidden -> docked -> expanded`. */
-  function grow(key: string): void {
-    const s = ensure(key);
-    if (s.mode === 'hidden') setMode(key, 'docked');
-    else if (s.mode === 'docked') setMode(key, 'expanded');
+  function grow(): void {
+    if (mode.value === 'hidden') setMode('docked');
+    else if (mode.value === 'docked') setMode('expanded');
   }
 
   /** `expanded -> docked -> hidden`. */
-  function shrink(key: string): void {
-    const s = ensure(key);
-    if (s.mode === 'expanded') setMode(key, 'docked');
-    else if (s.mode === 'docked') setMode(key, 'hidden');
+  function shrink(): void {
+    if (mode.value === 'expanded') setMode('docked');
+    else if (mode.value === 'docked') setMode('hidden');
   }
 
   function setHeight(key: string, height: number | null): void {
@@ -487,6 +532,8 @@ export const useComposerStore = defineStore('composer', () => {
 
   return {
     states,
+    mode,
+    lastOpenMode,
     targetKey,
     ensure,
     setDraft,

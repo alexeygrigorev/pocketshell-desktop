@@ -1,8 +1,9 @@
 # Prompt Composer — Desktop Implementation Spec
 
-Status: spec only. Nothing in `src/**` implements this yet — the desktop app
-today has no composer at all (`src/renderer/views/ConversationView.vue:53` is a
-"session id" input for loading logs, not a prompt surface).
+Status: **built.** `src/renderer/components/PromptComposer.vue` +
+`src/renderer/stores/composer.ts` implement Part II. Where the code and this
+document have since diverged, the code won; the sections that were revised
+against it say so inline (§12 and §21 are the two that changed shape).
 
 **Citation convention.** Paths starting `app/` or `core/` are in the Android
 repo at `C:\Users\alexey\git\pocketshell`. Paths starting `src/` or `docs/` are
@@ -481,11 +482,12 @@ Justification, grounded in the phone:
    composer.
 
 The navigation restructure has already landed and left the slot open. The mount
-point is the comment at `src/renderer/views/SessionWorkspaceView.vue:94` —
-*"The prompt composer docks here, below the tab content."* — inside a
-`.session-body` column whose header comment (`:10-11`) states it is a column
-"whose tab content flexes, leaving the bottom of this pane free for the prompt
-composer to dock into later." Route: `/host/:name/session/:session`
+point is `.session-body` in `src/renderer/views/SessionWorkspaceView.vue`, a
+column whose tab content flexes. **Revised (§21.1):** the composer does not dock
+*below* that content as originally specified — it floats *over* it, out of a
+`.composer-dock` positioned against `.session-body`, and the column reserves a
+constant strip at the bottom instead of giving up a flex row. Route:
+`/host/:name/session/:session`
 (`src/renderer/router.ts:23-27`); session identity is
 `route.params['session']` (`SessionWorkspaceView.vue:28`).
 
@@ -517,22 +519,32 @@ should **focus the composer draft on mount** when the session's persisted mode i
 
 ## 12. Visibility state machine (desktop)
 
-Three states, per session, persisted.
+Three states, **app-level** (not per session), persisted.
 
 ```ts
 type ComposerMode = 'hidden' | 'docked' | 'expanded';
 ```
 
-| State | Rendering | Height |
+| State | Rendering | Geometry |
 | --- | --- | --- |
-| `hidden` | A 32px collapsed rail only: a `Compose prompt…` ghost label, a `⌃⇧K` hint, an attachment-count badge, a "draft" dot when a draft exists, and a chevron | 32px |
-| `docked` (default) | Full composer. Draft `min-height: 96px`, scroll region `max-height: 360px` | content-height, ≤ 55% of the workspace body |
-| `expanded` | Same composer, draft grows | 60% of the workspace body, or the user's last dragged height |
+| `hidden` | The card shrinks to a **rail pill** in the same corner: chevron, `PROMPT` label, a `Compose prompt…` ghost label, a "draft" dot when a draft exists, an attachment-count badge, and the `Ctrl+\`` hint | 32px tall, width shrink-to-fit, capped at the card's width |
+| `docked` (default) | Full card | the remembered dragged height, default 240px, floor 190px |
+| `expanded` | Same card, maximized | 80% of the workspace body, ignoring the remembered height, which `docked` returns to |
 
 The `hidden` rail is a **desktop addition** and is deliberate: the phone loses
 the composer entirely when closed, so a preserved "Not sent" draft becomes
 invisible (issue #695's complaint class). A persistent rail costs 32px and
 guarantees a stale draft is always discoverable.
+
+**Revised — the mode is not per session.** It was, and the bug that produced
+was immediate: a session the composer had never been opened on started from
+`blankState()`, whose mode is `docked`, so closing the panel and selecting
+another session brought it straight back. Open/closed/maximized is a
+**preference about the tool**; the draft, its attachments, the caret and the
+dragged height are **facts about a session**. Only the second group is keyed by
+`targetKey`. `lastOpenMode` moved with the mode, so closing and re-opening still
+restores docked-vs-maximized — it just does so once for the app rather than once
+per session.
 
 ### 12.1 Transitions
 
@@ -543,9 +555,9 @@ guarantees a stale draft is always discoverable.
 | `docked` | `Ctrl+Shift+K` / `Ctrl+Shift+↓` / chevron | `hidden` |
 | `docked` | `Ctrl+Shift+↑` / drag the top handle above threshold / double-click the handle | `expanded` |
 | `expanded` | `Ctrl+Shift+↓` / `Escape` (see §12.2) / drag the handle down | `docked` |
-| any | **successful** send | `docked` (never `hidden` — see §12.3) |
+| any | **successful** send | the last open mode (never `hidden` — see §12.3) |
 | any | failed send | unchanged, banner shown |
-| any | session switch | the *new* session's persisted mode |
+| any | session switch | **unchanged.** The panel does not open or close because you changed session; only which draft it shows changes (revised — see §12) |
 
 ### 12.2 Escape ladder (ordered; first match wins)
 
@@ -563,16 +575,17 @@ Discarding is Discard's job and Discard's alone (§4.3).
 
 The phone dismisses the sheet on delivery (`PromptComposerSheet.kt:322-323`)
 because the sheet occludes the terminal on a phone screen. On desktop the
-composer is docked, not modal, and the user asked to interact *primarily*
-through it. So: on delivery, clear the draft and the tiles, keep the composer
-docked and focused, ready for the next prompt. This is a deliberate,
+composer is a non-modal floating card — no scrim, nothing to dismiss — and the
+user asked to interact *primarily* through it. So: on delivery, clear the draft
+and the tiles, keep the card open and focused, ready for the next prompt. This is a deliberate,
 justified divergence — record it in the component's header comment.
 
 ### 12.4 What persists — and the one mechanism NOT to port
 
 Per session key, everything persists across every mode transition and every tab
 switch: draft text, caret/selection, staged attachments, error banner, scroll
-position, and the mode itself.
+position, and the dragged panel height. The **mode is not among them** — it is
+app-level, stored under its own key (§12, §15).
 
 **Do not port the #746 owner-stamp discard-on-switch mechanism.** It exists
 solely because the Android ViewModel is a single activity-scoped instance shared
@@ -676,17 +689,25 @@ export interface StagedAttachment {
 export interface ComposerSessionState {
   draft: string;
   attachments: StagedAttachment[];
-  mode: ComposerMode;
   error: string | null;
   sendInFlight: boolean;
   uploadingCount: number;      // 0 = idle;  Android AttachmentUploadState
   connectionDegraded: boolean;
-  height: number | null;       // user-dragged px, null = default for the mode
+  height: number | null;       // user-dragged px, null = the default 240
+  caret: number;
 }
 ```
 
 Keyed by `targetKey = `${connectionId}/${sessionName}``, mirroring the phone's
 `"$hostId/$sessionName"` (`TmuxSessionScreen.kt:2207`).
+
+**Not keyed** (revised, §12): `mode` and `lastOpenMode` are two plain refs on the
+store, persisted under `pocketshell.composer.visibility.v1` — a second key
+rather than a version bump of `pocketshell.composer.v1`, so the drafts already on
+disk survive the change and an old blob's per-session `mode` is simply ignored.
+A record with no draft, no attachments and no dragged height is not written at
+all: `ensure()` touches a key for every session merely visited, and without that
+filter the blob grows one empty entry per session forever.
 
 Actions, one-for-one with the Kotlin so the mapping stays auditable:
 
@@ -703,7 +724,7 @@ Actions, one-for-one with the Kotlin so the mapping stays auditable:
 | `restoreFailedSend(key, payload, message?)` | `restoreFailedSend` `:746` |
 | `discard(key)` — cancels an in-flight upload first | `discardDraft` `:783` |
 | `setConnectionDegraded(key, boolean)` | `setConnectionDegraded` `:850` |
-| `setMode(key, mode)` / `toggleHidden(key)` | *(desktop only)* |
+| `setMode(mode)` / `toggleHidden()` / `grow()` / `shrink()` — **no key**, §12 | *(desktop only)* |
 
 Copy the strings exactly:
 
@@ -724,7 +745,7 @@ Copy the strings exactly:
 4. `sendInFlight = true`, `error = null`. **Leave the draft and the tiles on
    screen** — this is #745 and it is the single most user-visible send rule.
 5. Deliver (§16.2) with a 12 000 ms timeout (`SEND_TIMEOUT_MS`, `:2535`).
-6. Delivered → `markDelivered` (clear draft + tiles, keep the composer docked and
+6. Delivered → `markDelivered` (clear draft + tiles, keep the composer open and
    focused, §12.3). Not delivered or timed out → `restoreFailedSend(payload)`:
    put the **composed** payload back in the draft, drop the tiles, show the
    banner with a Discard button.
@@ -888,22 +909,73 @@ add a settings toggle for "Enter inserts a newline" — D22 (`docs/decisions.md:
 forbids settings flags for alternate behaviours; `Shift+Enter` is the escape
 hatch.
 
-## 21. Styling
+## 21. Styling and geometry
 
-Use the tokens in `src/renderer/App.vue:11-18`: `--bg #1e1e2e`, `--fg #cdd6f4`,
-`--muted #7f849c`, `--accent #89b4fa`, `--error #f38ba8`, `--border #313244`.
-The elevated surface used by the existing bars is the literal `#181825`
-(`views/HostWorkspaceView.vue:125`, `views/ConversationView.vue:114`) — the
-composer chrome should use it too. Map the Android roles: `Surface` → `#181825`,
-`SurfaceElev` → `var(--bg)` for the draft box fill, `Accent` → `var(--accent)`,
-`AccentSoft` → `rgba(137,180,250,0.08)` (the value already used at
-`ConversationView.vue:178`), `TextMuted` → `var(--muted)`.
+**Superseded palette.** This section originally named the Catppuccin values
+(`#1e1e2e` / `#cdd6f4` / `#89b4fa` …) and the literal `#181825` panel fill. The
+app has since moved to the token set in `docs/DESIGN.md` §4.3, and
+`tests/unit/designGates.test.ts` now fails any raw hex outside `App.vue`. The
+mapping is: panel chrome `var(--surface)`, draft-box fill `var(--bg)`, draft
+border `var(--border-strong)` (WCAG 1.4.11 — an input's boundary must be ≥3:1),
+accent `var(--accent)`, muted text `var(--fg-secondary)`.
 
-Geometry, ported: draft box 12px radius, 1px `var(--border)`, 18px horizontal
-padding, `min-height` 96px, `max-height` 220px with internal scroll
-(`PromptComposerSheet.kt:918-937`, `UnifiedComposer.kt:125-139`); scroll region
-`max-height` 360px (`:2910`); slash dropdown `max-height` 196px (`:2915`); the
-tools pill 22px radius (`:1146-1150`).
+### 21.1 The composer FLOATS — it is a card, not a bar
+
+The composer is not a docked row and no longer a full-bleed strip either. It is
+a card hovering over the bottom-right of the session body. Three states, one
+geometry:
+
+```
+ .session-body            position: relative
+ └── .composer-dock       position: absolute; inset: 0
+                          justify-content: flex-end; align-items: flex-end
+                          padding: var(--composer-inset)
+                          pointer-events: none      ← the terminal stays clickable
+     └── .composer        the card; pointer-events: auto
+```
+
+| Property | Value | Why |
+| --- | --- | --- |
+| Anchor | bottom-**right** of the session body | The user's own sketch, and the cheap side: terminal output is left-aligned, so line starts, the prompt column and the left half of tmux's status bar stay readable beside the card |
+| Inset | `--composer-inset` = `var(--sp-3)` on all four sides | The gap is what reads as *floating*. Zero inset is an overlay that still looks welded to the window |
+| Width | `min(720px, 100%)` | ≈80 columns of the draft's 13px mono — the width a prompt is written at. On a narrow pane it degrades to an inset full-width card |
+| Corners | `var(--r-xl)` | Same radius as `OverlayPanel`: both are panels floating above the workspace, so they are one material |
+| Elevation | `0 8px 32px rgba(0, 0, 0, 0.5)` | `OverlayPanel`'s shadow with the Y offset pulled in from 16px. That panel is centred; this one sits `--sp-3` off the bottom edge and would throw most of a 16px shadow off the pane, leaving the *top* edge — the one with terminal text behind it — with no separation |
+| Height | inline: the remembered px (default 240, floor 190), or `80%` when maximized. `max-height: 80%` is the backstop | The dock spans the whole body precisely so this percentage has a definite height to resolve against |
+| Closed | the card shrinks in place to a 32px rail **pill** (`border-radius: 999px`, width shrink-to-fit) | Closing is the card contracting, not the affordance jumping to another edge |
+
+**The dock spans the body, and must.** It used to be `left/right/bottom: 0` with
+an auto height, i.e. exactly as tall as the card inside it — which broke both
+things that need to measure the pane: the card's `max-height: 80%` had no
+definite height to resolve against, and the drag-resize handler read the card's
+own height as the room available for the card, so dragging upward clamped to 80%
+of the current height and walked the panel down to its floor. `pointer-events`
+is the price of covering the body and is paid on the dock, not the card.
+
+### 21.2 The terminal-never-resizes guarantee
+
+`.tab-body.with-composer` reserves
+`calc(var(--composer-rail-h) + var(--composer-inset))` — **permanently**, open or
+closed or mid-drag. The terminal is therefore sized as though the composer were
+closed and stays that size whatever the panel does, so opening a prompt is never
+an SSH window-change and never makes the remote tmux reflow. The reserve is the
+pill's height *plus* its inset, so the collapsed pill is the one state that
+covers no terminal row at all, including tmux's status bar. The open card does
+overlay rows; that is the trade, and it is why it is only 720px wide.
+
+Both constants are declared on `.session-workspace` in `SessionWorkspaceView.vue`
+rather than in `App.vue`'s `:root`: they describe that pane's relationship with
+the composer, and custom properties inherit, so the reserved space and the card's
+inset are guaranteed to be the same number.
+
+### 21.3 Inside the card
+
+Ported from the phone: draft box `var(--r-lg)` radius, 1px border, `min-height`
+46px (two lines — below that the caret line is clipped in half), internal scroll
+past that; the tools pill 22px radius (`PromptComposerSheet.kt:1146-1150`); slash
+dropdown `max-height` 196px (`:2915`), rendered **above** the card's top edge.
+That last one is why the card is *not* `overflow: hidden`, which in turn is why
+`.sash` closes the card's top corners itself.
 
 `<style scoped>` per component, matching every existing view.
 
@@ -917,7 +989,7 @@ tools pill 22px radius (`:1146-1150`).
 | **Everything IME** — the `keyboardUp` chrome variant (§3.3), the header-drop at `:802`, the 96↔56dp draft floor swap at `:932`, the `maxHeight - (ime - navBars)` room formula at `:735-741`, the `weight(1f, fill = false)` squish arithmetic at `:869`, `contentWindowInsets` at `:392-397`, and the six regression tests (`PromptComposerImeSquishProofTest`, `PromptComposerImeTightScreenSquishProofTest`, `PromptComposerImeEmptyDraftDeadSpaceProofTest`, `PromptComposerImeLayoutRegressionTest`, `PromptComposerSheetImeReachabilityTest`, `PromptComposerLongDraftCaretVisibleTest`) | A desktop window has no soft keyboard, so there is no dead space, no squish, and no IME-resized window. The composer is a flex child of a fixed-height column. **Do not port any reserve constant, any height cap keyed on an inset, or any "hide the header when …" rule.** The one durable lesson to keep is the invariant those tests were protecting: the Send row must always be reachable and a long draft must scroll *within* the composer instead of pushing the controls out of view — which on desktop is `overflow-y: auto` on the draft plus `flex: none` on the control row. |
 | **`TextFieldValue` composing-region handling** (#491, `UnifiedComposer.kt:42-60`, `PromptComposerSheet.kt:597-613`) | A DOM `<textarea>`'s `.value` is always the visible text; there is no uncommitted composing region to miss. Read `.value` directly. (IME composition for CJK still exists in the DOM — guard Enter-to-send with `event.isComposing` and that is the whole of it.) |
 | **`SavedStateHandle` mirroring + the #746 owner stamp** (`:2544`, `:2558`, `:813-840`) | Replaced by a per-session map in Pinia persisted through `electron-store` — see §12.4. |
-| **Modal bottom sheet, scrim, drag anchors, swipe-to-dismiss, `BackHandler`** (`PromptComposerSheet.kt:366`, `TmuxSessionScreen.kt:5543-5564`) | The desktop composer is docked, not modal. Escape replaces Back; the chevron and the shortcuts replace the swipe. |
+| **Modal bottom sheet, scrim, drag anchors, swipe-to-dismiss, `BackHandler`** (`PromptComposerSheet.kt:366`, `TmuxSessionScreen.kt:5543-5564`) | The desktop composer floats but is never modal: no scrim, the terminal behind it stays live and clickable. Escape replaces Back; the chevron and the shortcuts replace the swipe. |
 | **Mic-release-on-dismiss** (`:361-364`) | No mic. |
 
 ## 23. What desktop should ADD
@@ -971,8 +1043,10 @@ Component (Vue Test Utils) — port the instrumented tests' assertions:
   `:231-276`): a draft authored in session A is absent when session B is
   selected, **and present again** when A is re-selected.
 - **Compactness** (`ComposerPartialExpandE2eTest.kt:154-179`): in `docked` mode
-  the composer occupies the lower part of the workspace body and the tab content
-  above it remains rendered.
+  the card occupies the bottom-right of the workspace body, inset from its edges,
+  and the tab content behind it remains rendered. Assert the *terminal's* box is
+  unchanged between open and closed — that is the guarantee (§21.2), and it is
+  what a docked panel could not give.
 - **Slash** (`PromptComposerSlashButtonTest.kt:111-170`): the `/` button opens
   the full catalog on an agent session and is disabled with no agent; typing
   `/comp` shows `/compact` and hides `/clear`.

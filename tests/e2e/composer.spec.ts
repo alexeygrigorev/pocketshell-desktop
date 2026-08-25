@@ -10,8 +10,10 @@ import { ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from '
  * What is worth asserting in a real app (as opposed to the store unit tests in
  * tests/unit/composerStore.test.ts):
  *
- *  - the panel is a VS Code-style dock: it SHRINKS the terminal instead of
- *    covering it, and the tab content above it stays rendered;
+ *  - the panel is a floating card: it overlays the tab content rather than
+ *    splitting the pane with it, and — the guarantee that matters — the
+ *    terminal's own box is IDENTICAL open and closed, because a panel that
+ *    resized the terminal would resize the remote tmux with it;
  *  - hiding it leaves a discoverable rail, and the draft survives the round trip
  *    (the whole reason the rail exists — a preserved "Not sent" draft must never
  *    become invisible);
@@ -112,19 +114,43 @@ test.describe('prompt composer panel', () => {
     stopHelper();
   });
 
-  test('docks below the terminal without covering it', async () => {
+  test('floats over the terminal without resizing it', async () => {
     await expect(page.locator('.composer .panel-header')).toBeVisible();
     await expect(page.locator('.composer .draft')).toBeVisible();
     await expect(page.locator('.composer .send')).toBeVisible();
     await expect(page.locator('.composer .sash')).toBeVisible();
 
-    // The tab content above is still rendered, and the panel starts below it.
     const term = await page.locator('.terminal-area > .terminal').boundingBox();
     const panel = await page.locator('.composer').boundingBox();
+    const body = await page.locator('.session-body').boundingBox();
     expect(term).not.toBeNull();
     expect(panel).not.toBeNull();
     expect(term!.height).toBeGreaterThan(100);
-    expect(panel!.y).toBeGreaterThanOrEqual(term!.y + term!.height - 2);
+
+    // A card, not a bar: inset from the pane on every side it touches, and
+    // narrower than the pane, so terminal output stays readable beside it.
+    expect(panel!.x).toBeGreaterThan(body!.x);
+    expect(panel!.x + panel!.width).toBeLessThan(body!.x + body!.width);
+    expect(panel!.y + panel!.height).toBeLessThan(body!.y + body!.height);
+    // Anchored to the RIGHT: its right edge is the near one.
+    expect(body!.x + body!.width - (panel!.x + panel!.width)).toBeLessThan(
+      panel!.x - body!.x,
+    );
+
+    // The guarantee: closing and re-opening the panel leaves the terminal the
+    // exact same size, so the remote tmux is never asked to reflow.
+    await page.locator('.composer .panel-action').nth(1).click();
+    await expect(page.locator('.composer .rail')).toBeVisible();
+    const closed = await page.locator('.terminal-area > .terminal').boundingBox();
+    expect(closed!.height).toBe(term!.height);
+    expect(closed!.width).toBe(term!.width);
+
+    // ...and the rail pill is the one state that covers no terminal row at all.
+    const rail = await page.locator('.composer').boundingBox();
+    expect(rail!.y).toBeGreaterThanOrEqual(closed!.y + closed!.height - 1);
+
+    await page.locator('.composer .rail').click();
+    await expect(page.locator('.composer .draft')).toBeVisible();
   });
 
   test('Send is disabled until there is something to send', async () => {
@@ -185,6 +211,24 @@ test.describe('prompt composer panel', () => {
     await expect(page.locator('.composer .draft')).toHaveValue('build-only draft');
     // Leave nothing behind for the next run.
     await clearDraft(page);
+  });
+
+  test('closing it keeps it closed when you switch session', async () => {
+    // Open/closed is a preference about the tool, not a fact about a session:
+    // it used to be stored per session, so a session the composer had never
+    // been opened on started from its default — open — and closing the panel
+    // was undone by the next session switch.
+    await openSession(page, 'main');
+    await page.locator('.composer .panel-action').nth(1).click();
+    await expect(page.locator('.composer .rail')).toBeVisible();
+
+    await page.locator('.session-row', { hasText: 'build' }).first().click();
+    await expect(page.locator('.composer .rail')).toBeVisible();
+    await expect(page.locator('.composer .draft')).toHaveCount(0);
+
+    // Re-opening restores the panel, and the draft belonging to THIS session.
+    await page.locator('.composer .rail').click();
+    await expect(page.locator('.composer .draft')).toHaveValue('');
   });
 
   test('a multi-line prompt reaches the pane carrying every line', async () => {

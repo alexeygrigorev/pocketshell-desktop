@@ -129,7 +129,8 @@ function onFocusTerminal(): void {
       <!-- The prompt composer FLOATS over the tab content rather than docking
            below it. Mounted once, v-show (never v-if) so a tab switch cannot
            cost the user a draft — the flags live on the dock now, which is the
-           same thing: v-if unmounts either way, v-show keeps it alive. -->
+           same thing: v-if unmounts either way, v-show keeps it alive.
+           The dock is only the frame; the card inside it is what floats. -->
       <div
         v-if="connection.connectionId && sessionName"
         v-show="tab !== 'files'"
@@ -154,6 +155,22 @@ function onFocusTerminal(): void {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+
+  /* ---- the composer's two geometry constants ---------------------------
+   * Declared here rather than in App.vue's :root because they describe THIS
+   * pane's relationship with the composer, and only this pane reserves room
+   * for it. Custom properties inherit, so PromptComposer — a descendant —
+   * reads the same two numbers, which is the point: the space reserved below
+   * and the space the card is inset by can only be kept equal if there is one
+   * pair of values.
+   *
+   *   --composer-rail-h  the height of the collapsed rail pill.
+   *   --composer-inset   the gap between the card and the pane's edges. This
+   *                      is what makes it read as floating rather than as a
+   *                      bar welded to the window.
+   */
+  --composer-rail-h: 32px;
+  --composer-inset: var(--sp-3);
 }
 .session-bar {
   display: flex;
@@ -227,10 +244,13 @@ function onFocusTerminal(): void {
   flex: 1;
   min-height: 0;
 }
-/* The composer's collapsed rail — the ONE part of it that is never floating.
-   Kept in sync with `.rail { height: 32px }` in PromptComposer.vue. */
+/* Permanent room for the collapsed rail pill AND for the gap it floats in, so
+   the pill never covers a terminal row — including tmux's status bar, which is
+   the bottom one and the one worth protecting. This padding is a constant: it
+   is reserved whether the composer is open, closed or mid-drag, which is what
+   makes the terminal's row count independent of the composer (see below). */
 .tab-body.with-composer {
-  padding-bottom: var(--composer-rail-h);
+  padding-bottom: calc(var(--composer-rail-h) + var(--composer-inset));
 }
 .terminal-area {
   flex: 1;
@@ -246,40 +266,40 @@ function onFocusTerminal(): void {
  * close, drag-resize and mode switch changed the terminal's pixel height —
  * which changes its ROW COUNT, which is an SSH window-change the remote tmux
  * has to redraw and reflow for. Typing a prompt should not reflow the session
- * behind it.
- *
- * The rail's 32px is reserved permanently by `.tab-body.with-composer`
+ * behind it. `.tab-body.with-composer` reserves the rail's room permanently
  * instead, so the terminal is sized as though the composer were closed and
- * STAYS that size whatever the panel does. tmux's status bar stays visible at
- * the bottom of the pane; only the expanded panel covers terminal rows, and
- * only while it is expanded.
+ * STAYS that size whatever the panel does.
+ *
+ * Why the dock is the WHOLE body and not a strip at the bottom.
+ *
+ * It was `left/right/bottom: 0` with an auto height, which made it exactly as
+ * tall as the card inside it — and that broke both of the things that need to
+ * measure the pane: the card's own `max-height: 80%` had no definite height to
+ * resolve against, and the drag-resize handler (which measures its offset
+ * parent) was reading the card's height as the room available for the card.
+ * Dragging upward therefore clamped against 80% of the card's CURRENT height
+ * and collapsed it to the floor. Spanning the body fixes both by making the
+ * containing block mean what the code already assumed it meant.
+ *
+ * `pointer-events: none` is the price of covering the body: the dock must be
+ * transparent to the mouse or it would eat every click meant for the terminal.
+ * The card re-enables them for itself.
  */
 .composer-dock {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   z-index: 5;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  /* Backstop inherited from the docked layout's reasoning, re-aimed: it used
-     to stop the panel starving the terminal of height, which an overlay can no
-     longer do. It now stops the panel COVERING the whole terminal. */
-  max-height: 80%;
-  /* Reads as floating rather than as a pane that has always been there, and
-     stops terminal text appearing to run into the composer's top edge. */
-  box-shadow: 0 -8px 24px rgb(0 0 0 / 0.35);
+  /* Bottom-RIGHT, per the user's own sketch, and the side that costs the least:
+     terminal output is left-aligned, so the line starts, the prompt column and
+     the left half of tmux's status bar all stay readable beside the card. */
+  justify-content: flex-end;
+  align-items: flex-end;
+  padding: var(--composer-inset);
+  pointer-events: none;
 }
-/*
- * The panel remembers an absolute pixel height, and `.composer` is
- * `flex: 0 0 auto`, which cannot shrink. Inside an auto-height absolute box,
- * its own `max-height: 80%` resolves against nothing and is dropped — so the
- * dock's cap is what has to bite, and the panel has to be allowed to shrink
- * for it to.
- */
-.composer-dock :deep(.composer) {
-  flex: 1 1 auto;
-  min-height: 0;
+.composer-dock > * {
+  pointer-events: auto;
 }
 </style>

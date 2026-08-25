@@ -228,7 +228,7 @@ describe('send', () => {
     expect(composer.states[KEY]?.attachments).toEqual([]);
     expect(composer.states[KEY]?.error).toBeNull();
     // The phone dismisses the sheet here; the desktop deliberately does not.
-    expect(composer.states[KEY]?.mode).toBe('docked');
+    expect(composer.mode).toBe('docked');
   });
 
   it('restores the COMPOSED payload and drops the tiles on failure (:768-770)', async () => {
@@ -313,7 +313,7 @@ describe('discard (PromptComposerDiscardE2eTest.kt:160-226)', () => {
     expect(s.draft).toBe('');
     expect(s.attachments).toEqual([]);
     expect(s.error).toBeNull();
-    expect(s.mode).not.toBe('hidden');
+    expect(composer.mode).not.toBe('hidden');
   });
 
   it('does not touch any other session', () => {
@@ -326,55 +326,81 @@ describe('discard (PromptComposerDiscardE2eTest.kt:160-226)', () => {
 
 describe('visibility state machine (§12.1)', () => {
   it('defaults to docked', () => {
-    expect(composer.ensure(KEY).mode).toBe('docked');
+    expect(composer.mode).toBe('docked');
   });
 
   it('grows hidden -> docked -> expanded and stops there', () => {
-    composer.setMode(KEY, 'hidden');
-    composer.grow(KEY);
-    expect(composer.states[KEY]?.mode).toBe('docked');
-    composer.grow(KEY);
-    expect(composer.states[KEY]?.mode).toBe('expanded');
-    composer.grow(KEY);
-    expect(composer.states[KEY]?.mode).toBe('expanded');
+    composer.setMode('hidden');
+    composer.grow();
+    expect(composer.mode).toBe('docked');
+    composer.grow();
+    expect(composer.mode).toBe('expanded');
+    composer.grow();
+    expect(composer.mode).toBe('expanded');
   });
 
   it('shrinks expanded -> docked -> hidden and stops there', () => {
-    composer.setMode(KEY, 'expanded');
-    composer.shrink(KEY);
-    expect(composer.states[KEY]?.mode).toBe('docked');
-    composer.shrink(KEY);
-    expect(composer.states[KEY]?.mode).toBe('hidden');
-    composer.shrink(KEY);
-    expect(composer.states[KEY]?.mode).toBe('hidden');
+    composer.setMode('expanded');
+    composer.shrink();
+    expect(composer.mode).toBe('docked');
+    composer.shrink();
+    expect(composer.mode).toBe('hidden');
+    composer.shrink();
+    expect(composer.mode).toBe('hidden');
   });
 
   it('toggleHidden restores the last non-hidden mode, not always docked', () => {
-    composer.setMode(KEY, 'expanded');
-    composer.toggleHidden(KEY);
-    expect(composer.states[KEY]?.mode).toBe('hidden');
-    composer.toggleHidden(KEY);
-    expect(composer.states[KEY]?.mode).toBe('expanded');
+    composer.setMode('expanded');
+    composer.toggleHidden();
+    expect(composer.mode).toBe('hidden');
+    composer.toggleHidden();
+    expect(composer.mode).toBe('expanded');
   });
 
   it('never destroys the draft across any transition', () => {
     composer.setDraft(KEY, 'survivor');
     for (const m of ['hidden', 'docked', 'expanded', 'hidden'] as const) {
-      composer.setMode(KEY, m);
+      composer.setMode(m);
       expect(composer.states[KEY]?.draft).toBe('survivor');
     }
   });
 
-  it('mode is per session', () => {
-    composer.setMode(KEY, 'hidden');
-    expect(composer.ensure(OTHER).mode).toBe('docked');
+  /**
+   * The reported bug: close the panel, open another session, and it is back.
+   * Open/closed is a preference about the tool, so it does not live in the
+   * per-session record that a never-visited session starts blank.
+   */
+  it('stays closed when the user switches to another session', () => {
+    composer.setDraft(KEY, 'draft for main');
+    composer.setMode('hidden');
+
+    composer.ensure(OTHER); // selecting a session the composer has never seen
+    expect(composer.mode).toBe('hidden');
+
+    // ...and the per-session halves are still per session.
+    expect(composer.states[OTHER]?.draft).toBe('');
+    expect(composer.states[KEY]?.draft).toBe('draft for main');
+  });
+
+  it('re-opens into the mode it was closed from, whichever session is current', () => {
+    composer.setMode('expanded');
+    composer.setMode('hidden');
+    composer.ensure(OTHER);
+    composer.toggleHidden();
+    expect(composer.mode).toBe('expanded');
+  });
+
+  it('keeps the dragged height per session even though the mode is shared', () => {
+    composer.setHeight(KEY, 420);
+    expect(composer.ensure(OTHER).height).toBeNull();
+    expect(composer.states[KEY]?.height).toBe(420);
   });
 
   it('a delivered send re-opens a hidden composer rather than leaving it hidden', async () => {
     composer.setDraft(KEY, 'hi');
-    composer.setMode(KEY, 'hidden');
+    composer.setMode('hidden');
     await composer.send(KEY, async () => true);
-    expect(composer.states[KEY]?.mode).toBe('docked');
+    expect(composer.mode).toBe('docked');
   });
 });
 

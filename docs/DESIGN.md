@@ -814,6 +814,27 @@ Both are header buttons opening `OverlayPanel.vue`. Current backdrop is
 - `.toggle.on` (Auto-forward) → `--accent-soft` fill, `--accent` text,
   `--accent-dim` border.
 
+### 5.4b Prompt composer — a floating card (`composer-*` · `PromptComposer.vue`)
+
+Behaviour is `docs/COMPOSER.md`'s; this is only where it sits and what it is
+made of. The composer is **not** a docked row and **not** a full-bleed bar: it
+is a card hovering over the **bottom-right** of the session body, out of a
+`.composer-dock` that spans that body and is transparent to the mouse.
+
+| | |
+|---|---|
+| Inset | `--sp-3` on all four sides. The gap *is* the floating cue; without it an overlay still reads as welded to the window |
+| Width | `min(720px, 100%)` — ≈80 columns of the draft's 13px mono. Terminal output is left-aligned, so anchoring right and stopping at 720px keeps line starts, the prompt column and the left of tmux's status bar readable beside it |
+| Corners / elevation | `--r-xl` and `0 8px 32px rgba(0,0,0,.5)` — §5.5's `OverlayPanel` treatment, Y offset pulled in from 16px because a card sitting `--sp-3` off the bottom edge would throw that shadow off the pane and leave its *top* edge, the one with terminal text behind it, unseparated |
+| Surface | `--surface`, fully opaque, `--border` hairline. Never translucent: terminal text bleeding through a prompt field is unreadable for both |
+| Closed | the card contracts in place to a 32px rail **pill** (`border-radius: 999px`, shrink-to-fit) in the same corner, carrying a draft dot and an attachment count |
+| Reserved | `.tab-body` permanently pads the pill's height plus its inset, whatever the composer is doing — so the terminal's row count never changes and the remote tmux never reflows. See COMPOSER.md §21.2 |
+
+The two constants (`--composer-rail-h`, `--composer-inset`) live on
+`.session-workspace`, not in `:root`: they describe one pane's relationship with
+the composer, and one declaration keeps the reserved strip and the card's inset
+equal by construction.
+
 ### 5.5b Splitter (`02`, `03` · `HostWorkspaceView.vue`)
 
 Transparent at rest, `--accent-dim` on hover with a **250ms enter delay** —
