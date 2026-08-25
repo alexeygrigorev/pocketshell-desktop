@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SWITCH_CLIENT_NOT_READY_EXIT,
   SWITCH_NO_CLIENT_EXIT,
   clientTtyVar,
   sessionAttachCommand,
@@ -303,5 +304,118 @@ describe('sessionSwitchCommand', () => {
     const script = posixUnquote(injected.slice('/bin/sh -lc '.length));
     expect(script).toContain(shellSingleQuote(`=${payload}`));
     expect(script.startsWith('export PATH=')).toBe(true);
+  });
+});
+
+/**
+ * Waiting for the client, which is the whole of the fast-switch bug.
+ *
+ * The handshake variable and the tmux client do not appear together: the join
+ * publishes the tty as its first act and `tmuxctl` — Python — only execs
+ * `tmux attach` a few hundred milliseconds later (1.5-2 s on a real host).
+ * Ask `switch-client` for the client inside that window and it answers
+ * `can't find client`, which the old script passed straight to the caller as a
+ * flat failure. The caller re-joined, which opened a fresh window, so a user
+ * clicking faster than their host could finish a join never got a single
+ * switch and the feature was inert.
+ *
+ * These pin the shape of the wait rather than its timing; the timing is only
+ * observable against a real tmux, and TmuxSwitch.integration.test.ts drives it
+ * there with no settle delay at all.
+ */
+describe('sessionSwitchCommand — waiting for the client to come up', () => {
+  const ttyVar = clientTtyVar('a1b2c3');
+
+  it('checks the tty is a real client before trying to switch it', () => {
+    // The check is the fix. Without it the script cannot tell "no client yet"
+    // from "no client ever", because tmux reports both as `can't find client`.
+    // Asserted against the UNQUOTED script: the `sh -lc` wrapper escapes the
+    // inner quotes, so the literal form only exists once that layer is off.
+    const script = posixUnquote(sessionSwitchCommand(ttyVar, 'alpha', 2_000).slice('/bin/sh -lc '.length));
+    expect(script).toContain("list-clients -F '#{client_tty}'");
+    expect(script).toContain('grep -qxF "$t"');
+  });
+
+  it('re-reads the handshake on every pass, not just the first', () => {
+    // The value the loop starts with can be the OUTGOING join's tty; the
+    // incoming join overwrites it part-way through the wait. A loop that read
+    // once would wait out its whole budget on a tty already superseded.
+    const script = sessionSwitchCommand(ttyVar, 'alpha', 2_000);
+    const reads = script.match(new RegExp(`show-environment -g ${ttyVar}`, 'g'));
+    expect(reads).toHaveLength(1);
+    // ...and that single read sits INSIDE the loop.
+    const loopStart = script.indexOf('while :; do');
+    const loopEnd = script.indexOf('done;');
+    expect(loopStart).toBeGreaterThan(-1);
+    expect(script.indexOf('show-environment')).toBeGreaterThan(loopStart);
+    expect(script.indexOf('show-environment')).toBeLessThan(loopEnd);
+  });
+
+  it('scales the number of attempts with the budget it is given', () => {
+    const triesIn = (ms: number): number => {
+      const m = /n=(\d+);/.exec(sessionSwitchCommand(ttyVar, 'alpha', ms));
+      return Number(m?.[1]);
+    };
+    expect(triesIn(3_000)).toBeGreaterThan(triesIn(1_000));
+    expect(triesIn(1_000)).toBeGreaterThan(triesIn(0));
+  });
+
+  it('still LOOKS for the client when told to wait for nothing', () => {
+    // A zero budget means "do not wait", not "do not check". Skipping the
+    // check would put back the exact failure this loop exists to remove.
+    const command = sessionSwitchCommand(ttyVar, 'alpha', 0);
+    expect(command).toContain('n=1;');
+    expect(command).toContain('list-clients');
+  });
+
+  it('reports a missing client differently from a missing handshake', () => {
+    // Two different diagnoses that were previously one number. 65 says the
+    // rendezvous never happened — probably not even the same tmux server. 66
+    // says it happened perfectly and the tty it named is not a live client, so
+    // the join that owns it failed or the user detached.
+    const command = sessionSwitchCommand(ttyVar, 'alpha', 1_000);
+    expect(command).toContain(`exit ${SWITCH_CLIENT_NOT_READY_EXIT}`);
+    expect(SWITCH_CLIENT_NOT_READY_EXIT).not.toBe(SWITCH_NO_CLIENT_EXIT);
+  });
+
+  it('prints what the clients ACTUALLY were when it gives up', () => {
+    // The one fact worth having in the next bug report: the tty we wanted
+    // against the ttys tmux had. Without it "can't find client" is unanswerable
+    // from a log.
+    const command = sessionSwitchCommand(ttyVar, 'alpha', 1_000);
+    expect(command).toContain('no tmux client on %s');
+    expect(command).toContain('#{client_tty} -> #{client_session}');
+  });
+
+  it('keeps a shell without fractional sleep correct rather than spinning', () => {
+    // `sleep 0.15` is not POSIX (POSIX sleep takes an integer). busybox, GNU
+    // and BSD all take it; a shell that does not must still pause.
+    expect(sessionSwitchCommand(ttyVar, 'alpha', 1_000)).toContain('|| sleep 1');
+  });
+});
+
+describe('sessionAttachCommand — the note a forced re-join carries', () => {
+  it('says why, in the terminal, where the user is already looking', () => {
+    const command = sessionAttachCommand('alpha', clientTtyVar('t1'), "can't find session: alpha");
+    expect(command).toContain('[PocketShell] %s');
+    expect(command).toContain("can'\\''t find session: alpha");
+    // Before the join, because once tmux attaches it owns the screen.
+    expect(command.indexOf('printf')).toBeLessThan(command.indexOf('tmuxctl'));
+  });
+
+  it('adds nothing at all to an ordinary first join', () => {
+    const command = sessionAttachCommand('alpha', clientTtyVar('t1'));
+    expect(command).not.toContain('[PocketShell] %s');
+  });
+
+  it('cannot be used to repaint the pane with remote bytes', () => {
+    // The note is built from tmux's stderr, which is remote output. Control
+    // bytes in it would be executed by the terminal it is printed into.
+    const command = sessionAttachCommand('alpha', undefined, 'evil\u001b[2Jwipe\nsecond line');
+    // Losing the ESC is what turns the rest into inert text rather than a
+    // clear-screen; the newline goes with it so the note stays one line.
+    expect(command).not.toContain('\u001b');
+    expect(command).not.toContain('\n');
+    expect(command).toContain('evil [2Jwipe second line');
   });
 });

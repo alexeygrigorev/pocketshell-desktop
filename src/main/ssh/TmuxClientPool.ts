@@ -4,6 +4,7 @@ import {
   clientTtyVar,
   sessionAttachCommand,
   sessionSwitchCommand,
+  SWITCH_CLIENT_NOT_READY_EXIT,
   SWITCH_NO_CLIENT_EXIT,
 } from '../../shared/attachCommand.js';
 import type { SshService } from './SshService.js';
@@ -37,16 +38,31 @@ import { log } from '../log.js';
  * `switch-client`, and the renderer keeps the same {@link ShellId}: same
  * channel, same xterm, same everything, new contents.
  *
- * ## Why every failure degrades to a full join
+ * ## Why every failure degrades to a full join — and why it no longer does so
+ * ## silently
  *
- * There is no error taxonomy here on purpose. A switch can fail because the
- * user detached the client from inside tmux, because the session was killed
- * on the host, because the handshake found no tty, or because the link is
- * sick — and the right answer to all four is the same: close whatever we were
- * holding and join from scratch, which is precisely what the app did before
- * this class existed. That makes the worst case of the fast path equal to the
- * old behaviour plus one cheap exec, and it means a host this optimisation
- * does not suit degrades silently instead of breaking.
+ * A switch can fail because the user detached the client from inside tmux,
+ * because the session was killed on the host, because the handshake found no
+ * tty, or because the link is sick — and the right RECOVERY for all four is the
+ * same: close whatever we were holding and join from scratch, which is
+ * precisely what the app did before this class existed. That makes the worst
+ * case of the fast path equal to the old behaviour plus one cheap exec.
+ *
+ * This class used to draw the further conclusion that the four therefore did
+ * not need telling apart, and that a host the optimisation did not suit should
+ * degrade silently. Both halves of that were wrong, and together they hid the
+ * defect that made the feature inert for every user: `switch-client` was being
+ * asked for a client that the join had not finished creating, roughly two
+ * seconds before it existed. Every signal said the fast path was available,
+ * every switch failed, every failure became a re-join that opened a fresh
+ * two-second window, and the only symptom was that nothing got faster.
+ *
+ * So the recovery is unchanged and the reporting is not. The switch waits for
+ * its own client instead of concluding it has none; the exit codes distinguish
+ * "no rendezvous" from "no client yet" from tmux refusing; and a re-join that a
+ * failed switch forced prints tmux's reason into the terminal the user is
+ * already looking at, because a fallback nobody can see is a fallback nobody
+ * can report.
  *
  * ## What it costs
  *
@@ -87,6 +103,25 @@ export interface AttachSessionResult {
   switched: boolean;
 }
 
+/**
+ * How long after a join a tmux client may still be on its way up.
+ *
+ * A join is a login shell plus `tmuxctl`, and tmuxctl is Python: measured, the
+ * tmux client appears ~330 ms after the join on a loopback Docker fixture and
+ * 1.5-2 s on a real host over a real link. Until it does, `switch-client -c`
+ * fails with `can't find client` even though every other signal says the fast
+ * path is available — which is exactly how this feature came to be inert (see
+ * {@link sessionSwitchCommand}).
+ *
+ * The budget is generous because being wrong in the two directions costs very
+ * different amounts. Too short and the switch degrades to a full re-join, which
+ * restarts the same window and keeps the app permanently slow. Too long and a
+ * client that is genuinely gone delays ONE re-join, once, by the remainder —
+ * and only when the join it belongs to failed, because a client that comes up
+ * ends the wait the moment it does.
+ */
+const CLIENT_SETTLE_MS = 5_000;
+
 /** What the pool remembers about one connection's attached client. */
 interface SharedClient {
   shellId: ShellId;
@@ -94,6 +129,38 @@ interface SharedClient {
   ttyVar: string;
   /** The session the client is currently displaying. */
   session: string;
+  /** When the PTY was opened, for sizing the settle budget above. */
+  joinedAt: number;
+  /**
+   * True once a switch has actually moved this client, which proves tmux has
+   * it. From then on there is nothing to wait for: a switch that cannot find
+   * it is a client that has GONE (the user detached from inside tmux), not one
+   * that has yet to arrive, and waiting for it would only delay the re-join.
+   */
+  proven: boolean;
+}
+
+/**
+ * One short line saying why a switch could not be taken, for the log AND for
+ * the terminal.
+ *
+ * tmux's own words are preferred wherever it supplied any — `can't find
+ * session: foo` is more useful than anything this file could paraphrase, and it
+ * is the string a user can search for. Only the two codes the script raises
+ * itself get written out here, because tmux never says them.
+ */
+export function switchFailureReason(exitCode: number, stderr: string): string {
+  const first = stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (exitCode === SWITCH_NO_CLIENT_EXIT) {
+    return 'this host published no tmux client for the app to reuse';
+  }
+  if (exitCode === SWITCH_CLIENT_NOT_READY_EXIT) {
+    return 'the tmux client for the previous session never came up';
+  }
+  return first ?? `tmux switch-client exited ${exitCode}`;
 }
 
 export class TmuxClientPool {
@@ -131,24 +198,45 @@ export class TmuxClientPool {
       // on (a remount behind a v-show, a retry after a transient error).
       if (held.session === sessionName) return { shellId: held.shellId, switched: true };
 
+      // How long the switch may wait for its client before giving up. A client
+      // that has already been switched once is known to exist, so there is
+      // nothing to wait for; a fresh join may still be starting Python.
+      const waitMs = held.proven
+        ? 0
+        : Math.max(0, CLIENT_SETTLE_MS - (Date.now() - held.joinedAt));
       const started = Date.now();
-      const res = await this.ssh.exec(connectionId, sessionSwitchCommand(held.ttyVar, sessionName));
+      const res = await this.ssh.exec(
+        connectionId,
+        sessionSwitchCommand(held.ttyVar, sessionName, waitMs),
+      );
       if (res.exitCode === 0) {
         held.session = sessionName;
-        log('tmux', 'switch-client ok', { sessionName, ms: Date.now() - started });
+        held.proven = true;
+        log('tmux', 'switch-client ok', { sessionName, waitMs, ms: Date.now() - started });
         return { shellId: held.shellId, switched: true };
       }
 
-      // The fallback the user cannot see. Exit 65 is the documented "no
-      // handshake variable" code, which means the joining PTY never managed
-      // to publish its tty — so we are re-joining every time and the whole
-      // fast-switch feature is inert. Anything else is tmux itself refusing
-      // (client detached, session gone, wrong server).
+      // The fallback the user cannot see — from here it is made visible, in the
+      // terminal, by handing the reason to the re-join below.
+      //
+      // The three interesting exits are different diagnoses. 65: the handshake
+      // variable was not there at all, so the PTY's `tmux` and this exec's
+      // `tmux` are probably not the same server — a host-compatibility problem
+      // this optimisation cannot solve. 66: the variable was there and named a
+      // tty that never became a client within the budget, so the join it
+      // belonged to failed. Anything else is tmux itself refusing, and its
+      // stderr says which: `can't find session` proves the client WAS found
+      // (tmux resolves -c before -t), so the handshake worked and the session
+      // is the problem.
+      const reason = switchFailureReason(res.exitCode, res.stderr);
       log('tmux', 'switch-client FAILED - falling back to full re-join', {
         sessionName,
         ttyVar: held.ttyVar,
         exitCode: res.exitCode,
         noHandshake: res.exitCode === SWITCH_NO_CLIENT_EXIT,
+        clientNotReady: res.exitCode === SWITCH_CLIENT_NOT_READY_EXIT,
+        waitMs,
+        reason,
         stderr: res.stderr.trim().slice(0, 400),
         stdout: res.stdout.trim().slice(0, 400),
         ms: Date.now() - started,
@@ -160,6 +248,12 @@ export class TmuxClientPool {
       // though the renderer no longer closes anything on a session change.
       this.ssh.shellClose(held.shellId);
       this.clients.delete(connectionId);
+      return this.join(
+        connectionId,
+        sessionName,
+        opts,
+        `fast session switch unavailable (${reason}) - re-joining instead`,
+      );
     }
 
     return this.join(connectionId, sessionName, opts);
@@ -216,11 +310,25 @@ export class TmuxClientPool {
     return undefined;
   }
 
-  /** Open a PTY and run the documented join in it. */
+  /**
+   * Open a PTY and run the documented join in it.
+   *
+   * [note], when present, is printed into that PTY before the join runs. It is
+   * only ever set for a re-join that a failed switch forced, and it exists
+   * because "make the fallback visible" cannot mean "write a log line": the
+   * symptom the user reports is a session taking a second to open, and the
+   * place they are looking when it happens is the terminal. One line there,
+   * naming tmux's own reason, turns a silent slow path into an explained one.
+   *
+   * It is printed BEFORE `tmuxctl` because that is the only moment it can be:
+   * once tmux attaches it owns the screen. tmux draws over the alternate
+   * screen, so the note survives in the normal buffer rather than being lost.
+   */
   private async join(
     connectionId: string,
     sessionName: string,
     opts: AttachSessionOptions,
+    note?: string,
   ): Promise<AttachSessionResult> {
     const ttyVar = clientTtyVar(this.tokenFor(connectionId));
     // The callbacks need the id of the shell they belong to, and the id only
@@ -234,7 +342,7 @@ export class TmuxClientPool {
     // so rather than so bytes get dropped.
     let id: ShellId | null = null;
     const shellId = await this.ssh.openTrackedShell(connectionId, {
-      command: sessionAttachCommand(sessionName, ttyVar),
+      command: sessionAttachCommand(sessionName, ttyVar, note),
       cols: opts.cols,
       rows: opts.rows,
       onData: (data) => {
@@ -252,7 +360,13 @@ export class TmuxClientPool {
       },
     });
     id = shellId;
-    this.clients.set(connectionId, { shellId, ttyVar, session: sessionName });
+    this.clients.set(connectionId, {
+      shellId,
+      ttyVar,
+      session: sessionName,
+      joinedAt: Date.now(),
+      proven: false,
+    });
     return { shellId, switched: false };
   }
 

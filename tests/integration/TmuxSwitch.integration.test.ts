@@ -111,6 +111,36 @@ describeDocker('tmux switch-client session switching', () => {
     expect(pool.currentSession(connectionId)).toBe('sw-three');
   }, 90_000);
 
+  it('switches when the user clicks straight through, without waiting first', async () => {
+    // THE REGRESSION. Every other test in this file waits for the joined
+    // session's marker before switching — which is a wait for the tmux client
+    // to finish coming up, and it is the only reason they ever passed. A user
+    // does not wait. `tmux set-environment` is the join's first act and
+    // `tmuxctl` only execs `tmux attach` a few hundred milliseconds later (1.5-2 s
+    // on a real host over a real link), so a switch issued in between found the
+    // handshake variable present, the tty in it correct, and no client on that
+    // tty — and reported a flat failure the pool answered with a full re-join.
+    // The re-join opened the same window again, so clicking at ordinary speed
+    // never once took the fast path, which is exactly the "it makes no
+    // difference" the feature shipped with.
+    //
+    // Drop whatever a previous test left attached, so what follows is a real
+    // first join with a real cold client rather than a switch of a warm one.
+    const stale = await pool.attach(connectionId, 'sw-one', { cols: 80, rows: 24, ...sink });
+    ssh.shellClose(stale.shellId);
+
+    // Deliberately NO waitForOutput between the two calls.
+    const first = await pool.attach(connectionId, 'sw-one', { cols: 80, rows: 24, ...sink });
+    expect(first.switched).toBe(false);
+    output.delete(first.shellId);
+
+    const immediate = await pool.attach(connectionId, 'sw-two', { cols: 80, rows: 24, ...sink });
+    expect(immediate.switched).toBe(true);
+    expect(immediate.shellId).toBe(first.shellId);
+    // And the pane really is showing the other session, not merely reporting so.
+    await waitForOutput(first.shellId, marker('sw-two'));
+  }, 90_000);
+
   it('leaves any other client on the host alone', async () => {
     // A user with their own terminal attached to the same tmux server is the
     // reason the switch names its client with -c instead of letting tmux pick
