@@ -32,6 +32,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api } from '../ipc';
 import { useShellsStore } from '../stores/shells';
+import { useSettingsStore } from '../stores/settings';
+import { resolveMonoStack } from '../fonts';
 import { isTypingKey } from '../../shared/composerText';
 import type { ConnectionId, ShellId } from '../../shared/types';
 import '@xterm/xterm/css/xterm.css';
@@ -41,6 +43,9 @@ import '@xterm/xterm/css/xterm.css';
 // Ownership of the open/close lifecycle deliberately stays here; see the header
 // comment of stores/shells.ts for why.
 const shells = useShellsStore();
+// Typography is a user setting; the two values in TERMINAL_OPTIONS are only
+// its defaults. See src/renderer/fonts.ts.
+const settings = useSettingsStore();
 
 const props = defineProps<{
   connectionId: ConnectionId;
@@ -432,7 +437,11 @@ function onCustomKey(e: KeyboardEvent): boolean {
 }
 
 onMounted(async () => {
-  term = new Terminal(TERMINAL_OPTIONS);
+  term = new Terminal({
+    ...TERMINAL_OPTIONS,
+    fontFamily: resolveMonoStack(settings.monospaceFontFamily),
+    fontSize: settings.terminalFontSize,
+  });
   fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
   // An explicit activation handler, not the addon default.
@@ -513,6 +522,31 @@ onBeforeUnmount(() => {
 // Re-point the pane when the session key changes. Note this no longer says
 // "re-open": main answers most of these by switching the tmux client that is
 // already attached, and the PTY behind this terminal survives untouched.
+/**
+ * Font settings are live: no restart, and no remount of this component.
+ *
+ * THE REFIT IS NOT OPTIONAL. Changing the family or the size changes xterm's
+ * cell size, so the grid it computed from the old cell is now wrong — rows get
+ * clipped or a dead band opens under tmux's status line — and, worse, the PTY
+ * on the far end is never told, so tmux keeps drawing to the old geometry.
+ * That is the same class of failure as the sliced status line fixed in
+ * 7d7cdad, arriving by a different route.
+ *
+ * `scheduleFit()` rather than a bare `fitAddon.fit()`: it coalesces to one fit
+ * per frame, which also gives xterm a frame to re-measure the new cell, and it
+ * skips the degenerate 0x0 measurement of a hidden pane that a bare fit would
+ * push at the remote as a 1x1 terminal. The resize reaches the shell through
+ * the already-bound `term.onResize` handler — there is nothing extra to send.
+ */
+watch(
+  () => [settings.monospaceFontFamily, settings.terminalFontSize] as const,
+  ([family, size]) => {
+    if (!term) return;
+    term.options.fontFamily = resolveMonoStack(family);
+    term.options.fontSize = size;
+    scheduleFit();
+  },
+);
 watch(
   () => props.sessionKey,
   () => {
