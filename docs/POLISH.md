@@ -266,7 +266,7 @@ file, dot). Their only remaining non-ASCII is genuine text (tooltip copy,
 
 | Character | Where | Why it stays |
 |---|---|---|
-| `·` | `SessionTree.vue:130` (`· 2 sessions`), `HostWorkspaceView.vue` host label, `ConversationView.vue` resume chips, composer tooltip | metadata separator inside running text. Borderline case, called explicitly: it separates a label from its count the way a comma would — it is punctuation, not an affordance |
+| `·` | `HostWorkspaceView.vue` host label, `SessionTree.vue` root-header tooltip, composer tooltip | metadata separator inside running text. Borderline case, called explicitly: it separates a label from its count the way a comma would — it is punctuation, not an affordance |
 | `…` inside labels | `Sending…`, `Saving…`, `connecting…`, `probing…`, and `Load`'s loading state | ellipsis inside a word/label is prose. Only a **bare** `…` swapped in as a button's sole content is an indicator — those become the `.spin` refresh icon per the table above |
 | `—` | `UsageView.vue:60,62` (`resets —`), empty-state copy in `PortPanelView`/`UsageView` | em dash as "no data" placeholder / punctuation |
 | `–` | `PortPanelView.vue` hint (`1024–10000`) | en dash in a numeric range |
@@ -697,7 +697,7 @@ var(--sp-1)` (the inline-flex is also required once chips contain icons,
 
 **Update (docs/SESSIONLIST.md, implemented).** The metric is unchanged, but
 `SessionTree.vue`'s `.tag` no longer exists: the `attached` chip is
-**retired**. The flat session row says "attached" three ways at once — the
+**retired**. The session row says "attached" three ways at once — the
 green `--success` dot, a `--fw-semibold` label, and the row's position at the
 top of the list — so a fourth statement in chip form was competing with the
 information around it rather than adding any. `.agent-badge` stays, and stays

@@ -690,12 +690,18 @@ ports the phone's grouping (`groupSessionsByFolder`, folders sorted by recent
 activity with `Untracked` pinned last — the Android *no-watched-roots* path).
 The visual spec follows Android `FolderListScreen.kt`:
 
-> **Superseded by docs/SESSIONLIST.md (implemented).** The two-level tree
+> **Superseded by docs/SESSIONLIST.md (implemented).** The *leaf*-level tree
 > below is gone: on a real host the distribution is 1:1 (11 folders, 11
 > sessions), so every folder header cost a row to say nothing, and the session
 > name is *derived from the folder path*, so the two lines were the same fact
-> twice. The panel is now flat — one row per session. The `SESSIONS` header
-> row and the chip metric stand; the rest of this table is history.
+> twice.
+>
+> The panel is not flat, though. One folder level survives, at the **root** —
+> `$HOME`'s children (`git`, `tmp`, …) plus an `other` catch-all — because
+> that is the level the 1:1 measurement does *not* apply to: all 11 of those
+> sessions live under one `git`. So the header earns its row there, and only
+> there. See SESSIONLIST.md §2–§3 for the current row spec. The `SESSIONS`
+> header row and the chip metric stand; the rest of this table is history.
 
 | Element | Spec |
 |---|---|
@@ -711,7 +717,7 @@ The visual spec follows Android `FolderListScreen.kt`:
 | `.session-row:hover` | `background: var(--state-hover)` |
 | `.session-row.current` | `background: var(--state-selected)`, plus a 2px `--accent` left rail; **remove** the current cyan-tinted hover so hover and selection stop looking alike |
 | Footer | a full-width `New session` button opening the folder-first picker. The bare name field it replaced is **deleted**: the name is derived from the folder, never typed |
-| Retired | `.folder-header`, `.folder-count`, `.disclosure`, the 28px child indent, the `attached` text tag (dot + weight + sort position say it), and the absolute `.session-time` |
+| Retired | The `attached` text tag (dot + weight + sort position say it) and the absolute `.session-time`. `.folder-header`, `.disclosure` and the 28px child indent were retired with the leaf tree and are back at the root level; `.folder-count` stays retired — the root header carries a bare integer, not a `· N sessions` label |
 
 **Gap to flag:** Android sorts agent sessions above plain shells and puts an
 agent badge (`Claude` / `Codex` / `OpenCode`, purple `--agent` on

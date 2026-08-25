@@ -14,22 +14,27 @@
  * fallback path — `groupSessionsIntoFolders` — where folder groups are the
  * top level. The sort rules below are the same functions that path uses.
  *
- * ## Grouping semantics are shared; PRESENTATION is not (docs/SESSIONLIST.md)
+ * ## Three projections over one set of rules (docs/SESSIONLIST.md)
  *
- * The desktop panel no longer RENDERS these folder sections. On a real host
- * the distribution is 1:1 — 11 folders holding exactly 11 sessions — so every
- * folder header cost a row to say nothing, and because the session name is
- * derived from the folder path (`~/git/dataops` -> `git-dataops`,
- * src/main/projects/sessionName.ts) the two lines were the same fact twice,
- * both truncated to `git-…`. The phone escapes this because its top level is
- * watched ROOTS, which have real fan-out; the desktop ported only the
- * degenerate fallback.
+ * The panel renders {@link groupSessionsIntoRoots}: a two-level tree whose top
+ * level is the ROOT directory under `$HOME` (`git`, `tmp`, …) plus an `other`
+ * catch-all, each expanding to the flat session rows living beneath it.
  *
- * So the panel renders {@link flattenSessions} — one row per session, folder
- * basename as the label — while `groupSessionsByFolder` stays exported and
- * authoritative: it is the phone-parity anchor, `canonicalisePath` /
- * `defaultLabelForPath` are the shared label rules, and the folder-first
- * creation flow still speaks folders.
+ * That is the phone's *watched-roots* level, synthesised rather than read from
+ * a project-roots table the desktop does not have. It is deliberately NOT
+ * `groupSessionsByFolder`: on a real host the folder:session distribution is
+ * 1:1 (11 folders, 11 sessions), so a header per LEAF folder costs a row to
+ * say nothing, and because the session name is derived from the folder path
+ * (`~/git/dataops` -> `git-dataops`, src/main/projects/sessionName.ts) header
+ * and row were the same fact twice. Roots have real fan-out — all 11 of those
+ * sessions live under one `git` — which is what makes the level earn its rows.
+ *
+ * The leaf rows are the flat list's rows unchanged ({@link SessionRow}), so
+ * everything that design bought — folder basename as the label, derived-name
+ * suppression, middle truncation, attached-first ordering — survives inside
+ * the tree. `groupSessionsByFolder` stays exported as the phone-parity anchor
+ * for the leaf level, and `canonicalisePath` / `defaultLabelForPath` remain
+ * the shared label rules the folder-first creation flow also speaks.
  */
 import { sanitisePart } from '../shared/sessionNameParts';
 import type { SessionAgentKind, SessionSummary } from '../shared/types';
@@ -172,7 +177,7 @@ export function groupSessionsByFolder(sessions: SessionSummary[]): SessionFolder
 }
 
 /* ---------------------------------------------------------------------------
- * Flat projection — what the panel actually renders (docs/SESSIONLIST.md)
+ * Row projection — the leaf of the tree, and the whole of the flat list
  * ------------------------------------------------------------------------- */
 
 /** Characters of a label kept on the right of a middle truncation. */
@@ -289,20 +294,25 @@ function disambiguateLabels(rows: SessionRow[]): void {
 }
 
 /**
- * Flatten sessions into one row each — the panel's rendering model.
+ * Build one row per session, sorted, but NOT yet disambiguated.
+ *
+ * Disambiguation is left to the caller because its correct SCOPE differs
+ * between the two projections: the flat list has to separate `~/git/foo` from
+ * `~/work/foo` itself, while the tree already separates them with two root
+ * headers and only needs to disambiguate within a root.
  *
  * Built on the same `canonicalisePath` / `defaultLabelForPath` /
- * `sessionActivity` rules as {@link groupSessionsByFolder}, so both
- * projections agree about what a folder is called.
+ * `sessionActivity` rules as {@link groupSessionsByFolder}, so every
+ * projection agrees about what a folder is called.
  */
-export function flattenSessions(sessions: SessionSummary[]): SessionRow[] {
+function buildRows(sessions: SessionSummary[]): SessionRow[] {
   const counts = new Map<string, number>();
   for (const session of sessions) {
     const path = canonicalisePath(session.path);
     counts.set(path, (counts.get(path) ?? 0) + 1);
   }
 
-  const rows: SessionRow[] = [...sessions].sort(compareRows).map((session) => {
+  return [...sessions].sort(compareRows).map((session) => {
     const folderPath = canonicalisePath(session.path);
     const untracked = folderPath === UNTRACKED_PATH;
     // An untracked session has no folder to name it after, so its own name is
@@ -321,7 +331,189 @@ export function flattenSessions(sessions: SessionSummary[]): SessionRow[] {
       untracked,
     };
   });
+}
 
+/**
+ * Flatten sessions into one row each, with no folder level at all.
+ *
+ * Retained as the tree's degenerate case and as the row model's direct test
+ * surface; the panel itself renders {@link groupSessionsIntoRoots}.
+ */
+export function flattenSessions(sessions: SessionSummary[]): SessionRow[] {
+  const rows = buildRows(sessions);
   disambiguateLabels(rows);
   return rows;
+}
+
+/* ---------------------------------------------------------------------------
+ * Root projection — the folder tree the panel renders
+ * ------------------------------------------------------------------------- */
+
+/** Sentinel key for the catch-all root. Stable list key, never a real path. */
+export const OTHER_ROOT = '::other::';
+export const OTHER_LABEL = 'other';
+
+/** One top-level folder in the panel: a `$HOME` child, or the `other` bucket. */
+export interface SessionRootFolder {
+  /** `~/git`, or {@link OTHER_ROOT}. Stable list key and expansion key. */
+  key: string;
+  /** Header label: the root's own name, or {@link OTHER_LABEL}. */
+  label: string;
+  rows: SessionRow[];
+  /** Newest activity across the root's sessions — drives root order. */
+  mostRecentActivity: number;
+  /** True when any session under this root is attached (drives the dot). */
+  active: boolean;
+  /** True for the catch-all, which is pinned last and reads as a bucket. */
+  other: boolean;
+}
+
+/** Trim a `$HOME` value to a comparable prefix; blank becomes "unknown". */
+function normaliseHome(home: string | null | undefined): string | null {
+  const trimmed = (home ?? '').trim().replace(/\/+$/, '');
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Directories that hold home directories on the platforms this app connects
+ * to: Linux (`/home`), macOS (`/Users`), image-based Linux (`/var/home`), and
+ * `root` — whose home is `/root` itself, not a child of anything.
+ */
+const HOME_PARENTS = ['/home', '/Users', '/var/home'];
+const ROOT_HOME = '/root';
+
+/**
+ * Guess `$HOME` from the session paths themselves.
+ *
+ * The panel wants the host's real `$HOME`, but resolving it is a round trip
+ * that can legitimately fail (`projects.homeError`), and with no home every
+ * absolute path falls into `other` — one undifferentiated bucket, which is
+ * precisely the view the user asked us to replace. So when the authoritative
+ * value is missing we read the shape of the paths we already have.
+ *
+ * This is a fallback and is treated as one: only the standard home parents
+ * count, and the most frequently seen candidate wins, so one stray `/root/x`
+ * cannot outvote nine sessions under `/home/alexey`.
+ */
+export function inferHome(paths: (string | null | undefined)[]): string | null {
+  const votes = new Map<string, number>();
+  for (const raw of paths) {
+    const path = canonicalisePath(raw);
+    if (path === UNTRACKED_PATH) continue;
+    let candidate: string | null = null;
+    if (path === ROOT_HOME || path.startsWith(`${ROOT_HOME}/`)) candidate = ROOT_HOME;
+    else {
+      for (const parent of HOME_PARENTS) {
+        if (!path.startsWith(`${parent}/`)) continue;
+        const user = path.slice(parent.length + 1).split('/')[0];
+        if (user) candidate = `${parent}/${user}`;
+        break;
+      }
+    }
+    if (candidate) votes.set(candidate, (votes.get(candidate) ?? 0) + 1);
+  }
+
+  let best: string | null = null;
+  let bestVotes = 0;
+  for (const [candidate, count] of votes) {
+    if (count > bestVotes) {
+      best = candidate;
+      bestVotes = count;
+    }
+  }
+  return best;
+}
+
+/**
+ * Which top-level folder a session's working directory belongs to.
+ *
+ * The key is always written home-relative (`~/git`) so the two spellings of
+ * the same directory — the absolute `/home/alexey/git/x` tmux usually reports
+ * and the literal unexpanded `~/git/x` it sometimes does (helper/parsers.ts:163)
+ * — land in ONE bucket instead of two identically-labelled ones. A `~` prefix
+ * needs no `home` to resolve: `~` *is* home, whatever it expands to.
+ *
+ * Everything else is `other`, and honestly so: a path outside `$HOME`
+ * (`/var/log`, `/srv/app`) shares no parent with the home-rooted sessions, and
+ * a session sitting in `$HOME` itself has no root folder to be named after.
+ */
+export function rootForPath(
+  folderPath: string,
+  home: string | null,
+): { key: string; label: string } {
+  const other = { key: OTHER_ROOT, label: OTHER_LABEL };
+  if (folderPath === UNTRACKED_PATH) return other;
+
+  const homePrefix = normaliseHome(home);
+  let relative: string | null = null;
+  if (folderPath === '~' || folderPath === '$HOME') relative = '';
+  else if (folderPath.startsWith('~/')) relative = folderPath.slice(2);
+  else if (homePrefix !== null && folderPath === homePrefix) relative = '';
+  else if (homePrefix !== null && folderPath.startsWith(`${homePrefix}/`)) {
+    relative = folderPath.slice(homePrefix.length + 1);
+  }
+  if (relative === null) return other;
+
+  const first = relative.split('/').find((part) => part.length > 0);
+  if (!first) return other;
+  return { key: `~/${first}`, label: first };
+}
+
+/** Root order: newest activity first, case-insensitive label tiebreak. */
+function compareRoots(a: SessionRootFolder, b: SessionRootFolder): number {
+  const byActivity = b.mostRecentActivity - a.mostRecentActivity;
+  if (byActivity !== 0) return byActivity;
+  return a.label.toLowerCase().localeCompare(b.label.toLowerCase());
+}
+
+/**
+ * Group sessions into the panel's folder tree.
+ *
+ * @param home the host's `$HOME`, or null — in which case it is inferred from
+ *   the paths ({@link inferHome}) rather than surrendering every row to
+ *   `other`.
+ *
+ * Roots sort by most-recent activity descending, as folders do on the phone,
+ * with `other` pinned last however recent it is: it is a bucket, not a place,
+ * and letting it float to the top would put the least-organised rows where the
+ * eye lands first. Rows keep the flat list's global order within each root.
+ */
+export function groupSessionsIntoRoots(
+  sessions: SessionSummary[],
+  home: string | null = null,
+): SessionRootFolder[] {
+  const resolvedHome = normaliseHome(home) ?? inferHome(sessions.map((s) => s.path));
+
+  const byKey = new Map<string, SessionRootFolder>();
+  for (const row of buildRows(sessions)) {
+    const { key, label } = rootForPath(row.folderPath, resolvedHome);
+    const folder = byKey.get(key);
+    if (folder) folder.rows.push(row);
+    else {
+      byKey.set(key, {
+        key,
+        label,
+        rows: [row],
+        mostRecentActivity: 0,
+        active: false,
+        other: key === OTHER_ROOT,
+      });
+    }
+  }
+
+  const folders = [...byKey.values()];
+  for (const folder of folders) {
+    // Scoped to the root: two `foo` folders under one root still need growing
+    // apart, but `~/git/foo` vs `~/work/foo` are already separated by headers.
+    disambiguateLabels(folder.rows);
+    folder.mostRecentActivity = folder.rows.reduce(
+      (max, r) => Math.max(max, sessionActivity(r.session)),
+      0,
+    );
+    folder.active = folder.rows.some((r) => r.session.attached);
+  }
+
+  const rooted = folders.filter((f) => !f.other).sort(compareRoots);
+  const other = folders.filter((f) => f.other);
+  return [...rooted, ...other];
 }
