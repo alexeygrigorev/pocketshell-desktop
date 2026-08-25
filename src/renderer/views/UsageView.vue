@@ -88,17 +88,14 @@ function pctText(p: number): string {
 }
 
 /**
- * The "why is this provider blocked" line. `block_reason` existed on helper
- * 0.4.8 and is GONE on 0.4.44 (parsers.ts:277-283), so reading only that field
- * leaves a branch that can never render on a current host. Fall back to the
- * pass-through `details.limit_reached` the newer helper does emit.
+ * The "why is this provider blocked" line, read from the pass-through
+ * `details.limit_reached` the helper emits.
  *
  * Rendered as a neutral footnote, not a third alarm: the meter colour carries
  * the level and the status badge carries the category. Three amber signals for
  * one fact was the old card's loudest problem.
  */
 function blockNote(row: UsageRow): string | null {
-  if (row.block_reason) return row.block_reason;
   const reason = row.details?.['limit_reached'];
   if (typeof reason === 'string' && reason.trim()) return reason;
   return null;

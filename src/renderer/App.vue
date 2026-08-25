@@ -32,7 +32,6 @@
   --fg: #e6edf3; /* 16.02:1 on --bg */
   --fg-secondary: #8b949e; /*  6.15:1 — subtitles, timestamps, counts */
   --fg-muted: #6e7681; /*  4.12:1 — >=15px or decorative ONLY */
-  --muted: var(--fg-secondary); /* back-compat alias */
 
   /* ---- Lines --------------------------------------------------------- */
   --border: #2d333b; /* default hairline */

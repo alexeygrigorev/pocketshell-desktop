@@ -265,8 +265,13 @@ export function parseTmuxListSessionsFallback(stdout: string): SessionSummary[] 
 export interface UsageWindow {
   percent_remaining: number | null;
   reset_at: string | null;
-  /** Window label, e.g. `5h` / `7d` / `weekly` / `monthly`. Added post-0.4.8. */
-  window?: string | null;
+  /**
+   * Window label, e.g. `5h` / `7d` / `weekly` / `monthly`. Always present on
+   * 0.4.44 — null when the provider has no window of that term, never absent
+   * (see v0.4.44-usage.ndjson, where codex and copilot carry an explicit
+   * `"window": null`).
+   */
+  window: string | null;
 }
 
 export interface UsageRow {
@@ -277,14 +282,6 @@ export interface UsageRow {
   status: 'ok' | 'limited' | 'blocked' | 'error' | (string & {});
   short_term: UsageWindow;
   long_term: UsageWindow;
-  /**
-   * Present on 0.4.8, GONE on 0.4.44 — `normalize_usage_stdout` is a thin
-   * pass-through of quse's record (usage.py:176-218) and quse dropped the
-   * field. No fixture carries it any more (the image is pinned to 0.4.44);
-   * it stays optional only so an older host still types, and nothing may
-   * rely on it being there.
-   */
-  block_reason?: string | null;
   error: string | null;
   details: Record<string, unknown>;
 }

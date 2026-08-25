@@ -223,23 +223,12 @@ describe('parseTmuxListSessionsFallback', () => {
 });
 
 describe('parseUsageNdjson', () => {
-  it('parses the real pocketshell-usage.ndjson fixture', () => {
-    const out = parseUsageNdjson(readFixture('pocketshell-usage.ndjson'));
-    expect(out).toHaveLength(3);
-    expect(out.map((u) => u.provider)).toEqual(['codex', 'claude', 'copilot']);
-    const claude = out[1]!;
-    expect(claude.status).toBe('limited');
-    expect(claude.short_term.percent_remaining).toBe(15.0);
-    expect(claude.block_reason).toBe('5h budget nearly exhausted');
-    expect(claude.short_term.reset_at).toBe('2026-05-24T14:30:00Z');
-  });
-
   it('skips malformed lines', () => {
     const out = parseUsageNdjson('{"provider":"a"}\nnot json\n{"provider":"b"}\n');
     expect(out.map((u) => u.provider)).toEqual(['a', 'b']);
   });
 
-  it('parses the real 0.4.44 shape: null percentages, window labels, no block_reason', () => {
+  it('parses the real 0.4.44 shape: null percentages and window labels', () => {
     const out = parseUsageNdjson(readV44('v0.4.44-usage.ndjson'));
     expect(out.map((u) => u.provider)).toEqual(['claude', 'codex', 'copilot', 'grok', 'zai']);
 
@@ -255,8 +244,6 @@ describe('parseUsageNdjson', () => {
     expect(codex.short_term.reset_at).toBeNull();
     expect(codex.long_term.percent_remaining).toBe(90.0);
 
-    // `block_reason` was dropped between 0.4.8 and 0.4.44.
-    expect(out.every((u) => !('block_reason' in u))).toBe(true);
     // `status` stays `ok` even for an exhausted provider; the percentage is
     // the signal, not the status string.
     expect(out[3]!.status).toBe('ok');

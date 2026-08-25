@@ -414,20 +414,20 @@ export class PocketshellClient {
   /**
    * Agent config-dir profiles (`pocketshell profiles list --json`).
    *
-   * 0.4.44 emits a `{"profiles": [...]}` ENVELOPE, not the bare array the
-   * v0.4.8 contract documented — so the old `Array.isArray` guard silently
-   * returned `[]` for every profile on a current host. Both shapes are
-   * accepted so the call keeps working on either helper version.
+   * 0.4.44 emits a `{"profiles": [...]}` ENVELOPE. The bare array the stale
+   * v0.4.8 docs described is not accepted: this app targets one helper version
+   * and takes hard cuts over shims (ANALYSIS.md D22), and a second accepted
+   * shape is a second thing that can silently return `[]` without anyone
+   * noticing which branch ran.
    */
   async listProfiles(connectionId: string): Promise<unknown[]> {
     const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell profiles list --json'));
     if (res.exitCode !== 0) return [];
     try {
       const parsed: unknown = JSON.parse(res.stdout.trim());
-      // Array.isArray narrows `unknown` to `any[]`, so each branch is cast
-      // back to `unknown[]` rather than leaking `any` to the caller.
-      if (Array.isArray(parsed)) return parsed as unknown[];
       const envelope = (parsed as { profiles?: unknown } | null)?.profiles;
+      // Array.isArray narrows `unknown` to `any[]`, so the result is cast back
+      // to `unknown[]` rather than leaking `any` to the caller.
       return Array.isArray(envelope) ? (envelope as unknown[]) : [];
     } catch {
       return [];
