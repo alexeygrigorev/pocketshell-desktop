@@ -2,10 +2,10 @@
 // FileTree: the SFTP directory listing for the current path. Click a dir to
 // enter it; click a file to open it in the editor. Includes a breadcrumb,
 // refresh, and a "new folder/file" affordance wired to the store.
-import { computed } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import AppIcon, { type AppIconName } from './AppIcon.vue';
 import { useConnectionStore } from '../stores/connection';
-import { useFilesStore, formatBytes } from '../stores/files';
+import { useFilesStore, formatBytes, normaliseTypedPath } from '../stores/files';
 import type { DirEntry } from '../../main/sftp/SftpService';
 
 const emit = defineEmits<{ openFile: [path: string] }>();
@@ -71,15 +71,101 @@ async function onCrumb(path: string): Promise<void> {
 function icon(entry: DirEntry): AppIconName {
   return entry.type === 'dir' ? 'folder' : entry.type === 'symlink' ? 'symlink' : 'file';
 }
+
+// ---------------------------------------------------------------------------
+// The path bar
+// ---------------------------------------------------------------------------
+//
+// Typing or pasting a path was the one way to navigate this tab that did not
+// exist: the tree walks one directory at a time and the breadcrumb only goes
+// UP, so a path sitting in the clipboard — out of terminal output, a log, a
+// colleague's message — could not be used at all.
+//
+// It is click-to-edit rather than a second permanent row, the way Explorer and
+// VS Code do it. The breadcrumb strip already IS the "where am I" line, and
+// spending another --tabbar-h on a control used a few times a session, in a
+// pane whose whole job is a list, is not a trade this layout can afford (see
+// the same reasoning behind the merged session bar, DESIGN.md §5.4). The pencil
+// button is the affordance, so the feature does not depend on knowing a chord;
+// Ctrl+L is there for people who expect it from every address bar they use.
+//
+// Editing REPLACES the crumbs rather than sitting beside them, which also keeps
+// c9d4039's `~` collapsing intact by not touching the crumb builder at all.
+
+/** True while the strip is an input rather than a row of crumbs. */
+const editing = ref(false);
+/** What the user has typed. Seeded from the current directory on open. */
+const draft = ref('');
+const inputEl = ref<HTMLInputElement | null>(null);
+
+async function startEditing(): Promise<void> {
+  // Seeded with the current directory and fully selected: typing replaces it
+  // outright, while a small edit to where you already are stays cheap.
+  draft.value = files.cwd;
+  editing.value = true;
+  await nextTick();
+  inputEl.value?.focus();
+  inputEl.value?.select();
+}
+
+function cancelEditing(): void {
+  editing.value = false;
+}
+
+/**
+ * Go where the field says.
+ *
+ * The destination goes through `files.revealPath` — the SAME action a path
+ * clicked in the terminal uses. That is deliberate and is the point of routing
+ * both here: a directory navigates, a file opens in whichever viewer its kind
+ * calls for, and a path that is not there says so. Two entry points with two
+ * copies of that logic would drift the first time one of them was touched.
+ *
+ * The field stays open when the path did not resolve, because the next thing
+ * the user wants is to fix the typo, not to type the whole path again.
+ */
+async function onSubmit(): Promise<void> {
+  if (!connId.value) return;
+  const target = normaliseTypedPath(draft.value, files.cwd);
+  if (target == null) {
+    editing.value = false;
+    return;
+  }
+  await files.revealPath(connId.value, target);
+  if (files.error == null) editing.value = false;
+}
+
+/** Lets FilesView put the caret here from its Ctrl+L handler. */
+defineExpose({ editPath: startEditing });
 </script>
 
 <template>
   <div class="file-tree">
     <div class="breadcrumb">
-      <span v-for="(c, i) in breadcrumbs" :key="i" class="crumb">
-        <a @click="onCrumb(c.path)">{{ c.name }}</a>
-        <span v-if="i < breadcrumbs.length - 1" class="sep">/</span>
-      </span>
+      <!-- Enter goes, Escape gives up, and blur gives up too: leaving the pane
+           with a half-typed path should not commit it. -->
+      <input
+        v-if="editing"
+        ref="inputEl"
+        v-model="draft"
+        class="path-input"
+        spellcheck="false"
+        autocomplete="off"
+        placeholder="/path/to/file"
+        aria-label="Go to path"
+        @keydown.enter.prevent="onSubmit"
+        @keydown.esc.stop.prevent="cancelEditing"
+        @blur="cancelEditing"
+      />
+      <template v-else>
+        <span v-for="(c, i) in breadcrumbs" :key="i" class="crumb">
+          <a @click="onCrumb(c.path)">{{ c.name }}</a>
+          <span v-if="i < breadcrumbs.length - 1" class="sep">/</span>
+        </span>
+        <button class="icon-btn sm" title="Go to path (Ctrl+L)" @click="startEditing">
+          <AppIcon name="edit-2" :size="14" />
+        </button>
+      </template>
       <button
         class="icon-btn sm"
         :disabled="files.loading"
@@ -147,9 +233,32 @@ function icon(entry: DirEntry): AppIconName {
   margin: 0 2px;
 }
 /* Layout only — the size comes from the shared `.icon-btn.sm` primitive; this
-   used to fork it with its own height. */
+   used to fork it with its own height. The `auto` belongs to the FIRST trailing
+   button only: with both claiming it the free space would be split between
+   them and the pair would drift apart across the strip. */
 .icon-btn {
   margin-left: auto;
+}
+.icon-btn + .icon-btn {
+  margin-left: 0;
+}
+/* Takes the strip's whole width while it is open — it replaces the crumbs
+   rather than sharing the row with them. */
+.path-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--control-h-sm);
+  background: var(--surface-2);
+  /* WCAG 1.4.11: a control needs a >=3:1 boundary; --border is 1.49:1. */
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  padding: 0 var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-200);
+}
+.path-input::placeholder {
+  color: var(--fg-muted);
 }
 .entries {
   list-style: none;

@@ -16,7 +16,7 @@
 // `worker-src` falls back to it), which is exactly what Monaco's language
 // services need — the dev-works/packaged-dies failure. See the header of
 // components/CodeEditor.vue for the probe output.
-import { computed, defineAsyncComponent, onMounted, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useFilesStore, formatBytes } from '../stores/files';
 import FileTree from '../components/FileTree.vue';
@@ -114,10 +114,28 @@ async function onDownload(): Promise<void> {
   await files.download(connId.value);
 }
 
+/**
+ * Template ref on the tree, so the chord below can put the caret in its path
+ * bar. Typed by the one method called rather than `InstanceType<typeof
+ * FileTree>`, for the same reason SessionWorkspaceView types its terminal ref
+ * that way: `*.vue` is a `DefineComponent<…, any>` in env.d.ts, so the instance
+ * type collapses to `any` and takes the call site with it.
+ */
+const treeRef = ref<{ editPath: () => void } | null>(null);
+
 function onKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key === 's') {
     e.preventDefault();
     if (files.dirty) void onSave();
+  }
+  // Ctrl+L is the address-bar chord everywhere else the user types a path, and
+  // nothing in this app claims it: Ctrl+S saves here, and the composer's
+  // Ctrl+` / Ctrl+Shift+K / Ctrl+Shift+Down are not live on this tab, which
+  // hides the composer entirely. The shell's own Ctrl+L (clear screen) is a
+  // TERMINAL binding and this handler only sees keys from inside the Files pane.
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'l' || e.key === 'L')) {
+    e.preventDefault();
+    treeRef.value?.editPath();
   }
 }
 
@@ -128,7 +146,7 @@ const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSiz
 
 <template>
   <div class="files-view" @keydown="onKeydown">
-    <FileTree @open-file="onOpenFile" />
+    <FileTree ref="treeRef" @open-file="onOpenFile" />
     <div class="editor-area">
       <template v-if="files.openPath">
         <div class="editor-bar">

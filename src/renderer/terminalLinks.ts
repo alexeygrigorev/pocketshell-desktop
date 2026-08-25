@@ -34,6 +34,37 @@
  * Under tmux that is not viable: tmux repaints whole rows constantly and lives
  * on the alternate screen, so markers would decorate cells whose contents have
  * since changed, and every repaint would mean re-scanning the viewport.
+ *
+ * ## Clicking while the remote app owns the mouse
+ *
+ * This pane is ALWAYS a tmux client, and the agent TUIs it runs turn mouse
+ * reporting on, so "does a link still fire when the remote program is grabbing
+ * clicks?" decides whether any of this works in practice rather than only in a
+ * bare shell. It does fire, and the reason is that the two mechanisms are bound
+ * to different elements (xterm 6.0.0, verified against its sources):
+ *
+ *   - mouse REPORTING binds to `.xterm` — `CoreBrowserTerminal.bindMouse()`
+ *     opens with `const el = this.element`;
+ *   - the LINKIFIER binds to `.xterm-screen`, a child of it —
+ *     `createInstance(Linkifier, this.screenElement)`.
+ *
+ * A click lands inside the screen, so the linkifier's own mousedown/mouseup run
+ * first on the way up, and `Linkifier._handleMouseUp` calls `link.activate`
+ * with no consultation of `areMouseEventsActive` anywhere along that path. The
+ * outer handler's `cancel(ev)` calls `stopPropagation`, which only stops the
+ * event travelling FURTHER up — it cannot un-run a listener on a descendant.
+ * The decorations survive too: `.xterm.enable-mouse-events { cursor: default }`
+ * is overridden by the later and equally specific `.xterm .xterm-cursor-pointer`
+ * in xterm's own stylesheet.
+ *
+ * What the user ALSO gets is the same click delivered to the remote program, so
+ * tmux may move its cursor or select the pane under the pointer on the way. The
+ * conventional bypass suppresses that and leaves the link working: off macOS,
+ * `SelectionService.shouldForceSelection` returns `event.shiftKey`, and
+ * `bindMouse`'s mousedown handler returns before `sendEvent` when it is true.
+ * So a plain click follows the link (and nudges the TUI), and Shift-click
+ * follows it cleanly — the same modifier that already bypasses mouse reporting
+ * for drag-selection in this pane.
  */
 import type { ILink, ILinkProvider, Terminal } from '@xterm/xterm';
 import { findPaths } from './terminalPaths';
