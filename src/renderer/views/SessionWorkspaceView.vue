@@ -106,7 +106,7 @@ function onFocusTerminal(): void {
     </nav>
 
     <div class="session-body">
-      <div class="tab-body">
+      <div :class="['tab-body', { 'with-composer': tab !== 'files' }]">
         <!-- Terminal: kept mounted so switching tabs never drops the attach. -->
         <div v-show="tab === 'terminal'" class="terminal-area">
           <TerminalView
@@ -126,18 +126,24 @@ function onFocusTerminal(): void {
         <FilesView v-if="tab === 'files' && connection.connectionId" :start-path="sessionPath" />
       </div>
 
-      <!-- The prompt composer docks here, below the tab content. Mounted once,
-           v-show (never v-if) so a tab switch cannot cost the user a draft. -->
-      <PromptComposer
+      <!-- The prompt composer FLOATS over the tab content rather than docking
+           below it. Mounted once, v-show (never v-if) so a tab switch cannot
+           cost the user a draft — the flags live on the dock now, which is the
+           same thing: v-if unmounts either way, v-show keeps it alive. -->
+      <div
         v-if="connection.connectionId && sessionName"
         v-show="tab !== 'files'"
-        :connection-id="connection.connectionId"
-        :session-name="sessionName"
-        :agent-kind="agentKind"
-        :viewing-conversation="tab === 'conversation'"
-        :connected="connection.state === 'connected'"
-        @focus-terminal="onFocusTerminal"
-      />
+        class="composer-dock"
+      >
+        <PromptComposer
+          :connection-id="connection.connectionId"
+          :session-name="sessionName"
+          :agent-kind="agentKind"
+          :viewing-conversation="tab === 'conversation'"
+          :connected="connection.state === 'connected'"
+          @focus-terminal="onFocusTerminal"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -213,15 +219,67 @@ function onFocusTerminal(): void {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* Containing block for .composer-dock, which is positioned against it. */
+  position: relative;
 }
 .tab-body {
   display: flex;
   flex: 1;
   min-height: 0;
 }
+/* The composer's collapsed rail — the ONE part of it that is never floating.
+   Kept in sync with `.rail { height: 32px }` in PromptComposer.vue. */
+.tab-body.with-composer {
+  padding-bottom: var(--composer-rail-h);
+}
 .terminal-area {
   flex: 1;
   min-width: 0;
   display: flex;
+}
+
+/* ---- the composer floats over the tab content --------------------------- */
+/*
+ * Why an overlay and not a docked row.
+ *
+ * Docked, the composer was a flex sibling of the tab body, so every open,
+ * close, drag-resize and mode switch changed the terminal's pixel height —
+ * which changes its ROW COUNT, which is an SSH window-change the remote tmux
+ * has to redraw and reflow for. Typing a prompt should not reflow the session
+ * behind it.
+ *
+ * The rail's 32px is reserved permanently by `.tab-body.with-composer`
+ * instead, so the terminal is sized as though the composer were closed and
+ * STAYS that size whatever the panel does. tmux's status bar stays visible at
+ * the bottom of the pane; only the expanded panel covers terminal rows, and
+ * only while it is expanded.
+ */
+.composer-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Backstop inherited from the docked layout's reasoning, re-aimed: it used
+     to stop the panel starving the terminal of height, which an overlay can no
+     longer do. It now stops the panel COVERING the whole terminal. */
+  max-height: 80%;
+  /* Reads as floating rather than as a pane that has always been there, and
+     stops terminal text appearing to run into the composer's top edge. */
+  box-shadow: 0 -8px 24px rgb(0 0 0 / 0.35);
+}
+/*
+ * The panel remembers an absolute pixel height, and `.composer` is
+ * `flex: 0 0 auto`, which cannot shrink. Inside an auto-height absolute box,
+ * its own `max-height: 80%` resolves against nothing and is dropped — so the
+ * dock's cap is what has to bite, and the panel has to be allowed to shrink
+ * for it to.
+ */
+.composer-dock :deep(.composer) {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 </style>
