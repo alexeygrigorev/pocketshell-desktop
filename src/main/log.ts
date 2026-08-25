@@ -42,6 +42,12 @@ let warnedOnce = false;
  * no logger, so a full disk or a read-only home is swallowed after one warning.
  */
 export function log(scope: string, message: string, data?: Record<string, unknown>): void {
+  // Unit tests exercise the code paths that log, and they were writing into
+  // the same file a user is asked to paste when something goes wrong — so a
+  // real diagnosis had to be read around rows of `alpha`/`beta` fixture noise.
+  // A diagnostic file is only worth having if everything in it happened to the
+  // user.
+  if (process.env['VITEST'] != null) return;
   const stamp = new Date().toISOString();
   const detail = data == null ? '' : ` ${safeJson(data)}`;
   const line = `${stamp} [${scope}] ${message}${detail}\n`;
