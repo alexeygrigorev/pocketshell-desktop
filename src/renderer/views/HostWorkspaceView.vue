@@ -52,6 +52,29 @@ function loadPanelWidth(): number {
 
 const panelWidth = ref(loadPanelWidth());
 
+/**
+ * The host tools that are not installed.
+ *
+ * `tmuxctl` is listed like the others but it is not like the others: it is
+ * the binary the session-join command invokes, and the raw `tmux attach` and
+ * `pocketshell sessions` fallbacks are gone, so a host without it can open no
+ * session at all. Naming it here is the difference between finding that out
+ * now and finding it out after clicking a session and getting a diagnostic in
+ * the terminal.
+ */
+const missingTools = computed(() => {
+  const b = connection.bootstrap;
+  if (!b) return [];
+  return (['pocketshell', 'tmuxctl', 'tmux'] as const).filter((t) => !b[t].installed);
+});
+
+/** "tmuxctl", "tmuxctl and tmux", "pocketshell, tmuxctl and tmux". */
+const missingToolsText = computed(() => {
+  const names = missingTools.value;
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+});
+
 /** Session named by the route, so the panel can highlight the current row. */
 const activeSession = computed(() => (route.params['session'] as string | undefined) ?? null);
 
@@ -125,35 +148,23 @@ async function onRefreshUsage(): Promise<void> {
         <span class="muted">·</span>
         <span class="muted">{{ connection.activeHost?.user }}@{{ connection.activeHost?.hostname }}</span>
       </span>
-      <span v-if="connection.bootstrap" class="bootstrap">
-        <span :class="['chip', connection.bootstrap.pocketshell.installed ? 'ok' : 'warn']">
-          pocketshell
-          <AppIcon
-            :name="connection.bootstrap.pocketshell.installed ? 'check' : 'close'"
-            :size="12"
-          />
-        </span>
-        <!-- Its own chip, not folded into `pocketshell`: `tmuxctl` is the
-             binary the session-join command invokes, and the raw `tmux attach`
-             and `pocketshell sessions` fallbacks are gone. A host missing it
-             can open no session at all, so without this chip that host reads
-             as healthy right up until the user clicks a session and gets a
-             diagnostic in the terminal instead of a shell. -->
-        <span :class="['chip', connection.bootstrap.tmuxctl.installed ? 'ok' : 'warn']">
-          tmuxctl
-          <AppIcon :name="connection.bootstrap.tmuxctl.installed ? 'check' : 'close'" :size="12" />
-        </span>
-        <span :class="['chip', connection.bootstrap.tmux.installed ? 'ok' : 'warn']">
-          tmux
-          <AppIcon :name="connection.bootstrap.tmux.installed ? 'check' : 'close'" :size="12" />
-        </span>
-      </span>
       <div class="host-actions">
         <button class="btn-ghost" title="Port forwarding" @click="panel = 'ports'">Ports</button>
         <button class="btn-ghost" title="Provider usage" @click="panel = 'usage'">Usage</button>
         <button class="btn-ghost disconnect" @click="onDisconnect">disconnect</button>
       </div>
     </header>
+
+    <!-- Only rendered when something is actually missing. The always-on
+         chip row this replaces spent header space telling the user their
+         host was fine, which is the case that needs no words at all. -->
+    <p v-if="missingTools.length" class="install-ask">
+      <AppIcon name="close" :size="14" />
+      <span>
+        This host is missing {{ missingToolsText }}. Install
+        {{ missingTools.length === 1 ? 'it' : 'them' }} on the host to use PocketShell here.
+      </span>
+    </p>
 
     <div class="body">
       <!-- Persistent session panel: always mounted, never navigated away from. -->
@@ -227,29 +238,19 @@ async function onRefreshUsage(): Promise<void> {
   font-size: var(--fs-200);
   font-family: var(--font-mono);
 }
-.bootstrap {
+/* Warning-toned but not an alarm: it is an instruction, and the user can
+   still use every other part of the app while it stands. */
+.install-ask {
   display: flex;
-  gap: var(--sp-1);
-}
-/* One badge metric across the app (docs/POLISH.md §7); the inline-flex is
-   also what centres the state icon against the label. */
-.chip {
-  display: inline-flex;
   align-items: center;
-  gap: var(--sp-1);
-  font-size: var(--fs-100);
-  line-height: var(--lh-100);
-  padding: 0 var(--sp-1);
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-}
-.chip.ok {
-  color: var(--success);
-  background: var(--success-soft);
-}
-.chip.warn {
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
   color: var(--warning);
   background: var(--warning-soft);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-200);
+  line-height: var(--lh-200);
 }
 .host-actions {
   display: flex;
