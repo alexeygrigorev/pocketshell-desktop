@@ -11,6 +11,7 @@ import {
   SNAP_RADIANS,
   TEXT,
   textFontSize,
+  textHalfLeading,
   wrapLines,
   type Point,
 } from '../../src/shared/doodleGeometry';
@@ -157,11 +158,92 @@ describe('constrainToAngle', () => {
   });
 });
 
+/** The three mark weights the toolbar offers — `WIDTHS` in DoodleCanvas.vue. */
+const MARK_WEIGHTS = [3, 6, 12];
+
 describe('textFontSize', () => {
   it('follows the stroke width, so text and strokes are one hand', () => {
-    expect(textFontSize(3)).toBe(3 * TEXT.sizeRatio);
     expect(textFontSize(6)).toBe(6 * TEXT.sizeRatio);
     expect(textFontSize(12)).toBe(12 * TEXT.sizeRatio);
+    // Strictly increasing, which is the whole promise the weight control makes.
+    expect(textFontSize(3)).toBeLessThan(textFontSize(6));
+    expect(textFontSize(6)).toBeLessThan(textFontSize(12));
+  });
+
+  it('floors the lightest weight instead of taking the ratio literally', () => {
+    // 3 * 8 = 24, which is the size that was reported as unreadable. The floor
+    // is what stops the lightest setting from reproducing the complaint.
+    expect(3 * TEXT.sizeRatio).toBeLessThan(TEXT.minSize);
+    expect(textFontSize(3)).toBe(TEXT.minSize);
+  });
+
+  /**
+   * The regression this whole change exists to prevent: "for annotations font
+   * size is too small".
+   *
+   * Written against what reaches the EYE, not against the constants, so it
+   * cannot be satisfied by editing the number it checks. Logical canvas pixels
+   * are not CSS pixels — the sheet is a bitmap of up to 2048px shown inside the
+   * `md` overlay's ~700px frame, a scale of about 0.34 — and the old ladder of
+   * 12 / 24 / 48 arrived as 4 / 8 / 16 CSS px, two of the three settings below
+   * `--fs-100`, the smallest type the app sets anywhere.
+   *
+   * So: at every selectable mark weight, on the smallest realistic sheet, the
+   * annotation must be at least as big as the app's own smallest type. The old
+   * numbers fail this at two weights out of three.
+   */
+  it('stays legible on the shrunken sheet at every mark weight', () => {
+    const SHEET_SHRINK = 700 / 2048; // ~0.34: the `md` panel against a capped backdrop
+    const SMALLEST_UI_TYPE = 11; // --fs-100, in CSS pixels
+    for (const weight of MARK_WEIGHTS) {
+      expect(textFontSize(weight) * SHEET_SHRINK).toBeGreaterThanOrEqual(SMALLEST_UI_TYPE);
+    }
+  });
+});
+
+describe('textHalfLeading', () => {
+  /**
+   * The number that decides whether a caption lands where it was typed. The
+   * canvas anchors the glyph top at the origin; CSS centres the glyph box in a
+   * line box of `line-height`, so the editing overlay has to be lifted by this
+   * much or the caption hops upwards the moment it is committed.
+   */
+  it('is half the gap between the line box and the glyph box', () => {
+    // 100px type, 1.5 leading, glyphs 120 tall: 150 - 120 = 30, halved.
+    expect(textHalfLeading(100, 1.5, 120)).toBeCloseTo(15, 6);
+  });
+
+  it('scales with the font, so one correction serves every mark weight', () => {
+    const ratio = 1.3846;
+    for (const size of [36, 48, 96]) {
+      expect(textHalfLeading(size, ratio, size * 1.21)).toBeCloseTo(
+        textHalfLeading(1, ratio, 1.21) * size,
+        6,
+      );
+    }
+    // …and it is not zero at any of them, which is why it cannot be skipped.
+    expect(textHalfLeading(36, ratio, 36 * 1.21)).toBeGreaterThan(0);
+  });
+
+  /**
+   * jsdom's `measureText` reports a width and nothing else, and so would any
+   * canvas whose font failed to resolve. A missing metric must not become a
+   * NaN offset that puts the caret nowhere at all.
+   */
+  it('falls back to a font-shaped ratio when the canvas has no metrics', () => {
+    const fallback = textHalfLeading(48, 1.5, null);
+    expect(fallback).toBeCloseTo((48 * 1.5 - 48 * TEXT.contentBoxRatio) / 2, 6);
+    expect(textHalfLeading(48, 1.5, 0)).toBeCloseTo(fallback, 6);
+    expect(Number.isFinite(fallback)).toBe(true);
+  });
+
+  /**
+   * A theme could set `--lh-300` tighter than the glyph box. That means the
+   * lines overlap symmetrically, not that the caption should be pushed up out
+   * of the picture.
+   */
+  it('never lifts the text above the origin', () => {
+    expect(textHalfLeading(48, 0.8, 48 * 1.21)).toBe(0);
   });
 });
 
@@ -271,6 +353,26 @@ describe('layoutText', () => {
     const layout = layoutText({ ...base, text: 'aaaaaaaaa', origin: { x: 900, y: 0 } });
     expect(TEXT.edgePadding).toBeGreaterThan(0);
     expect(layout.lines.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * A caret placed hard against the right edge leaves a negative width once the
+   * edge padding is taken off, and a non-positive width switches wrapping off
+   * entirely — text that runs past the bitmap and is cropped by the PNG, which
+   * is invisible while editing and permanent in the export. That sliver is
+   * `edgePadding * fontSize` wide, so it grew with the font: unreachable at
+   * 24px, 48px of the sheet at the heaviest weight now.
+   */
+  it('still wraps for a caret placed hard against the right edge', () => {
+    const layout = layoutText({
+      ...base,
+      text: 'aaaaaaaaaaaa',
+      origin: { x: 1000, y: 0 },
+      sheetWidth: 1000,
+    });
+    // One character per line is ugly. Losing the caption off the edge is worse.
+    expect(layout.lines.length).toBeGreaterThan(1);
+    expect(layout.lines.join('')).toBe('aaaaaaaaaaaa');
   });
 });
 

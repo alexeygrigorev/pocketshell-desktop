@@ -39,8 +39,9 @@
  * The one number NOT taken from a token is the text SIZE, and the reasoning is
  * in `TEXT.sizeRatio` in src/shared/doodleGeometry.ts: the `--fs-*` ladder is a
  * chrome density system that stops at 20px, while this canvas is a bitmap up to
- * 2048px wide. Size follows the stroke width the user already picked instead,
- * so a caption and the arrow pointing at it read as one hand.
+ * 2048px wide displayed inside a ~700px panel. Size follows the stroke width
+ * the user already picked instead, so a caption and the arrow pointing at it
+ * read as one hand.
  *
  * ## Undo covers everything, including edits and Clear
  *
@@ -63,6 +64,7 @@ import {
   isDegenerateDrag,
   layoutText,
   textFontSize,
+  textHalfLeading,
   TEXT,
   type Point,
   type TextLayout,
@@ -145,9 +147,12 @@ type Pen = (typeof PENS)[number];
 /**
  * Logical stroke widths. Scaled with the canvas, so they hold at any zoom.
  *
- * Text size is derived from this too (see `TEXT.sizeRatio`), which is why the
- * control's label is deliberately generic: it is the weight of the mark, not
- * the thickness of a line.
+ * Text size is derived from this too (see `TEXT.sizeRatio` and `TEXT.minSize`,
+ * which make these three 36 / 48 / 96px of type), which is why the control's
+ * label is deliberately generic: it is the weight of the mark, not the
+ * thickness of a line. The two ladders are not the same shape — the floor lifts
+ * the lightest text off 24px — and that is fine, because what the control
+ * promises is an ORDERING, not a ratio.
  */
 const WIDTHS = [3, 6, 12] as const;
 
@@ -170,10 +175,12 @@ interface Stroke {
 /**
  * A committed text annotation.
  *
- * `origin` is the TOP-LEFT of the first line, not a baseline — the same box the
- * editing `<textarea>` occupies. Keeping the two in the same coordinate space
- * is what makes the editor a true preview instead of an approximation that
- * jumps a few pixels when you commit it.
+ * `origin` is the TOP OF THE GLYPHS of the first line, not a baseline and not
+ * the top of the first line BOX — it is the pixel the user clicked, and what
+ * they clicked is where the writing starts. The editing `<textarea>` is offset
+ * upwards by `textHalfLeading` to put its own first line here too (see
+ * `editorStyle`); without that the caret sits half a leading low and the
+ * caption visibly hops up at the moment it is committed.
  *
  * The raw text is stored, never the wrapped lines: wrapping depends on the
  * measured font, and the font depends on tokens that can change under a theme
@@ -265,6 +272,16 @@ const editorEl = ref<HTMLTextAreaElement | null>(null);
  * on demand because it only changes on a resize or a backdrop swap, and reading
  * `getBoundingClientRect` from a paint that runs on every pointermove would put
  * a forced layout in the drag loop.
+ *
+ * The ResizeObserver alone is NOT enough to keep it true, which is why
+ * `onPointerDown` re-measures. A ResizeObserver reports the border box, and a
+ * border box does not change under a CSS TRANSFORM — but `getBoundingClientRect`
+ * does. OverlayPanel's entrance animates the whole sheet through
+ * `translateY(8px) scale(0.985)` over `--dur-slow`, so a canvas that mounts with
+ * the panel (the blank-sheet route does) measures itself 1.5% small and is
+ * never told when the transform settles. 1.5% is nothing at the origin and 10
+ * display pixels at the far corner of a 700px sheet: a caret that lands further
+ * and further from the click the further across the image you click.
  */
 const displayScale = ref(1);
 let frameObserver: ResizeObserver | null = null;
@@ -316,6 +333,30 @@ function fontFor(markWidth: number): string {
   const family = readToken('--font-ui') || 'sans-serif';
   const weight = readToken('--fw-semibold') || '600';
   return `${weight} ${textFontSize(markWidth)}px ${family}`;
+}
+
+/**
+ * Ascent plus descent of the font a mark of this width paints in, or null.
+ *
+ * Asked of the canvas rather than of the DOM because the canvas is the only
+ * thing here that can answer: `getComputedStyle` reports the font that was
+ * REQUESTED, while `measureText` reports metrics of the font that was actually
+ * resolved, which is what both the painter and the browser's own line boxes are
+ * built from. The string measured is arbitrary — `fontBoundingBox*` describes
+ * the font, not the glyphs — but 'Hg' is a cap and a descender, so a renderer
+ * that ever regressed to ink-box metrics would be caught rather than flattered.
+ *
+ * Null when the metrics are missing, which is not hypothetical: jsdom has no
+ * text engine and its `measureText` returns a width and nothing else.
+ * `textHalfLeading` has a documented fallback for exactly that.
+ */
+function fontContentHeight(markWidth: number): number | null {
+  const ctx = canvasEl.value?.getContext('2d');
+  if (!ctx) return null;
+  ctx.font = fontFor(markWidth);
+  const metrics = ctx.measureText('Hg');
+  const height = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
+  return Number.isFinite(height) && height > 0 ? height : null;
 }
 
 /**
@@ -412,9 +453,17 @@ function strokePath(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
  * Paint one text annotation.
  *
  * `textBaseline = 'top'` rather than the default alphabetic baseline: the
- * layout module works in top-left boxes so that the overlaid textarea and the
- * painted result occupy the same rectangle, and converting between the two
- * would need an ascent metric that differs per font.
+ * layout module works in top-left boxes, and an alphabetic baseline would need
+ * an ascent metric that differs per font before a click could be turned into
+ * one. With 'top' the glyphs of line 0 begin exactly at `layout.y`, which is
+ * exactly where the user clicked — no fudge on this side at all.
+ *
+ * The half-leading correction that makes the editing overlay agree lives in
+ * `editorStyle`, and it is on that side ON PURPOSE. Only one of these two
+ * renderers can be the reference, and it has to be this one: this is what the
+ * PNG will contain, and the textarea is an affordance that exists for a few
+ * seconds. Correcting the paint instead would land every caption half a leading
+ * below the click forever, to spare a transient box from being moved.
  */
 function paintText(ctx: CanvasRenderingContext2D, item: TextItem): void {
   const layout = layoutFor(ctx, item);
@@ -503,6 +552,15 @@ function onPointerDown(e: PointerEvent): void {
   if (e.button !== 0) return;
   const canvas = canvasEl.value;
   if (!canvas) return;
+
+  // Re-measure BEFORE the click is decoded, so the scale that places the text
+  // editor is the same scale the click was read through. `pointFrom` divides a
+  // live `getBoundingClientRect`; `editorStyle` multiplies the cached
+  // `displayScale`. The two only cancel — which is what "the caret appears
+  // exactly where I clicked" means — if they are the same number, and see
+  // `displayScale` for how they drift apart on their own. One forced layout per
+  // press, on a path that already takes one.
+  measureScale();
 
   if (tool.value === 'text') {
     onTextPointerDown(pointFrom(e));
@@ -768,9 +826,19 @@ const editorStyle = computed(() => {
   // line breakers — but the box, the family, the size and the leading are the
   // same, so a caption that fits while typing fits when painted.
   const available = size.value.w - open.origin.x - fontSize * TEXT.edgePadding;
+  // Lift the box by half a leading. `origin` is where the GLYPHS start — the
+  // pixel the user clicked — and the canvas paints them there directly, because
+  // `textBaseline = 'top'` anchors the glyph top. CSS does not: a textarea
+  // centres each line's glyph box inside a line box of `line-height`, so a box
+  // whose top is at `origin` would start writing half a leading lower, and the
+  // caption would jump up by that much the instant it was committed. The
+  // correction is computed from the font's own metrics, so it holds at every
+  // mark weight rather than at the one it was tuned against; `* scale` because
+  // everything else in this style block is in display pixels too.
+  const lift = textHalfLeading(fontSize, lineHeightRatio(), fontContentHeight(open.width));
   return {
     left: `${open.origin.x * scale}px`,
-    top: `${open.origin.y * scale}px`,
+    top: `${(open.origin.y - lift) * scale}px`,
     width: `${Math.max(fontSize, available) * scale}px`,
     fontSize: `${fontSize * scale}px`,
     lineHeight: String(lineHeightRatio()),
@@ -1009,14 +1077,19 @@ onBeforeUnmount(() => {
 
       <!-- One control, two meanings: line thickness, and — via
            TEXT.sizeRatio — text size. They are the same idea (how heavy a
-           mark), which is why this is not two controls. -->
+           mark), which is why this is not two controls.
+
+           The tooltip asks `textFontSize(w)` rather than writing the ratio out
+           a second time. It used to say `w * 4`, which was already a copy of
+           `TEXT.sizeRatio` and would now be promising "Text 12px" for a mark
+           the canvas sets at 36. One function owns the answer. -->
       <div class="group" role="group" aria-label="Mark weight">
         <button
           v-for="w in WIDTHS"
           :key="w"
           class="width-btn"
           :class="{ active: width === w }"
-          :title="tool === 'text' ? `Text ${w * 4}px` : `${w}px`"
+          :title="tool === 'text' ? `Text ${textFontSize(w)}px` : `${w}px`"
           :aria-label="`Mark weight ${w}`"
           :aria-pressed="width === w"
           @click="width = w"

@@ -75,6 +75,8 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Text and arrows in the doodle surface | `298921a` |
 | ✅ | Annotate an image that is already attached | _pending_ |
 | ✅ | Cancelling the doodle no longer discards it silently | _pending_ |
+| ✅ | Annotation text was too small to read | _pending_ |
+| ✅ | The text tool's caret did not land where it was clicked | _pending_ |
 
 ### Files
 

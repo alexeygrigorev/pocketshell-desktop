@@ -1624,9 +1624,19 @@ density system (28px rows, 40px bars) that tops out at 20px — `fonts.ts` says 
 in as many words — while this canvas is a bitmap up to 2048px wide whose logical
 pixels are not CSS pixels. `--fs-300` text on a phone screenshot would be
 13/2048 of the image width and about four screen pixels tall on the sheet. Size
-follows the selected mark weight instead (4x, the same ratio as the arrowhead),
-so a caption and the arrow pointing at it read as one hand. The ratio is a named
-constant in the pure module and is unit-tested.
+follows the selected mark weight instead — 8x, with a 36px floor so the lightest
+weight stays legible once the sheet is shrunk to about a third — so a caption
+and the arrow pointing at it read as one hand.
+
+The ratio was 4x, borrowed from the arrowhead, and that borrowing was the bug a
+user reported as "for annotations font size is too small": an arrowhead is a
+SHAPE and survives being shrunk, type does not, and this sheet is always shrunk
+(an `md` overlay is ~700 CSS px over a backdrop worked at up to 2048). At 4x the
+three weights reached the eye at 4 / 8 / 16 CSS px — two of them, the default
+among them, below the 11px `--fs-100` this app never goes under. The ratio and
+the floor are named constants in the pure module, and the test asserts what
+REACHES THE EYE (`textFontSize(w) * (700/2048) >= 11`) rather than asserting the
+constants against themselves.
 
 ### 27.7 Annotating an image that is already attached
 

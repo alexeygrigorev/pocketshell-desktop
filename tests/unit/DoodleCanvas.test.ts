@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
+import { textFontSize, textHalfLeading } from '../../src/shared/doodleGeometry';
 
 /**
  * The doodle surface's two new tools, driven the way a user drives them.
@@ -21,6 +22,19 @@ import { mount, type VueWrapper } from '@vue/test-utils';
  */
 
 const SHEET = { w: 1024, h: 640 };
+
+/**
+ * The canvas's DISPLAYED box, in CSS pixels — the sheet's zoom, in other words.
+ *
+ * Mutable, and that is the point. A sheet shown at 1:1 is the one case that
+ * cannot tell a correct coordinate conversion from a missing one: every scale
+ * term is 1, so dividing by it, multiplying by it and forgetting it entirely
+ * all agree. The real sheet is never at 1:1 — a 2048px backdrop inside a 720px
+ * overlay is at about a third — so the placement specs set this to something
+ * other than SHEET, and one of them changes it AFTER mount, which is what the
+ * overlay's entrance transform does in the app.
+ */
+let displayed = { ...SHEET };
 
 /** Everything the component was told to draw, in order. */
 interface Op {
@@ -110,6 +124,7 @@ let encoded: Op[] = [];
 beforeEach(() => {
   ops = [];
   encoded = [];
+  displayed = { ...SHEET };
 
   vi.spyOn(window, 'getComputedStyle').mockReturnValue({
     getPropertyValue: (name: string) => TOKENS[name] ?? '',
@@ -118,7 +133,14 @@ beforeEach(() => {
   const proto = HTMLCanvasElement.prototype as unknown as Record<string, unknown>;
   proto.getContext = (): CanvasRenderingContext2D => context;
   proto.getBoundingClientRect = (): DOMRect =>
-    ({ left: 0, top: 0, width: SHEET.w, height: SHEET.h, right: SHEET.w, bottom: SHEET.h }) as DOMRect;
+    ({
+      left: 0,
+      top: 0,
+      width: displayed.w,
+      height: displayed.h,
+      right: displayed.w,
+      bottom: displayed.h,
+    }) as DOMRect;
   proto.toBlob = (cb: (b: Blob | null) => void): void => {
     encoded = [...ops];
     cb(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }));
@@ -347,8 +369,25 @@ describe('the text tool', () => {
 
     const drawn = frame().find((o) => o.op === 'fillText');
     expect(drawn?.fill).toBe(TOKENS['--success']);
-    // Weight and family from tokens; the size follows the mark weight (6 * 4).
-    expect(drawn?.font).toBe('600 24px Inter Variable, sans-serif');
+    // Weight and family from tokens; the size follows the mark weight. 48px,
+    // not the 24px this used to assert: at the ~0.34 zoom a capped backdrop is
+    // shown at, 24px reached the eye as 8 CSS pixels — below `--fs-100`, the
+    // smallest type the app sets anywhere. See TEXT.sizeRatio.
+    expect(drawn?.font).toBe('600 48px Inter Variable, sans-serif');
+  });
+
+  /**
+   * The weight control's tooltip promises a size, and it used to promise it by
+   * multiplying by a copy of `TEXT.sizeRatio` written out in the template. A
+   * copy of a constant is a constant that will be wrong exactly once.
+   */
+  it('labels the weight control with the size the text will really be', async () => {
+    const wrapper = await open();
+    await pickTool(wrapper, 'Text');
+    const button = wrapper
+      .findAll('button')
+      .find((b) => b.attributes('aria-label') === 'Mark weight 3');
+    expect(button?.attributes('title')).toBe(`Text ${textFontSize(3)}px`);
   });
 
   /**
@@ -481,6 +520,120 @@ describe('the text tool', () => {
     ops = [];
     await key(editor(wrapper), 'Escape');
     expect(painted()).toEqual(['one', 'two']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Where the text lands
+// ---------------------------------------------------------------------------
+
+/**
+ * "When I click with the I icon on the image it doesn't land where I clicked."
+ *
+ * Two separate ways that happened, and they are tested separately because
+ * either one alone reproduces the report:
+ *
+ *  1. The caret was placed through a CACHED zoom while the click was decoded
+ *     through a LIVE one. They agree until something changes the canvas's
+ *     rendered size without changing its border box — which is precisely what
+ *     OverlayPanel's entrance does, animating `scale(0.985)` over `--dur-slow`
+ *     while a ResizeObserver, which reports border boxes, says nothing. The
+ *     error is then proportional to the distance from the top-left corner.
+ *  2. The canvas anchors a line's GLYPH TOP at the origin and CSS anchors its
+ *     LINE BOX top there, so the editing overlay wrote half a leading below the
+ *     click and the caption hopped up when it was committed.
+ *
+ * Every case here is driven at a zoom that is not 1. At 1:1 a missing scale
+ * divide is indistinguishable from a correct one, so a spec written at 1:1
+ * would pass against both versions of the bug.
+ */
+describe('placing text where the pointer is', () => {
+  /** `--lh-300`, as the component resolves it. */
+  const LEADING = Number(TOKENS['--lh-300']);
+
+  it('maps a click to bitmap pixels through the sheet zoom', async () => {
+    // The sheet is drawn at half size, as a large backdrop in a small panel is.
+    displayed = { w: SHEET.w / 2, h: SHEET.h / 2 };
+    const wrapper = await open();
+    await pickTool(wrapper, 'Text');
+
+    await click(wrapper, { x: 150, y: 90 });
+    await type(wrapper, 'here');
+    ops = [];
+    await key(editor(wrapper), 'Escape');
+
+    // Half size, so 150 CSS pixels across the sheet is 300 pixels into the
+    // bitmap — and the bitmap is what the attachment will contain.
+    const drawn = frame().find((o) => o.op === 'fillText');
+    expect(drawn?.args).toEqual([300, 180]);
+  });
+
+  /**
+   * The stale-zoom half. Nothing here tells the component the sheet resized —
+   * that is the point, because in the app nothing tells it either.
+   */
+  it('places the caret through the zoom the click was read at, not a stale one', async () => {
+    const wrapper = await open(); // measured while the sheet was still 1:1
+    await pickTool(wrapper, 'Text');
+    displayed = { w: SHEET.w / 2, h: SHEET.h / 2 };
+
+    await click(wrapper, { x: 150, y: 90 });
+
+    // The caret belongs under the pointer, in display pixels: the same 150 the
+    // click came in at. Read through the stale 1:1 zoom it would sit at 300 —
+    // off by the distance from the corner, which is the shape of the report.
+    const style = editor(wrapper).style;
+    expect(Number.parseFloat(style.left)).toBeCloseTo(150, 6);
+    // Vertically the same, less the lift that makes the glyphs — not the box —
+    // start at the click.
+    const lift = textHalfLeading(textFontSize(6), LEADING);
+    expect(Number.parseFloat(style.top)).toBeCloseTo((180 - lift) / 2, 6);
+  });
+
+  /**
+   * The half-leading half. The overlay is a WYSIWYG preview, so the glyphs the
+   * user types and the glyphs that get painted have to occupy the same pixels —
+   * and both have to start at the click, not below it.
+   */
+  it('starts the writing at the click, in the editor and in the paint alike', async () => {
+    displayed = { w: SHEET.w / 2, h: SHEET.h / 2 };
+    const wrapper = await open();
+    await pickTool(wrapper, 'Text');
+    await click(wrapper, { x: 100, y: 75 }); // bitmap (200, 150)
+
+    // A textarea centres its glyphs in a line box of `line-height`, so its BOX
+    // has to begin above the click by exactly that half-leading for the glyphs
+    // inside it to begin at the click.
+    const lift = textHalfLeading(textFontSize(6), LEADING);
+    expect(lift).toBeGreaterThan(0);
+    expect(Number.parseFloat(editor(wrapper).style.top)).toBeCloseTo((150 - lift) / 2, 6);
+
+    await type(wrapper, 'wysiwyg');
+    ops = [];
+    await key(editor(wrapper), 'Escape');
+    // The canvas needs no such correction — `textBaseline = 'top'` already
+    // anchors the glyph top — so the paint lands on the click itself.
+    expect(frame().find((o) => o.op === 'fillText')?.args).toEqual([200, 150]);
+  });
+
+  /**
+   * The correction has to be derived, not tuned. A constant that cancelled at
+   * the default weight would be wrong at the other two, and the enlarged font
+   * makes the error twice the size it used to be.
+   */
+  it('keeps the caret on the click at every mark weight', async () => {
+    displayed = { w: SHEET.w / 2, h: SHEET.h / 2 };
+    for (const weight of [3, 6, 12]) {
+      const wrapper = await open();
+      await pickTool(wrapper, 'Text');
+      await pickTool(wrapper, `Mark weight ${weight}`);
+      await click(wrapper, { x: 100, y: 75 });
+
+      const lift = textHalfLeading(textFontSize(weight), LEADING);
+      expect(Number.parseFloat(editor(wrapper).style.left)).toBeCloseTo(100, 6);
+      expect(Number.parseFloat(editor(wrapper).style.top)).toBeCloseTo((150 - lift) / 2, 6);
+      wrapper.unmount();
+    }
   });
 });
 

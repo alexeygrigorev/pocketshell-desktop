@@ -187,11 +187,52 @@ export const TEXT = {
    * What text on this surface must match is the OTHER MARKS on this surface —
    * a caption and the arrow pointing at it should look like they came from one
    * hand — and the user already chose that weight of mark with the width
-   * control. So size follows width, at the same 4x the arrowhead uses. Family,
-   * weight and line height still come from tokens (`--font-ui`,
-   * `--fw-semibold`, `--lh-300`); only the SCALE is the canvas's own.
+   * control. So size follows width. Family, weight and line height still come
+   * from tokens (`--font-ui`, `--fw-semibold`, `--lh-300`); only the SCALE is
+   * the canvas's own.
+   *
+   * WAS 4, borrowed unchanged from `ARROW.headRatio`, and that borrowing is
+   * exactly what was wrong: an arrowhead is a shape and reads fine when the
+   * sheet is shrunk, while type stops being type. The sheet is ALWAYS shrunk.
+   * The doodle lives in an `md` OverlayPanel — `min(720px, 92vw)` less the
+   * panel border and the frame's `--sp-2` padding, so ~700 CSS px of sheet —
+   * and a backdrop is worked at up to 2048px (`MAX` in DoodleCanvas.vue). That
+   * is a display scale of 700/2048 = 0.34, and worse for a portrait screenshot,
+   * where `max-height: 56vh` on a 900px-tall window gives 504/2048 = 0.25.
+   *
+   * At 4x the three mark weights were 12 / 24 / 48 logical pixels, which at
+   * 0.34 reach the eye as 4 / 8 / 16 CSS pixels. Two of the three settings were
+   * below `--fs-100` (11px), the smallest type the app sets anywhere — the
+   * default among them. Hence "for annotations font size is too small": it was,
+   * measurably, and at every setting but the heaviest.
+   *
+   * At 8x they are 24 / 48 / 96 before the floor below applies, i.e. the old
+   * ladder moved up one notch with a new top. The default 48 lands at 16 CSS px
+   * on screen (between `--fs-400` and `--fs-500`) and is 2.3% of the width of a
+   * 2048px export, which is caption-sized on the PNG rather than fine print.
    */
-  sizeRatio: 4,
+  sizeRatio: 8,
+
+  /**
+   * The smallest font an annotation is ever set in, in logical pixels.
+   *
+   * NEW. Without it the lightest mark weight is 3 * 8 = 24px, which is the
+   * exact size that was just reported as too small to read — the ratio alone
+   * would leave one setting of the control still producing the complaint.
+   *
+   * 36 because the sheet is shown at roughly a third (700 CSS px of panel
+   * against a 2048px backdrop), and a third of 36 is 12: `--fs-200`, the size
+   * the app sets its own buttons and secondary rows in. `--fs-100` at 11px is
+   * the absolute floor of legibility rather than a target, and aiming at it
+   * exactly would have meant 33px — a number chosen by a rounding error.
+   *
+   * The cost is that the ladder compresses at the light end — 36 / 48 / 96
+   * rather than 24 / 48 / 96 — so light-to-medium is 1.33x where medium-to-heavy
+   * is 2x. That is the right trade: three sizes that can all be read beats an
+   * evenly spaced ladder with an unusable rung on it, and what the weight
+   * control promises is an ORDERING, not a ratio.
+   */
+  minSize: 36,
 
   /**
    * Fallback line-height ratio, used only if `--lh-300` fails to resolve —
@@ -209,11 +250,69 @@ export const TEXT = {
 
   /** Slop around a text block when hit-testing a click, in multiples of size. */
   hitPadding: 0.25,
+
+  /**
+   * Fallback height of a line's glyph box — ascent plus descent — as a multiple
+   * of the font size, used only when the canvas will not report font metrics.
+   *
+   * NEW, and it exists to place the editing overlay (see `textHalfLeading`).
+   * 1.21 is Inter's own: ascent 0.969em + descent 0.242em, the family `--font-ui`
+   * resolves to. It is a fallback and not the number normally used — Chromium's
+   * `measureText` reports `fontBoundingBoxAscent`/`Descent` and those are the
+   * very metrics its CSS line box is built from, so the real ones are exact
+   * where this one is merely close. The fallback matters in jsdom, whose
+   * `measureText` returns a width and nothing else.
+   *
+   * NOT 1: the em square is not the glyph box. Assuming 1 would over-correct
+   * the overlay by (1.21 - 1) / 2 = 0.105em, which at the new heaviest weight
+   * is 10 logical pixels of caption sitting above where it was typed.
+   */
+  contentBoxRatio: 1.21,
 } as const;
 
-/** The font size an annotation is set at, for a given stroke width. */
+/**
+ * The font size an annotation is set at, for a given stroke width.
+ *
+ * `Math.max` before `Math.round`, so the floor is the floor: see `TEXT.minSize`
+ * for why the lightest mark weight is not allowed to take the ratio literally.
+ */
 export function textFontSize(strokeWidth: number): number {
-  return Math.round(strokeWidth * TEXT.sizeRatio);
+  return Math.round(Math.max(strokeWidth * TEXT.sizeRatio, TEXT.minSize));
+}
+
+/**
+ * How far below the top of a LINE BOX the glyphs inside it actually begin.
+ *
+ * This is the number that decides whether a caption lands where it was typed.
+ * Two renderers draw the same annotation — the canvas, via `fillText` with
+ * `textBaseline = 'top'`, and a `<textarea>` overlaid on the canvas while the
+ * caret is in it — and they anchor the first line differently. Canvas `top`
+ * puts the glyph top AT the given y. CSS puts it half a leading down, because
+ * a line box of `line-height` tall centres its `ascent + descent` glyph box
+ * inside itself, above and below alike. So the same origin renders the same
+ * string in two places, and the gap is proportional to the font size: it was
+ * 2px at the old 24px default and would have been 8px at the new 48px one,
+ * growing to 17px at the heaviest weight. Tuning it away with a constant would
+ * therefore fix exactly one font size and break the other two.
+ *
+ * `contentHeight` is `fontBoundingBoxAscent + fontBoundingBoxDescent` from the
+ * canvas that will do the painting. Passing the measured value makes the
+ * correction exact rather than approximate, because Blink builds both the
+ * canvas baseline and the CSS line box from that same metric; null falls back
+ * to `TEXT.contentBoxRatio`.
+ *
+ * Clamped at zero: a line height TIGHTER than the glyph box (a theme could set
+ * `--lh-300` below 1) means the glyphs overflow their line box symmetrically,
+ * not that the caption should be pushed upwards.
+ */
+export function textHalfLeading(
+  fontSize: number,
+  lineHeightRatio: number,
+  contentHeight: number | null = null,
+): number {
+  const content =
+    contentHeight !== null && contentHeight > 0 ? contentHeight : fontSize * TEXT.contentBoxRatio;
+  return Math.max(0, (fontSize * lineHeightRatio - content) / 2);
 }
 
 /** Measures the advance width of a string in whatever font the caller has. */
@@ -337,7 +436,17 @@ export interface TextLayoutInput {
  */
 export function layoutText(input: TextLayoutInput): TextLayout {
   const { text, origin, fontSize, lineHeightRatio, sheetWidth, measure } = input;
-  const maxWidth = sheetWidth - origin.x - fontSize * TEXT.edgePadding;
+  // Never narrower than one em. The raw figure goes negative for a caret placed
+  // within `edgePadding` of the right edge, and a non-positive width switches
+  // `wrapLines` off entirely — text that runs off the bitmap and is cropped by
+  // the PNG, invisibly, in the export. That was a 12px-wide sliver of the sheet
+  // when the font was 24px and would be a 48px one now that it is 96px at the
+  // heaviest weight, so the fallback moved from "unreachable" to "reachable by
+  // clicking near the edge". One character per line is ugly; silently losing
+  // the caption is worse. It also matches what the editing overlay already did
+  // — `Math.max(fontSize, available)` in DoodleCanvas.vue's `editorStyle` — so
+  // the preview and the paint now break their lines by the same rule.
+  const maxWidth = Math.max(fontSize, sheetWidth - origin.x - fontSize * TEXT.edgePadding);
   const lines = wrapLines(text, maxWidth, measure);
   const lineHeight = fontSize * lineHeightRatio;
   let width = 0;
