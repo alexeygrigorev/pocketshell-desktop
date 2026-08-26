@@ -619,11 +619,31 @@ export class PocketshellClient {
     return { ok: false, path: null, alreadyExists: false, error, state };
   }
 
-  /** Provider quota via `pocketshell usage --json`. Returns [] if unavailable. */
+  /**
+   * Provider quota via `pocketshell usage --json`.
+   *
+   * `[]` means one thing only: the host answered and had nothing to report.
+   * It used to also mean "the call failed", which cost the two layers above
+   * the distinction they exist to draw — `usageError` in stores/agents.ts is
+   * only ever set by a rejection, and UsageView's empty state asks "is
+   * `pocketshell usage` available on this host?", the wrong question for a
+   * helper that is present and failing. `usage` shells out to `quse` and
+   * touches every provider's credentials, so it has more ways to fail after
+   * starting than anything else here, and all of them looked identical.
+   *
+   * A missing BINARY still answers `[]` — that is the case the empty state's
+   * question is right about. A command that ran and failed throws with the
+   * host's own line, which `loadUsage` catches into `usageError` without
+   * disturbing the rows already on screen.
+   */
   async usage(connectionId: string): Promise<UsageRow[]> {
     const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell usage --json'));
-    if (res.exitCode !== 0) return [];
-    return parseUsageNdjson(res.stdout);
+    if (res.exitCode === 0) return parseUsageNdjson(res.stdout);
+    const output = `${res.stdout}\n${res.stderr}`;
+    if (isHelperMissing(res.exitCode, output)) return [];
+    const hostMessage =
+      res.stderr.trim() || res.stdout.trim() || `pocketshell usage exited ${res.exitCode}`;
+    throw new Error(annotateHelperRejection(hostMessage, output));
   }
 
   /**
