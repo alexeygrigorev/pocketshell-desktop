@@ -36,6 +36,8 @@ const readBinary =
 const readFile = vi.fn<(connectionId: string, path: string) => Promise<string>>();
 const writeFile =
   vi.fn<(connectionId: string, path: string, content: string) => Promise<boolean>>();
+const saveAs =
+  vi.fn<(opts: { connectionId: string; remotePath: string }) => Promise<string | null>>();
 const openHtml =
   vi.fn<(connectionId: string, path: string) => Promise<{ token: string; url: string }>>();
 const openMarkdown =
@@ -67,6 +69,7 @@ vi.mock('../../src/renderer/ipc', () => ({
       readFile: (connectionId: string, path: string) => readFile(connectionId, path),
       writeFile: (connectionId: string, path: string, content: string) =>
         writeFile(connectionId, path, content),
+      saveAs: (opts: { connectionId: string; remotePath: string }) => saveAs(opts),
     },
     preview: {
       openHtml: (connectionId: string, path: string) => openHtml(connectionId, path),
@@ -112,6 +115,7 @@ beforeEach(() => {
   readBinary.mockReset();
   readFile.mockReset();
   writeFile.mockReset();
+  saveAs.mockReset();
   openHtml.mockReset();
   openMarkdown.mockReset();
   releasePreview.mockReset();
@@ -432,6 +436,110 @@ describe('files store openFile() type gating', () => {
     await files.openFile(CONN, 'b.pdf');
 
     expect(revoked).toContain(first);
+  });
+});
+
+/**
+ * WHERE a failure is reported is part of what the failure means.
+ *
+ * `save()` and `download()` used to write into the same `error` ref the
+ * directory listing uses, and that ref renders in exactly one place: the
+ * footer of the file tree, in the LEFT pane. A failed Ctrl+S therefore put
+ * its reason in the far corner of a pane the user was not looking at — or
+ * off-screen entirely, below a short listing — while on the right the Save
+ * button merely stopped saying "Saving…" and the file stayed dirty. That
+ * reads as a save that silently did nothing. These pin the split: open-file
+ * failures land in `fileError`, which FilesView renders beside the editor
+ * bar, and the listing keeps `error` to itself.
+ */
+describe("files store fileError — the open file's own channel", () => {
+  const openText = async (name = 'notes.txt') => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: 6 });
+    readBinary.mockResolvedValue(new TextEncoder().encode('hello\n'));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u');
+    await files.openFile(CONN, name);
+    return files;
+  };
+
+  it('lands a failed save beside the editor, not in the tree footer', async () => {
+    const files = await openText();
+    files.setContent('edited');
+    writeFile.mockRejectedValue(new Error('Permission denied'));
+
+    expect(await files.save(CONN)).toBe(false);
+
+    expect(files.fileError).toBe('Permission denied');
+    // The listing channel stays silent — the tree has nothing to confess.
+    expect(files.error).toBeNull();
+    // And the buffer is still the user's: a failed save must leave it dirty.
+    expect(files.dirty).toBe(true);
+  });
+
+  it('retires the verdict when a new save attempt starts', async () => {
+    const files = await openText();
+    files.setContent('edited');
+    writeFile.mockRejectedValueOnce(new Error('Permission denied'));
+    expect(await files.save(CONN)).toBe(false);
+    expect(files.fileError).toBe('Permission denied');
+
+    writeFile.mockResolvedValue(true);
+    expect(await files.save(CONN)).toBe(true);
+
+    // The retry succeeded, so the failure message comes down with it.
+    expect(files.fileError).toBeNull();
+  });
+
+  it('clears when the file is closed', async () => {
+    const files = await openText();
+    files.setContent('edited');
+    writeFile.mockRejectedValue(new Error('Permission denied'));
+    await files.save(CONN);
+    expect(files.fileError).toBe('Permission denied');
+
+    files.closeFile();
+
+    expect(files.fileError).toBeNull();
+  });
+
+  it('clears when another file replaces the one that failed', async () => {
+    const files = await openText();
+    files.setContent('edited');
+    writeFile.mockRejectedValue(new Error('Permission denied'));
+    await files.save(CONN);
+    expect(files.fileError).toBe('Permission denied');
+
+    readBinary.mockResolvedValue(new TextEncoder().encode('other\n'));
+    await files.openFile(CONN, 'other.txt');
+
+    // A verdict on one file must not hang over the next.
+    expect(files.fileError).toBeNull();
+  });
+
+  it('lands a failed download in the same channel', async () => {
+    // A zip goes to the binary panel, whose ONLY action is the Download…
+    // button — which sits in the editor area, so its failure belongs beside
+    // it too.
+    const files = await openText('dump.zip');
+    saveAs.mockRejectedValue(new Error('EACCES: permission denied'));
+
+    expect(await files.download(CONN)).toBeNull();
+
+    expect(files.fileError).toContain('EACCES');
+    expect(files.error).toBeNull();
+  });
+
+  it('keeps a listing failure in the listing channel', async () => {
+    // The other direction of the split: the tree's own failures must not
+    // start appearing beside the editor just because a file is open.
+    const files = await openText();
+    list.mockRejectedValue(new Error('Channel closed'));
+
+    await files.refresh(CONN);
+
+    expect(files.error).toBe('Channel closed');
+    expect(files.fileError).toBeNull();
   });
 });
 

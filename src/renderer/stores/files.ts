@@ -160,6 +160,34 @@ export const useFilesStore = defineStore('files', () => {
   const saving = ref(false);
   const opening = ref(false);
 
+  /**
+   * Errors about the OPEN FILE — a failed save or download — kept apart from
+   * `error`, which is the LISTING's channel.
+   *
+   * The split exists because the two have different audiences in different
+   * corners of the screen. A listing failure is about the tree, and renders in
+   * the tree's footer — the left pane, where the user is looking when a
+   * directory refuses to list. A failed Ctrl+S is about the editor: the user
+   * is watching the Save button on the right when it fails (permissions, a
+   * dropped link, a file moved under them), and when the reason landed in the
+   * shared `error` ref it appeared in the far corner of a different pane — or
+   * off-screen entirely if the tree was short — while the button merely
+   * stopped saying "Saving…" and the file stayed dirty. That reads as "save
+   * silently did nothing", which is the one thing a failed save must never
+   * read as. FilesView renders this ref right under the editor bar, where the
+   * eyes already are.
+   *
+   * `openFile` and `revealPath` failures stay OUT of this channel on the same
+   * audience test: a file that cannot be opened lands in the binary panel
+   * with its reason in `openNote`, and a dead reveal link is reported through
+   * `error` because the tree is what the click was navigating.
+   *
+   * Cleared when a fresh save or download attempt starts (the message
+   * describes the LAST attempt, not the file), and whenever the open file
+   * changes or closes — a verdict on one file must not hang over the next.
+   */
+  const fileError = ref<string | null>(null);
+
   // -------------------------------------------------------------------------
   // HTML preview
   // -------------------------------------------------------------------------
@@ -581,6 +609,11 @@ export const useFilesStore = defineStore('files', () => {
     // else about the open file survives a switch (see `stash`).
     revokeUrl();
     if (remembered?.buffer) {
+      // This branch bypasses `resetOpenFile`, so the open-file error channel
+      // is emptied by hand: whatever failed before the tab switch was a
+      // verdict on an attempt in the past, and re-showing it now would read
+      // as a failure that just happened to the restored buffer.
+      fileError.value = null;
       openPath.value = remembered.buffer.path;
       openContent.value = remembered.buffer.content;
       // Re-derive the kind from the NAME rather than pinning it to 'text'.
@@ -811,6 +844,10 @@ export const useFilesStore = defineStore('files', () => {
   async function save(connectionId: ConnectionId): Promise<boolean> {
     if (!openPath.value || !isEditable(openMode.value)) return false;
     saving.value = true;
+    // A new attempt retires the last attempt's verdict: leaving the old
+    // message up while "Saving…" runs would show a failure that has not
+    // happened yet, and a retry that succeeds must take the message down.
+    fileError.value = null;
     try {
       await api.sftp.writeFile(connectionId, openPath.value, openContent.value);
       dirty.value = false;
@@ -831,7 +868,10 @@ export const useFilesStore = defineStore('files', () => {
       }
       return true;
     } catch (e) {
-      error.value = (e as Error).message;
+      // Into the open file's channel, NOT `error`: the user is looking at the
+      // Save button, not at the tree footer. See `fileError` for the audit
+      // that moved this.
+      fileError.value = (e as Error).message;
       return false;
     } finally {
       saving.value = false;
@@ -845,10 +885,15 @@ export const useFilesStore = defineStore('files', () => {
    */
   async function download(connectionId: ConnectionId): Promise<string | null> {
     if (!openPath.value) return null;
+    fileError.value = null;
     try {
       return await api.sftp.saveAs({ connectionId, remotePath: openPath.value });
     } catch (e) {
-      error.value = (e as Error).message;
+      // The Download… button lives in the binary panel, in the editor area —
+      // so its failure belongs beside it, in the open file's channel, for the
+      // same reason a failed save does. (FileTree's own save-a-row action
+      // keeps reporting through `error`: that one is acted on IN the tree.)
+      fileError.value = (e as Error).message;
       return null;
     }
   }
@@ -859,6 +904,10 @@ export const useFilesStore = defineStore('files', () => {
   }
 
   function resetOpenFile(): void {
+    // The open file's error goes with the open file: every path that closes
+    // or replaces one comes through here, so this is the one place the
+    // channel is emptied for "the file changed".
+    fileError.value = null;
     openPath.value = null;
     openMode.value = null;
     openContent.value = '';
@@ -1017,6 +1066,7 @@ export const useFilesStore = defineStore('files', () => {
     entries,
     loading,
     error,
+    fileError,
     openPath,
     openMode,
     openContent,

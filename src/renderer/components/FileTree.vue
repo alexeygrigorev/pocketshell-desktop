@@ -188,6 +188,12 @@ async function downloadEntry(entry: DirEntry): Promise<void> {
   try {
     await api.sftp.saveAs({ connectionId, remotePath: pathOf(entry) });
   } catch (e) {
+    // Deliberately the LISTING channel, not `files.fileError`. The store's
+    // own `download()` reports beside the editor because its button lives
+    // there — but this download acts on a ROW, reached through the tree's own
+    // context menu, so the user's eyes are on the tree when it fails and the
+    // footer below it is the message's honest home. Each channel follows
+    // where the action was taken, not what kind of action it was.
     files.error = (e as Error).message;
   }
 }

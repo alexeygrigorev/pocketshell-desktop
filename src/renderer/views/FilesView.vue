@@ -271,6 +271,39 @@ function onKeydown(e: KeyboardEvent): void {
   }
 }
 
+/**
+ * The root element, so the workspace's focus handoff has somewhere to land —
+ * the keydown handlers above are bound to it, and handlers on an element
+ * nothing can focus are handlers that never hear a key.
+ */
+const rootEl = ref<HTMLElement | null>(null);
+
+/**
+ * Take the keyboard, on the workspace's behalf.
+ *
+ * FolderWorkspaceView.focusActiveTab() calls this when a Files tab is
+ * selected — by click or by Ctrl+Tab — through the same ref-and-ask shape it
+ * uses for terminals. Without it, focus stayed on the tab BUTTON and the
+ * pane's own chords (Ctrl+S / Ctrl+L / Ctrl+F) were dead until the user
+ * clicked inside the pane: the call site existed and did nothing, because
+ * nothing here was exposed for it to reach.
+ *
+ * The one refusal is the workspace's own contract, quoted from its call site:
+ * "The Files pane declines the focus when an editor is open with unsaved
+ * content" — moving the caret out of a dirty buffer to a container the user
+ * did not ask for would be worse than doing nothing, and this pane is the one
+ * that knows it is dirty. Declining means doing NOTHING, not blurring:
+ * wherever the caret is (usually the editor) is where the unsaved work is.
+ */
+function focus(): void {
+  if (files.dirty && isEditable(files.openMode)) return;
+  rootEl.value?.focus();
+}
+
+// The workspace types its ref as `{ focus?: () => void }` and calls it
+// optionally; this is the other half of that contract.
+defineExpose({ focus });
+
 /** Basename of the open file, for the viewer headings. */
 const openName = computed(() => files.openPath?.split('/').pop() ?? '');
 const sizeLabel = computed(() => (files.openSize > 0 ? formatBytes(files.openSize) : ''));
@@ -330,7 +363,17 @@ const previewNote = computed(() => {
 </script>
 
 <template>
-  <div class="files-view" @keydown="onKeydown">
+  <div ref="rootEl" class="files-view" tabindex="-1" @keydown="onKeydown">
+    <!-- `tabindex="-1"` on the root above: focusable programmatically,
+         invisible to the Tab key. The workspace's focusActiveTab
+         (FolderWorkspaceView.vue) hands focus to this element through the
+         exposed `focus()` so the @keydown chords are live the moment the tab
+         is selected; -1 keeps a bare container out of the tab order, where a
+         keyboard user walking the page would land on a box that is not a
+         control. The ring is suppressed in the styles below for the same
+         reason. (Inside the root rather than above it: a root-level comment
+         makes the component a dev-mode fragment, which changes `$el` and
+         breaks attribute fallthrough.) -->
     <FileTree
       ref="treeRef"
       :style="treeStyle"
@@ -369,6 +412,15 @@ const previewNote = computed(() => {
           </button>
           <button class="close-btn" title="Close file" @click="files.closeFile()">Close</button>
         </div>
+
+        <!-- The open file's OWN error channel: a failed save or download,
+             rendered directly under the bar that holds the Save button,
+             because that is where the user is looking when Ctrl+S fails.
+             These used to land in `files.error`, whose only render is the
+             tree's footer in the OTHER pane — a failed save read as a save
+             that silently did nothing. Listing failures still go there; the
+             store's `fileError` comment carries the split. -->
+        <p v-if="files.fileError" class="error file-error">{{ files.fileError }}</p>
 
         <p v-if="files.opening" class="loading muted">opening {{ openName }}…</p>
 
@@ -588,6 +640,14 @@ const previewNote = computed(() => {
   min-width: 0;
   height: 100%;
 }
+/* The root takes programmatic focus (see the tabindex on it) but is a
+   container, not a control. App.vue's designed focus treatment matches every
+   `[tabindex]` element, so without this the whole pane would grow an outline
+   on each tab switch — a ring around everything announces focus nowhere. The
+   controls inside keep the global ring untouched. */
+.files-view:focus-visible {
+  outline: none;
+}
 .editor-area {
   flex: 1;
   min-width: 0;
@@ -664,6 +724,13 @@ const previewNote = computed(() => {
 .close-btn:hover {
   color: var(--fg);
   background: var(--state-hover);
+}
+/* Colour and size come from the global `.error` primitive (App.vue); this
+   only gives the line the bar's own horizontal rhythm so it reads as part of
+   the editor chrome rather than a stray paragraph. */
+.file-error {
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3) 0;
 }
 .loading {
   padding: var(--sp-4);
