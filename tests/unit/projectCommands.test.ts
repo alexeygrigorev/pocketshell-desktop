@@ -113,10 +113,34 @@ describe('freeSessionNameCommand', () => {
 
   it('walks base, base-2, base-3 … entirely on the host', () => {
     expect(built).toContain("__ps_n='git-x'");
-    expect(built).toContain('while tmux has-session -t "=$__ps_n" 2>/dev/null; do');
+    expect(built).toContain('while __ps_taken "$__ps_n"; do');
     expect(built).toContain("__ps_n='git-x'-$__ps_i");
     expect(built).toContain('__ps_i=$((__ps_i+1))');
     expect(built).toContain("printf '%s\\n' \"$__ps_n\"");
+  });
+
+  /**
+   * The regression this file exists to hold down now that the `+` bug is
+   * understood.
+   *
+   * The walk used to ask a bare `tmux has-session`, which reaches ONE tmux
+   * server. This host has more than one — src/main/projects/sessionDirs.ts
+   * quotes the log where raw `tmux` answered `can't find session:` for three
+   * sessions `pocketshell sessions list` was happily listing — so "free" was
+   * being decided against a socket that could not see the session already on
+   * screen, and the create underneath is attach-or-create.
+   *
+   * Both halves are asserted because either alone is the bug: the default
+   * socket first (a host whose `TMUX_TMPDIR` the glob does not model must keep
+   * today's answer), then every socket in the sweep.
+   */
+  it('asks EVERY tmux server the user has, not only the default socket', () => {
+    expect(built).toContain('tmux has-session -t "=$1" 2>/dev/null && return 0;');
+    expect(built).toContain('for __ps_s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*; do');
+    expect(built).toContain('[ -S "$__ps_s" ] || continue;');
+    expect(built).toContain('tmux -S "$__ps_s" has-session -t "=$1" 2>/dev/null && return 0;');
+    // The default invocation runs BEFORE the sweep, never instead of it.
+    expect(built.indexOf('tmux has-session')).toBeLessThan(built.indexOf('__ps_s'));
   });
 
   it('bounds the walk', () => {
@@ -127,10 +151,19 @@ describe('freeSessionNameCommand', () => {
   it('quotes the base so a hostile name cannot break the loop', () => {
     const hostile = freeSessionNameCommand("a'; touch /tmp/PWNED; :'b");
     // The payload sits inside a quoted region on BOTH interpolations — the
-    // seed and the `-$i` concatenation.
+    // seed and the `-$i` concatenation. The socket sweep interpolates nothing
+    // at all, so the hostile name never reaches it.
     expect(hostile).toBe(
-      "__ps_n='a'\\''; touch /tmp/PWNED; :'\\''b'; __ps_i=2; " +
-        'while tmux has-session -t "=$__ps_n" 2>/dev/null; do ' +
+      '__ps_taken() { ' +
+        'tmux has-session -t "=$1" 2>/dev/null && return 0; ' +
+        'for __ps_s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*; do ' +
+        '[ -S "$__ps_s" ] || continue; ' +
+        'tmux -S "$__ps_s" has-session -t "=$1" 2>/dev/null && return 0; ' +
+        'done; ' +
+        'return 1; ' +
+        '}; ' +
+        "__ps_n='a'\\''; touch /tmp/PWNED; :'\\''b'; __ps_i=2; " +
+        'while __ps_taken "$__ps_n"; do ' +
         'if [ "$__ps_i" -gt 200 ]; then break; fi; ' +
         "__ps_n='a'\\''; touch /tmp/PWNED; :'\\''b'-$__ps_i; " +
         '__ps_i=$((__ps_i+1)); ' +

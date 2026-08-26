@@ -110,6 +110,49 @@ describeDocker('ProjectsService integration', () => {
     expect(out.sessionName).toBe('git-new-empty-2');
   });
 
+  /**
+   * The `+` -> New session bug, reproduced against a real tmux.
+   *
+   * The free-name walk used to ask a bare `tmux has-session`, which reaches ONE
+   * tmux server. src/main/projects/sessionDirs.ts quotes the user's log where
+   * raw `tmux` answered `can't find session:` for three sessions `pocketshell
+   * sessions list` was listing quite happily — so "free" was being decided
+   * against a socket that could not see the session already on screen. And the
+   * create underneath is attach-or-create, so the "new" session came back as the
+   * one the user was already looking at.
+   *
+   * `tmux -L` is that condition, exactly and on purpose: a second server whose
+   * socket lives beside the default one in `$TMUX_TMPDIR/tmux-$(id -u)/`. The
+   * assertion in the middle is the part that makes this a regression test rather
+   * than a tautology — it pins that the default socket really is blind to the
+   * session, which is the premise the old walk got wrong.
+   */
+  it('skips a name that is held on ANOTHER tmux socket', async () => {
+    await projects.createFolder(connectionId!, { parent: '~/git', name: 'socket-probe' });
+    const held = await ssh.exec(
+      connectionId!,
+      pathAwareCommand(
+        'tmux -L ps-alt new-session -d -s git-socket-probe -c "$HOME/git/socket-probe"',
+      ),
+    );
+    expect(held.exitCode).toBe(0);
+
+    // The premise: the default server denies a session that exists.
+    const blind = await ssh.exec(
+      connectionId!,
+      pathAwareCommand("tmux has-session -t '=git-socket-probe' 2>/dev/null"),
+    );
+    expect(blind.exitCode).not.toBe(0);
+
+    const out = await projects.startSession(connectionId!, {
+      folder: '~/git/socket-probe',
+      namePolicy: 'unique',
+    });
+    expect(out.ok).toBe(true);
+    // Not `git-socket-probe`, which would have attached to the session above.
+    expect(out.sessionName).toBe('git-socket-probe-2');
+  });
+
   it('refuses to start in a folder that does not exist', async () => {
     const out = await projects.startSession(connectionId!, { folder: '~/git/definitely-not-here' });
     expect(out.ok).toBe(false);

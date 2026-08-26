@@ -941,8 +941,15 @@ async function commitRename(): Promise<void> {
  * creates nothing on the host and has nothing to configure. Putting a free
  * action behind a dialog would make it feel expensive.
  *
- * The menu also used to offer Grok, which could never have worked: 0.4.44's
- * `pocketshell agent` has no `grok` subcommand (see shared/agentLaunch.ts).
+ * The menu also used to offer Grok, which at the time could not have worked:
+ * 0.4.44's `pocketshell agent` has no `grok` subcommand. That fact still
+ * holds, but it is no longer a reason to leave Grok out — the dialog now asks
+ * the HOST which subcommands its helper actually has and offers Grok only
+ * where the answer says yes, explaining itself where it says no (see
+ * `kindUnavailableReason` in shared/agentLaunch.ts). Which is the deeper
+ * reason the engines belong behind the dialog rather than in this menu: the
+ * answer is per-host and has to be fetched, and a menu row cannot wait for a
+ * round trip or carry the sentence that comes back when it is no.
  */
 const launching = ref(false);
 
@@ -1108,6 +1115,31 @@ watch(
  * a session and only then found out the command was malformed, so a failed
  * launch still cost the user a stray session and an error to read in a
  * terminal.
+ *
+ * ## Every exit from here is either a new tab or a sentence
+ *
+ * There used to be a third kind, and it was the whole of the reported bug. The
+ * host can answer a `unique` start with the name of a session this bar is
+ * ALREADY showing — see ProjectsService.startSession for the socket-blindness
+ * that made it do so — and this function trusted the name it was handed. Both
+ * symptoms fell out of that one line:
+ *
+ *  - a shell create assigned `selected` the tab that was already selected, so
+ *    the dialog closed and nothing else visibly happened at all;
+ *  - an agent create armed the launch against a session whose PTY was already
+ *    up and registered, so the watcher below fired on the spot and typed
+ *    `pocketshell agent …` into the terminal the user was working in.
+ *
+ * The second is the serious one: it is this app writing a command into a live
+ * session nobody pointed it at. So the name is checked against the bar BEFORE
+ * anything is armed or selected, and the launch is armed LAST — after the
+ * refresh, after the tab is known to exist, and with no `await` between the
+ * selection and the arming, so no PTY can register in the gap and fire the
+ * watcher against a session this function has not vouched for.
+ *
+ * A refusal is always a sentence in `createError`, which renders directly under
+ * the tab strip. "Nothing happened" is not an outcome this function is allowed
+ * to have.
  */
 async function createSession(choice: LaunchChoice | null): Promise<void> {
   addAnchor.value = null;
@@ -1135,6 +1167,13 @@ async function createSession(choice: LaunchChoice | null): Promise<void> {
   // serialisation failure), and an unhandled rejection here would leave the
   // user exactly where they started — a menu that closed and nothing else —
   // which is the same "nothing happens" symptom this whole change is fixing.
+  //
+  // The bar is read BEFORE the await, because `tabs` is derived from the session
+  // store and the refresh below moves it. What is wanted is the set of sessions
+  // that were already here when the user asked for another one.
+  const before = new Set(
+    tabs.value.filter((tab) => tab.kind === 'session').map((tab) => tab.session),
+  );
   let result;
   try {
     result = await projects.start(connectionId, path, undefined, 'unique');
@@ -1146,10 +1185,40 @@ async function createSession(choice: LaunchChoice | null): Promise<void> {
     createError.value = result.error ?? 'Could not start a session here.';
     return;
   }
-  if (choice) armLaunch(result.sessionName, choice);
+  const created = result.sessionName;
+  // The host answered with something that is already on this bar. Main refuses
+  // the cases it can see (ProjectsService.startSession), and this is the same
+  // refusal made from the only place that knows what is on screen — which is a
+  // fact main does not have and cannot be given. Nothing is armed and nothing is
+  // re-selected: the user asked for another session and did not get one, and the
+  // one thing worse than saying so is typing an agent into the session they were
+  // using.
+  if (result.reused || before.has(created)) {
+    createError.value =
+      `The host answered with "${created}", which is already open in this folder, so no ` +
+      `new session was started` +
+      (choice ? ` and ${KIND_LABELS[choice.kind]} was not launched.` : '.');
+    return;
+  }
   await sessions.refresh(connectionId);
-  selected.value = result.sessionName;
+  if (!tabs.value.some((tab) => tab.kind === 'session' && tab.session === created)) {
+    // The session exists on the host — main confirmed the create — but it is not
+    // filed under this folder, so there is no tab to select and no pane for a
+    // launch to wait on. Grouping is by the directory tmux reports, so the usual
+    // cause is a session whose working directory is not the one this workspace
+    // is keyed on. Saying which name to look for is the whole remedy.
+    createError.value =
+      `Started "${created}" on the host, but it did not appear in this folder, so there ` +
+      `is no tab for it here` +
+      (choice ? ` and ${KIND_LABELS[choice.kind]} was not launched.` : '.');
+    return;
+  }
+  selected.value = created;
   persist();
+  // Armed last, and deliberately after the selection rather than before it: the
+  // pane this mounts is the PTY the launch waits for, and there is no `await`
+  // between the two, so the watcher cannot fire against anything else.
+  if (choice) armLaunch(created, choice);
 }
 
 /**

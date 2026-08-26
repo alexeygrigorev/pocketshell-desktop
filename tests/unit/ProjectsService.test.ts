@@ -186,8 +186,24 @@ describe('ProjectsService.startSession', () => {
     expect(inner(commands.find((c) => c.includes('sessions create'))!)).toContain("'git-x-2'");
   });
 
-  it('falls back to the base name when the free-name probe fails — never blocks a create', async () => {
-    const { projects } = service([
+  /**
+   * The `+` -> New session bug, pinned at the layer that caused it.
+   *
+   * This used to assert the opposite — `ok: true` with `sessionName: 'git-x'` —
+   * under the heading "never blocks a create". That is the wrong trade for THIS
+   * policy, and the symptom is what proves it. `git-x` is the folder's existing
+   * session; `pocketshell sessions create` is attach-or-create; so answering
+   * `git-x` to "give me a NEW session" hands the caller back a session it
+   * already has open, with `ok: true` and `reused: false`, i.e. with no way to
+   * tell. In the workspace that re-selected the tab that was already selected
+   * (nothing happened) and, with an agent chosen, typed the launch line into the
+   * terminal the user was working in.
+   *
+   * Fail closed, and create NOTHING: the user gets a sentence, and the session
+   * they were using is untouched.
+   */
+  it('refuses a unique start rather than reusing when the free-name probe fails', async () => {
+    const { projects, commands } = service([
       homeResponder,
       dirExistsResponder,
       pwdResponder,
@@ -195,6 +211,57 @@ describe('ProjectsService.startSession', () => {
       createResponder,
     ]);
     const out = await projects.startSession(CONN, { folder: '~/git/x', namePolicy: 'unique' });
+    expect(out.ok).toBe(false);
+    expect(out.code).toBe('name-unavailable');
+    expect(out.sessionName).toBeNull();
+    expect(out.error).toContain('git-x');
+    expect(commands.some((c) => c.includes('sessions create'))).toBe(false);
+  });
+
+  it('refuses a unique start whose probe answered with nothing readable', async () => {
+    const { projects, commands } = service([
+      homeResponder,
+      dirExistsResponder,
+      pwdResponder,
+      (c) => (c.includes('__ps_n=') ? ok('   \n\n') : null),
+      createResponder,
+    ]);
+    const out = await projects.startSession(CONN, { folder: '~/git/x', namePolicy: 'unique' });
+    expect(out.ok).toBe(false);
+    expect(out.code).toBe('name-unavailable');
+    expect(commands.some((c) => c.includes('sessions create'))).toBe(false);
+  });
+
+  /**
+   * The helper echoes the resolved name and every other path trusts it. Under
+   * `unique` that trust is checked: a name we did not ask for is a name nothing
+   * walked the suffix chain for, and it is also the shape a chatty login shell
+   * produces, since the echo is read as the first non-blank line of stdout.
+   */
+  it('refuses a unique start whose create came back under another name', async () => {
+    const { projects } = service([
+      homeResponder,
+      dirExistsResponder,
+      pwdResponder,
+      (c) => (c.includes('__ps_n=') ? ok('git-x-2\n') : null),
+      (c) => (c.includes('sessions create') ? ok('Welcome to example.com\ngit-x-2\n') : null),
+    ]);
+    const out = await projects.startSession(CONN, { folder: '~/git/x', namePolicy: 'unique' });
+    expect(out.ok).toBe(false);
+    expect(out.code).toBe('name-unavailable');
+    expect(out.error).toContain('Welcome to example.com');
+  });
+
+  /** The same probe failure under `reuse` is harmless and must stay allowed. */
+  it('still creates under the reuse policy when the free-name probe is not run', async () => {
+    const { projects } = service([
+      homeResponder,
+      dirExistsResponder,
+      pwdResponder,
+      noSessionResponder,
+      createResponder,
+    ]);
+    const out = await projects.startSession(CONN, { folder: '~/git/x' });
     expect(out.ok).toBe(true);
     expect(out.sessionName).toBe('git-x');
   });

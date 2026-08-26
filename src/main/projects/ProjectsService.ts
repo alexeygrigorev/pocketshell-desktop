@@ -112,8 +112,18 @@ export interface StartSessionRequest {
   namePolicy?: SessionNamePolicy;
 }
 
-/** Why a start request failed, for a UI that wants to react rather than print. */
-export type StartSessionFailure = 'folder-missing' | 'create-failed';
+/**
+ * Why a start request failed, for a UI that wants to react rather than print.
+ *
+ * `name-unavailable` belongs only to the `unique` policy and only to the two
+ * ways that policy can be defeated without anything having gone wrong on the
+ * host: the free-name probe could not be read at all, or the create came back
+ * under a different name than the one it was asked for. Both used to resolve
+ * `ok: true` carrying the name of a session that was ALREADY OPEN — see
+ * {@link ProjectsService.startSession} for why that is the worst answer this
+ * call can give.
+ */
+export type StartSessionFailure = 'folder-missing' | 'create-failed' | 'name-unavailable';
 
 /** Result of {@link ProjectsService.startSession}. Never thrown. */
 export interface StartSessionResult {
@@ -345,6 +355,29 @@ export class ProjectsService {
    *  4. ask the host whether that session is already open, and — under the
    *     `unique` policy — for the first free `-N` variant;
    *  5. create, idempotently.
+   *
+   * ## Why the `unique` policy fails CLOSED and `reuse` does not
+   *
+   * The create underneath both policies is attach-or-create: `pocketshell
+   * sessions create` is a no-op success when the name is already running, which
+   * is exactly what `reuse` wants and exactly what makes `unique` dangerous when
+   * anything upstream of it is uncertain. If the free-name walk cannot be read,
+   * or if the helper answers with a name other than the one we asked for, the
+   * name we hand back may be a session that is ALREADY OPEN in the caller's UI —
+   * and the caller has no way to tell, because `ok` is true and `reused` is
+   * false.
+   *
+   * That is not a hypothetical. It is the `+` -> New session bug: the walk asked
+   * a bare `tmux has-session`, which on this host denies sessions the helper
+   * lists (see {@link freeSessionNameCommand}), so `unique` answered with the
+   * folder's existing session. The workspace then re-selected the tab that was
+   * already selected — "nothing happened" — and, when an agent had been chosen,
+   * typed its launch line into the terminal the user was already working in.
+   *
+   * So a `unique` request that cannot be SHOWN to have produced a new name is
+   * refused with `name-unavailable` and nothing is created. The same failure
+   * under `reuse` is harmless and stays harmless: re-opening a session that is
+   * already open is what `reuse` means.
    */
   async startSession(
     connectionId: string,
@@ -377,7 +410,22 @@ export class ProjectsService {
     let name = base;
     let reused = false;
     if (policy === 'unique') {
-      name = await this.freeSessionName(connectionId, base);
+      const free = await this.freeSessionName(connectionId, base);
+      if (free === null) {
+        return {
+          ok: false,
+          sessionName: null,
+          folder: canonical,
+          reused: false,
+          via: null,
+          error:
+            `Could not ask the host for a free session name, so nothing was created. ` +
+            `Starting another session here would have re-opened "${base}" instead of ` +
+            `making a new one.`,
+          code: 'name-unavailable',
+        };
+      }
+      name = free;
     } else {
       const has = await this.ssh.exec(
         connectionId,
@@ -396,6 +444,28 @@ export class ProjectsService {
         via: created.via,
         error: created.error,
         code: 'create-failed',
+      };
+    }
+    // The helper echoes the resolved name and we normally trust it over ours
+    // (../helper/PocketshellClient.ts). Under `unique` that trust has to be
+    // checked rather than extended: the whole request was "a name nothing else
+    // is using", and a name we did not ask for is a name nothing walked the
+    // suffix chain for. It is also the shape a chatty login shell produces — the
+    // echo is read as the first non-empty line of stdout, so a `.profile` that
+    // greets would put its greeting here — and answering with that would be
+    // worse than answering with nothing.
+    if (policy === 'unique' && created.name !== name) {
+      return {
+        ok: false,
+        sessionName: null,
+        folder: canonical,
+        reused: false,
+        via: created.via,
+        error:
+          `Asked the host for a new session called "${name}" and it answered with ` +
+          `"${created.name ?? ''}", so it is not clear a new session was made. Nothing ` +
+          `here has been selected; check the host before trying again.`,
+        code: 'name-unavailable',
       };
     }
     return {
@@ -546,23 +616,35 @@ export class ProjectsService {
   }
 
   /**
-   * The first free `<base>`, `<base>-2`, … on the host.
+   * The first free `<base>`, `<base>-2`, … on the host, or null when the host
+   * did not answer.
    *
-   * Fail-safe: any non-zero exit or unparseable reply falls back to [base], so
-   * a broken probe can never BLOCK a create — it just gives up its opinion and
-   * lets the idempotent create do what it always did.
+   * This used to fall back to [base] on a non-zero exit or an unreadable reply,
+   * described as fail-safe on the grounds that a broken probe should never BLOCK
+   * a create. That reasoning had the blast radius backwards. [base] is the one
+   * answer this function must never invent, because the create it feeds is
+   * attach-or-create: handing back [base] does not degrade a `unique` request
+   * into a slightly worse `unique` request, it silently converts it into
+   * `reuse`, and the caller is told `ok: true` with the name of a session it
+   * very probably already has on screen. The only caller of this IS the `unique`
+   * policy.
+   *
+   * So the failure is reported instead of papered over, and
+   * {@link startSession} refuses. The last non-blank line is still what is read
+   * on success — the walk's own `printf` is the last thing the shell runs, so
+   * anything a login shell said before it is behind us.
    */
-  private async freeSessionName(connectionId: string, base: string): Promise<string> {
+  private async freeSessionName(connectionId: string, base: string): Promise<string | null> {
     const probe = await this.ssh.exec(
       connectionId,
       pathAwareCommand(freeSessionNameCommand(base)),
     );
-    if (probe.exitCode !== 0) return base;
+    if (probe.exitCode !== 0) return null;
     const lines = probe.stdout
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
-    return lines[lines.length - 1] ?? base;
+    return lines[lines.length - 1] ?? null;
   }
 
   /** `cd … && pwd -P`, falling back to the input when it cannot be resolved. */

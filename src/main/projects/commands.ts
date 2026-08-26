@@ -72,6 +72,62 @@ export function sessionExistsCommand(name: string): string {
 }
 
 /**
+ * A POSIX-sh function, `__ps_taken`, that answers "does a session called `$1`
+ * exist ANYWHERE on this host" — every tmux server the user has, not only the
+ * default socket.
+ *
+ * ## Why the default socket is not the whole answer
+ *
+ * Because this host has already proved it is not. The evidence is committed in
+ * ../projects/sessionDirs.ts and quoted from the user's own log: `pocketshell
+ * sessions list` returned twelve sessions while raw `tmux` on the same
+ * connection answered `can't find session: git-red-stamp-sound`,
+ * `can't find session: git-dtc-website-import` and
+ * `can't find session: git-ai-engineering-field-guide`. Three sessions the app
+ * lists, shows a tab for, and attaches to, that a bare `tmux has-session`
+ * denies the existence of.
+ *
+ * {@link freeSessionNameCommand} used to ask exactly that bare question, and a
+ * "no" from it means "this name is free". So on this host the walk answered
+ * `<base>` for a folder whose `<base>` session was open on screen — and since
+ * `pocketshell sessions create` is attach-or-create, the "new" session was the
+ * one the user was already looking at. That is the whole of the `+` -> New
+ * session bug: a shell create appeared to do nothing because it re-selected the
+ * tab that was already selected, and an agent create typed its launch line into
+ * the terminal that was already in front of the user.
+ *
+ * ## Why sweeping the socket directory is the right remedy and not a guess
+ *
+ * It is the remedy this repo already reached for the same discrepancy, and for
+ * the same reason. `SESSION_ENRICHMENT_COMMAND` (../helper/parsers.ts) runs the
+ * default invocation first and then loops over `${TMUX_TMPDIR:-/tmp}/tmux-$(id
+ * -u)/*` precisely because `list-panes -a` is per-SERVER and the user's host has
+ * more than one. `has-session` is per-server in exactly the same way. Asking one
+ * socket and calling the answer "the host" was the assumption; this removes it
+ * rather than restating it.
+ *
+ * The default invocation stays FIRST and is not replaced by the sweep, for the
+ * reason the enrichment probe gives: a host whose `TMUX_TMPDIR` points somewhere
+ * this glob does not model would otherwise go from one answer to none. A stale
+ * socket whose server has died prints `no server running` and exits 1, which
+ * `2>/dev/null` and the loop's own continuation absorb.
+ *
+ * Note the direction this fails in. A socket we cannot read makes a taken name
+ * look free, which is the bug above; a socket we can read can only ever make the
+ * walk skip a suffix and hand back `<base>-3` where `<base>-2` was spare. The
+ * first costs the user a session they asked for; the second costs a number.
+ */
+const SESSION_TAKEN_ANYWHERE_FUNCTION =
+  '__ps_taken() { ' +
+  'tmux has-session -t "=$1" 2>/dev/null && return 0; ' +
+  'for __ps_s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*; do ' +
+  '[ -S "$__ps_s" ] || continue; ' +
+  'tmux -S "$__ps_s" has-session -t "=$1" 2>/dev/null && return 0; ' +
+  'done; ' +
+  'return 1; ' +
+  '}; ';
+
+/**
  * Print the smallest free name in the `<base>`, `<base>-2`, `<base>-3`… walk,
  * evaluated ENTIRELY on the host in one exec.
  *
@@ -80,14 +136,19 @@ export function sessionExistsCommand(name: string): string {
  * it" is one command on one connection rather than a seconds-wide window
  * against a client-side cache.
  *
+ * The per-candidate question is {@link SESSION_TAKEN_ANYWHERE_FUNCTION} and not
+ * a bare `tmux has-session` — see that constant for the log lines that made the
+ * difference load-bearing.
+ *
  * [base] is quoted once and then concatenated with `-$i` in the loop, which is
  * safe because POSIX sh concatenates adjacent quoted and unquoted words.
  */
 export function freeSessionNameCommand(base: string): string {
   const quoted = shellQuote(base);
   return (
+    SESSION_TAKEN_ANYWHERE_FUNCTION +
     `__ps_n=${quoted}; __ps_i=2; ` +
-    'while tmux has-session -t "=$__ps_n" 2>/dev/null; do ' +
+    'while __ps_taken "$__ps_n"; do ' +
     `if [ "$__ps_i" -gt ${FREE_SESSION_NAME_MAX_SUFFIX} ]; then break; fi; ` +
     `__ps_n=${quoted}-$__ps_i; ` +
     '__ps_i=$((__ps_i+1)); ' +
