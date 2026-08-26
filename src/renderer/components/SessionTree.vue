@@ -262,12 +262,17 @@ let polling = false;
 /**
  * One tick of the poll.
  *
- * Three things are skipped rather than merely tolerated:
+ * Four things are skipped rather than merely tolerated:
  *
  *   - no connection, because there is nothing to ask;
  *   - `document.hidden`, because a window in the background has no reader and
  *     a laptop in a bag should not be holding an SSH connection busy;
- *   - a listing already in flight (see {@link polling}).
+ *   - a listing already in flight (see {@link polling});
+ *   - a transport main has reported dead (`connection.state === 'lost'`),
+ *     because the failure has already been surfaced once and a poll cannot
+ *     revive a dead link — only the reconnect can. Ticking on would fail
+ *     every five seconds forever, rewriting `sessions.error` with a raw IPC
+ *     message each time, over the top of the one report that explains it.
  *
  * `quiet` keeps the Refresh glyph still: `loading` means "the user asked", and
  * a poll did not. See the store for the half of that decision that matters —
@@ -276,7 +281,7 @@ let polling = false;
  */
 async function pollSessions(): Promise<void> {
   const connectionId = connection.connectionId;
-  if (!connectionId || polling || document.hidden) return;
+  if (!connectionId || polling || document.hidden || connection.state === 'lost') return;
   polling = true;
   try {
     await sessions.refresh(connectionId, { quiet: true });
@@ -791,7 +796,20 @@ function fmtRelative(epochSeconds: number): string {
         </ul>
       </section>
 
-      <p v-if="!roots.length && !sessions.loading" class="empty muted">no sessions</p>
+      <!-- Nothing running anywhere on this host. The sentence used to stand
+           alone, which made this the one empty state with no way forward: the
+           header's `+` covers it in principle, but it is an unlabelled 14px
+           mark in a strip of five, and an empty panel is exactly when a user
+           has no habits to find it by. The folder workspace's own empty state
+           set the pattern ("nothing is running in this folder" + a worded
+           "Start a session here" button, FolderWorkspaceView.vue): say what is
+           empty AND offer the one useful action. The button opens the same
+           dialog the header `+` does, nothing pre-filled — a second door into
+           the ONE creation flow, not a second flow. -->
+      <div v-if="!roots.length && !sessions.loading" class="empty">
+        <p class="muted">no sessions</p>
+        <button class="btn-ghost" @click="creating = { startIn: null }">New session…</button>
+      </div>
     </div>
 
     <!-- The full-width `New session` button that used to sit here is GONE. It
@@ -1156,6 +1174,19 @@ function fmtRelative(epochSeconds: number): string {
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
+}
+/* Sentence over action, left on the panel's own indent rather than centred:
+   the workspace's empty state centres in a whole pane, and centring in a strip
+   that drags down to 200px would just ragged-edge two short lines. */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+}
+.empty p {
+  margin: 0;
 }
 .error {
   padding: 0 var(--sp-3) var(--sp-2);

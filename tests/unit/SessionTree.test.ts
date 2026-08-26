@@ -186,6 +186,21 @@ describe('SessionTree — the foot button is gone, and nothing went with it', ()
     expect(generalAdd(wrapper).exists()).toBe(true);
   });
 
+  it('offers a worded "New session…" in the empty state, not only the header glyph', async () => {
+    // The sentence alone was a dead end: the header's `+` exists but is an
+    // unlabelled 14px mark in a strip of five, and an empty panel is exactly
+    // when a user has no habits to find it by. The folder workspace's empty
+    // state set the pattern — say what is empty AND offer the action in words.
+    const wrapper = await open([]);
+    const cta = wrapper.find('.empty .btn-ghost');
+    expect(cta.exists()).toBe(true);
+    expect(cta.text()).toBe('New session…');
+    await cta.trigger('click');
+    // Null, not `$HOME`: the same contract as the header `+` — one creation
+    // flow, entered by a second door.
+    expect(dialogStartIn(wrapper)).toBeNull();
+  });
+
   it('opens the picker with nothing pre-selected from the general +', async () => {
     const wrapper = await open([session('git-a', `${HOME}/git/a`)]);
     expect(dialogStartIn(wrapper)).toBeUndefined();
@@ -457,6 +472,23 @@ describe('SessionTree — the panel keeps up with the host', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await wrapper.vm.$nextTick();
     expect(sessionsList.mock.calls.length).toBe(listedOnMount + 1);
+  });
+
+  it('stops asking once main has declared the transport lost', async () => {
+    // Each tick against a dead link fails, and the failure is not quiet — it
+    // rewrites `sessions.error` with a raw IPC message every five seconds,
+    // forever, over the top of the one report the drop already produced. A
+    // poll cannot revive a dead transport; only the reconnect can, so a lost
+    // link is a skip exactly like a hidden window.
+    const wrapper = await open([session('git-dataqna', `${HOME}/git/dataqna`)]);
+    const listedOnMount = sessionsList.mock.calls.length;
+    useConnectionStore().state = 'lost';
+    await vi.advanceTimersByTimeAsync(30_000);
+    await wrapper.vm.$nextTick();
+    expect(sessionsList.mock.calls.length).toBe(listedOnMount);
+    // The stale rows stay: a tree a few seconds old beats a blank panel while
+    // the link is being re-dialled.
+    expect(dirLabels(wrapper)).toEqual(['dataqna']);
   });
 
   it('stops polling once the panel goes away', async () => {
