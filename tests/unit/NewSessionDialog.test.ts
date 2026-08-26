@@ -41,8 +41,12 @@ vi.mock('../../src/renderer/ipc', () => ({
     },
     // The chained agent step mounts LaunchSessionDialog, which asks the host
     // for its profiles on mount. An empty list is the common real answer and
-    // the one that needs no picker.
-    agent: { profiles: vi.fn().mockResolvedValue([]) },
+    // the one that needs no picker. `kinds` is the capability probe behind the
+    // Grok option; the pinned 0.4.44 answer is the three baseline engines.
+    agent: {
+      profiles: vi.fn().mockResolvedValue([]),
+      kinds: vi.fn().mockResolvedValue(['claude', 'codex', 'opencode']),
+    },
     ssh: { onState: vi.fn(), listConfigHosts: vi.fn().mockResolvedValue([]) },
     helper: { usage: vi.fn().mockResolvedValue([]) },
   },
@@ -222,6 +226,133 @@ describe('NewSessionDialog agent chain', () => {
 
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(parkedAgentLaunch.value).toBeNull();
+  });
+
+  it('parks the launch BEFORE it asks to be navigated', async () => {
+    // Order, not merely presence: `FolderWorkspaceView` reads the slot as it
+    // mounts and `started` is what mounts it, so a park that landed after the
+    // emit would be a park nobody collects — the user picks Claude and gets a
+    // shell.
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start session')!.trigger('click');
+    await flush(wrapper);
+    await button(wrapper, 'Create session')!.trigger('click');
+    await flush(wrapper);
+
+    expect(wrapper.emitted('started')).toEqual([['git-dataops-2']]);
+    expect(parkedAgentLaunch.value?.session).toBe('git-dataops-2');
+  });
+});
+
+/**
+ * What a create ANSWERS with.
+ *
+ * There used to be a green "Started `git-dataops-2`" banner with an `Open
+ * session` button under it, and the user had to press it. Success is not news —
+ * it is what was asked for — so the ordinary create now emits `started` the
+ * moment the host names the session and the panel navigates. What is left of
+ * the outcome panel is the answers that are not simply "yes".
+ */
+describe('NewSessionDialog outcome', () => {
+  it('opens the session immediately, with no banner in between', async () => {
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start shell')!.trigger('click');
+    await flush(wrapper);
+
+    expect(wrapper.emitted('started')).toEqual([['git-dataops-2']]);
+    // Not merely dismissed quickly — never rendered at all.
+    expect(wrapper.find('.result-banner').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('Started');
+  });
+
+  it('holds the panel for a raw-tmux create, because that one has a caveat', async () => {
+    // `tmux-fallback` means the helper was unusable, so the session was made
+    // with raw `tmux` and carries NO memory cap. That is true for as long as it
+    // lives and is visible nowhere else, and navigating away the instant it is
+    // created is exactly how a warning goes unread.
+    startSession.mockResolvedValue({
+      ok: true,
+      sessionName: 'git-dataops-2',
+      folder: `${HOME}/git`,
+      via: 'tmux-fallback',
+    });
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start shell')!.trigger('click');
+    await flush(wrapper);
+
+    expect(wrapper.emitted('started')).toBeUndefined();
+    expect(wrapper.text()).toContain('no memory cap');
+
+    // And the session is still one click away — the button is the only reason
+    // holding here is acceptable.
+    await button(wrapper, 'Open session')!.trigger('click');
+    expect(wrapper.emitted('started')).toEqual([['git-dataops-2']]);
+  });
+
+  it('holds the panel on a failure, and navigates nowhere', async () => {
+    startSession.mockResolvedValue({
+      ok: false,
+      sessionName: null,
+      folder: null,
+      reused: false,
+      via: null,
+      error: 'Start folder does not exist on the host: /home/alexey/git',
+      code: 'folder-missing',
+    });
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start shell')!.trigger('click');
+    await flush(wrapper);
+
+    expect(wrapper.emitted('started')).toBeUndefined();
+    expect(wrapper.text()).toContain('That folder is not on the host');
+    // `Start another` is the way back to the picker that keeps the browse.
+    await button(wrapper, 'Start another')!.trigger('click');
+    await flush(wrapper);
+    expect(wrapper.find('.result-banner').exists()).toBe(false);
+    expect(wrapper.text()).toContain('Existing folder');
+  });
+});
+
+/**
+ * The busy mark belongs to the button that was pressed.
+ *
+ * It used to be a loose icon in the gap between `Cancel` and `Start shell`,
+ * attached to neither — "the loader here seems strange … in that place it's
+ * super weird". Both commit buttons now carry their own, and both reserve the
+ * space for it always, so the bar has one width whether or not it is working.
+ */
+describe('NewSessionDialog busy mark', () => {
+  it('spins in the button doing the work, and nowhere else', async () => {
+    let finish!: (result: unknown) => void;
+    startSession.mockReturnValue(
+      new Promise<unknown>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const wrapper = await open(`${HOME}/git`);
+    await button(wrapper, 'Start shell')!.trigger('click');
+    await flush(wrapper);
+
+    expect(button(wrapper, 'Start shell')!.find('.spin').exists()).toBe(true);
+    // The other commit button keeps its reserved, hidden mark: it is not the
+    // one being waited on, and it must not change width while this runs.
+    const other = button(wrapper, 'Start session')!;
+    expect(other.find('.spin').exists()).toBe(false);
+    expect(other.find('.idle-mark').exists()).toBe(true);
+    // Both stay disabled for the duration.
+    expect(button(wrapper, 'Start shell')!.attributes('disabled')).toBeDefined();
+    expect(other.attributes('disabled')).toBeDefined();
+
+    finish({ ok: true, sessionName: 'git-dataops-2', folder: `${HOME}/git`, via: 'helper' });
+    await flush(wrapper);
+    expect(wrapper.emitted('started')).toEqual([['git-dataops-2']]);
+  });
+
+  it('reserves the space for the mark when nothing is running', async () => {
+    const wrapper = await open(`${HOME}/git`);
+    expect(button(wrapper, 'Start shell')!.find('.idle-mark').exists()).toBe(true);
+    expect(button(wrapper, 'Start session')!.find('.idle-mark').exists()).toBe(true);
+    expect(wrapper.findAll('.spin')).toHaveLength(0);
   });
 });
 

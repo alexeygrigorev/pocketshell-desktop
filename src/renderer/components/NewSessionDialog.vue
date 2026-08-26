@@ -44,18 +44,28 @@
 // wrapper line needs a PTY and the panel has no terminal. The choice is PARKED
 // (`src/renderer/pendingAgentLaunch.ts`) and `FolderWorkspaceView` collects it
 // when the user opens the session. So "create" and "launch" are separated in
-// time, and the outcome banner below still gets read rather than preempted.
+// time, and the launch rides the navigation this dialog asks for rather than
+// this dialog growing a terminal of its own.
 //
 // A plain shell is untouched by all of this and stays ONE click: `Start shell`
 // beside the primary button commits with no choice at all, exactly as `Start
 // session` did before this change.
 //
-// The outcome banner does not auto-dismiss, and that is deliberate. Two of the
-// backend's honest answers cannot be read off the session row afterwards:
+// A create that WORKS opens the session, immediately. There used to be a green
+// "Started `git-dataqna`" banner with an `Open session` button under it, and it
+// was a screen whose only content was the good news: the user had pressed
+// Start, the host had done exactly what was asked, and the dialog answered with
+// a receipt and a second click. Success is not news — it is the thing that was
+// asked for — so `commit` emits `started` the moment the host names the session
+// and the panel navigates. See {@link commit}.
+//
+// The outcome panel survives for the answers that are NOT simply "yes", because
+// two of them cannot be read off the session row afterwards:
 // `via: 'tmux-fallback'` means the session was created WITHOUT a memory cap,
 // and `code: 'folder-missing'` guards a real helper trap where a `-c` at a
 // missing directory exits 0 and silently lands the pane in `$HOME`. Both are
-// worth a sentence, so the dialog says it and the user presses Open.
+// worth a sentence, so in those cases the dialog stays put, says it, and the
+// user presses Open (or goes round again) having read it.
 import { computed, onMounted, ref, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import OverlayPanel from './OverlayPanel.vue';
@@ -187,9 +197,48 @@ const agentStep = ref(false);
  * in `pendingAgentLaunch`; this is a label.
  */
 const parkedKind = ref<LaunchChoice['kind'] | null>(null);
+/**
+ * WHICH of the two commit buttons started the work that is running.
+ *
+ * `busy` says that something is happening; this says whose it is, and the two
+ * are read together — see {@link working}. It is set by {@link commit} and
+ * never cleared, deliberately: the value is only ever consulted while `busy`,
+ * so a stale one is invisible, and clearing it would mean finding every one of
+ * that function's early returns and getting them all right for a ref whose
+ * lifetime is already bounded by a flag beside it.
+ */
+const committing = ref<'shell' | 'agent' | null>(null);
 
 const connId = computed(() => connection.connectionId);
 const busy = computed(() => preparing.value !== null || projects.starting);
+/**
+ * The commit button currently doing work, or null when nothing is.
+ *
+ * The busy mark used to be a loose `AppIcon` between `Cancel` and `Start
+ * shell`, on the reasoning that with TWO commit buttons an in-button spinner
+ * would have to pick one and might pick the wrong one — so "working" was given
+ * to the bar instead. The user's verdict on that: "the loader here seems
+ * strange … you can have a loader there but in that place it's super weird",
+ * and they are right. A glyph floating in the gap between two buttons is
+ * attached to neither, so it reads as a stray mark rather than as the state of
+ * the thing that was just pressed.
+ *
+ * The premise was the part that was wrong: the dialog knows perfectly well
+ * which button was pressed, because `commit` is told — a null choice IS `Start
+ * shell` and a choice is the agent chain, which only `Start session…` can
+ * raise. Recording that is one ref, and it puts the mark on the control it
+ * describes.
+ *
+ * Unlike the old mark this stays lit through the mkdir and the clone as well as
+ * the `start`. The progress bar above says WHAT is happening ("Cloning
+ * owner/repo…"); the button says that the press landed and that this control is
+ * the one you are waiting on. Those are different sentences, and the old
+ * `busy && !preparing` split left the button looking untouched for the longest
+ * step of the three.
+ */
+const working = computed<'shell' | 'agent' | null>(() =>
+  busy.value ? committing.value : null,
+);
 
 /** Breadcrumb segments for the browsed path, `~` collapsed. */
 const crumbs = computed(() => {
@@ -408,6 +457,10 @@ async function commit(choice: LaunchChoice | null): Promise<void> {
   const id = connId.value;
   agentStep.value = false;
   if (!id || busy.value) return;
+  // Which button the user is waiting on. A null choice is `Start shell`; a
+  // choice can only have come from the agent step, which only `Start session…`
+  // raises. See {@link working}.
+  committing.value = choice ? 'agent' : 'shell';
   stepError.value = null;
   outcome.value = null;
   parkedKind.value = null;
@@ -475,24 +528,50 @@ async function commit(choice: LaunchChoice | null): Promise<void> {
     undefined,
     'unique',
   );
-  outcome.value = result;
-  if (result.ok) {
-    newFolderName.value = '';
-    if (choice && result.sessionName) {
-      // Parked against the folder the HOST resolved, not the one we predicted.
-      // The clone route in particular can land somewhere else — a repo already
-      // on disk comes back at its real path, and `alreadyExists` returns the
-      // host's spelling — and `--dir` pointing at a directory that does not
-      // exist is the exact failure `agentLaunch.ts` was written to make
-      // unrepeatable.
-      const dir = result.folder ?? folder;
-      parkAgentLaunch(id, result.sessionName, { ...choice, dir });
-      parkedKind.value = choice.kind;
-    }
-    // Land the browser on the folder we just used, so "start another" is
-    // already pointed somewhere sensible.
-    if (result.folder && route.value !== 'existing') await projects.browse(id, result.folder);
+
+  if (!result.ok) {
+    outcome.value = result;
+    return;
   }
+
+  newFolderName.value = '';
+  if (choice && result.sessionName) {
+    // Parked against the folder the HOST resolved, not the one we predicted.
+    // The clone route in particular can land somewhere else — a repo already
+    // on disk comes back at its real path, and `alreadyExists` returns the
+    // host's spelling — and `--dir` pointing at a directory that does not
+    // exist is the exact failure `agentLaunch.ts` was written to make
+    // unrepeatable.
+    //
+    // BEFORE the emit, always. The parking and the navigation are two halves
+    // of one handoff: `FolderWorkspaceView` reads the slot as it mounts, and
+    // `started` is what mounts it.
+    const dir = result.folder ?? folder;
+    parkAgentLaunch(id, result.sessionName, { ...choice, dir });
+    parkedKind.value = choice.kind;
+  }
+
+  // One successful create still stops here instead of opening, and it is the
+  // one whose good news has a caveat attached. `via: 'tmux-fallback'` means the
+  // helper could not be used and the session was made with raw `tmux`, so it
+  // carries NO memory cap — a fact about this session that is true for as long
+  // as it lives and is visible nowhere else in the app. Navigating away the
+  // instant it is created is exactly how a warning goes unread, so this one
+  // keeps the panel and costs the user the click it takes to have seen it.
+  //
+  // A missing `sessionName` on an `ok` result holds too, for the blunter
+  // reason that there is nothing to emit: the panel says what happened rather
+  // than the dialog closing onto no navigation at all.
+  if (result.via === 'tmux-fallback' || !result.sessionName) {
+    outcome.value = result;
+    // Land the browser on the folder we just used, so "Start another" is
+    // already pointed somewhere sensible. Only worth doing on this path — on
+    // every other success the dialog is already gone.
+    if (result.folder && route.value !== 'existing') await projects.browse(id, result.folder);
+    return;
+  }
+
+  emit('started', result.sessionName);
 }
 
 /** A clone failure the host classified — say which, not just "git failed". */
@@ -503,6 +582,14 @@ function cloneMessage(error: string | null, state?: string): string {
   return error ?? 'The clone failed.';
 }
 
+/**
+ * Open the session named in the banner.
+ *
+ * The button this belongs to is no longer the ordinary way out of a create —
+ * `commit` emits `started` itself now. It survives for the raw-`tmux` hold
+ * above, where the panel is on screen so that a warning gets read, and the
+ * user still has to be able to carry on to the session they just made.
+ */
 function onOpen(): void {
   const name = outcome.value?.sessionName;
   if (name) emit('started', name);
@@ -510,6 +597,10 @@ function onOpen(): void {
 
 /**
  * Clear the banner and go round again.
+ *
+ * Both panels that remain reach this: the failure one, where it is the only way
+ * back to the picker that does not throw the browse away, and the raw-`tmux`
+ * hold, where it is a genuine "start another" — a session was created.
  *
  * The parked launch is deliberately NOT cleared. The user chose an agent for
  * that session and the session exists; it is still the right thing to run when
@@ -540,16 +631,22 @@ function onStartAnother(): void {
 
   <OverlayPanel v-else title="New session" size="md" @close="emit('close')">
     <div class="new-session">
-      <!-- ================= outcome ================= -->
+      <!-- ================= outcome =================
+           Only the answers that are not simply "yes" get this far: a plain
+           success has already emitted `started` and this dialog is unmounting.
+           What is left is a failure, or the raw-`tmux` create whose warning is
+           the reason it holds. `reused` is not among them and never was from
+           here — this dialog asks for `unique`, which walks `-2`, `-3`… rather
+           than handing back an open session (see the note beside
+           `derivedName`), so the host's `reused` flag is always false on this
+           path and the banner does not offer to explain a state it cannot
+           produce. -->
       <section v-if="outcome" class="result">
         <div :class="['result-banner', outcome.ok ? 'ok' : 'bad']">
           <AppIcon :name="outcome.ok ? 'check' : 'alert-triangle'" />
           <div class="result-text">
             <p class="result-title">
-              <template v-if="outcome.ok && outcome.reused">
-                Re-opened <code>{{ outcome.sessionName }}</code>
-              </template>
-              <template v-else-if="outcome.ok">
+              <template v-if="outcome.ok">
                 Started <code>{{ outcome.sessionName }}</code>
               </template>
               <template v-else-if="outcome.code === 'folder-missing'">
@@ -559,10 +656,6 @@ function onStartAnother(): void {
             </p>
             <p v-if="outcome.ok" class="result-sub muted">
               in <code>{{ displayPath(outcome.folder ?? '', projects.home) }}</code>
-              <template v-if="outcome.reused">
-                — a session for this folder was already open, so it was reused rather
-                than duplicated.
-              </template>
             </p>
             <p v-else-if="outcome.code === 'folder-missing'" class="result-sub muted">
               {{ outcome.error }}. Nothing was created — a session started in a missing
@@ -575,7 +668,11 @@ function onStartAnother(): void {
         <!-- The agent is armed, not started. Saying so here is what keeps the
              banner honest about a launch that happens after a navigation the
              user has not made yet — "I picked Claude and got a shell" is not a
-             bug anyone can report usefully. -->
+             bug anyone can report usefully. It reads as true as it ever did,
+             because the only successful create that still shows this panel is
+             the one the user must press Open on: everywhere else the
+             navigation happens on its own and there is no instruction to
+             give. -->
         <p v-if="outcome.ok && parkedKind" class="launch-note">
           <AppIcon name="terminal" :size="12" />
           {{ KIND_LABELS[parkedKind] }} starts when this session's terminal opens — press
@@ -807,19 +904,26 @@ function onStartAnother(): void {
                and its ellipsis is this app's usual promise that a dialog
                follows (the workspace `+`'s "New session…" says it the same
                way). -->
+          <!-- The busy mark rides INSIDE the button that is doing the work
+               (see `working`), and each commit button reserves its 14px
+               whether or not it is the one running: the mark is hidden, not
+               absent. A spinner that appeared would widen the button under a
+               cursor that is still resting on it and shove its neighbour
+               sideways at the exact moment the user might click again, which
+               is a worse bug than the stray glyph this replaced. -->
           <div class="commit-actions">
             <button class="btn-secondary" @click="emit('close')">Cancel</button>
-            <!-- The spinner is its OWN element rather than an icon inside one
-                 of the buttons. With two commits, an in-button spinner would
-                 have to pick a button, and it would sometimes pick the one the
-                 user did not press — "working" belongs to the bar. -->
-            <AppIcon v-if="busy && !preparing" name="refresh" :size="14" class="spin busy-mark" />
             <button
               class="btn-secondary"
               :disabled="busy || !targetFolder"
               title="Create the session and leave it at a plain shell"
               @click="commit(null)"
             >
+              <AppIcon
+                name="refresh"
+                :size="14"
+                :class="working === 'shell' ? 'spin' : 'idle-mark'"
+              />
               Start shell
             </button>
             <button
@@ -828,6 +932,11 @@ function onStartAnother(): void {
               title="Choose an agent for this session"
               @click="openAgentStep"
             >
+              <AppIcon
+                name="refresh"
+                :size="14"
+                :class="working === 'agent' ? 'spin' : 'idle-mark'"
+              />
               Start session…
             </button>
           </div>
@@ -1114,8 +1223,14 @@ function onStartAnother(): void {
   justify-content: flex-end;
   gap: var(--sp-2);
 }
-.busy-mark {
-  color: var(--fg-muted);
+/* Hidden, not gone: `visibility` keeps the box and its share of the button's
+   `gap`, so the commit bar has exactly one width whether or not something is
+   running. `.spin` and its reduced-motion guard are global (App.vue) — the
+   mark inherits the button's `currentColor` rather than the muted grey the old
+   free-floating one wore, because inside a filled primary button a grey glyph
+   reads as a disabled control rather than as progress. */
+.commit-actions .idle-mark {
+  visibility: hidden;
 }
 .btn-primary,
 .btn-secondary {

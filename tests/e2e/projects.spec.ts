@@ -52,8 +52,11 @@ const SEED_BLOCK = [
 
 /**
  * Unique per run. The compose container survives a `stop`/`up` cycle, so a
- * fixed name would already exist on the second run and the first assertion
- * would see "Re-opened" where it expects "Started".
+ * fixed name would already have its folder — and, if `afterAll` did not get to
+ * run, its session — on the second run. The dialog asks for a `unique` name, so
+ * the host would answer with `<name>-2` while the picker had previewed
+ * `<name>`, and the assertion that the session which opened is the one that was
+ * previewed would fail for a reason that has nothing to do with the code.
  */
 const PROJECT_FOLDER = `e2e-proj-${Date.now().toString(36)}`;
 
@@ -174,7 +177,7 @@ test.describe('folder-first session creation + port panel controls', () => {
     await expect(page.locator('.repos')).toContainText('Already on the host');
   });
 
-  test('the new-folder route creates the folder and starts the session', async () => {
+  test('the new-folder route creates the folder and opens the session, with no second click', async () => {
     await page.getByRole('tab', { name: 'Existing folder' }).click();
     // Back to $HOME so the folder lands somewhere predictable.
     await page.getByTitle('Home folder').click();
@@ -186,41 +189,43 @@ test.describe('folder-first session creation + port panel controls', () => {
     previewedName = (await page.locator('.preview-name').innerText()).trim();
     expect(previewedName).toContain(PROJECT_FOLDER);
 
-    await page.getByRole('button', { name: 'Start session' }).click();
-    await expect(page.locator('.result-banner')).toBeVisible({ timeout: 60_000 });
-    await expect(page.locator('.result-banner')).toHaveClass(/ok/);
-    // The name the host chose is the name the picker previewed.
-    await expect(page.locator('.result-title')).toContainText(previewedName);
-    await expect(page.locator('.result-title')).toContainText('Started');
-  });
+    // `Start shell`, not `Start session…`. The primary button chains to the
+    // AGENT step (docs/SESSIONLIST.md §13) — a second `OverlayPanel` that is
+    // also titled "New session" — and this test is about what a COMMIT answers
+    // with, not about the chain. `Start shell` is the one-click commit, and the
+    // chain's own commit lands in exactly the same `commit()` tail
+    // (tests/unit/NewSessionDialog.test.ts covers the park-then-navigate order
+    // that only the agent route has).
+    await page.getByRole('button', { name: 'Start shell' }).click();
 
-  test('starting the same folder again is reported as a reuse, not a failure', async () => {
-    await page.getByRole('button', { name: 'Start another' }).click();
-    // A successful create leaves the browser standing IN the folder it just
-    // made, so the existing-folder route is already aimed at it — and the
-    // new-folder name field is cleared, deliberately, so "start another" cannot
-    // re-run the same mkdir by accident.
-    await page.getByRole('tab', { name: 'Existing folder' }).click();
-    await expect(page.locator('.preview-name')).toHaveText(previewedName, { timeout: 20_000 });
-    await page.getByRole('button', { name: 'Start session' }).click();
-    await expect(page.locator('.result-banner')).toBeVisible({ timeout: 60_000 });
-    await expect(page.locator('.result-banner')).toHaveClass(/ok/);
-    await expect(page.locator('.result-title')).toContainText('Re-opened');
-    await expect(page.locator('.result-sub')).toContainText('reused');
-  });
-
-  test('opening the new session attaches its workspace', async () => {
-    await page.getByRole('button', { name: 'Open session' }).click();
-    await expect(page.getByRole('dialog', { name: 'New session' })).toHaveCount(0);
-    // Creating from the panel now lands in the new session's FOLDER workspace,
-    // with that session's tab selected — the panel highlights the folder.
+    // A create that works no longer answers with a receipt. The dialog closes
+    // itself and the app lands in the new session's FOLDER workspace, with that
+    // session's tab selected and the panel highlighting the folder — no
+    // "Started …" banner in between, and nothing to press.
+    await expect(page.getByRole('dialog', { name: 'New session' })).toHaveCount(0, {
+      timeout: 60_000,
+    });
+    await expect(page.locator('.result-banner')).toHaveCount(0);
     await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('.dir-header.current')).toHaveCount(1);
     await expect(page.locator('.tab.active')).toBeVisible();
+    // The session that opened is the one the picker previewed. Asserted on the
+    // tooltip rather than the tab's text: a tab strips the folder's own prefix
+    // from its label, so the only session in `~/<PROJECT_FOLDER>` is labelled
+    // `Terminal` (shared/workspaceTabs.ts) and the full name lives in `title`.
+    await expect(page.locator('.tab.active')).toHaveAttribute(
+      'title',
+      new RegExp(previewedName),
+    );
   });
 
   test('the port panel shows discovered ports with process and folder columns', async () => {
-    await page.getByRole('button', { name: 'Ports' }).click();
+    // Unrelated to the create flow, and repaired only so this spec can finish:
+    // the panel's foot row of labelled buttons is gone, and Ports now lives in
+    // the header's overflow menu with its full name (renderer/hostPanels.ts).
+    // The `⋯` trigger is icon-only, so its accessible name is its `title`.
+    await page.getByRole('button', { name: 'Ports, Usage' }).click();
+    await page.getByRole('button', { name: 'Port forwarding' }).click();
     await expect(page.getByRole('dialog', { name: 'Port forwarding' })).toBeVisible();
 
     // Normalise the toggle. Auto-forward is PERSISTED per host (PortfwdStore),
