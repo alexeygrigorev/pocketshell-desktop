@@ -87,12 +87,14 @@ export interface AgentMark {
  * the header for why `unknown` and `shell` deliberately get no glyph rather
  * than a "we don't know" one.
  *
- * `grok` is included even though `LAUNCHABLE_KINDS` excludes it: 0.4.44's
- * `pocketshell agent` has no `grok` subcommand, so this app cannot START one,
- * but a session can BE one — the phone launches it through its own engine
- * registry and the tmux option is on the session either way. Refusing to badge
- * a session because we could not have created it would be reading our own
- * capability out of the host's record.
+ * `grok` is badged unconditionally, and that is independent of whether this
+ * app could have started the session. Launching one now depends on the HOST —
+ * 0.4.44's `pocketshell agent` has no `grok` subcommand, newer helpers do, and
+ * `agentLaunch.ts` probes for it — while a session can be a grok session
+ * regardless: the phone launches it through its own engine registry and the
+ * tmux option is on the session either way. Reading our own capability, or a
+ * particular host's, out of the record we are merely displaying would badge
+ * the same session differently depending on which machine it came from.
  */
 export function agentMark(kind: SessionAgentKind | null | undefined): AgentMark | null {
   switch (kind) {

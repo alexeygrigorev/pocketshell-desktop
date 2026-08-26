@@ -28,12 +28,13 @@ describe('agentMark', () => {
     expect(agentMark('grok')?.label).toBe('Grok');
   });
 
-  it('badges GROK even though this app cannot launch one', () => {
-    // 0.4.44's `pocketshell agent` has no `grok` subcommand, so `grok` is
-    // deliberately absent from LAUNCHABLE_KINDS — but a session can BE one (the
-    // phone starts it through its own engine registry) and the tmux option is
-    // on the session either way. Refusing to badge it would be reading our own
-    // capability out of the host's record.
+  it('badges GROK whether or not the host it came from could launch one', () => {
+    // Whether this app can START a grok session is a per-host question
+    // (`agentLaunch.ts` probes `pocketshell agent --help` for the subcommand,
+    // which 0.4.44 does not have). Whether a session IS one is not: the phone
+    // starts them through its own engine registry and the tmux option is on
+    // the session either way. Badging must follow the record, or the same
+    // session would look different depending on which machine listed it.
     expect(agentMark('grok')).not.toBeNull();
   });
 

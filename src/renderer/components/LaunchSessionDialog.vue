@@ -33,8 +33,12 @@
 // picker (shown only when the host lists a real choice). Diverged:
 //   - no name / start-folder fields — the workspace already fixes both, and
 //     the name is derived host-side;
-//   - Grok is absent, because `pocketshell agent` 0.4.44 has no such
-//     subcommand (see agentLaunch.ts);
+//   - Grok is offered, but PER HOST. The phone lists it unconditionally; the
+//     pinned 0.4.44 helper has no `grok` subcommand at all, and typing one at
+//     a host that lacks it exits 2 and leaves a plain shell behind. So this
+//     dialog asks the host what it can launch (`agents.loadAgentKinds`) and
+//     turns a "no" into a sentence rather than into a missing button — see
+//     `hostSupport` below and the header of shared/agentLaunch.ts;
 //   - the answers PERSIST (the phone resets every open) — see
 //     `AppSettings.agentLaunchDefaults`;
 //   - an empty or failed profile fetch says so in a line, where the phone
@@ -50,11 +54,13 @@ import {
   KIND_LABELS,
   LAUNCHABLE_KINDS,
   buildLaunchCommand,
+  kindUnavailableReason,
   launchBlocker,
   profileFlagName,
   profilesFor,
   supportsProfiles,
   supportsSkipPermissions,
+  type HostAgentSupport,
   type LaunchChoice,
   type LaunchableKind,
 } from '../../shared/agentLaunch';
@@ -125,20 +131,52 @@ const choice = computed<LaunchChoice | null>(() => {
 });
 
 /**
+ * What this host's `pocketshell agent` said it can launch, plus the helper
+ * version bootstrap already read.
+ *
+ * The version is passed for the MESSAGE only — the decision comes from the
+ * probed subcommand list, never from comparing numbers (agentLaunch.ts says
+ * why). It costs nothing to include and turns "your helper is too old" into
+ * "your helper is 0.4.44, which is too old", which is the difference between a
+ * complaint and an instruction.
+ */
+const hostSupport = computed<HostAgentSupport>(() => ({
+  subcommands: agents.agentKinds,
+  helperVersion: connection.bootstrap?.pocketshell.version ?? null,
+  probing: agents.agentKindsProbing,
+}));
+
+/** Why this host cannot start [k], for the dimming and the tooltip on its segment. */
+function unavailable(k: LaunchableKind): string | null {
+  return kindUnavailableReason(k, hostSupport.value);
+}
+
+/**
  * Why confirming would not work, or null. A plain shell needs a folder too —
  * the session is created with `-c <folder>` either way — so the folder check
  * runs for both, which is why the shell branch borrows an agent kind purely to
  * satisfy the shape.
+ *
+ * `hostSupport` is passed only on the AGENT branch: a plain shell needs no
+ * `pocketshell agent` subcommand at all, and a host whose probe failed must
+ * not lose the ability to open a terminal over it.
  */
 const blocker = computed(() =>
-  launchBlocker(choice.value ?? { kind: 'claude', dir: props.folderPath ?? '' }),
+  choice.value
+    ? launchBlocker(choice.value, hostSupport.value)
+    : launchBlocker({ kind: 'claude', dir: props.folderPath ?? '' }),
 );
 
 /** The literal line that will be typed, shown so it is never a mystery. */
 const preview = computed(() => (choice.value ? buildLaunchCommand(choice.value) : null));
 
 onMounted(() => {
-  if (connection.connectionId) void agents.loadProfiles(connection.connectionId);
+  if (!connection.connectionId) return;
+  void agents.loadProfiles(connection.connectionId);
+  // Re-asked on every open rather than cached: the helper is upgraded out from
+  // under this app, and a user who just installed a newer one should see the
+  // engine it added in the very next dialog.
+  void agents.loadAgentKinds(connection.connectionId);
 });
 
 // Switching to an engine that cannot take one drops a stale profile from the
@@ -200,7 +238,14 @@ function onConfirm(): void {
       </section>
 
       <template v-if="wantsAgent">
-        <!-- ---- which harness ---- -->
+        <!-- ---- which harness ----
+             An engine this host cannot launch is DIMMED but still clickable,
+             which is the deliberate part. Removing it would leave the user
+             unable to tell "this app dropped Grok" from "my host's helper is
+             old"; disabling it would show that something is wrong without
+             saying what. Clicking it selects it, `blocker` names the reason in
+             full, and Create stays dead — so the explanation is one click away
+             and the broken launch is still impossible. -->
         <section class="field">
           <span class="field-label">Agent</span>
           <div class="segmented" role="tablist">
@@ -208,9 +253,10 @@ function onConfirm(): void {
               v-for="k in LAUNCHABLE_KINDS"
               :key="k"
               class="segment"
-              :class="{ on: kind === k }"
+              :class="{ on: kind === k, unavailable: unavailable(k) !== null }"
               role="tab"
               :aria-selected="kind === k"
+              :title="unavailable(k) ?? ''"
               @click="kind = k"
             >
               {{ KIND_LABELS[k] }}
@@ -351,6 +397,13 @@ function onConfirm(): void {
 .segment.on {
   background: var(--accent-soft);
   color: var(--accent);
+}
+/* Reads as unavailable at a glance, stays clickable so the reason is
+   reachable. Selecting one keeps the `on` background, because the user did
+   select it and the segmented control must not lie about which tab is
+   current — the red blocker line below is what says it cannot be created. */
+.segment.unavailable:not(.on) {
+  opacity: var(--disabled-opacity);
 }
 
 .toggle-field .toggle {

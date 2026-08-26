@@ -348,13 +348,24 @@ describe('agentLaunchDefaults', () => {
     });
   });
 
-  it('drops a kind the helper cannot launch, keeping the other answers', () => {
-    // `grok` is in SessionAgentKind but has no `pocketshell agent` subcommand,
-    // so a blob naming it must not reach the command builder.
+  it('drops a kind that is not launchable, keeping the other answers', () => {
+    // `shell` is in SessionAgentKind but is a classification, not something
+    // `pocketshell agent` can start, so a blob naming it must not reach the
+    // command builder.
     const out = coerceSettings({
-      agentLaunchDefaults: { kind: 'grok', skipPermissions: false, profiles: { claude: 'Z' } },
+      agentLaunchDefaults: { kind: 'shell', skipPermissions: false, profiles: { claude: 'Z' } },
     }).agentLaunchDefaults;
     expect(out).toEqual({ kind: 'claude', skipPermissions: false, profiles: { claude: 'Z' } });
+  });
+
+  it('keeps a remembered grok, which is now a launchable kind', () => {
+    // Remembering it is safe even on a host that cannot run it: the launch
+    // dialog probes the host and refuses with a message rather than typing a
+    // command that exits 2 (shared/agentLaunch.ts).
+    const out = coerceSettings({
+      agentLaunchDefaults: { kind: 'grok', skipPermissions: true, profiles: {} },
+    }).agentLaunchDefaults;
+    expect(out.kind).toBe('grok');
   });
 
   it('degrades a corrupt profile map per ENTRY', () => {

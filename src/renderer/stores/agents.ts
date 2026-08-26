@@ -86,5 +86,72 @@ export const useAgentsStore = defineStore('agents', () => {
     }
   }
 
-  return { usage, loading, loadUsage, profiles, profilesLoading, profilesError, loadProfiles };
+  /**
+   * The engines this host's `pocketshell agent` actually lists, or null when
+   * we have not been able to ask.
+   *
+   * Null is the initial value AND the failure value, and that is deliberate:
+   * both mean "unknown", and `kindUnavailableReason` in shared/agentLaunch.ts
+   * already knows what to do with unknown — offer the engines the pinned 0.4.44
+   * helper guarantees, refuse the ones it does not. Distinguishing "never
+   * asked" from "asked and failed" would buy a different WORDING at best, and
+   * `agentKindsProbing` already covers the only case where the wording matters
+   * (the answer is still coming).
+   *
+   * Not merged into `profiles`: a host can list profiles and lack an engine,
+   * or the reverse, and the launch dialog needs both answers separately.
+   */
+  const agentKinds = ref<readonly string[] | null>(null);
+  /** True while `loadAgentKinds` is in flight — lets "no" be said as "not yet". */
+  const agentKindsProbing = ref(false);
+  /** @see profilesFor — same stale-response guard, same reason. */
+  let agentKindsFor: ConnectionId | null = null;
+
+  /**
+   * Ask the host which engines it can launch.
+   *
+   * Re-asked on every open of the launch dialog rather than cached per host,
+   * because the helper is installed and upgraded out from under this app: a
+   * user who runs `uv tool upgrade pocketshell` in one tab should find Grok
+   * offered in the next dialog they open, not after a reconnect. The call is
+   * one `--help` exec, which does no work host-side.
+   *
+   * Never rejects. A failure leaves `agentKinds` null, which the dialog reads
+   * as "unknown" and handles by falling back to the pinned baseline — see
+   * shared/agentLaunch.ts. Nothing here needs an error string, because the
+   * sentence the user sees is composed from the kind they picked, not from the
+   * exec's complaint.
+   */
+  async function loadAgentKinds(connectionId: ConnectionId): Promise<void> {
+    agentKindsProbing.value = true;
+    agentKindsFor = connectionId;
+    try {
+      const kinds = await api.agent.kinds(connectionId);
+      if (agentKindsFor !== connectionId) return;
+      // Anything that is not a list is "unknown", which is what null means
+      // here. The main process already answers `string[] | null`, so this is
+      // the belt to that braces — but the value crosses an IPC boundary and a
+      // shape that slipped through would otherwise become an empty list, i.e.
+      // a host that claims it can launch nothing.
+      agentKinds.value = Array.isArray(kinds) ? kinds : null;
+    } catch {
+      if (agentKindsFor !== connectionId) return;
+      agentKinds.value = null;
+    } finally {
+      if (agentKindsFor === connectionId) agentKindsProbing.value = false;
+    }
+  }
+
+  return {
+    usage,
+    loading,
+    loadUsage,
+    profiles,
+    profilesLoading,
+    profilesError,
+    loadProfiles,
+    agentKinds,
+    agentKindsProbing,
+    loadAgentKinds,
+  };
 });

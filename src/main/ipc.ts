@@ -816,6 +816,12 @@ export function registerIpcHandlers(deps: {
   // server-side pocketshell helper. The conversation-log and resumable
   // channels that used to live here went with the Conversation feature
   // (docs/WORKSPACE.md §9).
+  // Null, not [], when the host could not be asked — the launch picker uses
+  // the difference to decide whether an engine it cannot confirm should be
+  // offered anyway (shared/agentLaunch.ts).
+  ipcMain.handle(ipc.agent.kinds, async (_evt, connectionId: string) => {
+    return helper.agentSubcommands(connectionId);
+  });
   ipcMain.handle(ipc.agent.profiles, async (_evt, connectionId: string) => {
     return helper.listProfiles(connectionId);
   });

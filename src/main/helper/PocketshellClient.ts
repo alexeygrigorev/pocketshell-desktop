@@ -10,6 +10,7 @@
 import type { SshService } from '../ssh/SshService.js';
 import type { ExecResult, SessionSummary } from '../../shared/types.js';
 import {
+  parseAgentSubcommands,
   parseSessionsList,
   parseTmuxListSessionsFallback,
   parseUsageNdjson,
@@ -623,6 +624,30 @@ export class PocketshellClient {
     const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell usage --json'));
     if (res.exitCode !== 0) return [];
     return parseUsageNdjson(res.stdout);
+  }
+
+  /**
+   * Which engines this host's `pocketshell agent` can actually launch
+   * (`pocketshell agent --help`), or null when the question could not be
+   * answered.
+   *
+   * The launch picker needs this because the helper is a separately released
+   * project and the app's own pinned version (0.4.44) has exactly three agent
+   * subcommands, no `grok`. Typing `pocketshell agent grok` at a host that
+   * lacks it exits 2 and leaves the user in a plain shell with a usage
+   * message — so the picker asks first. See shared/agentLaunch.ts for why the
+   * answer is read from the help text rather than from a version comparison,
+   * and why null must not be flattened into `[]`.
+   *
+   * Cheap enough to run on every open of the dialog: it is one exec of a
+   * `--help` that does no work host-side. It is deliberately NOT folded into
+   * the bootstrap probe, which runs once on connect — a host whose helper is
+   * upgraded while the app is connected should start offering the new engine
+   * without a reconnect.
+   */
+  async agentSubcommands(connectionId: string): Promise<string[] | null> {
+    const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell agent --help'));
+    return parseAgentSubcommands(res.stdout, res.exitCode);
   }
 
   /**

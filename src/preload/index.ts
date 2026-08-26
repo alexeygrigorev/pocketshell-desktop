@@ -699,6 +699,15 @@ const api = {
   },
 
   agent: {
+    /**
+     * The engines this host's `pocketshell agent` lists, or **null** when the
+     * host could not be asked. The two are not interchangeable: null means the
+     * picker falls back to the engines the pinned helper guarantees, where an
+     * empty array would mean a host that says it can launch nothing.
+     */
+    kinds: (connectionId: string): Promise<string[] | null> =>
+      ipcRenderer.invoke(ipc.agent.kinds, connectionId),
+
     /** Agent config-dir profiles. */
     profiles: (connectionId: string): Promise<unknown[]> =>
       ipcRenderer.invoke(ipc.agent.profiles, connectionId),

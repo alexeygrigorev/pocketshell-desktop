@@ -18,13 +18,17 @@ import { mount, type VueWrapper } from '@vue/test-utils';
  */
 
 const profiles = vi.fn();
+const kinds = vi.fn();
 
-// Only `agent.profiles` has behaviour; the rest is here because constructing
-// the connection/projects stores subscribes to them.
+// Only `agent.profiles` and `agent.kinds` have behaviour; the rest is here
+// because constructing the connection/projects stores subscribes to them.
 vi.mock('../../src/renderer/ipc', () => ({
   api: {
     helper: { usage: vi.fn().mockResolvedValue([]) },
-    agent: { profiles: (connectionId: string): unknown => profiles(connectionId) },
+    agent: {
+      profiles: (connectionId: string): unknown => profiles(connectionId),
+      kinds: (connectionId: string): unknown => kinds(connectionId),
+    },
     ssh: { onState: vi.fn(), listConfigHosts: vi.fn().mockResolvedValue([]) },
     projects: { onCloneProgress: vi.fn() },
   },
@@ -34,6 +38,11 @@ const LaunchSessionDialog = (await import('../../src/renderer/components/LaunchS
   .default;
 const { useConnectionStore } = await import('../../src/renderer/stores/connection');
 const { useSettingsStore } = await import('../../src/renderer/stores/settings');
+
+/** What `pocketshell agent --help` lists on the pinned helper: no grok. */
+const PINNED_KINDS = ['claude', 'codex', 'opencode'];
+/** The same host after the (still unreleased) grok subcommand lands. */
+const UPGRADED_KINDS = [...PINNED_KINDS, 'grok'];
 
 /** The host's real 0.4.44 shape: a default profile plus a named sibling. */
 const HOST_PROFILES = [
@@ -76,6 +85,7 @@ beforeEach(() => {
   localStorage.clear();
   setActivePinia(createPinia());
   profiles.mockReset().mockResolvedValue(HOST_PROFILES);
+  kinds.mockReset().mockResolvedValue(PINNED_KINDS);
   useConnectionStore().connectionId = 'conn-1';
 });
 
@@ -131,11 +141,6 @@ describe('what it emits', () => {
 });
 
 describe('what the helper cannot do', () => {
-  it('offers no Grok, which has no `pocketshell agent` subcommand', async () => {
-    const wrapper = await open();
-    expect(wrapper.text()).not.toMatch(/Grok/i);
-  });
-
   it('hides the permission toggle for opencode, where the flag is a no-op', async () => {
     const wrapper = await open();
     expect(wrapper.text()).toContain('Skip permission prompts');
@@ -148,6 +153,125 @@ describe('what the helper cannot do', () => {
     expect(wrapper.text()).toContain('Claude (Z.AI)');
     await click(wrapper, 'OpenCode');
     expect(wrapper.text()).not.toContain('Claude (Z.AI)');
+  });
+});
+
+/**
+ * Grok, and the host probe that makes offering it safe.
+ *
+ * The property under test is the one the old "just don't list Grok" answer got
+ * for free and that adding the option could easily lose: on a host whose
+ * `pocketshell agent` has no `grok` subcommand, NOTHING is ever created. The
+ * user gets a sentence naming the version boundary instead of a session that
+ * comes up as a plain shell with a click usage message in it.
+ */
+describe('the Grok gate', () => {
+  /** The segmented-control button for [label], or undefined. */
+  function segment(wrapper: VueWrapper, label: string) {
+    return wrapper.findAll('button.segment').find((b) => b.text().trim() === label);
+  }
+
+  /** The Create button, whose disabled state is the actual safety property. */
+  function createButton(wrapper: VueWrapper) {
+    return wrapper.findAll('button').find((b) => b.text().trim() === 'Create session')!;
+  }
+
+  it('lists Grok even on a host that cannot run it, dimmed and explained', async () => {
+    const wrapper = await open();
+    const grok = segment(wrapper, 'Grok');
+    expect(grok, 'Grok is offered, not hidden').toBeTruthy();
+    expect(grok!.classes()).toContain('unavailable');
+    expect(grok!.attributes('title')).toMatch(/too old to start Grok/);
+    // The engines the pinned helper does have are not dimmed with it.
+    expect(segment(wrapper, 'Claude Code')!.classes()).not.toContain('unavailable');
+  });
+
+  it('refuses to create anything when Grok is picked on a 0.4.44 host', async () => {
+    const wrapper = await open();
+    await click(wrapper, 'Grok');
+    expect(wrapper.text()).toMatch(/too old to start Grok/);
+    expect(wrapper.text()).toMatch(/newer than 0\.4\.44/);
+    const button = createButton(wrapper);
+    expect(button.attributes('disabled')).toBeDefined();
+    await button.trigger('click');
+    expect(wrapper.emitted('confirm')).toBeUndefined();
+  });
+
+  it('launches Grok once the host lists the subcommand', async () => {
+    kinds.mockResolvedValue(UPGRADED_KINDS);
+    const wrapper = await open();
+    expect(segment(wrapper, 'Grok')!.classes()).not.toContain('unavailable');
+    await click(wrapper, 'Grok');
+    // The minimal line: --dir and nothing else (see agentLaunch.test.ts).
+    expect(wrapper.text()).toContain("pocketshell agent grok --dir $HOME/'git/my app'");
+    expect(createButton(wrapper).attributes('disabled')).toBeUndefined();
+    await click(wrapper, 'Create session');
+    expect(confirmed(wrapper)).toEqual({
+      kind: 'grok',
+      dir: '~/git/my app',
+      skipPermissions: true,
+      profile: null,
+    });
+  });
+
+  it('shows Grok no permission toggle and no profile picker', async () => {
+    kinds.mockResolvedValue(UPGRADED_KINDS);
+    const wrapper = await open();
+    await click(wrapper, 'Grok');
+    expect(wrapper.text()).not.toContain('Skip permission prompts');
+    expect(wrapper.text()).not.toContain('Claude (Z.AI)');
+  });
+
+  it('refuses Grok when the host could not be asked at all', async () => {
+    // A failed probe is the same answer as "no grok here", because being wrong
+    // in the other direction costs the user the plain-shell failure.
+    kinds.mockRejectedValue(new Error('ssh channel closed'));
+    const wrapper = await open();
+    await click(wrapper, 'Grok');
+    expect(wrapper.text()).toMatch(/Could not ask this host/);
+    expect(createButton(wrapper).attributes('disabled')).toBeDefined();
+  });
+
+  it('treats a null answer the same as a failure', async () => {
+    kinds.mockResolvedValue(null);
+    const wrapper = await open();
+    await click(wrapper, 'Grok');
+    expect(createButton(wrapper).attributes('disabled')).toBeDefined();
+  });
+
+  it('does not let a failed probe take away the engines the helper pins', async () => {
+    // The asymmetry: unknown means no for grok, yes for the baseline three.
+    kinds.mockRejectedValue(new Error('ssh channel closed'));
+    const wrapper = await open();
+    expect(segment(wrapper, 'Claude Code')!.classes()).not.toContain('unavailable');
+    await click(wrapper, 'Codex');
+    expect(createButton(wrapper).attributes('disabled')).toBeUndefined();
+    await click(wrapper, 'Create session');
+    expect(confirmed(wrapper)).toMatchObject({ kind: 'codex' });
+  });
+
+  it('still opens a plain shell on a host the probe could not answer for', async () => {
+    kinds.mockRejectedValue(new Error('ssh channel closed'));
+    const wrapper = await open();
+    await click(wrapper, 'Shell');
+    await click(wrapper, 'Create session');
+    expect(confirmed(wrapper)).toBeNull();
+  });
+
+  it('re-opens on a remembered Grok and blocks it again on an old host', async () => {
+    // The remembered default can outlive the host it was chosen on. It must
+    // come back as a refusal with a reason, never as a silent launch.
+    kinds.mockResolvedValue(UPGRADED_KINDS);
+    const first = await open();
+    await click(first, 'Grok');
+    await click(first, 'Create session');
+    expect(useSettingsStore().agentLaunchDefaults).toMatchObject({ kind: 'grok' });
+
+    kinds.mockResolvedValue(PINNED_KINDS);
+    const second = await open();
+    expect(segment(second, 'Grok')!.classes()).toContain('on');
+    expect(second.text()).toMatch(/too old to start Grok/);
+    expect(createButton(second).attributes('disabled')).toBeDefined();
   });
 });
 

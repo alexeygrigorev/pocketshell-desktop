@@ -175,6 +175,7 @@ export const ipc = {
     readLocal: 'attachments:readLocal', // bytes of a path pickFiles handed out THIS session
   },
   agent: {
+    kinds: 'agent:kinds', // agent --help -> the engines this host can launch
     profiles: 'agent:profiles', // profiles list --json
     envList: 'agent:envList', // env list --dir --json
     envGet: 'agent:envGet', // env get --dir --json
