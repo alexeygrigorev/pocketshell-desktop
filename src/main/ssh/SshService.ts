@@ -189,10 +189,32 @@ export class SshService {
     });
   }
 
-  /** Execute a command; resolve on completion. No throw on non-zero exit. */
+  /**
+   * Execute a command; resolve on completion. No throw on non-zero exit.
+   *
+   * Every call is timed into the log. This is the app's unit of remote work —
+   * a user-visible action costs however many of these it makes, times whatever
+   * one costs on that host — and until now nothing recorded either number, so
+   * "it takes too long" had no way to become a fact. One line per exec gives
+   * both: count them between two timestamps to see the round trips an action
+   * spends, and read `ms` to see what the host charges for one.
+   *
+   * The command is logged truncated rather than in full. Nothing here is
+   * secret today, but exec carries arbitrary shell and this file is what users
+   * are asked to paste, so the prefix — enough to tell `sessions list` from
+   * `sessions create` — is all it takes to read a trace.
+   */
   async exec(connectionId: string, command: string, _opts: ExecOptions = {}): Promise<ExecResult> {
     const rec = this.registry.require(connectionId);
-    return execOnClient(rec, command);
+    const startedAt = Date.now();
+    const res = await execOnClient(rec, command);
+    log('exec', 'ran', {
+      connectionId,
+      ms: Date.now() - startedAt,
+      exitCode: res.exitCode,
+      command: execLogPreview(command),
+    });
+    return res;
   }
 
   /** Spawn a shell with a PTY. Used by the terminal view (Phase 1). */
@@ -403,6 +425,20 @@ function loadKey(opts: ConnectOptions): Buffer {
   if (opts.privateKey) return Buffer.from(opts.privateKey, 'utf8');
   if (opts.privateKeyPath) return readFileSync(opts.privateKeyPath);
   throw new Error('No private key provided (pass privateKey or privateKeyPath).');
+}
+
+/**
+ * The part of a command worth logging.
+ *
+ * `pathAwareCommand` wraps everything in `/bin/sh -lc 'export PATH=...; <real>'`,
+ * so a raw prefix would be the same 60 characters of wrapper for every line and
+ * identify nothing. The wrapper is stripped first, then what the user actually
+ * asked for is truncated.
+ */
+export function execLogPreview(command: string, limit = 120): string {
+  const unwrapped = /^\/bin\/sh -lc 'export PATH="[^"]*:\$PATH"; (.*)'$/s.exec(command);
+  const meat = (unwrapped?.[1] ?? command).replace(/\s+/g, ' ').trim();
+  return meat.length <= limit ? meat : `${meat.slice(0, limit)}…`;
 }
 
 function execOnClient(rec: ConnectionRecord, command: string): Promise<ExecResult> {
