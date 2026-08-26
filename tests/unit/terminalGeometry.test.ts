@@ -307,4 +307,71 @@ describe('the far end is told the geometry the pane actually has', () => {
     expect(resize).not.toHaveBeenCalled();
     wrapper.unmount();
   });
+
+  it('never pushes a box that is SMALL but not zero — the four-column wrap', async () => {
+    // THE REPORTED PICTURE, and the case the zero-check above could not see.
+    //
+    // "output in terminal broke again": a band of scrollback wrapped at about
+    // four columns (`I'd` / `just` / `poi` / `nt` / `out`, one fragment a row)
+    // with correct full-width text above and below it, and the agent TUI still
+    // drawing its input box that narrow long after the pane was wide again.
+    //
+    // Only the remote can produce that. tmux and the TUI wrap to the width they
+    // were told and their scrollback keeps the wrap it was written with, so a
+    // four-column resize reached the far end — and the correct size that
+    // followed repaired only what was drawn after it. There is no undo, which
+    // is why the push has to be refused rather than corrected.
+    //
+    // 30px is the shape of the bug: a container mid-transition is not zero, so
+    // it walked straight through a guard that only knew about zero.
+    const wrapper = await mountTerminal();
+    resize.mockClear();
+
+    setPaneSize(wrapper, 30, 40);
+    paneGrid = { cols: 4, rows: 2 };
+    await paneResized();
+
+    expect(resize).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('re-asserts the real size, with a repaint, once the layout settles', async () => {
+    // The other half of refusing: a transient box must not leave the far end on
+    // a stale size with nothing scheduled to correct it. The skip arms the same
+    // hidden -> visible edge a backgrounded tab uses, so the pane pushes AND
+    // asks for a redraw when it comes back — tmux repaints nothing for a resize
+    // it considers a no-op, and "the size it was already on" is exactly that.
+    const wrapper = await mountTerminal();
+    resize.mockClear();
+    redraw.mockClear();
+
+    setPaneSize(wrapper, 30, 40);
+    paneGrid = { cols: 4, rows: 2 };
+    await paneResized();
+    expect(resize).not.toHaveBeenCalled();
+
+    setPaneSize(wrapper, 800, 600);
+    paneGrid = { cols: 120, rows: 40 };
+    await paneResized();
+
+    expect(resize).toHaveBeenCalledWith('shell-1', 120, 40);
+    expect(redraw).toHaveBeenCalledWith('shell-1');
+    wrapper.unmount();
+  });
+
+  it('still pushes an ordinarily small pane, so the floor cannot become a bug of its own', async () => {
+    // The floor is set to be unreachable by a real layout, not to second-guess
+    // one. A genuinely narrow pane — a small window, a wide session panel —
+    // must still tell the far end the truth, or the fix for a reflow becomes a
+    // fix that leaves tmux drawing a screen larger than the viewport.
+    const wrapper = await mountTerminal();
+    resize.mockClear();
+
+    setPaneSize(wrapper, 320, 240);
+    paneGrid = { cols: 24, rows: 12 };
+    await paneResized();
+
+    expect(resize).toHaveBeenCalledWith('shell-1', 24, 12);
+    wrapper.unmount();
+  });
 });

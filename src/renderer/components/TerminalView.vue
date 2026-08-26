@@ -219,6 +219,60 @@ let fitFrame = 0;
  * calls that instead of reasoning about whether a send is needed.
  */
 let sent: { cols: number; rows: number } | null = null;
+
+/**
+ * The smallest grid the far end may ever be told about.
+ *
+ * ## The picture this exists for
+ *
+ * Reported as "output in terminal broke again": a band of scrollback wrapped at
+ * about four columns — `I'd` / `just` / `poi` / `nt` / `out`, one fragment per
+ * row — with correctly-wrapped full-width text above and below it, and a live
+ * agent TUI still drawing its input box at that width long after the pane was
+ * wide again.
+ *
+ * That picture can only be made by the REMOTE. tmux and the TUI inside it wrap
+ * to the width they were told, and their scrollback keeps the wrap it was
+ * written with; nothing on this side re-flows text that has already been
+ * printed. So something sent a resize of roughly four columns, the agent
+ * reflowed its whole view to it, and the correct size that followed repaired
+ * only what was redrawn afterwards. The damage is not recoverable — which is
+ * what makes a bogus push worth refusing rather than correcting.
+ *
+ * ## Why the existing guard did not catch it
+ *
+ * There has been a degenerate-geometry guard here since inactive tabs started
+ * staying mounted, and it asks the right question of the wrong quantity: it
+ * tests the container for ZERO pixels (`clientWidth`/`clientHeight`), because
+ * the case it was written for is a `v-show`'d pane, which measures exactly 0.
+ * A container that is 30px wide is not zero, is not a pane anyone is looking
+ * at, and produces a four-column fit — every transient layout that has a
+ * non-zero width on its way to its real one walks straight through the guard.
+ *
+ * ## Why these numbers
+ *
+ * They are chosen to be UNREACHABLE by a real pane rather than to be the
+ * smallest usable terminal. The session panel is clamped to 560px
+ * (`MAX_PANEL_WIDTH`), the composer is an overlay and takes no rows from the
+ * pane, and the window has an OS minimum — so a grid this small is not a
+ * cramped layout, it is a measurement taken mid-transition. 20 columns is
+ * narrower than any terminal anyone has ever worked in on purpose, and 5 rows
+ * is narrower than the tmux status line plus a prompt.
+ *
+ * A pane that really is smaller than this keeps the last size the far end was
+ * told, which is the honest failure: tmux draws a screen bigger than the
+ * viewport and the user sees part of it, instead of the agent reflowing its
+ * session to a width the user cannot read and cannot undo.
+ */
+const MIN_REMOTE_COLS = 20;
+const MIN_REMOTE_ROWS = 5;
+
+/** Is this grid one a person could actually be looking at? */
+function plausibleGrid(size: { cols: number; rows: number } | undefined): boolean {
+  if (!size) return false;
+  return size.cols >= MIN_REMOTE_COLS && size.rows >= MIN_REMOTE_ROWS;
+}
+
 /** True between mousedown inside the terminal and the mouse-up that ends it. */
 let selecting = false;
 
@@ -305,6 +359,14 @@ function pushGeometry(opts: { redraw?: boolean } = {}): void {
   // on screen at all. The hidden -> visible edge in `scheduleFit` is what
   // brings it back.
   if (!containerEl.value?.clientHeight || !containerEl.value.clientWidth) return;
+  // The floor, applied HERE because this is the one place that speaks to the
+  // far end (see {@link MIN_REMOTE_COLS}). `scheduleFit` refuses to fit to a
+  // degenerate size in the first place, but it is not the only route in: the
+  // mount, `showTarget` after a join, and the font and zoom watchers all fit
+  // and then push. Guarding the owner covers every one of them, and leaves
+  // `sent` untouched — so the size the remote is still on remains the size we
+  // believe it is on, and the next plausible fit is compared against the truth.
+  if (!plausibleGrid({ cols, rows })) return;
   const id = shellId;
   if (!sent || sent.cols !== cols || sent.rows !== rows) {
     sent = { cols, rows };
@@ -758,6 +820,25 @@ function scheduleFit(): void {
     // keeps a hidden tab from telling its tmux session it is two columns wide —
     // and a hidden tab is now the normal state of most of them.
     if (!containerEl.value?.clientHeight || !containerEl.value.clientWidth) {
+      paneHidden = true;
+      return;
+    }
+    // A box that is small but not zero. `proposeDimensions` answers what a
+    // `fit()` WOULD produce, so asking first is what keeps xterm from reflowing
+    // its own buffer to four columns on the way past — the guard below in
+    // `pushGeometry` would stop the remote hearing about it, but the local
+    // reflow would still have happened, and a re-flowed scrollback does not
+    // come back.
+    //
+    // Treated as HIDDEN rather than merely skipped, deliberately: that is what
+    // arms the hidden -> visible edge below, so when the layout settles the
+    // pane re-asserts its geometry AND asks for a repaint. A plain `return`
+    // would leave the far end on a stale size with nothing scheduled to correct
+    // it — the exact failure mode this whole function was rewritten to remove.
+    //
+    // `undefined` from `proposeDimensions` means the addon could not measure at
+    // all, which is the zero case by another name.
+    if (!plausibleGrid(fitAddon?.proposeDimensions())) {
       paneHidden = true;
       return;
     }

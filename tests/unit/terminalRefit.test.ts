@@ -77,8 +77,18 @@ vi.mock('@xterm/addon-fit', () => ({
     fit(): void {
       fits++;
     }
-    proposeDimensions(): undefined {
-      return undefined;
+    // A PLAUSIBLE grid, not `undefined`.
+    //
+    // It used to answer undefined, which was fine while nothing read it and
+    // wrong the moment something did: the component now asks what a fit WOULD
+    // produce and declines to perform one that is degenerate, because a fit to
+    // a transient four-column box reflows xterm's buffer and the far end's with
+    // it (see MIN_REMOTE_COLS in TerminalView.vue). Undefined is the real
+    // addon's "I cannot measure" answer — the zero case by another name — so a
+    // double that returns it is asserting the hidden-pane path in every test in
+    // this file, none of which is about that.
+    proposeDimensions(): { cols: number; rows: number } {
+      return { cols: 80, rows: 24 };
     }
   },
 }));
