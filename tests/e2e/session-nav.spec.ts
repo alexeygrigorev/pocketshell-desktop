@@ -245,12 +245,29 @@ test.describe('session-scoped navigation + terminal wiring', () => {
     expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toContain('nav_sentinel_ok');
   });
 
-  test('Ctrl+Shift+V pastes the clipboard into the shell', async () => {
+  test('the right-click pastes the clipboard into the shell', async () => {
+    // The right-click, not Ctrl+Shift+V. That chord pasted here until a user
+    // reported reaching for it and having the clipboard go to the shell instead
+    // of the composer; both paste CHORDS belong to the composer now, and the
+    // mouse is the whole of the shell's paste (docs/SHORTCUTS.md §1.1).
     await app.evaluate(({ clipboard }) => clipboard.writeText('paste_probe_42'));
-    await page.locator('.terminal-area > .terminal').first().click();
-    await page.keyboard.press('Control+Shift+V');
+    await page.locator('.terminal-area > .terminal').first().click({ button: 'right' });
     await expect
       .poll(() => terminalText(page), { timeout: 5_000 })
       .toContain('paste_probe_42');
+  });
+
+  test('Ctrl+Shift+V puts the clipboard in the composer, not in the shell', async () => {
+    // The reported defect, end to end. The draft is what must receive it, and
+    // the pane must NOT — which is the half a jsdom unit test cannot prove,
+    // since jsdom performs no default action and so cannot produce the second,
+    // browser-driven paste this chord is capable of.
+    await app.evaluate(({ clipboard }) => clipboard.writeText('composer_probe_77'));
+    await page.locator('.terminal-area > .terminal').first().click();
+    await page.keyboard.press('Control+Shift+V');
+    await expect(page.locator('.composer .draft')).toHaveValue(/composer_probe_77/, {
+      timeout: 5_000,
+    });
+    expect(await terminalText(page)).not.toContain('composer_probe_77');
   });
 });

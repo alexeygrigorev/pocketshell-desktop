@@ -105,8 +105,8 @@ describe('chords — spelling', () => {
     expect(chordMatches(chord('Ctrl+Shift+V'), { key: 'V', ctrlKey: true, shiftKey: true })).toBe(
       true,
     );
-    // The pair that must never collapse into one: Ctrl+V goes to the composer,
-    // Ctrl+Shift+V pastes into the shell.
+    // Shift is part of the chord, which is what lets one command hold Ctrl+V
+    // and Ctrl+Shift+V as two entries rather than as one fuzzy match.
     expect(chordMatches(chord('Ctrl+V'), { key: 'V', ctrlKey: true, shiftKey: true })).toBe(false);
     expect(chordMatches(chord('Ctrl+V'), { key: 'v', ctrlKey: true, altKey: true })).toBe(false);
   });
@@ -208,12 +208,24 @@ describe('the registry', () => {
     expect(bad).toEqual([]);
   });
 
-  it('names the three chords the terminal pane claims', () => {
+  it('names the chords the terminal pane claims, and the action that has none', () => {
     // The audit, pinned. If one of these disappears from the registry the list
     // stops being the truth about the app.
-    expect(shortcutById('terminal.pasteIntoShell')!.defaults).toEqual(['Ctrl+Shift+V']);
+    //
+    // BOTH paste chords belong to the composer. Ctrl+Shift+V moved here from
+    // pasteIntoShell on a user report — it is the chord every terminal trains
+    // into the hand, so it is the one reached for first, and having it feed the
+    // shell while its twin fed the composer made the destination a coin toss.
+    expect(shortcutById('terminal.pasteIntoComposer')!.defaults).toEqual([
+      'Ctrl+V',
+      'Ctrl+Shift+V',
+    ]);
     expect(shortcutById('terminal.copySelection')!.defaults).toEqual(['Ctrl+Shift+C']);
-    expect(shortcutById('terminal.pasteIntoComposer')!.defaults).toEqual(['Ctrl+V']);
+    // The shell's paste survives with NO chord: it is the right-click, and it
+    // stays in the table because the action still exists and a reader needs to
+    // find out how to reach it.
+    expect(shortcutById('terminal.pasteIntoShell')!.defaults).toEqual([]);
+    expect(shortcutById('terminal.pasteIntoShell')!.rebindable).toBe(false);
   });
 
   it('lists the chords Electron binds that this app never declared', () => {
@@ -349,10 +361,16 @@ describe('validateBinding', () => {
   });
 
   it('allows an editing accelerator, because preventDefault suppresses those', () => {
-    // Ctrl+Shift+V is `pasteAndMatchStyle` in the default menu AND the app's
-    // paste-into-shell chord. Cancelling the keydown is what makes that work —
-    // measured, in the double-paste investigation.
-    expect(validateBinding('terminal.pasteIntoShell', chord('Ctrl+Shift+V'), inForce)).toBeNull();
+    // Ctrl+Shift+V is `pasteAndMatchStyle` in the default menu AND the chord
+    // the terminal pane hands to the composer. Cancelling the keydown is what
+    // makes that work — measured, in the double-paste investigation.
+    //
+    // Asked of the Files filter rather than of a terminal command: the terminal
+    // pane's own paste bindings are fixed now (a two-chord binding cannot be
+    // rebound without losing one), so asking either of them would test
+    // `locked` and never reach the menu rule this is about. Files has no
+    // terminal behind it, so the surfaces do not collide.
+    expect(validateBinding('files.filterTree', chord('Ctrl+Shift+V'), inForce)).toBeNull();
   });
 
   it('refuses a chord with no modifier, which would swallow typing', () => {
@@ -382,7 +400,7 @@ describe('validateBinding', () => {
     // terminal chord are two commands one keypress could reach.
     const refusal = validateBinding('composer.toggle', chord('Ctrl+Shift+V'), inForce);
     expect(refusal?.kind).toBe('conflict');
-    expect(refusal).toMatchObject({ withId: 'terminal.pasteIntoShell' });
+    expect(refusal).toMatchObject({ withId: 'terminal.pasteIntoComposer' });
   });
 
   it('does NOT report a conflict across surfaces that never coexist', () => {
@@ -463,15 +481,23 @@ describe('isShortcut — the shape every call site becomes', () => {
   const bindings = resolveBindings({});
 
   it('answers for a chord without the call site spelling it', () => {
-    expect(isShortcut(bindings, 'terminal.pasteIntoShell', { key: 'V', ctrlKey: true, shiftKey: true })).toBe(
-      true,
-    );
+    // One command, both spellings: Shift makes no difference to where a paste
+    // at the terminal goes, which is the whole of the user's report.
     expect(isShortcut(bindings, 'terminal.pasteIntoComposer', { key: 'v', ctrlKey: true })).toBe(
       true,
     );
-    // The two must not collapse into one — the regression the paste tests pin.
     expect(
       isShortcut(bindings, 'terminal.pasteIntoComposer', { key: 'V', ctrlKey: true, shiftKey: true }),
+    ).toBe(true);
+    // AltGr is not a paste: Ctrl+Alt is how it arrives on European layouts,
+    // where V sits under a printable character.
+    expect(
+      isShortcut(bindings, 'terminal.pasteIntoComposer', { key: 'v', ctrlKey: true, altKey: true }),
+    ).toBe(false);
+    // The shell's paste holds no chord at all now — it is the right-click — so
+    // nothing on the keyboard may answer for it.
+    expect(
+      isShortcut(bindings, 'terminal.pasteIntoShell', { key: 'V', ctrlKey: true, shiftKey: true }),
     ).toBe(false);
   });
 

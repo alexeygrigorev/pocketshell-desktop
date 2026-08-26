@@ -30,9 +30,9 @@
 // is what stops a re-attach closing a PTY main was about to hand back.
 //
 // Clipboard: selecting with the mouse copies on mouse-up (see onDocumentMouseUp);
-// Ctrl/Cmd-Shift-V and right-click paste INTO THE SHELL. Plain Ctrl/Cmd-V does
-// not: it is claimed for the prompt composer and leaves as `paste-into-composer`
-// (see onCustomKey).
+// RIGHT-CLICK pastes into the shell. Neither paste CHORD does — Ctrl/Cmd-V and
+// Ctrl/Cmd-Shift-V are both claimed for the prompt composer and leave as
+// `paste-into-composer` (see onCustomKey).
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Terminal, type IDisposable, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -491,7 +491,13 @@ async function copyToClipboard(text: string): Promise<void> {
   }
 }
 
-/** Read the system clipboard and feed it to the shell as pasted input. */
+/**
+ * Read the system clipboard and feed it to the shell as pasted input.
+ *
+ * One caller left: the right-click (`onTerminalContextMenu`). Both paste CHORDS
+ * go to the composer now, so this is the whole of the shell's paste — see the
+ * chord branch in `onCustomKey` for why that is the split.
+ */
 async function pasteFromClipboard(): Promise<void> {
   if (!term) return;
   try {
@@ -606,47 +612,46 @@ function onCustomKey(e: KeyboardEvent): boolean {
   }
 
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.shiftKey && (e.key === 'V' || e.key === 'v')) {
-    // Same defect as the typing branch above, and the same fix: returning
-    // false stops xterm — `_keyDown` bails at the custom handler and never
-    // calls its own `cancel()` — but leaves the DOM event LIVE. Chromium then
-    // performs its own Ctrl+Shift+V (paste as plain text), which fires a
-    // `paste` event on xterm's textarea, which xterm's own listener turns
-    // into a second write. One keystroke, two paths: measured in Electron as
-    // two onData calls each carrying the whole clipboard.
-    e.preventDefault();
-    void pasteFromClipboard();
-    return false;
-  }
-  // PLAIN Ctrl/Cmd+V goes to the PROMPT COMPOSER, not to the shell.
+  // BOTH paste chords go to the PROMPT COMPOSER, Shift or no Shift.
   //
-  // This chord is affordable, which is the only reason it can be taken. It was
-  // measured on this exact xterm during the double-paste investigation
-  // (3628090): Ctrl+V produces a single `\x16` through xterm's own ctrl-letter
-  // mapping and pastes NOTHING. Every paste the user has ever got out of this
-  // pane came from Ctrl+SHIFT+V or the right-click above, and both keep working
-  // unchanged — the branch above is matched first and this one demands
-  // `!e.shiftKey`, so the two chords cannot collapse into one.
+  // Ctrl+V was claimed first, and it was affordable only because it was
+  // measured: on this exact xterm (3628090) plain Ctrl+V produces a single
+  // `\x16` through xterm's own ctrl-letter mapping and pastes NOTHING. What it
+  // costs is readline's literal-next (`quoted-insert`, bound to `\x16`), which
+  // some people do use at a bash prompt; `Ctrl+Q` is bound to the same command
+  // in vi mode and nothing here claims it.
   //
-  // What it does cost is readline's literal-next (`quoted-insert`, bound to
-  // `\x16`), the thing that lets you type a raw control character at a bash
-  // prompt. That is a real key some people use and it is gone from this pane;
-  // `Ctrl+Q` is bound to the same command in vi mode and nothing else here
-  // claims it.
+  // Ctrl+SHIFT+V now joins it, and that was the user's report: "when I paste
+  // using ctrl+shift+v it goes directly to terminal but should go to prompt
+  // composer". It is the chord every terminal emulator trains into people's
+  // hands, so it is the one they reach for FIRST — and a pane where one paste
+  // chord opens the composer and its twin dumps the clipboard into the shell
+  // does not have two features, it has a coin toss. Which of the two fires is
+  // not something a user can feel before the paste has already landed
+  // somewhere, and one of those landings runs whatever was on the clipboard as
+  // shell input.
+  //
+  // The shell keeps its paste: RIGHT-CLICK (`onTerminalContextMenu`), which is
+  // still a chord-free, one-gesture route to the same place and is documented
+  // as such. That is deliberate — pasting a command to run at a prompt is a
+  // real thing to want, it just no longer sits on the key most likely to be
+  // pressed by reflex.
   //
   // `!e.altKey` because Ctrl+Alt is how AltGr arrives on European layouts, and
   // AltGr+V is a printable character on several of them. A user typing `@` or
   // `~` must not have it swallowed by the composer.
   //
   // preventDefault IS THE FEATURE here for the third time in this function, and
-  // for the third identical reason: returning false stops xterm but leaves the
-  // DOM event live, and Chromium's own default action for Ctrl+V is a paste
-  // into whatever holds focus. Focus is about to be the composer's draft, so
-  // without this line the clipboard would land there TWICE — once through the
-  // composer's staging path and once natively, on top of it. That is bc86cf7's
-  // doubled first letter and 3628090's doubled paste, arriving by a third
-  // route.
-  if (mod && !e.shiftKey && !e.altKey && (e.key === 'V' || e.key === 'v')) {
+  // for the third identical reason — returning false stops xterm (`_keyDown`
+  // bails at the custom handler and never calls its own `cancel()`) but leaves
+  // the DOM event LIVE, so Chromium performs its own default action on top of
+  // ours. It has been measured doing exactly that twice: Ctrl+Shift+V is
+  // `pasteAndMatchStyle`, which fires a `paste` on xterm's textarea that xterm
+  // turns into a second write (3628090), and Ctrl+V is an ordinary paste into
+  // whatever holds focus — about to be the composer's draft, which would then
+  // receive the clipboard twice. One keystroke, two paths, is bc86cf7 and
+  // 3628090; this line is what closes the native one.
+  if (mod && !e.altKey && (e.key === 'V' || e.key === 'v')) {
     e.preventDefault();
     emit('paste-into-composer');
     return false;

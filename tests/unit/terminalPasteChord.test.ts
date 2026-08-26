@@ -55,20 +55,34 @@ import { createPinia, setActivePinia } from 'pinia';
  * second paste at all. What it can assert is the thing that makes the second
  * paste impossible.
  *
- * ## The two chords must stay two chords
+ * ## Both chords now go to the composer, and the shell keeps the right-click
  *
- * Plain Ctrl+V has since been claimed for the PROMPT COMPOSER: the user asked
- * that pasting at the terminal put the clipboard in the composer — an image as
- * a staged attachment, text as draft content — rather than into the shell. The
+ * Plain Ctrl+V was claimed for the PROMPT COMPOSER first: the user asked that
+ * pasting at the terminal put the clipboard in the composer — an image as a
+ * staged attachment, text as draft content — rather than into the shell. The
  * measurement above is what made that affordable: Ctrl+V never pasted anything
  * here, it only produced `\x16`, so nothing the user could previously do with
- * it is being taken away except readline's literal-next (`quoted-insert`).
+ * it was taken away except readline's literal-next (`quoted-insert`).
  *
- * Ctrl+SHIFT+V is untouched and must stay untouched. It is the chord that
- * actually pastes into the shell, it is the one this component's header has
- * always documented, and collapsing the two into one would either break shell
- * pasting or make every composer paste land in the shell as well. Both chords
- * are asserted separately below for that reason.
+ * Ctrl+SHIFT+V has now followed it, on a second report: "when I paste using
+ * ctrl+shift+v it goes directly to terminal but should go to prompt composer".
+ * That is the chord every terminal emulator trains into the hand, so it is the
+ * one reached for FIRST — and a pane where one paste chord opens the composer
+ * while its twin feeds the shell is not two features, it is a coin toss the
+ * user cannot call until the clipboard has already landed somewhere. One of
+ * those landings hands whatever was on the clipboard to a shell.
+ *
+ * So the split is no longer chord-vs-chord, it is KEYBOARD-vs-MOUSE: both
+ * chords announce `paste-into-composer`, and the right-click is the whole of
+ * the shell's paste. The tests below are written the other way up from how they
+ * started — what they now guard is that NEITHER chord reaches `term.paste`,
+ * and that the right-click still does.
+ *
+ * The `preventDefault` assertions are unchanged and matter more than before.
+ * Ctrl+Shift+V is `pasteAndMatchStyle` in Chromium's default menu; leaving the
+ * event live would let the browser paste into whatever holds focus, which a
+ * moment later is the composer's draft — the doubled paste of 3628090 arriving
+ * at a new destination.
  */
 
 /** Captures the handler TerminalView hands to xterm, so a test can drive it. */
@@ -164,18 +178,12 @@ beforeEach(() => {
 
 describe('paste chord — delivery', () => {
   it('CANCELS Ctrl+Shift+V, so the browser cannot paste it a second time', async () => {
-    // THE REGRESSION. Un-skip together with the one-line TerminalView fix:
-    //
-    //   if (mod && e.shiftKey && (e.key === 'V' || e.key === 'v')) {
-    //  +  e.preventDefault();
-    //     void pasteFromClipboard();
-    //     return false;
-    //   }
-    //
-    // An un-cancelled event is one Chromium goes on to act on itself, and its
-    // action for this chord is a paste — into the same terminal, through
-    // xterm's own paste listener. Measured in Electron: two onData writes for
-    // one keypress, one from each path.
+    // THE ORIGINAL REGRESSION, and it outlived the change of destination. An
+    // un-cancelled event is one Chromium goes on to act on itself, and its
+    // action for this chord is `pasteAndMatchStyle` — measured in Electron as
+    // two onData writes for one keypress, one from each path. Now that the
+    // chord opens the composer, the browser's copy would land in the DRAFT
+    // instead, on top of the staged one; the same defect with a new victim.
     const wrapper = mountTerminal();
     const e = keydown('V', { ctrlKey: true, shiftKey: true });
 
@@ -184,26 +192,29 @@ describe('paste chord — delivery', () => {
     expect(e.defaultPrevented).toBe(true);
 
     await settle();
-    expect(pasted).toEqual(['CLIPBOARD-TEXT']);
+    expect(pasted).toEqual([]);
     wrapper.unmount();
   });
 
-  it('handles Ctrl+Shift+V itself and takes it away from xterm', async () => {
+  it('sends Ctrl+Shift+V to the COMPOSER, and nothing to the shell', async () => {
+    // The user's report, pinned: "when I paste using ctrl+shift+v it goes
+    // directly to terminal but should go to prompt composer". The bytes are
+    // withheld from xterm (`false`) and the clipboard is never read here — the
+    // composer reads it, because the composer is where the answer is acted on.
     const wrapper = mountTerminal();
 
     expect(customKeyHandler!(keydown('V', { ctrlKey: true, shiftKey: true }))).toBe(false);
     await settle();
 
-    // Exactly one paste from OUR path. The second write in the bug came from
-    // the browser, which jsdom cannot reproduce — see the file header.
-    expect(pasted).toEqual(['CLIPBOARD-TEXT']);
+    expect(wrapper.emitted('paste-into-composer')).toHaveLength(1);
+    expect(pasted).toEqual([]);
     wrapper.unmount();
   });
 
-  it('pastes once per keystroke, never once per key EVENT', async () => {
+  it('announces once per keystroke, never once per key EVENT', async () => {
     // xterm consults this handler for keyup and keypress too. A handler that
-    // acted on all three would paste three times without any help from the
-    // browser at all.
+    // acted on all three would read the clipboard three times and, for an
+    // image, stage three tiles.
     const wrapper = mountTerminal();
 
     customKeyHandler!(keydown('V', { ctrlKey: true, shiftKey: true }));
@@ -215,22 +226,32 @@ describe('paste chord — delivery', () => {
     );
     await settle();
 
-    expect(pasted).toEqual(['CLIPBOARD-TEXT']);
+    expect(wrapper.emitted('paste-into-composer')).toHaveLength(1);
+    expect(pasted).toEqual([]);
     wrapper.unmount();
   });
 
-  it('still pastes into the SHELL on Ctrl+Shift+V, now that Ctrl+V does not', async () => {
-    // The regression guard for the feature below. Ctrl+V was taken for the
-    // composer; if that branch ever stops demanding `!e.shiftKey`, or is moved
-    // ahead of this one, shell pasting disappears and every Ctrl+Shift+V opens
-    // the composer instead. Two chords, two destinations, asserted apart.
+  it('sends NEITHER chord to the shell — the right-click is the only route left', async () => {
+    // The split, asserted in one place: keyboard goes to the composer, mouse
+    // goes to the shell. If a future edit reintroduces a `e.shiftKey` test in
+    // that branch, this is the test that says which half broke — the chords
+    // would start pasting into the shell again while the right-click carried
+    // on working, which is exactly the state the user reported.
     const wrapper = mountTerminal();
 
-    expect(customKeyHandler!(keydown('V', { ctrlKey: true, shiftKey: true }))).toBe(false);
+    for (const mods of [{ ctrlKey: true }, { ctrlKey: true, shiftKey: true }]) {
+      expect(customKeyHandler!(keydown('V', mods))).toBe(false);
+    }
     await settle();
+    expect(pasted).toEqual([]);
+    expect(wrapper.emitted('paste-into-composer')).toHaveLength(2);
 
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    (wrapper.element as HTMLElement).dispatchEvent(menu);
+    await settle();
     expect(pasted).toEqual(['CLIPBOARD-TEXT']);
-    expect(wrapper.emitted('paste-into-composer')).toBeUndefined();
+    // And the mouse route does NOT double as a composer route.
+    expect(wrapper.emitted('paste-into-composer')).toHaveLength(2);
     wrapper.unmount();
   });
 
@@ -252,7 +273,11 @@ describe('paste chord — delivery', () => {
 
   it('survives a clipboard the browser refuses to read', async () => {
     // Permission denied / no clipboard API. The pane must not throw into an
-    // unhandled rejection; the chord simply does nothing.
+    // unhandled rejection; the paste simply does nothing.
+    //
+    // Driven through the RIGHT-CLICK, because that is now the only thing in
+    // this component that reads the clipboard at all — the chords hand the job
+    // to the composer without touching it.
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: {
@@ -263,7 +288,8 @@ describe('paste chord — delivery', () => {
     });
     const wrapper = mountTerminal();
 
-    expect(customKeyHandler!(keydown('V', { ctrlKey: true, shiftKey: true }))).toBe(false);
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    (wrapper.element as HTMLElement).dispatchEvent(menu);
     await settle();
 
     expect(pasted).toEqual([]);
@@ -345,6 +371,37 @@ describe('Ctrl+V — intercepted for the prompt composer', () => {
     // untypeable in the terminal.
     const wrapper = mountTerminal();
     const e = keydown('v', { ctrlKey: true, altKey: true });
+
+    expect(customKeyHandler!(e)).toBe(true);
+    expect(e.defaultPrevented).toBe(false);
+    await settle();
+
+    expect(wrapper.emitted('paste-into-composer')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('takes the Shift spelling as the same intention', async () => {
+    // Ctrl+Shift+V used to be excluded here by an `!e.shiftKey` test, and its
+    // removal IS the fix for the user's report. Asserted in this describe as
+    // well as the one above, because this is the block a reader consults for
+    // "what opens the composer", and the answer must not depend on Shift.
+    const wrapper = mountTerminal();
+    const e = keydown('V', { ctrlKey: true, shiftKey: true });
+
+    expect(customKeyHandler!(e)).toBe(false);
+    expect(e.defaultPrevented).toBe(true);
+    await settle();
+
+    expect(wrapper.emitted('paste-into-composer')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('leaves AltGr+Shift+V alone as well', async () => {
+    // The AltGr guard has to survive the Shift branch being merged in: on a
+    // European layout Ctrl+Alt is AltGr, and swallowing it would make a
+    // printable character untypeable whether or not Shift is down.
+    const wrapper = mountTerminal();
+    const e = keydown('V', { ctrlKey: true, altKey: true, shiftKey: true });
 
     expect(customKeyHandler!(e)).toBe(true);
     expect(e.defaultPrevented).toBe(false);

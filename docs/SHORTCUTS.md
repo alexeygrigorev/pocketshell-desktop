@@ -24,18 +24,33 @@ Ctrl-or-Command everywhere: every call site in the app spells the test
 
 | Chord | Does | Note |
 |---|---|---|
-| `Ctrl+Shift+V` | Paste into the shell | The only chord that has ever pasted here. |
-| `Ctrl+Shift+C` | Copy the selection | Only when there is a selection; falls through otherwise. |
 | `Ctrl+V` | Put the clipboard in the composer | Costs readline's `quoted-insert`. `Ctrl+Alt+V` is left alone — that is AltGr. |
+| `Ctrl+Shift+V` | Put the clipboard in the composer | The same command. It used to paste into the shell; see below. |
+| `Ctrl+Shift+C` | Copy the selection | Only when there is a selection; falls through otherwise. |
 | *any printable key* | Opens the composer with the keystroke | Not a chord. Gated on the `typingOpensComposer` setting and on the composer being closed. |
-| right-click | Paste into the shell | Not a chord, but the same command. |
+| right-click | Paste into the shell | Not a chord, and now the ONLY route to the shell's own paste. |
 | mouse-up after a drag | Copy the selection | Ditto. |
 
-`onCustomKey` also *declines* the tab chords (§1.3a) so that a pane mounted
+**Both paste chords go to the composer; the split is keyboard-vs-mouse, not
+chord-vs-chord.** `Ctrl+Shift+V` pasted into the shell until a user reported
+reaching for it and having the clipboard land there: it is the chord every
+terminal emulator trains into the hand, so it is the one pressed first, and a
+pane where one paste chord opens the composer while its twin feeds the shell is
+not two features — it is a coin toss the user cannot call until the clipboard
+has already gone somewhere, and one of those somewheres is a shell.
+
+Both chords are cancelled with `preventDefault()`, and that is load-bearing for
+both: `Ctrl+Shift+V` is `pasteAndMatchStyle` in Chromium's default menu and
+`Ctrl+V` is an ordinary paste, so an un-cancelled event gets acted on a second
+time by the browser — into xterm's textarea before, into the composer's draft
+now. Measured in Electron as two writes for one keypress (`3628090`).
+
+`onCustomKey` also *declines* the tab chords (§1.2) so that a pane mounted
 outside a folder workspace cannot turn one into shell input.
 
 Plus xterm's own `Shift+PageUp` / `Shift+PageDown`, which scroll the pane's
-buffer. Not this app's, but it is what the tab-move chord had to stay clear of.
+buffer, and — since the tab-move chord was removed — `Ctrl+Shift+PageUp` /
+`PageDown` as well. Not this app's.
 
 ### 1.2 Tabs — `FolderWorkspaceView.vue`, `onWindowKeydown`
 
@@ -155,11 +170,12 @@ What that changed, measured chord by chord against the real xterm:
 | Chord | In the terminal | Everywhere else, before | Now |
 |---|---|---|---|
 | `Ctrl+W` | `` — xterm cancelled the keydown, so the menu never saw it | **closed the window** | reaches the focused element; nothing closes |
-| `Ctrl+M` | `` | minimised the window | reaches the focused element |
+| `Ctrl+M` | `
+` | minimised the window | reaches the focused element |
 | `Ctrl+R` | `` | reload (not reproduced in a probe, but bound) | nothing |
 | `F11` | `[23~` | full-screened the window | reaches the focused element |
 | `Ctrl+Z` / `Ctrl+Y` / `Ctrl+X` / `Ctrl+A` | their C0 bytes | undo / redo / cut / select-all | unchanged — Chromium's editor, not the menu |
-| `Ctrl+C` / `Ctrl+V` / `Ctrl+Shift+V` | `` / `` / a real paste | copy / paste | unchanged, same reason |
+| `Ctrl+C` / `Ctrl+V` / `Ctrl+Shift+V` | `` / `` / a real paste | copy / paste | unchanged, same reason. Both `V` chords are this app's now (§1.1) and cancel their own keydown, which is what stops the menu's `paste` / `pasteAndMatchStyle` firing on top |
 | `Ctrl+0` / `+Plus` / `+-` | — | zoom, behind the settings store's back | this app's own, since `31019f2` |
 
 The load-bearing row is the first one. **The terminal was never the victim**:

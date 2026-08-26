@@ -1035,8 +1035,9 @@ with the `""`/`" "` separator rule from `PromptComposerSheet.kt:466-472`.
 Register global chords on `window` with `{ capture: true }` in the workspace
 shell and `preventDefault()` + `stopPropagation()` on match, so xterm's textarea
 never sees them. `TerminalView.vue` has already claimed the
-`Ctrl/Cmd+Shift+…` namespace for app chords (Ctrl/Cmd+Shift+V paste,
-`components/TerminalView.vue:11-12`), which is why every global here is a
+`Ctrl/Cmd+Shift+…` namespace for app chords (both paste chords, Ctrl/Cmd+V and
+Ctrl/Cmd+Shift+V, now land in THIS composer — see `onCustomKey` and
+docs/SHORTCUTS.md §1.1), which is why every global here is a
 Shift-chord: bare `Ctrl+K`, `Ctrl+L`, `Ctrl+A`, `Ctrl+E`, `Ctrl+R` are all real
 terminal keys and must keep reaching the pane.
 
