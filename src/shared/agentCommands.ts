@@ -145,6 +145,24 @@ const openCode: AgentCommand[] = [
   { command: '/init', label: 'Init', description: 'Initialise project memory.' },
 ];
 
+/**
+ * Grok. The one list here with NO Android original — `AgentCommandCatalog.kt`
+ * covers three engines (30 entries) and grok is not among them, so this is
+ * assembled from the Grok CLI's own command set rather than ported.
+ *
+ * That makes it the one list whose provenance is weaker than the rule at the
+ * top of this file would like, and it is deliberately kept to commands that
+ * are core to the CLI rather than padded to match the others' length. Grok is
+ * already the engine this repo cannot get a receipt for — `agentLaunch.ts`
+ * keeps its launch line minimal for exactly the same reason, no
+ * `pocketshell agent grok --help` having been captured. When one is, check
+ * this list against it; a command that turns out not to exist should be
+ * DELETED, not left in with a caveat, because offering an unavailable command
+ * is the failure mode the catalog exists to avoid.
+ *
+ * No `/goal`, following the opencode precedent: an engine that does not have
+ * it gets it omitted, never stubbed.
+ */
 const grokBuild: AgentCommand[] = [
   {
     command: '/new',
@@ -158,8 +176,20 @@ const grokBuild: AgentCommand[] = [
     description: 'Summarise the conversation to free up context.',
     argument: compactArgument,
   },
-  { command: '/export', label: 'Export', description: 'Export the current session.' },
   { command: '/context', label: 'Context', description: 'Show the current context usage.' },
+  { command: '/export', label: 'Export', description: 'Export the current session.' },
+  // Long tail (searchable).
+  {
+    command: '/clear',
+    label: 'Clear',
+    description: 'Clear the conversation history.',
+    destructive: true,
+  },
+  { command: '/models', label: 'Models', description: 'Switch the active model.' },
+  { command: '/usage', label: 'Usage', description: 'Show token usage for the session.' },
+  { command: '/mcp', label: 'MCP servers', description: 'Manage connected MCP servers.' },
+  { command: '/init', label: 'Init', description: 'Initialise project memory.' },
+  { command: '/help', label: 'Help', description: "List the CLI's own commands." },
 ];
 
 /** The full ordered list for one engine, curated-first then long tail. */

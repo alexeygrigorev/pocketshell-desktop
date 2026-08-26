@@ -10,6 +10,7 @@ import {
   slashQueryFor,
 } from '../../src/shared/composerText';
 import { commandsFor, filteredCommands, insertionTextFor } from '../../src/shared/agentCommands';
+import { composerAgentKind } from '../../src/shared/composerSend';
 
 /**
  * Ports of the Android client's own contracts for the composer's pure logic.
@@ -158,6 +159,84 @@ describe('agent command catalog (AgentCommandCatalog.kt)', () => {
     const clear = commandsFor('claude').find((c) => c.command === '/clear');
     expect(insertionTextFor(compact!)).toBe('/compact ');
     expect(insertionTextFor(clear!)).toBe('/clear');
+  });
+
+  /**
+   * Grok is the engine everything else in this repo has to hedge about — it
+   * cannot be launched by the pinned helper and no `--help` has been captured
+   * for it — so it is the one most likely to be quietly left as a stub. It is
+   * a real `SessionAgentKind` and `composerAgentKind` passes it straight
+   * through, which means a grok pane reaches the dropdown like any other and
+   * must not arrive to a near-empty list.
+   */
+  describe('grok', () => {
+    it('offers a catalog comparable to the ported engines, not a stub', () => {
+      const grok = commandsFor('grok');
+      expect(grok.length).toBeGreaterThanOrEqual(commandsFor('opencode').length);
+    });
+
+    it('is reachable from a host-recorded kind, so the dropdown really opens', () => {
+      expect(composerAgentKind('grok')).toBe('grok');
+      expect(filteredCommands(composerAgentKind('grok'), '')).toEqual(commandsFor('grok'));
+    });
+
+    it('carries the conversation basics the composer is built around', () => {
+      const commands = commandsFor('grok').map((c) => c.command);
+      expect(commands).toContain('/new');
+      expect(commands).toContain('/compact');
+      expect(commands).toContain('/clear');
+    });
+
+    it('omits /goal rather than stubbing it, the way OpenCode does', () => {
+      expect(commandsFor('grok').map((c) => c.command)).not.toContain('/goal');
+    });
+
+    it('takes a compaction argument, so accepting it leaves room to type one', () => {
+      const compact = commandsFor('grok').find((c) => c.command === '/compact');
+      expect(insertionTextFor(compact!)).toBe('/compact ');
+    });
+
+    it('is searchable by description, not only by command token', () => {
+      expect(filteredCommands('grok', 'model').map((c) => c.command)).toContain('/models');
+    });
+  });
+
+  /**
+   * Structural rules that hold for EVERY engine. A duplicate row is the defect
+   * these catch in practice: two entries for one command give the dropdown two
+   * identical-looking rows and make the highlight index ambiguous.
+   */
+  describe('every engine', () => {
+    const engines = ['claude', 'codex', 'opencode', 'grok'] as const;
+
+    it('offers a non-empty list', () => {
+      for (const engine of engines) expect(commandsFor(engine).length).toBeGreaterThan(0);
+    });
+
+    it('lists each command exactly once', () => {
+      for (const engine of engines) {
+        const commands = commandsFor(engine).map((c) => c.command);
+        expect(new Set(commands).size).toBe(commands.length);
+      }
+    });
+
+    it('writes every command with its leading slash and no whitespace', () => {
+      for (const engine of engines) {
+        for (const c of commandsFor(engine)) {
+          expect(c.command).toMatch(/^\/[a-z][a-z-]*$/);
+          expect(c.label).not.toBe('');
+          expect(c.description).not.toBe('');
+        }
+      }
+    });
+
+    it('starts with a way to begin a fresh conversation', () => {
+      for (const engine of engines) {
+        const first = commandsFor(engine)[0]!;
+        expect(first.destructive).toBe(true);
+        expect(['/new', '/clear']).toContain(first.command);
+      }
+    });
   });
 });
 

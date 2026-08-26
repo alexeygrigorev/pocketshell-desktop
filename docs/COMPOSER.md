@@ -1093,6 +1093,14 @@ Sources: `{ kind: 'file', path }` for the picker and drag-and-drop;
   (30 entries, `AgentCommandCatalog.kt:83-256`) plus the substring filter over
   command + label + description (`:268-277`). It is an app-shipped curated
   catalog, not user CRUD — do not build editing UI for it.
+- **Grok is the one list with no Android original.** The Kotlin catalog covers
+  claude/codex/opencode only, but `grok` is a real `SessionAgentKind` that
+  `composerAgentKind` passes through, so a grok pane reaches the dropdown and
+  needs a list of its own. It is assembled from the Grok CLI's own commands
+  rather than ported, which makes it the one entry without a receipt — the
+  same gap `agentLaunch.ts` documents for `pocketshell agent grok`. When a
+  `grok --help` is finally captured, check the list against it and DELETE
+  anything that turns out not to exist rather than annotating it.
 - Dropdown opens when `slashQueryFor(text, caret) !== null` **and** the filtered
   list is non-empty (`PromptComposerSheet.kt:631`).
 - Position it **above** the draft field (`:780-786`).
