@@ -8,7 +8,7 @@
 // title must suppress it when embedded (see UsageView's `embedded` prop),
 // otherwise the name appears twice — which it used to, see
 // docs/screenshots/07-usage-overlay.png.
-import { onBeforeUnmount, onMounted } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
 
 withDefaults(
@@ -31,8 +31,47 @@ function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') emit('close');
 }
 
-onMounted(() => document.addEventListener('keydown', onKeydown));
-onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
+/**
+ * Focus management, the minimal version. Without it, opening a panel left
+ * keyboard focus on the trigger button BEHIND the scrim — Tab then walked the
+ * obscured background — and closing restored nothing. So: on mount, remember
+ * where focus was and move it into the panel (the `tabindex="-1"` below is
+ * what makes a plain div focusable), so keyboard events start inside the
+ * dialog and the `role="dialog"`/`aria-label` are announced; on unmount, hand
+ * focus back, best-effort — the trigger may be gone by then (a session row
+ * that closed itself), hence the `isConnected` guard.
+ *
+ * Two deliberate limits. A full focus TRAP — cycling Tab at the panel's edges,
+ * inert-ing the background — was considered and deferred: it is a page of
+ * subtle code for a marginal gain here, since every panel is dismissed by
+ * Escape and none is long enough for Tab to walk off the end of in practice.
+ * And the panel must not STEAL focus from its own content: several dialogs
+ * focus a field of their own as they mount, and slot children mount before
+ * this component's mounted hook runs, so we only take focus when none of them
+ * already did.
+ */
+const panelEl = ref<HTMLElement | null>(null);
+/**
+ * Captured at SETUP, not in `onMounted` — the same child-first ordering that
+ * makes the no-stealing check above work means that by mounted-time a child
+ * may have focused its own field, and `activeElement` would then name an
+ * element inside the panel: we would "restore" focus to a field that is being
+ * torn down with the panel, and it would die with it, dropping focus to
+ * `<body>`. Setup runs before any of the subtree exists, so what is captured
+ * here is genuinely where the user was.
+ */
+const openedFrom: HTMLElement | null =
+  document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+onMounted(() => {
+  document.addEventListener('keydown', onKeydown);
+  const panel = panelEl.value;
+  if (panel && !panel.contains(document.activeElement)) panel.focus();
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeydown);
+  if (openedFrom?.isConnected) openedFrom.focus();
+});
 </script>
 
 <template>
@@ -41,11 +80,13 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   <Transition name="overlay" appear>
     <div class="overlay-backdrop" @click.self="emit('close')">
       <div
+        ref="panelEl"
         class="overlay-panel"
         :class="size"
         role="dialog"
         aria-modal="true"
         :aria-label="title"
+        tabindex="-1"
       >
         <header class="overlay-header">
           <h2 class="overlay-title">{{ title }}</h2>
@@ -89,6 +130,15 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-overlay);
   overflow: hidden;
+}
+/* The panel takes programmatic focus on open (see the script), and App.vue's
+   one-focus-treatment rule matches every `[tabindex]` — but the panel is a
+   SURFACE, not a control, and a ring around the whole sheet would say "this is
+   operable" about something that is only a container. `:focus-visible` (not
+   bare `:focus`) so the suppression is scoped to exactly the case the global
+   rule creates; real controls inside keep their rings untouched. */
+.overlay-panel:focus-visible {
+  outline: none;
 }
 .overlay-panel.lg {
   width: min(960px, 92vw);
