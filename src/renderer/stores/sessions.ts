@@ -13,15 +13,33 @@ export const useSessionsStore = defineStore('sessions', () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
 
-  async function refresh(connectionId: ConnectionId): Promise<void> {
-    loading.value = true;
+  /**
+   * Re-read the host's live session list.
+   *
+   * `quiet` exists for the session panel's background poll and it toggles ONE
+   * thing: whether `loading` moves. `loading` is not "a request is in flight",
+   * it is "the user asked for this and is waiting" — it spins the panel's
+   * Refresh glyph and disables the button. A poll that set it would spin that
+   * glyph for a fraction of a second every few seconds forever, which reads as
+   * the panel permanently working rather than as it quietly keeping up.
+   *
+   * `error` is deliberately NOT quietened, and that is the half that matters
+   * for correctness. A poll that fails leaves the previous list in place —
+   * there is nothing better to show, and blanking the panel on one bad round
+   * trip would be worse than showing a list that is a few seconds old — so the
+   * only thing standing between the user and a stale tree is this message. A
+   * folder row that should have vanished and did not is exactly the state that
+   * has to come with a reason attached.
+   */
+  async function refresh(connectionId: ConnectionId, options?: { quiet?: boolean }): Promise<void> {
+    if (!options?.quiet) loading.value = true;
     error.value = null;
     try {
       sessions.value = await api.helper.sessionsList(connectionId, 'activity');
     } catch (e) {
       error.value = (e as Error).message;
     } finally {
-      loading.value = false;
+      if (!options?.quiet) loading.value = false;
     }
   }
 

@@ -60,8 +60,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
 import NewSessionDialog from './NewSessionDialog.vue';
 import HostActionsMenu from './HostActionsMenu.vue';
+import PopupMenu from './PopupMenu.vue';
 import { type HostPanel } from '../hostPanels';
-import { type Box } from '../../shared/popupPlacement';
+import { pointAnchor, type Box } from '../../shared/popupPlacement';
 import { useConnectionStore } from '../stores/connection';
 import { useProjectsStore } from '../stores/projects';
 import { useSessionsStore } from '../stores/sessions';
@@ -215,6 +216,76 @@ const now = ref(Date.now());
 let clock: ReturnType<typeof setInterval> | null = null;
 
 /**
+ * How often the panel re-reads the host's session list.
+ *
+ * ## Why this exists at all
+ *
+ * Because the rest of the app already believed it did. docs/SESSIONLIST.md and
+ * docs/WORKSPACE.md refer to "the refresh timer" a dozen times over — the
+ * argument against keying a row's shape off `directories.length` (§3a), the
+ * rule that expansion state must never watch the root list, the tab order
+ * being stored as a RANKING because "sessions arrive on the refresh timer, and
+ * vanish when they are killed here, from the phone or from the user's own
+ * terminal", and the repo-root cache recording negatives so it does not put a
+ * git process on the host "every few seconds forever". Every one of those is a
+ * decision taken to survive a poll. The poll was not here. The only
+ * `setInterval` in the whole renderer was the cosmetic clock above.
+ *
+ * The symptom is precisely the one reported: a session that goes away leaves
+ * its folder row sitting in the panel. The store is only re-read on mount, on
+ * the Refresh button, and at the few call sites that follow their own write —
+ * so a session stopped from the phone, from a terminal, by an agent exiting,
+ * or by a stop whose follow-up refresh did not land, stays on screen until the
+ * user hits Refresh or navigates somewhere that happens to re-read it. The
+ * folder row is not wrong about anything; nothing ever told it.
+ *
+ * ## Why five seconds
+ *
+ * It is the "every few seconds" the repo-root cache was already designed
+ * against, and it is the interval the port dashboard settled on for the same
+ * kind of question. It has to be well under a minute for "I stopped it and it
+ * is still there" to stop being a bug report, and well over one second for the
+ * two execs a listing costs not to be a load on someone's box.
+ */
+const POLL_MS = 5_000;
+let poll: ReturnType<typeof setInterval> | null = null;
+/**
+ * Guards against a second listing being issued while the first is still out.
+ *
+ * A slow host is the case this is for: five seconds is shorter than a round
+ * trip over a bad link, and without the guard each tick would stack another
+ * pair of execs on a connection that is already struggling — the classic way a
+ * poll turns a slow host into an unusable one.
+ */
+let polling = false;
+
+/**
+ * One tick of the poll.
+ *
+ * Three things are skipped rather than merely tolerated:
+ *
+ *   - no connection, because there is nothing to ask;
+ *   - `document.hidden`, because a window in the background has no reader and
+ *     a laptop in a bag should not be holding an SSH connection busy;
+ *   - a listing already in flight (see {@link polling}).
+ *
+ * `quiet` keeps the Refresh glyph still: `loading` means "the user asked", and
+ * a poll did not. See the store for the half of that decision that matters —
+ * the error message is deliberately NOT quietened, because a stale tree with
+ * no explanation is the state this whole timer exists to prevent.
+ */
+async function pollSessions(): Promise<void> {
+  const connectionId = connection.connectionId;
+  if (!connectionId || polling || document.hidden) return;
+  polling = true;
+  try {
+    await sessions.refresh(connectionId, { quiet: true });
+  } finally {
+    polling = false;
+  }
+}
+
+/**
  * The tree. The top level is the user's REGISTERED roots when they have any,
  * and `$HOME`'s children derived from the session paths when they do not —
  * the grouping module decides which, from whether the list is empty.
@@ -227,6 +298,12 @@ onMounted(async () => {
   clock = setInterval(() => {
     now.value = Date.now();
   }, 60_000);
+  // Two timers, not one, because they answer to different costs. The clock
+  // above is free and only has to be fast enough to turn `59s` into `1m`; the
+  // poll below costs two execs on the user's host and has to be fast enough
+  // that a stopped session stops being on screen. Folding them together would
+  // force one of those two numbers to be wrong.
+  poll = setInterval(() => void pollSessions(), POLL_MS);
   if (!connection.connectionId) return;
   await sessions.refresh(connection.connectionId);
   // A failure is not worth surfacing: the panel still groups, just from the
@@ -237,6 +314,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (clock !== null) clearInterval(clock);
+  if (poll !== null) clearInterval(poll);
 });
 
 /** `1 session` / `3 sessions` — the phrase form, which lives only in tooltips. */
@@ -315,6 +393,86 @@ function dirTooltip(dir: SessionDirectory): string {
     lines.push(`  … and ${dir.rows.length - TOOLTIP_NAME_LIMIT} more`);
   }
   return lines.join('\n');
+}
+
+/* ── The folder row's context menu ─────────────────────────────────────────
+ * A root row has a `+` and the header has a `+`, and between them they cover
+ * "a session under `git`" and "a session anywhere". What neither covers is the
+ * case the user actually hit: standing in front of the row that says
+ * `dataqna`, wanting another session IN `dataqna`, and having to open the
+ * picker at `~/git` and browse back down to the folder already under the
+ * cursor. The row knows its own directory; the only thing missing was a way to
+ * ask it.
+ *
+ * A right-click rather than another revealed `+`. The row is already tight —
+ * dot, label, up to two badges, a count and a timestamp, in a panel that drags
+ * down to 200px, where the container query has already had to drop the
+ * timestamp — and the `+` on the root above it is the mark whose whole
+ * justification (see `.root-add`) was that one per ROOT is a tolerable number
+ * of identical marks to run down a scannable panel. One per FOLDER is not.
+ *
+ * `PopupMenu` rather than an absolute dropdown, for the reason that component
+ * exists: `.folder-list` is `overflow-y: auto`, so a menu laid out inside a row
+ * is clipped at the list's edge and a row near the bottom would open a menu
+ * nobody can see. It teleports to `body` and positions from a measured
+ * viewport rect, which is what a menu on a scrolling list needs.
+ */
+const folderMenu = ref<{ label: string; startIn: string | null; anchor: Box } | null>(null);
+
+/**
+ * Right-click a folder row.
+ *
+ * The absolute directory is resolved HERE, at open time, and parked in the
+ * menu's own state rather than re-derived when the item is clicked. Same
+ * reasoning as `creating` holding one object instead of a boolean and a path:
+ * the poll re-reads the session list every few seconds, so `home` and the row
+ * set can both move between the right-click and the click on the item. Resolved
+ * once, the enabled/disabled state the user SAW and the folder the dialog gets
+ * cannot disagree; re-derived, they could, and the way that failure presents is
+ * a session created somewhere the user did not point at.
+ *
+ * `rootHostPath` is named for the root row's `+` but it is not root-specific —
+ * it is the inverse of `directoryKey`, and `dir.path` is exactly what
+ * `directoryKey` produced (`~/git/dataqna`). Reusing it is what keeps one rule
+ * for turning a grouping key back into a real host directory, rather than a
+ * second expansion free to drift from the first. It answers null for an
+ * untracked folder, which is the case the item is disabled for.
+ *
+ * Nothing here selects the row, and that is deliberate — the workspace's tab
+ * menu takes the same position. A right-click the user then dismisses would
+ * otherwise have already navigated them somewhere else.
+ */
+function openFolderMenu(dir: SessionDirectory, e: MouseEvent): void {
+  folderMenu.value = {
+    label: dir.label,
+    startIn: rootHostPath(dir.path, home.value),
+    anchor: pointAnchor(e.clientX, e.clientY),
+  };
+}
+
+/**
+ * "New session…" from the row's menu: the same folder-first dialog both `+`s
+ * open, handed the folder the user right-clicked.
+ *
+ * The dialog still opens its picker rather than skipping to a confirmation,
+ * because `startIn` is where the browse LANDS and not a folder already chosen.
+ * That is the honest shape for it: a folder row is a strong hint about where
+ * the session goes, not a commitment, and the one step the user is spared —
+ * browsing back down to a directory they had already pointed at — is the whole
+ * of the complaint.
+ *
+ * The null guard is a second line rather than the only one: the item renders
+ * disabled in that case, so this is unreachable through the UI. It stays
+ * because "disabled in the template" and "cannot start" are two statements of
+ * one fact, and the one that must not be skippable is this one — a `startIn`
+ * of null does not fail, it silently means "$HOME", which is the wrong folder
+ * rather than no folder.
+ */
+function createInFolder(): void {
+  const target = folderMenu.value;
+  folderMenu.value = null;
+  if (!target || target.startIn === null) return;
+  creating.value = { startIn: target.startIn };
 }
 
 async function onRefresh(): Promise<void> {
@@ -594,6 +752,7 @@ function fmtRelative(epochSeconds: number): string {
               }"
               :title="dirTooltip(dir)"
               @click="emit('select', dir)"
+              @contextmenu.prevent="openFolderMenu(dir, $event)"
             >
               <!-- The dot says "something live is in here". It used to be an
                    aggregate standing in for a collapsed branch; now it is the
@@ -647,6 +806,50 @@ function fmtRelative(epochSeconds: number): string {
          than a text field, because the session name is DERIVED from the folder
          and typing one produced sessions that no other client could group. -->
     <p v-if="sessions.error" class="error">{{ sessions.error }}</p>
+
+    <!-- Right-clicking a folder row. One item today, and it is the one the row
+         is uniquely able to offer: the folder is already known, so the picker
+         opens IN it instead of at `$HOME` with the user browsing back down to
+         where they were already pointing.
+
+         `.prevent` on the handler, not a global suppression: in a packaged
+         Electron app the default here is Chromium's own menu, which carries
+         nothing that applies to a session row. It is the same `.prevent` the
+         file tree's rows and the workspace's session tabs use — the
+         application MENU BAR is a separate thing, nulled in main (169cf60),
+         and neither disarms the other.
+
+         DISABLED rather than absent when the folder has no directory we can
+         resolve — an untracked session, or a `~`-keyed folder on a host whose
+         `$HOME` never came back. Same rule the root `+` follows and for the
+         same reason: the action is real and the host is temporarily unable to
+         answer, so the title says which of those it is. An item that quietly
+         vanishes reads as a feature that was never there. -->
+    <PopupMenu
+      v-if="folderMenu"
+      :anchor="folderMenu.anchor"
+      :label="`Actions for ${folderMenu.label}`"
+      @close="folderMenu = null"
+    >
+      <ul>
+        <li class="menu-head">{{ folderMenu.label }}</li>
+        <li>
+          <button
+            class="menu-item"
+            :disabled="folderMenu.startIn === null"
+            :title="
+              folderMenu.startIn === null
+                ? `${folderMenu.label} has no directory on this host to start a session in`
+                : `Start a session in ${folderMenu.startIn}`
+            "
+            @click="createInFolder"
+          >
+            <AppIcon name="plus" :size="14" />
+            New session…
+          </button>
+        </li>
+      </ul>
+    </PopupMenu>
 
     <NewSessionDialog
       v-if="creating"

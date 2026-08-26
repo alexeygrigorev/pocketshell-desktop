@@ -913,6 +913,111 @@ describe('groupSessionsIntoRoots with registered roots', () => {
   });
 });
 
+/**
+ * What happens to a folder when its last session stops.
+ *
+ * Written because the user reported the opposite — "I stopped the last session
+ * but it stayed" — and the first question was whether the projection was at
+ * fault: does a directory that has lost every session still come out of here as
+ * a row? These say no, and they say it at both levels, so the next person
+ * reading that bug report does not have to re-derive it.
+ *
+ * The answer matters beyond this one report, because it is the reason the FIX
+ * could be a plain re-read of the session list rather than any reconciliation
+ * of the tree. `buildDirectories` builds a node BECAUSE a row landed in it —
+ * there is no path through it that produces an empty one — so feeding it the
+ * host's current truth is sufficient, and nothing has to remember what was on
+ * screen a moment ago in order to take it away.
+ *
+ * The one thing that DOES survive with nothing in it is a registered root, and
+ * that is deliberate and load-bearing: it is a statement of intent by the user
+ * rather than a fact derived from the session list, and the panel says so in
+ * words ("registered in Settings — nothing running here"). Anything that
+ * removes rows for being empty has to leave that case alone.
+ */
+describe('groupSessionsIntoRoots — a folder whose sessions are gone', () => {
+  const home = '/home/alexey';
+
+  it('has nothing at all to render once the last session stops', () => {
+    const live = groupSessionsIntoRoots([session('git-dataqna', `${home}/git/dataqna`, 100)], home);
+    expect(live[0]!.directories.map((d) => d.label)).toEqual(['dataqna']);
+    // The same call, one session poorer. Not "a root with an empty directory"
+    // and not "a directory with no rows" — the whole branch is simply absent.
+    expect(groupSessionsIntoRoots([], home)).toEqual([]);
+  });
+
+  it('drops the directory but keeps the root while a sibling folder is still live', () => {
+    const roots = groupSessionsIntoRoots(
+      [
+        session('git-dataqna', `${home}/git/dataqna`, 300),
+        session('git-dataops', `${home}/git/dataops`, 200),
+      ],
+      home,
+    );
+    expect(roots[0]!.directories.map((d) => d.label)).toEqual(['dataqna', 'dataops']);
+
+    const after = groupSessionsIntoRoots([session('git-dataops', `${home}/git/dataops`, 200)], home);
+    expect(after.map((r) => r.label)).toEqual(['git']);
+    expect(after[0]!.directories.map((d) => d.label)).toEqual(['dataops']);
+    expect(after[0]!.sessionCount).toBe(1);
+  });
+
+  it('keeps a folder that has merely lost ONE of its sessions', () => {
+    // The boundary the removal must not overshoot. Two sessions in a folder,
+    // one stopped: the row stays, holding the survivor, and its count and its
+    // dot both follow what is left rather than what was there.
+    const after = groupSessionsIntoRoots(
+      [session('git-dataqna', `${home}/git/dataqna`, 300, true)],
+      home,
+    );
+    const [dir] = after[0]!.directories;
+    expect(dir!.rows.map((r) => r.session.name)).toEqual(['git-dataqna']);
+    expect(dir!.active).toBe(true);
+  });
+
+  it('never emits a directory with no rows in it, whatever it is fed', () => {
+    // The property, rather than another example of it. `buildDirectories`
+    // creates a node BECAUSE a row landed in it, and this is what stops a
+    // future change from introducing a seeded-empty directory the way roots
+    // are legitimately seeded empty one level up.
+    const roots = groupSessionsIntoRoots(
+      [
+        session('git-a', `${home}/git/a`, 300),
+        session('tmp-b', `${home}/tmp/b`, 200),
+        session('elsewhere', '/srv/app', 150),
+        session('nowhere', null, 100),
+      ],
+      home,
+      ['~/git', '~/tmp', '~/never'],
+    );
+    for (const root of roots) {
+      for (const dir of root.directories) expect(dir.rows.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('still renders a REGISTERED root that has emptied out, and says nothing runs there', () => {
+    // The deliberate exception, and the reason "remove empty rows" cannot be a
+    // blanket rule. `~/git` was registered in Settings; its last session
+    // stopping does not un-register it, and a setting that silently shows
+    // nothing reads as a broken setting.
+    const roots = groupSessionsIntoRoots([], home, ['~/git']);
+    expect(roots.map((r) => r.label)).toEqual(['git']);
+    expect(roots[0]!.directories).toEqual([]);
+    expect(roots[0]!.sessionCount).toBe(0);
+    expect(roots[0]!.configured).toBe(true);
+    expect(roots[0]!.active).toBe(false);
+  });
+
+  it('removes a DERIVED root entirely when the last session under it stops', () => {
+    // The contrast that makes the exception above legible: nothing was
+    // registered here, so `git` existed only because a session was in it. With
+    // the session gone the root has no reason to be, and unlike a registered
+    // one it has nothing to say about itself.
+    expect(groupSessionsIntoRoots([session('git-a', `${home}/git/a`, 100)], home)).toHaveLength(1);
+    expect(groupSessionsIntoRoots([], home)).toHaveLength(0);
+  });
+});
+
 describe('rootHostPath', () => {
   /**
    * The inverse of `directoryKey`, and the reason the session panel's per-root

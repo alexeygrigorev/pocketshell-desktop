@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils';
 import { defineComponent, type PropType } from 'vue';
@@ -71,6 +71,26 @@ const DialogStub = defineComponent({
 });
 
 /**
+ * PopupMenu, flattened into the component tree.
+ *
+ * The real one teleports to `<body>`, which is exactly right in the app and
+ * exactly wrong here: a teleported node is outside the wrapper, so every
+ * `wrapper.find` in these tests would miss it and the assertions would read as
+ * "the menu did not open". What is being checked at this seam is which items a
+ * folder row offers and which folder they are pointed at; the teleport and the
+ * placement are PopupMenu's own, and popupPlacement.test.ts holds them.
+ *
+ * Plain options object rather than `defineComponent`, unlike the dialog above:
+ * nothing here is ever read back off the instance — the items are found by
+ * class — so it needs no identity, and one `defineComponent` per file is the
+ * shape the lint rule is asking for.
+ */
+const MenuStub = {
+  props: ['anchor', 'label'],
+  template: '<div class="menu-stub" :aria-label="label"><slot /></div>',
+};
+
+/**
  * Mount the panel against a host holding `sessions`, with `roots` registered
  * in Settings, and let the two mounted fetches settle.
  */
@@ -88,7 +108,7 @@ async function open(
   useSettingsStore().sessionRoots = roots;
 
   const wrapper = mount(SessionTree, {
-    global: { stubs: { NewSessionDialog: DialogStub } },
+    global: { stubs: { NewSessionDialog: DialogStub, PopupMenu: MenuStub } },
   });
   await flush(wrapper);
   return wrapper;
@@ -97,7 +117,13 @@ async function open(
 async function flush(wrapper: VueWrapper): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
-  await new Promise((r) => setTimeout(r, 0));
+  // The poll tests install fake timers BEFORE mounting, because the panel's
+  // `setInterval` is created in `onMounted` and one taken out against the real
+  // clock cannot be advanced afterwards. That makes the plain `setTimeout(0)`
+  // below never fire, so the settle step has to be spelled whichever way the
+  // clock currently works.
+  if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+  else await new Promise((r) => setTimeout(r, 0));
   await wrapper.vm.$nextTick();
 }
 
@@ -117,6 +143,19 @@ function headerControls(wrapper: VueWrapper): string[] {
 function rootAdds(wrapper: VueWrapper): { title: string; disabled: boolean }[] {
   return wrapper.findAll('.root-add').map((b) => ({
     title: b.attributes('title') ?? '',
+    disabled: b.attributes('disabled') !== undefined,
+  }));
+}
+
+/** Every folder row's label, in rendered order. */
+function dirLabels(wrapper: VueWrapper): string[] {
+  return wrapper.findAll('.dir-header .label').map((l) => l.text());
+}
+
+/** The items in the open row menu, with whether each is takeable. */
+function menuItems(wrapper: VueWrapper): { text: string; disabled: boolean }[] {
+  return wrapper.findAll('.menu-stub .menu-item').map((b) => ({
+    text: b.text(),
     disabled: b.attributes('disabled') !== undefined,
   }));
 }
@@ -242,5 +281,189 @@ describe('SessionTree — the per-root +', () => {
     const [add] = rootAdds(wrapper);
     expect(add?.disabled).toBe(true);
     expect(add?.title).toContain('cannot resolve $HOME');
+  });
+});
+
+/**
+ * The folder row's context menu.
+ *
+ * The gap it closes is one the two `+`s cannot: standing on the row that says
+ * `dataqna` and wanting a session IN `dataqna` meant opening the picker at
+ * `~/git` and browsing back down to the folder already under the cursor. The
+ * row knows its own directory, so the properties here are that it HANDS that
+ * directory over, absolute, and that it refuses rather than guesses when it has
+ * none.
+ */
+describe('SessionTree — right-clicking a folder row', () => {
+  it('offers a new session in the folder that was right-clicked', async () => {
+    const wrapper = await open([
+      session('git-dataqna', `${HOME}/git/dataqna`, 300),
+      session('git-other', `${HOME}/git/other`, 200),
+    ]);
+    expect(dirLabels(wrapper)).toEqual(['dataqna', 'other']);
+    expect(wrapper.find('.menu-stub').exists()).toBe(false);
+
+    await wrapper.findAll('.dir-header')[0]!.trigger('contextmenu');
+    expect(menuItems(wrapper)).toEqual([{ text: 'New session…', disabled: false }]);
+
+    await wrapper.get('.menu-stub .menu-item').trigger('click');
+    // The whole point: the picker opens IN the folder, expanded to a real
+    // absolute path — never at `$HOME`, and never at the literal `~/git/dataqna`,
+    // which SFTP would read as a directory named `~`.
+    expect(dialogStartIn(wrapper)).toBe('/home/alexey/git/dataqna');
+    // Taking the item closes the menu; two overlapping surfaces is not a state
+    // this should be able to reach.
+    expect(wrapper.find('.menu-stub').exists()).toBe(false);
+  });
+
+  it('acts on the row under the cursor, not on the first one', async () => {
+    const wrapper = await open([
+      session('git-dataqna', `${HOME}/git/dataqna`, 300),
+      session('git-other', `${HOME}/git/other`, 200),
+    ]);
+    await wrapper.findAll('.dir-header')[1]!.trigger('contextmenu');
+    await wrapper.get('.menu-stub .menu-item').trigger('click');
+    expect(dialogStartIn(wrapper)).toBe('/home/alexey/git/other');
+  });
+
+  it('suppresses the browser default menu', async () => {
+    // In a packaged Electron app the default here is Chromium's own menu, which
+    // carries nothing that applies to a session row. Dispatched by hand because
+    // `trigger` does not hand the event back, and `defaultPrevented` is the only
+    // thing that actually proves the `.prevent`.
+    const wrapper = await open([session('git-dataqna', `${HOME}/git/dataqna`)]);
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    wrapper.get('.dir-header').element.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('leaves the row left-click exactly as it was', async () => {
+    // The menu is additive. A left-click still opens the folder's workspace,
+    // and a right-click still does NOT — a right-click the user then dismisses
+    // must not have navigated them somewhere in the meantime.
+    const wrapper = await open([session('git-dataqna', `${HOME}/git/dataqna`)]);
+    await wrapper.get('.dir-header').trigger('contextmenu');
+    expect(wrapper.emitted('select')).toBeUndefined();
+    await wrapper.get('.dir-header').trigger('click');
+    expect(wrapper.emitted('select')).toHaveLength(1);
+  });
+
+  it('disables the item on a folder with no directory on the host', async () => {
+    // An untracked session — tmux reported no cwd — is rendered as a folder row
+    // labelled by the session name. There is no directory behind it, so there is
+    // nowhere to create anything; the item stays, disabled, because `startIn`
+    // does not FAIL when it is null, it silently means `$HOME`, and that is a
+    // session in the wrong place rather than a session that was not created.
+    const wrapper = await open([session('nowhere', null)]);
+    expect(dirLabels(wrapper)).toEqual(['nowhere']);
+    await wrapper.get('.dir-header').trigger('contextmenu');
+    expect(menuItems(wrapper)).toEqual([{ text: 'New session…', disabled: true }]);
+    expect(wrapper.get('.menu-stub .menu-item').attributes('title')).toContain(
+      'no directory on this host',
+    );
+    await wrapper.get('.menu-stub .menu-item').trigger('click');
+    expect(dialogStartIn(wrapper)).toBeUndefined();
+  });
+});
+
+/**
+ * The panel keeping up with the host, which is what "I stopped the last session
+ * and the row stayed" turned out to be about.
+ *
+ * The grouping never emits a folder with no sessions in it — sessionGrouping's
+ * own tests pin that — so a row that outlives its last session is not a
+ * projection bug. It is the session list never being re-read: before this, the
+ * only `setInterval` in the renderer was the cosmetic clock behind the relative
+ * timestamps, while docs/SESSIONLIST.md and docs/WORKSPACE.md argue a dozen
+ * decisions against "the refresh timer" that did not exist. A session killed
+ * from the phone, from a terminal, or by an agent exiting stayed on screen
+ * until the user pressed Refresh.
+ */
+describe('SessionTree — the panel keeps up with the host', () => {
+  // Installed before the mount on purpose: the interval is created in
+  // `onMounted`, and one taken out against the real clock cannot be advanced.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('drops a folder row once its last session is gone from the host', async () => {
+    const wrapper = await open([session('git-dataqna', `${HOME}/git/dataqna`)]);
+    expect(dirLabels(wrapper)).toEqual(['dataqna']);
+
+    // The session was stopped — here, from the phone, or from the user's own
+    // terminal. The panel is told nothing; it has to notice.
+    sessionsList.mockResolvedValue([]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await wrapper.vm.$nextTick();
+
+    expect(dirLabels(wrapper)).toEqual([]);
+    expect(wrapper.find('.empty').text()).toContain('no sessions');
+  });
+
+  it('keeps the other sessions in a folder when only one of them goes', async () => {
+    // The removal must be driven by what the host reports and nothing else. A
+    // folder losing one of two sessions keeps its row, with the survivor in it.
+    const wrapper = await open([
+      session('git-dataqna', `${HOME}/git/dataqna`, 300),
+      session('git-dataqna-2', `${HOME}/git/dataqna`, 200),
+    ]);
+    sessionsList.mockResolvedValue([session('git-dataqna', `${HOME}/git/dataqna`, 300)]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await wrapper.vm.$nextTick();
+
+    expect(dirLabels(wrapper)).toEqual(['dataqna']);
+  });
+
+  it('keeps the row AND says why when the list cannot be re-read', async () => {
+    // The failure mode the user could not interpret. Blanking the tree on one
+    // bad round trip would be worse than showing a list a few seconds old, so
+    // the row stays — and the message is then the only thing standing between
+    // the user and a tree they have no reason to distrust.
+    const wrapper = await open([session('git-dataqna', `${HOME}/git/dataqna`)]);
+    sessionsList.mockRejectedValue(new Error('ssh channel closed'));
+    await vi.advanceTimersByTimeAsync(5_000);
+    await wrapper.vm.$nextTick();
+
+    expect(dirLabels(wrapper)).toEqual(['dataqna']);
+    expect(wrapper.get('.error').text()).toContain('ssh channel closed');
+  });
+
+  it('polls quietly, without spinning the Refresh glyph', async () => {
+    // `loading` is not "a request is in flight", it is "the user asked and is
+    // waiting". A poll that set it would spin that glyph and grey the button
+    // out for a moment every few seconds forever, which reads as a panel
+    // permanently working rather than one quietly keeping up.
+    const wrapper = await open([session('git-dataqna', `${HOME}/git/dataqna`)]);
+    // Left pending, so the assertion lands while the listing is genuinely out.
+    sessionsList.mockReturnValue(new Promise<SessionSummary[]>(() => {}));
+    await vi.advanceTimersByTimeAsync(5_000);
+    await wrapper.vm.$nextTick();
+
+    const refresh = wrapper.get('[title="Refresh"]');
+    expect(refresh.attributes('disabled')).toBeUndefined();
+    expect(refresh.find('.spin').exists()).toBe(false);
+  });
+
+  it('does not stack listings on a host slower than the poll', async () => {
+    // Five seconds is shorter than a round trip over a bad link, and without
+    // the in-flight guard every tick would put another pair of execs on a
+    // connection that is already struggling.
+    const wrapper = await open([session('git-dataqna', `${HOME}/git/dataqna`)]);
+    const listedOnMount = sessionsList.mock.calls.length;
+    sessionsList.mockReturnValue(new Promise<SessionSummary[]>(() => {}));
+    await vi.advanceTimersByTimeAsync(30_000);
+    await wrapper.vm.$nextTick();
+    expect(sessionsList.mock.calls.length).toBe(listedOnMount + 1);
+  });
+
+  it('stops polling once the panel goes away', async () => {
+    const wrapper = await open([session('git-dataqna', `${HOME}/git/dataqna`)]);
+    wrapper.unmount();
+    const after = sessionsList.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sessionsList.mock.calls.length).toBe(after);
   });
 });
