@@ -153,21 +153,23 @@ describe('the tab chords are taken away from xterm', () => {
     wrapper.unmount();
   });
 
-  it('cancels every digit in the family, including the ones xterm encodes', () => {
-    // Ctrl+3..Ctrl+8 are real C0 control bytes at a terminal. They are the
-    // reason this branch cannot be "only the ones that do nothing anyway".
+  it('CANCELS Ctrl+Left and Ctrl+Right, which xterm sends as modified arrows', () => {
+    // The chords that replaced the digit family: step one tab left or right.
+    // xterm encodes these as ESC [ 1 ; 5 D / ESC [ 1 ; 5 C, which readline
+    // reads as backward-word and forward-word — so this branch is what stops
+    // one keystroke both moving the tab and jumping a word at the prompt.
     const wrapper = mountTerminal();
-    for (const digit of ['1', '2', '3', '4', '5', '6', '7', '8', '9']) {
-      const e = keydown(digit, { ctrlKey: true });
-      expect(customKeyHandler!(e)).toBe(false);
-      expect(e.defaultPrevented).toBe(true);
+    for (const key of ['ArrowLeft', 'ArrowRight']) {
+      const e = keydown(key, { ctrlKey: true });
+      expect(customKeyHandler!(e), key).toBe(false);
+      expect(e.defaultPrevented, key).toBe(true);
     }
     wrapper.unmount();
   });
 
   it('takes the Cmd spelling too', () => {
     const wrapper = mountTerminal();
-    for (const e of [keydown('Tab', { metaKey: true }), keydown('4', { metaKey: true })]) {
+    for (const e of [keydown('Tab', { metaKey: true }), keydown('ArrowLeft', { metaKey: true })]) {
       expect(customKeyHandler!(e)).toBe(false);
       expect(e.defaultPrevented).toBe(true);
     }
@@ -196,31 +198,64 @@ describe('what the chords deliberately leave alone', () => {
     wrapper.unmount();
   });
 
-  it('lets a bare digit through', () => {
+  it('lets a bare arrow through — that is history and cursor movement', () => {
     const wrapper = mountTerminal();
-    const e = keydown('4');
-    expect(customKeyHandler!(e)).toBe(true);
-    expect(e.defaultPrevented).toBe(false);
+    for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+      const e = keydown(key);
+      expect(customKeyHandler!(e), key).toBe(true);
+      expect(e.defaultPrevented, key).toBe(false);
+    }
     wrapper.unmount();
   });
 
-  it('leaves Ctrl+Shift+<digit> alone — a different chord, and nobody’s here', () => {
-    // Only Tab takes Shift, as its direction. A shifted digit is punctuation on
-    // most layouts and is not part of the jump family.
+  it('HANDS THE DIGITS BACK — Ctrl+3..Ctrl+8 are C0 controls the shell wants', () => {
+    // The jump-to-Nth-tab family was removed at the user's request ("remove
+    // ctrl 1 2 3 hotkey"), and this is the half of that removal worth pinning:
+    // the decline had to go with it. Ctrl+3..Ctrl+7 are ESC, FS, GS, RS, US and
+    // Ctrl+8 is DEL — Ctrl+3 in particular is a widely used stand-in for
+    // Escape. A chord this app no longer claims must reach the program the user
+    // is actually talking to, so every one of these now falls through.
     const wrapper = mountTerminal();
-    const e = keydown('4', { ctrlKey: true, shiftKey: true });
-    expect(customKeyHandler!(e)).toBe(true);
-    expect(e.defaultPrevented).toBe(false);
+    for (const digit of ['1', '2', '3', '4', '5', '6', '7', '8', '9']) {
+      const e = keydown(digit, { ctrlKey: true });
+      expect(customKeyHandler!(e), digit).toBe(true);
+      expect(e.defaultPrevented, digit).toBe(false);
+    }
+    wrapper.unmount();
+  });
+
+  it('leaves Ctrl+Shift+arrow alone — a different chord, and nobody’s here', () => {
+    // Only Tab takes Shift, as its direction.
+    const wrapper = mountTerminal();
+    for (const key of ['ArrowLeft', 'ArrowRight']) {
+      const e = keydown(key, { ctrlKey: true, shiftKey: true });
+      expect(customKeyHandler!(e), key).toBe(true);
+      expect(e.defaultPrevented, key).toBe(false);
+    }
+    wrapper.unmount();
+  });
+
+  it('leaves Ctrl+Shift+PageUp / PageDown alone — that is xterm’s scrollback', () => {
+    // "Move the active tab left or right remove this too". With the chord gone,
+    // the keys belong to the pane again: xterm reaches `case 33`/`case 34`
+    // before any ctrl branch and scrolls its own buffer.
+    const wrapper = mountTerminal();
+    for (const key of ['PageUp', 'PageDown']) {
+      const e = keydown(key, { ctrlKey: true, shiftKey: true });
+      expect(customKeyHandler!(e), key).toBe(true);
+      expect(e.defaultPrevented, key).toBe(false);
+    }
     wrapper.unmount();
   });
 
   it('leaves Ctrl+Alt alone — that is AltGr on European layouts', () => {
-    // The digit row carries printable characters under AltGr on several
-    // layouts. Same guard the Ctrl+V branch already carries.
+    // AltGr+arrow is a real combination on a few layouts, and the digit row
+    // carries printable characters under AltGr on several. Same guard the
+    // Ctrl+V branch already carries.
     const wrapper = mountTerminal();
     for (const e of [
       keydown('Tab', { ctrlKey: true, altKey: true }),
-      keydown('4', { ctrlKey: true, altKey: true }),
+      keydown('ArrowLeft', { ctrlKey: true, altKey: true }),
     ]) {
       expect(customKeyHandler!(e)).toBe(true);
       expect(e.defaultPrevented).toBe(false);
@@ -228,11 +263,18 @@ describe('what the chords deliberately leave alone', () => {
     wrapper.unmount();
   });
 
-  it('leaves Ctrl+0 alone — it belongs to zoom, and there is no zeroth tab', () => {
+  it('leaves Ctrl+Up / Ctrl+Down alone — the WORKSPACE chords are not this pane’s', () => {
+    // They step between folder workspaces and are owned by HostWorkspaceView's
+    // window listener, which cancels them in capture long before xterm is
+    // consulted. This branch declines only what the pane would otherwise
+    // encode into a chord the workspace claims — the vertical pair is somebody
+    // else's, and a second decline of it here would be a second place to keep
+    // in step for no gain.
     const wrapper = mountTerminal();
-    const e = keydown('0', { ctrlKey: true });
-    expect(customKeyHandler!(e)).toBe(true);
-    expect(e.defaultPrevented).toBe(false);
+    for (const key of ['ArrowUp', 'ArrowDown']) {
+      const e = keydown(key, { ctrlKey: true });
+      expect(customKeyHandler!(e), key).toBe(true);
+    }
     wrapper.unmount();
   });
 });

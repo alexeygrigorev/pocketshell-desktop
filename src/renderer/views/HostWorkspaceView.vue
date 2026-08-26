@@ -29,7 +29,7 @@
 // FOLDER (docs/WORKSPACE.md). The two host-scoped panels — port forwarding and
 // provider usage — open as overlays, because neither is a property of one
 // folder.
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAgentsStore } from '../stores/agents';
 import { useConnectionStore } from '../stores/connection';
@@ -41,6 +41,8 @@ import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
 import HostActionsMenu from '../components/HostActionsMenu.vue';
 import { type HostPanel } from '../hostPanels';
+import { useFolderTree } from '../folderTree';
+import { adjacentIndex } from '../../shared/listNavigation';
 import type { Box } from '../../shared/popupPlacement';
 import PortPanelView from './PortPanelView.vue';
 import SettingsView from './SettingsView.vue';
@@ -222,6 +224,13 @@ const missingToolsText = computed(() => {
 const activeFolder = computed(() => (route.params['folder'] as string | undefined) ?? null);
 
 /**
+ * The panel's folder rows, flat and in draw order, for the `Ctrl+↑`/`Ctrl+↓`
+ * chords below. The SAME derivation `SessionTree` renders from — see
+ * `folderTree.ts` for why deriving it twice is the bug this avoids.
+ */
+const { folders } = useFolderTree();
+
+/**
  * Open a folder's workspace. [session] names a tab to arrive on, which the
  * panel supplies only when it has a reason to — a session it just created.
  *
@@ -240,6 +249,96 @@ function onSelectFolder(folder: SessionDirectory, session?: string): void {
     ...(session === undefined ? {} : { query: { tab: session } }),
   });
 }
+
+/* ── `Ctrl+↑` / `Ctrl+↓`: the workspace above, the workspace below ─────────
+ *
+ * Asked for as one gesture with the tab chords — "up and down - different
+ * workspaces", "left and right - tabs within workspace" — and that pairing is
+ * the whole design. The two axes are the two lists on screen: the tab bar runs
+ * across the top of the workspace, the folder rows run down the panel on the
+ * left, and each arrow moves along the thing that lies in its own direction.
+ * Nobody has to remember which is which, because the keyboard mirrors the
+ * layout.
+ *
+ * ## Why HERE and not in the workspace
+ *
+ * `FolderWorkspaceView` owns the horizontal pair, because tabs are its own
+ * state. The vertical pair changes WHICH workspace is mounted, so it belongs to
+ * the thing that owns the route — and this is it (`onSelectFolder`). Putting it
+ * in the workspace would mean a component navigating away from itself, and the
+ * one case that has to work would be the one it could not serve: an empty
+ * panel, or a route with no folder yet, where no workspace is mounted to listen.
+ *
+ * ## Which rows, and in what order
+ *
+ * `useFolderTree().folders` — the SAME derivation the panel draws from, in the
+ * same order, keyed the same way. Deriving the list a second time here is the
+ * one thing this must not do: `$HOME` decides whether a folder is keyed
+ * `~/git/foo` or `/home/me/git/foo`, and a chord navigating by a key the panel
+ * spells differently lands in a workspace with no tabs and highlights no row.
+ * See the header of `folderTree.ts`.
+ *
+ * The list is FLAT across roots, so `Ctrl+↓` on the last folder of `git` opens
+ * the first folder under the next root. The user is stepping down the PANEL,
+ * and a root header is a label, not a stop.
+ *
+ * It CLAMPS at both ends (`adjacentIndex`), unlike `Ctrl+Tab`, which cycles.
+ * Same reasoning as the tab arrows: an arrow is a direction, and being thrown
+ * from the top of the panel to the bottom is not what "up" asked for.
+ *
+ * ## What it costs, and where it stands down
+ *
+ * `Ctrl+↑`/`Ctrl+↓` at a shell is `ESC [ 1 ; 5 A` / `ESC [ 1 ; 5 B`, which
+ * readline leaves unbound by default — so this is the cheaper half of the two
+ * pairs. In a real text field it does nothing at all here: the same
+ * `editingTarget` rule the tab arrows follow, kept in step deliberately, or one
+ * axis of a single gesture would behave differently from the other in a draft.
+ *
+ * `capture: true` on `window` for the reason FolderWorkspaceView's handler
+ * documents at length: xterm, CodeMirror and the composer are three different
+ * keyboard owners, and capture runs before all of them. `preventDefault` and
+ * `stopPropagation` both, so neither Chromium nor xterm also acts on it.
+ */
+function stepWorkspace(direction: 1 | -1): void {
+  const rows = folders.value;
+  const index = adjacentIndex(
+    rows.length,
+    rows.findIndex((dir) => dir.key === activeFolder.value),
+    direction,
+  );
+  const target = index === null ? null : rows[index];
+  if (target) onSelectFolder(target);
+}
+
+/**
+ * A field the user is editing keeps its own arrow keys.
+ *
+ * The terminal is deliberately not one, and that exception is the load-bearing
+ * half: xterm's input sink IS a `<textarea>` (`.xterm-helper-textarea`) and is
+ * focused whenever the pane has the keyboard, so a plain editable test would
+ * exempt the one surface these chords exist for. Same rule, same reason, as
+ * FolderWorkspaceView's `editingTarget` — the two must not drift, because they
+ * are two axes of one gesture.
+ */
+function editingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest('.xterm')) return false;
+  if (target.isContentEditable) return true;
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+}
+
+function onWindowKeydown(e: KeyboardEvent): void {
+  if (!e.ctrlKey && !e.metaKey) return;
+  if (e.altKey || e.shiftKey) return;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  if (editingTarget(e.target)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  stepWorkspace(e.key === 'ArrowDown' ? 1 : -1);
+}
+
+onMounted(() => window.addEventListener('keydown', onWindowKeydown, { capture: true }));
+onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown, { capture: true }));
 
 function onDragStart(): void {
   document.addEventListener('mousemove', onDragMove);

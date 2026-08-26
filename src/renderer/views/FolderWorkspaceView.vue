@@ -64,18 +64,17 @@ import { pointAnchor, type Box } from '../../shared/popupPlacement';
 import { composerAgentKind } from '../../shared/composerSend';
 import { agentMark } from '../../shared/agentBadge';
 import { sanitisePart, sessionBaseName } from '../../shared/sessionNameParts';
+import { adjacentIndex } from '../../shared/listNavigation';
 import {
   buildWorkspaceTabs,
   applyTabOrder,
   canDropTabAt,
   nextWorkspaceTabId,
-  nudgeTabOrder,
   pruneTabIds,
   pushMru,
   reorderTabs,
   renamedSessionName,
   tabAfterClose,
-  tabIdAtIndex,
   type WorkspaceTab,
 } from '../../shared/workspaceTabs';
 import { groupSessionsIntoRoots, rootHostPath, UNTRACKED_PATH } from '../sessionGrouping';
@@ -788,21 +787,13 @@ function onTabDragEnd(): void {
   dropGap.value = null;
 }
 
-/**
- * Move the ACTIVE tab one place along — the keyboard counterpart of the drag.
- *
- * The active tab rather than a separately-tracked "grabbed" tab, because that
- * is the one the user is looking at and the one the chord's effect is visible
- * on. Returning null (the move would leave the group, or the tab is already at
- * the end) does nothing at all, which is the right feel for a key: it stops at
- * the edge rather than jumping the boundary.
- */
-function nudgeActiveTab(direction: 1 | -1): void {
-  const id = activeTab.value?.id;
-  if (id === undefined) return;
-  const next = nudgeTabOrder(tabs.value, id, direction);
-  if (next) writeTabOrder(next);
-}
+// `nudgeActiveTab` — the keyboard counterpart of the drag — is GONE with the
+// chord that called it (`Ctrl+Shift+PageUp`/`PageDown`), removed at the user's
+// request: "Move the active tab left or right remove this too". The DRAG is
+// untouched and is now the only way to reorder (docs/WORKSPACE.md §15);
+// `nudgeTabOrder` stays in the shared module, unused here, still pinned by
+// workspaceTabs.test.ts, because the ordering rule it encodes is the drag's
+// too.
 
 // ---------------------------------------------------------------------------
 // Tab chords (docs/WORKSPACE.md §11)
@@ -836,24 +827,35 @@ function nudgeActiveTab(direction: 1 | -1): void {
  *
  * ## The terminal is NOT a safe place to let these fall through
  *
- * The brief's premise was that these two families are affordable "because
- * terminals cannot encode them". Measured against the xterm this app ships
- * (@xterm/xterm 6, `evaluateKeyboardEvent`), that is not true, and the
- * correction is the reason TerminalView also declines them:
+ * The brief's premise was that a tab chord is affordable "because terminals
+ * cannot encode it". Measured against the xterm this app ships (@xterm/xterm 6,
+ * `evaluateKeyboardEvent`), that is not true, and the correction is the reason
+ * TerminalView also declines what this handler claims:
  *
  *   - **`Ctrl+Tab` is `\t`.** `case 9` is reached before the ctrl branch and is
  *     not gated on any modifier: Tab produces `HT` and `Ctrl+Shift+Tab`
  *     produces `ESC [ Z`. At a shell prompt that is completion, not nothing.
- *   - **`Ctrl+3` through `Ctrl+8` are C0 controls.** The ctrl branch maps
- *     keyCodes 51-55 to `ESC`, `FS`, `GS`, `RS`, `US` and keyCode 56 to `DEL`.
- *     `Ctrl+3` in particular is a widely used stand-in for Escape.
+ *   - **`Ctrl+←`/`Ctrl+→` are `ESC [ 1 ; 5 D` / `ESC [ 1 ; 5 C`**, which
+ *     readline reads as backward-word and forward-word. That is the cost of the
+ *     arrow chords, and it is a real one — `Alt+B` / `Alt+F` do the same two
+ *     things and are untouched.
  *
- * So the chords are not free, and `Ctrl+3`..`Ctrl+8` at the terminal is a real
- * (small) capability this takes away. Only `Ctrl+1`, `Ctrl+2` and `Ctrl+9`
- * genuinely encode nothing. The user asked for the family, and a family with
- * two holes in it would be worse than the cost — but the cost is stated rather
- * than assumed, and the interception has to be airtight rather than merely
- * tidy.
+ * ## What went, and what came back with it
+ *
+ * `Ctrl+1`..`Ctrl+9` (jump to the Nth tab) and `Ctrl+Shift+PageUp`/`PageDown`
+ * (move the active tab) were both removed at the user's request — "remove ctrl
+ * 1 2 3 hotkey", "Move the active tab left or right remove this too" — when the
+ * arrow chords arrived to do the navigating.
+ *
+ * Removing them GIVES KEYS BACK to the pane, which is the part worth writing
+ * down: `Ctrl+3`..`Ctrl+8` are the C0 controls `ESC`, `FS`, `GS`, `RS`, `US`
+ * and `DEL` (`Ctrl+3` is a widely used stand-in for Escape), and
+ * `Ctrl+Shift+PageUp`/`PageDown` reach xterm's own scrollback. All of them
+ * were being swallowed for chords that no longer exist, so the declines in
+ * TerminalView went with them.
+ *
+ * Moving a tab from the keyboard went with the chord. The drag
+ * (docs/WORKSPACE.md §15) is unaffected and is still the way to reorder.
  *
  * ## What it deliberately does not touch
  *
@@ -877,41 +879,64 @@ function onWindowKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` MOVE the active tab — the
-  // accessible counterpart of the drag (docs/WORKSPACE.md §15).
+  if (e.shiftKey) return;
+
+  // `Ctrl+←` / `Ctrl+→`: the tab to the left, the tab to the right.
   //
-  // VS Code's own binding for exactly this action, which is the best reason to
-  // pick it: a user who wants to move a tab with the keyboard will try this
-  // first. It collides with nothing this app claims — the composer's size
-  // ladder is `Ctrl+Shift+↑/↓`, and taking `Ctrl+Shift+←/→` instead would have
-  // put a second arrow family beside it for a different job.
+  // Asked for in exactly those words — "ctrl left goes to the left tab right to
+  // the right tab" — alongside `Ctrl+↑`/`Ctrl+↓` for the workspaces, which
+  // `HostWorkspaceView` owns. The pair is what makes them worth having: the
+  // horizontal axis is the tab bar and the vertical one is the panel down the
+  // side, which is where those two things actually sit on screen.
   //
-  // What it costs at the terminal is stated rather than assumed. xterm's
-  // `evaluateKeyboardEvent` reaches `case 33`/`case 34` before any ctrl branch
-  // and checks Shift FIRST, so Ctrl+Shift+PageUp would otherwise scroll the
-  // pane's buffer. Plain `Shift+PageUp` — the gesture people actually use for
-  // scrollback — is untouched, because this branch requires Ctrl.
-  if (e.shiftKey && (e.key === 'PageUp' || e.key === 'PageDown')) {
+  // THEY CLAMP, where `Ctrl+Tab` above wraps, and the difference is deliberate
+  // (see `adjacentIndex`). Tab is a cycle; an arrow is a direction, and landing
+  // at the opposite end of the bar is not what "further left" asks for.
+  //
+  // WHAT IT COSTS is `Ctrl+←`/`Ctrl+→` at the shell, which readline binds to
+  // backward-word / forward-word. That is a real key some people use every day
+  // — the same shape of trade `Ctrl+V` made for `quoted-insert` — and it is
+  // stated rather than assumed. `Alt+B` / `Alt+F` are bound to the same two
+  // readline commands and are untouched here.
+  //
+  // Except in a real text field, which is the one place this does NOT fire: see
+  // `editingTarget`. Word-jump in a draft or a path box is an editing gesture,
+  // not a navigation one.
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    if (editingTarget(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
-    nudgeActiveTab(e.key === 'PageDown' ? 1 : -1);
-    return;
+    const index = adjacentIndex(
+      tabs.value.length,
+      tabs.value.findIndex((t) => t.id === activeTab.value?.id),
+      e.key === 'ArrowRight' ? 1 : -1,
+    );
+    const target = index === null ? null : (tabs.value[index]?.id ?? null);
+    if (target !== null) goToTab(target);
   }
+}
 
-  if (e.shiftKey) return;
-  // `e.key`, not `e.code`: the user pressed the character `4`, wherever their
-  // layout keeps it. `Ctrl+1`..`Ctrl+9`; there is no `Ctrl+0` because there is
-  // no zeroth tab, and clamping it to the last one is the "jump to the end"
-  // gesture nobody asked for.
-  if (!/^[1-9]$/.test(e.key)) return;
-  const target = tabIdAtIndex(tabs.value, Number(e.key) - 1);
-  // Cancelled even when the bar is too short. The user pressed a chord this
-  // window owns; letting `Ctrl+7` fall through to the shell as `US` on a bar of
-  // three would make the SAME key mean two things depending on how many
-  // sessions happen to be running.
-  e.preventDefault();
-  e.stopPropagation();
-  if (target !== null) goToTab(target);
+/**
+ * Is this keystroke aimed at something the user is EDITING?
+ *
+ * `Ctrl+←`/`Ctrl+→` is word-jump in every text field on every platform, and
+ * this app has several the user genuinely types prose into — the composer's
+ * draft, the Files path box, the tree filter, the code editor. Taking the chord
+ * from those would trade a navigation gesture for an editing one people have
+ * had since before this app existed.
+ *
+ * The terminal is deliberately NOT in that set, and it is the reason this is a
+ * function rather than an `instanceof HTMLTextAreaElement` test: xterm's own
+ * input sink IS a `<textarea>` (`.xterm-helper-textarea`), always focused while
+ * the pane has the keyboard. A naive editable check would exempt the terminal —
+ * the one surface the whole feature is for — and the chord would appear to do
+ * nothing at all. So an editable inside `.xterm` is not an editable.
+ */
+function editingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest('.xterm')) return false;
+  if (target.isContentEditable) return true;
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }
 
 onMounted(() => window.addEventListener('keydown', onWindowKeydown, { capture: true }));

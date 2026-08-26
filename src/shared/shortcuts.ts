@@ -495,7 +495,7 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
     defaults: ['Ctrl+Tab'],
     owner: 'app',
     rebindable: true,
-    note: 'Not free, contrary to the folklore: xterm encodes Ctrl+Tab as a plain tab and Ctrl+Shift+Tab as back-tab, so this costs completion at a shell prompt. It is taken anyway because a tab chord has to be the one every other app uses, and the cost is stated rather than assumed. Both directions wrap, and Files tabs are in the cycle.',
+    note: 'Not free, contrary to the folklore: xterm encodes Ctrl+Tab as a plain tab and Ctrl+Shift+Tab as back-tab, so this costs completion at a shell prompt. It is taken anyway because a tab chord has to be the one every other app uses, and the cost is stated rather than assumed. Both directions WRAP — Tab is a cycle. The arrows below travel and stop; that difference is deliberate. Files tabs are in both.',
   },
   {
     id: 'tabs.previous',
@@ -506,33 +506,37 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
     rebindable: true,
   },
   {
-    id: 'tabs.move',
+    id: 'tabs.stepLeftRight',
     surface: 'workspace',
-    label: 'Move the active tab left or right',
-    defaults: ['Ctrl+Shift+PageUp', 'Ctrl+Shift+PageDown'],
+    label: 'The tab to the left, the tab to the right',
+    defaults: ['Ctrl+Left', 'Ctrl+Right'],
     owner: 'app',
     rebindable: false,
-    note: 'VS Code’s own binding for this action, which is the best reason to pick it. A PAIR of chords rather than one, so it is fixed for the same reason the digit family is. Plain Shift+PageUp — the scrollback gesture people actually use — is untouched, because this needs Ctrl; Ctrl+Shift+PageUp would otherwise have scrolled the pane.',
+    note: 'Asked for as half of one gesture — "ctrl left goes to the left tab right to the right tab", with Ctrl+Up/Down for the workspaces — and the pairing is the point: horizontal is the tab bar, vertical is the panel down the side, which is where each of those lists actually sits. A PAIR of chords, so it is fixed for the same reason a pair always is here: an override replaces a binding’s chords outright and would lose one. It CLAMPS where Ctrl+Tab cycles. What it costs is readline’s backward-word / forward-word in the pane (xterm sends ESC [ 1 ; 5 D / C); Alt+B and Alt+F are the same two commands and are untouched. It stands down inside a real text field, where Ctrl+arrow is an editing gesture — but NOT inside the terminal, whose xterm-helper-textarea would otherwise exempt the one surface this is for.',
   },
   {
-    id: 'tabs.jumpToIndex',
-    surface: 'workspace',
-    label: 'Jump to the 1st–9th tab',
-    defaults: [
-      'Ctrl+1',
-      'Ctrl+2',
-      'Ctrl+3',
-      'Ctrl+4',
-      'Ctrl+5',
-      'Ctrl+6',
-      'Ctrl+7',
-      'Ctrl+8',
-      'Ctrl+9',
-    ],
+    id: 'workspaces.stepUpDown',
+    surface: 'global',
+    label: 'The workspace above, the workspace below',
+    defaults: ['Ctrl+Up', 'Ctrl+Down'],
     owner: 'app',
     rebindable: false,
-    note: 'A FAMILY of nine chords, not one chord, which is why it cannot be rebound: moving it would mean choosing nine new keys that stay in digit order. Only Ctrl+1, Ctrl+2 and Ctrl+9 are free at a terminal — Ctrl+3 through Ctrl+8 are the C0 controls ESC, FS, GS, RS, US and DEL, and Ctrl+3 is a common stand-in for Escape. A family with two holes in it would be worse than that cost. A digit past the end of the bar does nothing rather than clamping to the last tab.',
+    note: 'The other half of the same gesture: it walks the session panel’s folder rows, flat across roots (a root header is a label, not a stop), and opens each one’s workspace. Owned by HostWorkspaceView, because it changes WHICH workspace is mounted and that view owns the route — surface "global" for the same reason. Clamps at both ends. The cheaper half at the terminal: xterm sends ESC [ 1 ; 5 A / B, which readline leaves unbound by default. Same text-field exemption as the tab arrows, kept in step deliberately.',
   },
+
+  // `tabs.move` (Ctrl+Shift+PageUp/PageDown) and `tabs.jumpToIndex`
+  // (Ctrl+1..Ctrl+9) USED TO BE HERE and were removed at the user's request —
+  // "Move the active tab left or right remove this too", "remove ctrl 1 2 3
+  // hotkey" — when the arrow chords above arrived to do the navigating.
+  //
+  // Recorded here because both removals HAND KEYS BACK to the pane, and a
+  // future reader wondering why those chords are free needs to know they were
+  // deliberately released rather than never claimed: Ctrl+3..Ctrl+8 are the C0
+  // controls ESC, FS, GS, RS, US and DEL (Ctrl+3 is a common stand-in for
+  // Escape), and Ctrl+Shift+PageUp/PageDown reach xterm's own scrollback.
+  //
+  // Moving a tab from the keyboard went with its chord. The DRAG
+  // (docs/WORKSPACE.md §15) is untouched and is the way to reorder.
 
   // --- Terminal -----------------------------------------------------------
   {

@@ -613,10 +613,10 @@ function onCustomKey(e: KeyboardEvent): boolean {
   if (e.type !== 'keydown') return true;
 
   // THE WORKSPACE'S TAB CHORDS. `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle the tab
-  // strip and `Ctrl+1`..`Ctrl+9` jump to one (docs/WORKSPACE.md §11). They are
-  // handled by a window-level capture listener in FolderWorkspaceView, which
-  // stops the event before it can descend this far — so in the folder workspace
-  // this branch never runs.
+  // strip, and `Ctrl+←` / `Ctrl+→` step one tab left or right
+  // (docs/WORKSPACE.md §11). They are handled by a window-level capture
+  // listener in FolderWorkspaceView, which stops the event before it can
+  // descend this far — so in the folder workspace this branch never runs.
   //
   // It is here anyway, and it is NOT belt-and-braces: it is the answer to what
   // xterm would do with these keys, which is not nothing. Measured against
@@ -627,14 +627,27 @@ function onCustomKey(e: KeyboardEvent): boolean {
   //                      branch and is gated only on Shift, so the modifier is
   //                      simply ignored. At a shell prompt that is completion.
   //   Ctrl+Shift+Tab  -> ESC [ Z (back-tab).
-  //   Ctrl+3..Ctrl+7  -> ESC, FS, GS, RS, US — keyCodes 51-55 map to
-  //                      `keyCode - 51 + 27` in the ctrl branch.
-  //   Ctrl+8          -> DEL.
-  //   Ctrl+1/2/9      -> nothing.
+  //   Ctrl+←/Ctrl+→   -> ESC [ 1 ; 5 D / ESC [ 1 ; 5 C, the modified-arrow
+  //                      forms, which readline binds to backward-word and
+  //                      forward-word.
   //
   // So a pane mounted outside a folder workspace — a future caller, a test —
   // would otherwise turn a tab chord into shell input. Declining it here means
   // the chord's meaning does not depend on who mounted the terminal.
+  //
+  // ## The digits are NOT in this list any more
+  //
+  // `Ctrl+1`..`Ctrl+9` used to be declined here too, for the jump-to-Nth-tab
+  // family. The user asked for that family to go ("remove ctrl 1 2 3 hotkey"),
+  // and the decline went with it — which HANDS KEYS BACK to the shell rather
+  // than merely tidying up: `Ctrl+3`..`Ctrl+7` are `ESC`, `FS`, `GS`, `RS`,
+  // `US` (keyCodes 51-55 map to `keyCode - 51 + 27` in the ctrl branch) and
+  // `Ctrl+8` is `DEL`. `Ctrl+3` in particular is a widely used stand-in for
+  // Escape. A chord this app no longer claims must reach the program the user
+  // is actually talking to.
+  //
+  // `Ctrl+Shift+PageUp`/`PageDown` went the same way, and were never declined
+  // here in the first place: xterm's own scrollback is what they do now.
   //
   // `preventDefault()` AND `return false`, both, for the third time in this
   // function and for the reason the two branches below spell out: returning
@@ -643,10 +656,13 @@ function onCustomKey(e: KeyboardEvent): boolean {
   // its own default action for `Ctrl+Tab`. One keystroke, two paths, is
   // bc86cf7 and 3628090.
   //
-  // `!e.altKey`: Ctrl+Alt is AltGr on European layouts, where the digit row
-  // carries printable characters on several of them.
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'Tab' || /^[1-9]$/.test(e.key))) {
-    // Digits only without Shift — Ctrl+Shift+<digit> is a different chord and
+  // `!e.altKey`: Ctrl+Alt is AltGr on European layouts. It guarded the digit
+  // row, which carries printable characters on several of them, and it still
+  // guards the arrows — AltGr+arrow is a real key combination on a few layouts
+  // and none of it is ours.
+  const arrow = e.key === 'ArrowLeft' || e.key === 'ArrowRight';
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'Tab' || arrow)) {
+    // The arrows only without Shift — `Ctrl+Shift+←/→` is a different chord and
     // is nobody's here — while Tab takes Shift as its direction.
     if (e.key === 'Tab' || !e.shiftKey) {
       e.preventDefault();

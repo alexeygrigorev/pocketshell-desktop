@@ -52,17 +52,55 @@ Plus xterm's own `Shift+PageUp` / `Shift+PageDown`, which scroll the pane's
 buffer, and — since the tab-move chord was removed — `Ctrl+Shift+PageUp` /
 `PageDown` as well. Not this app's.
 
-### 1.2 Tabs — `FolderWorkspaceView.vue`, `onWindowKeydown`
+### 1.2 Navigation — the two arrow pairs
 
-One `keydown` on `window` in **capture**, so the chord works with focus in the
-terminal, the file tree or the composer alike — three different keyboard owners
-that would otherwise need three implementations of one gesture.
+One `keydown` on `window` in **capture** each, so the chords work with focus in
+the terminal, the file tree or the composer alike — three different keyboard
+owners that would otherwise need three implementations of one gesture.
 
-| Chord | Does |
-|---|---|
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab; wraps; Files tabs included |
-| `Ctrl+1`..`Ctrl+9` | Jump to that tab; out of range does nothing |
-| `Ctrl+Shift+PageUp` / `PageDown` | Move the active tab |
+They are two axes of ONE gesture, and the axes match the screen: the tab bar
+runs across the top of a workspace, the folder rows run down the panel on the
+left. Nobody has to remember which arrow does which, because the keyboard
+mirrors the layout.
+
+| Chord | Does | Owner |
+|---|---|---|
+| `Ctrl+←` / `Ctrl+→` | The tab to the left / right; **stops** at the ends | `FolderWorkspaceView.vue` |
+| `Ctrl+↑` / `Ctrl+↓` | The folder workspace above / below in the panel; **stops** at the ends; crosses root headers without stopping | `HostWorkspaceView.vue` |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab; **wraps**; Files tabs included | `FolderWorkspaceView.vue` |
+
+**Arrows clamp, Tab cycles**, and the difference is deliberate rather than an
+oversight: Tab is the gesture for visiting each tab in turn and coming back
+round, while an arrow is a direction — being thrown to the opposite end is not
+what "further left" asked for.
+
+**The vertical pair lives in `HostWorkspaceView`** because it changes WHICH
+workspace is mounted, and that view owns the route. Both read the same folder
+list (`renderer/folderTree.ts`): `$HOME` decides whether a folder is keyed
+`~/git/foo` or `/home/me/git/foo`, and a chord navigating by a second
+derivation would open a workspace with no tabs and highlight no row.
+
+**What the arrows cost**, stated rather than assumed. `Ctrl+←`/`Ctrl+→` is
+readline's backward-word / forward-word at a shell prompt (xterm sends
+`ESC [ 1 ; 5 D` / `C`) — a real key, gone from the pane; `Alt+B` / `Alt+F` are
+bound to the same two commands and are untouched. `Ctrl+↑`/`Ctrl+↓` is the
+cheaper pair: readline leaves those unbound by default.
+
+**Where they stand down:** inside a real text field — the composer's draft, the
+path bar, the tree filter, the editor — where `Ctrl+arrow` is an editing
+gesture. The terminal is deliberately NOT in that set even though xterm's input
+sink is literally a `<textarea>` (`.xterm-helper-textarea`); an editable inside
+`.xterm` is not an editable, or the chords would do nothing in the one place
+they exist for.
+
+**Two chord families were removed** to make room, at the user's request:
+`Ctrl+1`..`Ctrl+9` (jump to the Nth tab) and `Ctrl+Shift+PageUp`/`PageDown`
+(move the active tab). Both removals **hand keys back to the pane** —
+`Ctrl+3`..`Ctrl+7` are `ESC`, `FS`, `GS`, `RS`, `US`, `Ctrl+8` is `DEL`
+(`Ctrl+3` is a common stand-in for Escape), and `Ctrl+Shift+PageUp`/`PageDown`
+reach xterm's own scrollback. Moving a tab from the keyboard went with its
+chord; the drag (docs/WORKSPACE.md §15) is untouched and is the way to
+reorder.
 
 ### 1.3 The Files tab — `FilesView.vue`, `onKeydown`
 
@@ -337,6 +375,7 @@ The tab chords were briefed as affordable because *"terminals cannot encode most
 | `Ctrl+3`..`Ctrl+7` | `ESC`, `FS`, `GS`, `RS`, `US` — keyCodes 51-55 map to `keyCode - 51 + 27` |
 | `Ctrl+8` | `DEL` |
 | `Ctrl+1`, `Ctrl+2`, `Ctrl+9` | nothing — the only free digits |
+| `Ctrl+<arrow>` | `ESC [ 1 ; 5 <A-D>` — readline reads `D`/`C` as backward-word / forward-word, and leaves `A`/`B` unbound. This is what the arrow chords (§1.2) cost. |
 | `Ctrl+Shift+<arrow>` | `ESC [ 1 ; 6 <A-D>` — modifiers ride in the CSI parameter |
 | `Ctrl+Shift+PageUp` | xterm's own scrollback, not bytes |
 | `Ctrl+Shift+2` / `Ctrl+Shift+-` | `NUL` / `US` — matched on the character `@` / `_`, after Shift has changed it |
@@ -422,7 +461,8 @@ following still hold their own copies:
 | File | Bindings |
 |---|---|
 | `components/TerminalView.vue` | `terminal.*`, and the declining branch for `tabs.*` |
-| `views/FolderWorkspaceView.vue` | `tabs.next`, `tabs.previous`, `tabs.jumpToIndex`, `tabs.move` |
+| `views/FolderWorkspaceView.vue` | `tabs.next`, `tabs.previous`, `tabs.stepLeftRight` |
+| `views/HostWorkspaceView.vue` | `workspaces.stepUpDown` |
 | `views/FilesView.vue` | `files.save`, `files.gotoPath`, `files.filterTree` |
 | `components/PromptComposer.vue` | `composer.*` |
 | `components/DoodleCanvas.vue` | `doodle.*` |

@@ -414,7 +414,14 @@ describe('validateBinding', () => {
     expect(validateBinding('files.editorUndo', chord('Ctrl+Shift+Z'), inForce)?.kind).toBe(
       'locked',
     );
-    expect(validateBinding('tabs.jumpToIndex', chord('Ctrl+Shift+J'), inForce)?.kind).toBe(
+    // A PAIR of chords is always fixed here — an override replaces a binding's
+    // chords outright, so a rebindable pair loses one the first time it moves.
+    // `tabs.jumpToIndex` used to stand in this line and is gone; the arrows
+    // that replaced it are fixed for the same rule that fixed the digits.
+    expect(validateBinding('tabs.stepLeftRight', chord('Ctrl+Shift+J'), inForce)?.kind).toBe(
+      'locked',
+    );
+    expect(validateBinding('workspaces.stepUpDown', chord('Ctrl+Shift+J'), inForce)?.kind).toBe(
       'locked',
     );
   });

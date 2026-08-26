@@ -904,18 +904,74 @@ resolved and why.
 
 ## 11. Tab chords
 
-> `Ctrl+Tab` / `Ctrl+Shift+Tab` to cycle, `Ctrl+1`..`Ctrl+9` to jump.
+> `Ctrl+Tab` / `Ctrl+Shift+Tab` to cycle, `Ctrl+←` / `Ctrl+→` to step.
 
 Cycling wraps, follows DISPLAYED order (so §15's manual arrangement is what it
 walks), and includes Files tabs — they are tabs, the bar shows them as tabs, and
 a chord that stopped at the last session would strand the user one press short
-of something they can see. `Ctrl+7` on a bar of three does nothing rather than
-clamping to the last tab. After a chord, focus lands in the new tab's surface
+of something they can see. After a chord, focus lands in the new tab's surface
 through the SAME `focusActiveTab` a click uses, so the two cannot drift.
 
-The decisions are `nextWorkspaceTabId` and `tabIdAtIndex` in
-`src/shared/workspaceTabs.ts`, as tables with unit tests; the key handling is a
-window-level `keydown` listener in capture, in `FolderWorkspaceView`.
+The decision is `nextWorkspaceTabId` in `src/shared/workspaceTabs.ts`, as a
+table with unit tests; the key handling is a window-level `keydown` listener in
+capture, in `FolderWorkspaceView`.
+
+### 11.0a The arrows, and the pair they belong to
+
+> "ctrl left goes to the left tab right to the right tab. up to the session
+> before and down to the session after" — then, on being asked which list the
+> vertical pair should walk: "up and down - different workspaces", "left and
+> right - tabs within workspace".
+
+Two axes of ONE gesture, and the axes match the screen: the tab bar runs across
+the top of this workspace, the folder rows run down the panel on the left. The
+horizontal pair is this view's; the vertical pair belongs to
+`HostWorkspaceView`, because it changes WHICH workspace is mounted and that view
+owns the route. Both read one folder list (`renderer/folderTree.ts`) — `$HOME`
+decides whether a folder is keyed `~/git/foo` or `/home/me/git/foo`, and a chord
+navigating by a second derivation would open a workspace with no tabs in it and
+highlight no row.
+
+**The arrows CLAMP where `Ctrl+Tab` wraps.** Tab is a cycle — the gesture for
+visiting each tab in turn and coming back round. An arrow is a direction, and
+being thrown from the leftmost tab to the rightmost answers a question the user
+did not ask. `adjacentIndex` in `src/shared/listNavigation.ts` is that rule,
+shared by both pairs so the two ends of one gesture cannot drift apart.
+
+**They stand down inside a real text field** — the composer's draft, the path
+bar, the tree filter, the editor — where `Ctrl+arrow` is word-jump, an editing
+gesture people have had for decades. The terminal is deliberately not in that
+set, and that exception is what the feature rests on: xterm's input sink is
+literally a `<textarea class="xterm-helper-textarea">` and is focused whenever
+the pane has the keyboard, so a naive editable check would exempt the one
+surface these chords are for. An editable inside `.xterm` is not an editable.
+
+**What they cost** is stated rather than assumed, as §11.2 does for `Ctrl+Tab`:
+xterm encodes `Ctrl+←`/`Ctrl+→` as `ESC [ 1 ; 5 D` / `C`, which readline binds
+to backward-word and forward-word. That is a real key, gone from the pane;
+`Alt+B` / `Alt+F` are the same two commands and are untouched. `Ctrl+↑`/`Ctrl+↓`
+is the cheaper pair — readline leaves those unbound.
+
+### 11.0b What was removed to make room
+
+> "remove ctrl 1 2 3 hotkey" — "Move the active tab left or right remove this
+> too"
+
+`Ctrl+1`..`Ctrl+9` (jump to the Nth tab) and `Ctrl+Shift+PageUp`/`PageDown`
+(move the active tab, §15.5) are both gone, along with the branches in
+TerminalView that declined them.
+
+Both removals **hand keys back to the pane**, which is the part worth writing
+down rather than quietly deleting: `Ctrl+3`..`Ctrl+7` are the C0 controls `ESC`,
+`FS`, `GS`, `RS`, `US` and `Ctrl+8` is `DEL` — `Ctrl+3` in particular is a widely
+used stand-in for Escape — and `Ctrl+Shift+PageUp`/`PageDown` reach xterm's own
+scrollback. A chord this app no longer claims has to reach the program the user
+is actually talking to.
+
+Moving a tab from the keyboard went with its chord. The DRAG (§15) is untouched
+and is now the only way to reorder; `nudgeTabOrder` survives in the shared
+module, unused by any handler and still unit-tested, because the ordering rule
+it encodes is the drag's too.
 
 ### 11.1 One window listener, not three key handlers
 
@@ -944,14 +1000,19 @@ the family:
 |---|---|
 | `Ctrl+Tab` | `C0.HT` — a literal TAB. `case 9` is reached before any ctrl branch and is gated only on Shift, so the modifier is ignored |
 | `Ctrl+Shift+Tab` | `ESC [ Z` (back-tab) |
+| `Ctrl+←` / `Ctrl+→` | `ESC [ 1 ; 5 D` / `C` — readline's backward-word / forward-word |
+| `Ctrl+↑` / `Ctrl+↓` | `ESC [ 1 ; 5 A` / `B` — readline leaves these unbound |
 | `Ctrl+3` .. `Ctrl+7` | `ESC`, `FS`, `GS`, `RS`, `US` — keyCodes 51-55 map to `keyCode - 51 + 27` |
 | `Ctrl+8` | `C0.DEL` |
 | `Ctrl+1`, `Ctrl+2`, `Ctrl+9` | nothing |
 
-So the chords are **not free**. `Ctrl+Tab` at a shell prompt is completion, and
-`Ctrl+3` is a widely used stand-in for Escape. The family still ships — the user
-asked for it, and a family with two holes in it would be worse than the cost —
-but the cost is recorded rather than assumed, and two things follow:
+So the chords are **not free**. `Ctrl+Tab` at a shell prompt is completion and
+`Ctrl+←`/`Ctrl+→` is word-jump; the cost is recorded rather than assumed, and
+two things follow:
+
+The digit rows stay in this table even though the family that claimed them is
+gone (§11.0b). They are the measurement that says what removing it GAVE BACK,
+and a future chord aimed at `Ctrl+3` needs to find it.
 
 1. the interception has to be **airtight**, so both `preventDefault()` and
    `stopPropagation()` are called. The first stops Chromium (Electron still has
@@ -1351,7 +1412,14 @@ Native HTML5 drag-and-drop, the same family the composer uses for attachments.
   boundary — are invisible unless something draws them. A refused drop draws
   nothing, and that absence IS the refusal.
 
-### 15.5 Keyboard reordering
+### 15.5 Keyboard reordering ~~(shipped)~~ — REMOVED
+
+**The chord below is gone**, removed at the user's request ("Move the active tab
+left or right remove this too") when the arrow chords arrived to do the
+navigating (§11.0b). The drag this section is mostly about is untouched. What
+follows is kept because the REASONING still applies to whatever replaces it, and
+because `nudgeTabOrder` — the pure rule it describes — is still in
+`src/shared/workspaceTabs.ts` with its tests.
 
 `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` move the ACTIVE tab one place.
 

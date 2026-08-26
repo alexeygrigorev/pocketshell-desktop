@@ -56,7 +56,7 @@
 //     stop rendering identically when the panel is narrow.
 //   - the tooltip carries the full truth: session name, full path, absolute
 //     time.
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
 import NewSessionDialog from './NewSessionDialog.vue';
 import HostActionsMenu from './HostActionsMenu.vue';
@@ -68,10 +68,8 @@ import { useComposerStore } from '../stores/composer';
 import { useConnectionStore } from '../stores/connection';
 import { useProjectsStore } from '../stores/projects';
 import { useSessionsStore } from '../stores/sessions';
-import { useSettingsStore } from '../stores/settings';
+import { useFolderTree } from '../folderTree';
 import {
-  groupSessionsIntoRoots,
-  inferHome,
   rootHostPath,
   type SessionDirectory,
   type SessionRootFolder,
@@ -117,7 +115,6 @@ const composer = useComposerStore();
 const connection = useConnectionStore();
 const projects = useProjectsStore();
 const sessions = useSessionsStore();
-const settings = useSettingsStore();
 
 /**
  * The folder-first creation dialog: null when shut, otherwise the directory it
@@ -183,32 +180,15 @@ function openPanel(name: HostPanel): void {
 }
 
 /**
- * The host's `$HOME`, which is what turns `/home/alexey/git/dataops` into the
- * `git` root.
+ * `$HOME` and the tree, from the ONE derivation (../folderTree.ts).
  *
- * Read from the projects store via `ensureHome`, which resolves the string
- * WITHOUT landing the folder browser on it — the SFTP listing `loadHome` also
- * does is of no use to this panel. It used to be fetched into a ref local to
- * this component, and that was a latent bug rather than an optimisation: the
- * folder workspace reads the same value out of the store, and `$HOME` is what
- * decides whether a folder is keyed `~/git/foo` or `/home/me/git/foo`. Two
- * spellings of one key is a panel row that opens a workspace with no tabs.
- *
- * If the fetch fails, grouping infers a home from the paths instead of dropping
- * every session into `other` (see `inferHome`).
- *
- * The inference is applied HERE rather than left to `groupSessionsIntoRoots`,
- * which used to do it privately, because a second consumer arrived that needs
- * the same answer: `rootHostPath`, which turns a root's `~/git` key back into
- * an absolute directory for the root row's `+`. Two callers deriving `$HOME`
- * separately is how the panel and the workspace once ended up keying one folder
- * two ways. `groupSessionsIntoRoots` still infers when handed null, so this is
- * a widening of where the answer is visible, not a change to it — passing an
- * already-inferred home through it is idempotent.
+ * They used to be computed here, privately, and the move is not a tidy-up: the
+ * `Ctrl+↑` / `Ctrl+↓` chords step between folder WORKSPACES and are owned by
+ * `HostWorkspaceView`, which now needs the same rows in the same order, keyed
+ * the same way. Two derivations of one key is a row that opens a workspace with
+ * no tabs in it — see the header of `folderTree.ts` for the whole argument.
  */
-const home = computed(
-  () => projects.home ?? inferHome(sessions.sessions.map((s) => s.path)),
-);
+const { home, roots } = useFolderTree();
 
 /**
  * Clock for the relative timestamps. The activity values only change when the
@@ -292,15 +272,6 @@ async function pollSessions(): Promise<void> {
     polling = false;
   }
 }
-
-/**
- * The tree. The top level is the user's REGISTERED roots when they have any,
- * and `$HOME`'s children derived from the session paths when they do not —
- * the grouping module decides which, from whether the list is empty.
- */
-const roots = computed(() =>
-  groupSessionsIntoRoots(sessions.sessions, home.value, settings.sessionRoots),
-);
 
 onMounted(async () => {
   clock = setInterval(() => {
