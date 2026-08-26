@@ -996,7 +996,57 @@ watch(
  * rung blurs the composer draft and returns the user to the terminal
  * (docs/COMPOSER.md §12.2).
  */
-defineExpose({ focus: (): void => term?.focus() });
+/**
+ * Put the pane and the far end back in agreement, on demand.
+ *
+ * ## The picture this is for
+ *
+ * Reported with a screenshot: tmux's status line drawn in the MIDDLE of the
+ * pane, correct output above it, and below it rows holding stale text — a diff
+ * hunk repeated eleven times, a TUI's input line repeated five. The user added
+ * the trigger: "it happens when codex starts redrawing like crazy".
+ *
+ * That is one specific disagreement and not a rendering fault on this side.
+ * tmux draws its status line where IT believes the screen ends, so a status
+ * line at row 24 of a 40-row pane means the far end is working to a smaller
+ * screen than we have; the rows below it are cells tmux does not think it owns,
+ * still holding whatever the renderer last put there. A busy TUI does not cause
+ * that — it makes it obvious, because a quiet pane has nothing to redraw
+ * wrongly.
+ *
+ * ## Why a BUTTON exists for it, when `pushGeometry` is supposed to prevent it
+ *
+ * Because the disagreement can start on the far side, where nothing we do
+ * reaches. A tmux session can hold several clients — this app's tab, the phone,
+ * the user's own terminal — and `window-size latest` sizes the window to the
+ * most recently used one. Another client becoming "latest" shrinks the window
+ * under us, and from this side NOTHING HAS CHANGED: xterm's grid is what it
+ * was, so `sent` still matches it, so the guard that exists to stop pointless
+ * resizes correctly sends nothing. The state is stale and self-consistent, and
+ * only an outside nudge can break it.
+ *
+ * So this does the two things that recover it, in the order that matters:
+ *
+ *   1. `sent = null` — forget what the far end was TOLD, so the size is sent
+ *      again even though our side never moved. This is the half a plain redraw
+ *      cannot do: `refresh-client` repaints the window at whatever size tmux
+ *      currently believes in, which is exactly the wrong size in this picture.
+ *   2. push, with a repaint, so tmux draws all of it rather than the part it
+ *      thinks changed.
+ *
+ * It is deliberately manual rather than automatic. Doing it on a timer would
+ * mean an exec and a full-screen repaint on every tab, every few seconds,
+ * forever — the cost the repo-root cache and the session poll are both written
+ * against — to correct a state that is usually fine. A lever the user can reach
+ * when they see the picture costs nothing until it is pulled.
+ */
+function resyncDisplay(): void {
+  fitAddon?.fit();
+  sent = null;
+  pushGeometry({ redraw: true });
+}
+
+defineExpose({ focus: (): void => term?.focus(), resyncDisplay });
 </script>
 
 <template>

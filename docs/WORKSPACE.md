@@ -1175,6 +1175,31 @@ and positions from a measured rect.
 undiscoverable, and a context menu that opens for a single action is a worse
 trade than the right-click itself.
 
+**Redraw is the third item**, above the separator with Rename, because it is the
+other one that cannot lose anything. It exists for a reported picture: tmux's
+status line drawn in the MIDDLE of the pane, correct output above it, stale rows
+below — a diff hunk repeated eleven times, a TUI's input line repeated five —
+noticed "when codex starts redrawing like crazy". A busy TUI does not cause that;
+it makes it visible, because a quiet pane has nothing to redraw wrongly.
+
+tmux draws its status line where IT believes the screen ends, so that picture
+means the far end is working to a smaller screen than the pane has, and the rows
+beneath are cells tmux does not think it owns. The state is reachable from
+OUTSIDE this app and not from inside it: a tmux session can hold several clients
+— this app's tab, the phone, the user's own terminal — and `window-size latest`
+sizes the window to the most recently used one, so another client becoming
+latest shrinks the window while nothing here moves. `pushGeometry`'s `sent`
+still matches xterm's grid, so the guard that exists to stop pointless resizes
+correctly sends nothing, and the disagreement is stable.
+
+So the item does both halves, in this order: forget what the remote was told
+(`sent = null`) so the size goes out again unchanged, then push with a repaint.
+A `refresh-client` alone would redraw at the size tmux currently believes in,
+which is the wrong one. It is manual on purpose — a timer would mean an exec and
+a full-screen repaint per tab every few seconds forever to correct a state that
+is usually fine, which is the cost the session poll and the repo-root cache are
+both written against.
+
 A right-click does NOT select the tab. The items name the tab they came from, so
 acting on a background tab is unambiguous — and selecting first would mean a
 right-click the user then dismisses had already moved them, and moved the

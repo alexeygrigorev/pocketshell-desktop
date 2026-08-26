@@ -87,8 +87,22 @@ function row(name: string, created: number): unknown {
   };
 }
 
+/** Every `resyncDisplay()` the workspace asked for, by session name. */
+const resynced: string[] = [];
+
 const stubs = {
-  TerminalView: { template: '<div class="stub-terminal" />' },
+  // Exposes what the real pane exposes, so the menu item's call lands
+  // somewhere: `defineExpose({ focus, resyncDisplay })` in TerminalView.
+  TerminalView: {
+    props: ['sessionKey'],
+    template: '<div class="stub-terminal" />',
+    methods: {
+      focus(): void {},
+      resyncDisplay(): void {
+        resynced.push((this as unknown as { sessionKey: string }).sessionKey);
+      },
+    },
+  },
   PromptComposer: { template: '<div class="stub-composer" />' },
   FilesView: { template: '<div class="stub-files" />' },
   OverlayPanel: { template: '<div><slot /></div>' },
@@ -278,6 +292,52 @@ describe('where the tab arrows stand down', () => {
     expect(e.defaultPrevented).toBe(true);
     expect(activeTab(wrapper)).toBe(labels[1]);
     pane.remove();
+    wrapper.unmount();
+  });
+});
+
+describe('Redraw, from the tab menu', () => {
+  it('asks the pane of the tab it was opened on to resync', async () => {
+    // The lever for the reported picture: tmux's status line drawn in the
+    // middle of the pane with stale rows under it, which happens when another
+    // tmux client shrinks the window and nothing on this side moves. The menu
+    // item must reach the pane of the tab it was opened on — a redraw aimed at
+    // the wrong session repaints something that was never wrong.
+    const wrapper = await openWorkspace();
+    const labels = tabLabels(wrapper);
+    // Visit the second tab, then leave it. A pane is mounted the first time its
+    // tab is selected and kept mounted afterwards, so this is what gives the
+    // background tab something to redraw — a tab never visited has no pane on
+    // screen and nothing to put right.
+    await clickTab(wrapper, labels[1]!);
+    await clickTab(wrapper, labels[0]!);
+    resynced.length = 0;
+
+    // Right-click the SECOND tab, not the active one, so a handler that
+    // reached for "the current pane" instead of the menu's target fails here.
+    await wrapper.findAll('nav.tabs button.tab')[1]!.trigger('contextmenu');
+    await flush(2);
+    // The menu names the session it was opened on; that is the pane the item
+    // must reach.
+    const named = wrapper.find('.menu-head').text().trim();
+    const item = wrapper.findAll('button').find((b) => b.text().trim() === 'Redraw');
+    if (!item) throw new Error(`no Redraw item in: ${wrapper.text()}`);
+    await item.trigger('click');
+    await flush(2);
+
+    expect(resynced).toEqual([named]);
+    wrapper.unmount();
+  });
+
+  it('closes the menu when it is taken', async () => {
+    const wrapper = await openWorkspace();
+    await wrapper.findAll('nav.tabs button.tab')[1]!.trigger('contextmenu');
+    await flush(2);
+    await flush(2);
+    const item = wrapper.findAll('button').find((b) => b.text().trim() === 'Redraw')!;
+    await item.trigger('click');
+    await flush(2);
+    expect(wrapper.findAll('button').some((b) => b.text().trim() === 'Redraw')).toBe(false);
     wrapper.unmount();
   });
 });

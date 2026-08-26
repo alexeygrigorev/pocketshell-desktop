@@ -270,6 +270,34 @@ describe('the far end is told the geometry the pane actually has', () => {
     wrapper.unmount();
   });
 
+  it('re-sends a size the far end already has when asked to RESYNC', async () => {
+    // The deliberate exception to the test above, and the reason the manual
+    // lever exists at all.
+    //
+    // Reported picture: tmux's status line drawn in the middle of the pane with
+    // stale rows beneath it — the far end working to a smaller screen than we
+    // have. That state is unreachable from this side: a tmux session can hold
+    // several clients (this app's tab, the phone, the user's own terminal) and
+    // `window-size latest` sizes the window to the most recently used one, so
+    // another client can shrink the window while NOTHING here moves. `sent`
+    // still matches xterm's grid, the guard correctly sends nothing, and the
+    // disagreement is stable.
+    //
+    // `resyncDisplay` forgets what the remote was told, so the same size goes
+    // out again, and asks for the repaint — a `refresh-client` alone would
+    // redraw at the size tmux currently believes in, which is the wrong one.
+    const wrapper = await mountTerminal();
+    resize.mockClear();
+    redraw.mockClear();
+
+    (wrapper.vm as unknown as { resyncDisplay: () => void }).resyncDisplay();
+    await nextTick();
+
+    expect(resize).toHaveBeenCalledWith('shell-1', 80, 24);
+    expect(redraw).toHaveBeenCalledWith('shell-1');
+    wrapper.unmount();
+  });
+
   it('re-asserts geometry AND asks for a repaint when a hidden tab comes back', async () => {
     // The second half of the report: a tab that returns at the size it was
     // hidden at changes nothing on our side, so the old wiring — which only

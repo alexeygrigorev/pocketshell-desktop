@@ -1493,12 +1493,17 @@ function renameFromMenu(): void {
 /**
  * The session a confirmed Stop would kill, or null when nothing is being asked.
  *
- * **The only destructive action in this app, and the only one that confirms.**
- * The file tree's menu (c614e7e) deliberately omits delete as
- * "destructive-adjacent with no undo"; this was asked for explicitly, so it
- * ships — but a tmux session is usually an agent in the middle of a task, and
- * there is no undo of any kind: the scrollback, the process tree and whatever
- * was uncommitted in that shell all go at once.
+ * **The only destructive action in this app.** The file tree's menu (c614e7e)
+ * deliberately omits delete as "destructive-adjacent with no undo"; this was
+ * asked for explicitly, so it ships — but a tmux session is usually an agent in
+ * the middle of a task, and there is no undo of any kind: the scrollback, the
+ * process tree and whatever was uncommitted in that shell all go at once.
+ *
+ * It has a sibling now: the session panel's folder row stops every session in a
+ * folder in one confirm (docs/WORKSPACE.md §14.4, SessionTree.vue). The two ask
+ * the same question and must keep looking like one feature — same word (`Stop`,
+ * never `Close`), same tinted item, same quiet-Cancel/error-fill sheet. Any
+ * change to the wording here belongs there too.
  *
  * The dialog names the SESSION, not the tab label. The label is a projection
  * that strips the folder prefix (§3.3), so two folders' tabs can both read
@@ -1507,6 +1512,30 @@ function renameFromMenu(): void {
  */
 const stopping = ref<string | null>(null);
 const stopBusy = ref(false);
+
+/**
+ * "Redraw" from the tab menu: put this pane and the far end back in agreement.
+ *
+ * The reported picture is tmux's status line drawn in the middle of the pane
+ * with stale rows beneath it — the far end working to a smaller screen than we
+ * have. The pane's own `resyncDisplay` explains why that state is unreachable
+ * from this side once it starts (another tmux client became "latest" and shrank
+ * the window; nothing here moved, so nothing here re-sends) and why the lever is
+ * manual rather than a timer.
+ *
+ * It sits in the tab menu with Rename and Stop, and its position in that list is
+ * the point: it is the only NON-destructive item, so it goes above the
+ * separator, next to the other thing that changes nothing you can lose.
+ *
+ * Only a session tab has a pane to redraw. The menu is opened from a Files tab
+ * too, and the item is simply not rendered there — an item that greys out on
+ * half the tabs teaches the eye to skip the whole menu.
+ */
+function redrawFromMenu(): void {
+  const target = tabMenu.value;
+  tabMenu.value = null;
+  if (target) terminalRefs.get(target.session)?.resyncDisplay();
+}
 
 function askStop(): void {
   const target = tabMenu.value;
@@ -1583,9 +1612,14 @@ async function confirmStop(): Promise<void> {
  * naming the instance type here would collapse the call site to `any` instead
  * of checking anything.
  */
-const terminalRefs = new Map<string, { focus: () => void }>();
+const terminalRefs = new Map<string, TerminalPane>();
+interface TerminalPane {
+  focus: () => void;
+  /** Re-assert geometry and repaint — see TerminalView's `resyncDisplay`. */
+  resyncDisplay: () => void;
+}
 function setTerminalRef(session: string, el: unknown): void {
-  if (el) terminalRefs.set(session, el as { focus: () => void });
+  if (el) terminalRefs.set(session, el as TerminalPane);
   else terminalRefs.delete(session);
 }
 /** Same reasoning for the composer, whose `typeInto` the terminal feeds. */
@@ -1829,6 +1863,18 @@ function onFocusTerminal(): void {
           <li class="menu-head">{{ tabMenu.session }}</li>
           <li>
             <button class="menu-item" @click="renameFromMenu">Rename…</button>
+          </li>
+          <li>
+            <!-- No ellipsis: it acts immediately and asks nothing, which is
+                 exactly what the ellipsis on its neighbours promises is NOT the
+                 case for them. -->
+            <button
+              class="menu-item"
+              title="Tell the host our size again and repaint the whole pane"
+              @click="redrawFromMenu"
+            >
+              Redraw
+            </button>
           </li>
           <li class="menu-sep" />
           <li>
