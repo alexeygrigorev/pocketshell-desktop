@@ -60,9 +60,11 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
 import NewSessionDialog from './NewSessionDialog.vue';
 import HostActionsMenu from './HostActionsMenu.vue';
+import OverlayPanel from './OverlayPanel.vue';
 import PopupMenu from './PopupMenu.vue';
 import { type HostPanel } from '../hostPanels';
 import { pointAnchor, type Box } from '../../shared/popupPlacement';
+import { useComposerStore } from '../stores/composer';
 import { useConnectionStore } from '../stores/connection';
 import { useProjectsStore } from '../stores/projects';
 import { useSessionsStore } from '../stores/sessions';
@@ -111,6 +113,7 @@ const emit = defineEmits<{
   collapse: [];
 }>();
 
+const composer = useComposerStore();
 const connection = useConnectionStore();
 const projects = useProjectsStore();
 const sessions = useSessionsStore();
@@ -422,7 +425,20 @@ function dirTooltip(dir: SessionDirectory): string {
  * nobody can see. It teleports to `body` and positions from a measured
  * viewport rect, which is what a menu on a scrolling list needs.
  */
-const folderMenu = ref<{ label: string; startIn: string | null; anchor: Box } | null>(null);
+const folderMenu = ref<{
+  label: string;
+  startIn: string | null;
+  /**
+   * The tmux names of every session in the folder, snapshotted at open time.
+   *
+   * Same rule as `startIn` below, and it matters more here: this is the list a
+   * confirmed Stop kills. Re-read at click time it could have grown on the
+   * poll, and the folder would lose a session the user was never shown and
+   * never agreed to lose.
+   */
+  sessions: string[];
+  anchor: Box;
+} | null>(null);
 
 /**
  * Right-click a folder row.
@@ -451,6 +467,7 @@ function openFolderMenu(dir: SessionDirectory, e: MouseEvent): void {
   folderMenu.value = {
     label: dir.label,
     startIn: rootHostPath(dir.path, home.value),
+    sessions: dir.rows.map((row) => row.session.name),
     anchor: pointAnchor(e.clientX, e.clientY),
   };
 }
@@ -478,6 +495,109 @@ function createInFolder(): void {
   folderMenu.value = null;
   if (!target || target.startIn === null) return;
   creating.value = { startIn: target.startIn };
+}
+
+/* ── Stopping every session in a folder ───────────────────────────────
+ * The row's second item, and the mirror of the first: `New session…` exists
+ * because the row knows a folder the picker would otherwise make the user
+ * browse back down to, and this exists because the row stands in for a SET of
+ * sessions that has no other single lever. The workspace's tab menu can stop
+ * one session (docs/WORKSPACE.md §14); stopping a folder's four means opening
+ * that workspace and confirming four times.
+ *
+ * It is called Stop, not Close, and that is not a synonym chosen at random.
+ * `Close` in this app closes a TAB and leaves the session running; the word for
+ * killing the tmux session is `Stop`, on the tab menu and in its dialog. Two
+ * words for one destructive act, in two menus a click apart, is how a user ends
+ * up believing one of them is the safe one.
+ *
+ * Everything §14 says about the single kill holds here and is multiplied: no
+ * undo, and each session is usually an agent mid-task. So the item is
+ * separated, tinted, and behind a confirmation that NAMES the sessions — which
+ * matters more from this panel than from the tab bar, because a folder row does
+ * not show them. The one thing the user can see is a count.
+ */
+const stopping = ref<{ label: string; sessions: string[] } | null>(null);
+const stopBusy = ref(false);
+/**
+ * A refused batch, reported under the tree beside the store's own error.
+ *
+ * Separate from `sessions.error` on purpose: that ref belongs to the listing
+ * and the poll rewrites it every five seconds, so a kill's refusal parked there
+ * would be erased by the next successful tick — seconds after the user asked
+ * for something that did not happen.
+ */
+const stopError = ref<string | null>(null);
+
+/** `Stop session…` / `Stop all 3 sessions…` — the menu item's words. */
+function stopFolderLabel(count: number): string {
+  return count === 1 ? 'Stop session…' : `Stop all ${count} sessions…`;
+}
+
+function askStopFolder(): void {
+  const target = folderMenu.value;
+  folderMenu.value = null;
+  if (!target || !target.sessions.length) return;
+  stopError.value = null;
+  stopping.value = { label: target.label, sessions: target.sessions };
+}
+
+/**
+ * Kill the folder's sessions, one at a time, and report what survived.
+ *
+ * SEQUENTIAL rather than `Promise.all`, for two reasons that both point the
+ * same way. Each kill is an ssh exec on the user's host, and firing a folder's
+ * worth at once is the load the session poll is already guarded against; and a
+ * partial failure has to be reportable by NAME, which a settled array can give
+ * but which is much easier to get wrong when the failures interleave.
+ *
+ * `not-found` counts as success, exactly as the single kill treats it
+ * (docs/WORKSPACE.md §14.2): the panel refreshes on a timer, so a session that
+ * went away between the right-click and the confirm is the ordinary case, and
+ * the state the user asked for is the state that exists.
+ *
+ * The refusal is worded as the tab bar words its own (`createError`): the
+ * session in double quotes, and the host's sentence carried rather than
+ * replaced. It names the sessions instead of counting them — `1 of 2` says how
+ * much of the folder is still up, but not WHICH, and the name is the only half
+ * of that the user can act on.
+ *
+ * The composer record is dropped per session, and only for the ones that
+ * actually died — it is the third row of §14.3's table, and the only one of the
+ * three this component can reach. The pool's client goes main-side from the ipc
+ * handler whatever the caller is, and the workspace's mounted pane unmounts on
+ * its own: `sessionPanes` is filtered against the live tabs, so a session that
+ * leaves the listing takes its terminal with it.
+ *
+ * The refresh runs even when everything failed. The list is what the user is
+ * looking at, and it has to agree with the host whichever way the batch went.
+ */
+async function confirmStopFolder(): Promise<void> {
+  const target = stopping.value;
+  const connectionId = connection.connectionId;
+  if (!target || !connectionId) {
+    stopping.value = null;
+    return;
+  }
+  stopBusy.value = true;
+  const failed: string[] = [];
+  let reason: string | null = null;
+  for (const name of target.sessions) {
+    const result = await projects.killSession(connectionId, name);
+    if (!result.ok && result.code !== 'not-found') {
+      failed.push(name);
+      if (reason === null) reason = result.error ?? null;
+      continue;
+    }
+    composer.forget(composer.targetKey(connectionId, name));
+  }
+  stopBusy.value = false;
+  stopping.value = null;
+  if (failed.length) {
+    const names = failed.map((name) => `"${name}"`).join(', ');
+    stopError.value = `Could not stop ${names} in ${target.label}.` + (reason ? ` ${reason}` : '');
+  }
+  await sessions.refresh(connectionId);
 }
 
 async function onRefresh(): Promise<void> {
@@ -824,11 +944,27 @@ function fmtRelative(epochSeconds: number): string {
          than a text field, because the session name is DERIVED from the folder
          and typing one produced sessions that no other client could group. -->
     <p v-if="sessions.error" class="error">{{ sessions.error }}</p>
+    <!-- A refused batch, with its own dismiss because nothing else clears it:
+         the listing's error is rewritten by the poll, and this one has to
+         outlive the refresh that runs immediately after the kills. -->
+    <p v-if="stopError" class="error stop-error">
+      <span>{{ stopError }}</span>
+      <button class="icon-btn sm" title="Dismiss" @click="stopError = null">
+        <AppIcon name="close" :size="12" />
+      </button>
+    </p>
 
-    <!-- Right-clicking a folder row. One item today, and it is the one the row
-         is uniquely able to offer: the folder is already known, so the picker
-         opens IN it instead of at `$HOME` with the user browsing back down to
-         where they were already pointing.
+    <!-- Right-clicking a folder row. Two items, and both are things the ROW can
+         offer that nothing else can: it knows the folder, so the picker opens
+         IN it instead of at `$HOME` with the user browsing back down to where
+         they were already pointing; and it stands in for the whole SET of
+         sessions in that folder, which is the only lever that stops them
+         together rather than one workspace tab at a time.
+
+         Separated and tinted, the tab menu's rule (docs/WORKSPACE.md §14): the
+         separator says "another group", the `--error` colour says "another KIND
+         of thing", and the one item here that can lose work must not look like
+         the one that cannot.
 
          `.prevent` on the handler, not a global suppression: in a packaged
          Electron app the default here is Chromium's own menu, which carries
@@ -866,8 +1002,78 @@ function fmtRelative(epochSeconds: number): string {
             New session…
           </button>
         </li>
+        <li class="menu-sep" />
+        <li>
+          <!-- Never disabled in practice — a folder row exists because sessions
+               are in it — but the count is read from the same snapshot the
+               confirm kills, so an empty one would offer to stop nothing. -->
+          <button
+            class="menu-item danger"
+            :disabled="!folderMenu.sessions.length"
+            :title="`Stop ${sessionCountLabel(folderMenu.sessions.length)} on the host`"
+            @click="askStopFolder"
+          >
+            {{ stopFolderLabel(folderMenu.sessions.length) }}
+          </button>
+        </li>
       </ul>
     </PopupMenu>
+
+    <!-- The confirm, the tab menu's dialog (docs/WORKSPACE.md §14.1) with the
+         one change the plural forces: it LISTS the sessions.
+
+         A folder row shows a dot, a label and a count — never the session
+         names — so "Stop all 3 sessions in dataqna?" would ask the user to
+         agree to three things they cannot see. The tab menu could name one
+         session because the tab was under the cursor; here the names have to be
+         put on screen before the question means anything. The list scrolls
+         rather than growing the sheet, so a folder with a dozen sessions
+         produces a dialog rather than a page.
+
+         Cancel is the quiet button and Stop carries the error fill, so the
+         dangerous half is the half that has to be aimed at. -->
+    <OverlayPanel
+      v-if="stopping"
+      :title="stopping.sessions.length === 1 ? 'Stop session' : 'Stop sessions'"
+      size="sm"
+      @close="stopping = null"
+    >
+      <div class="stop-confirm">
+        <!-- One session: the tab menu's sentence, word for word, naming the
+             session rather than counting it — and no list, which could only
+             repeat the name the question already carries. -->
+        <p v-if="stopping.sessions.length === 1">Stop <code>{{ stopping.sessions[0] }}</code> ?</p>
+        <template v-else>
+          <p>
+            Stop {{ sessionCountLabel(stopping.sessions.length) }} in
+            <code>{{ stopping.label }}</code> ?
+          </p>
+          <ul class="stop-list">
+            <li v-for="name in stopping.sessions" :key="name"><code>{{ name }}</code></li>
+          </ul>
+        </template>
+        <p v-if="stopping.sessions.length === 1" class="muted">
+          This kills the tmux session on the host. Anything running in it stops, its scrollback
+          goes, and there is no undo.
+        </p>
+        <p v-else class="muted">
+          This kills each tmux session on the host. Anything running in them stops, their
+          scrollback goes, and there is no undo.
+        </p>
+        <footer class="actions">
+          <button class="btn-secondary" @click="stopping = null">Cancel</button>
+          <button class="btn-danger" :disabled="stopBusy" @click="confirmStopFolder">
+            {{
+              stopBusy
+                ? 'Stopping…'
+                : stopping.sessions.length === 1
+                  ? 'Stop session'
+                  : `Stop ${stopping.sessions.length} sessions`
+            }}
+          </button>
+        </footer>
+      </div>
+    </OverlayPanel>
 
     <NewSessionDialog
       v-if="creating"
@@ -1190,6 +1396,114 @@ function fmtRelative(epochSeconds: number): string {
 }
 .error {
   padding: 0 var(--sp-3) var(--sp-2);
+}
+/* The batch's refusal, which unlike the listing's error has a dismiss: flex so
+   the button sits at the end of the strip, with the TEXT as the flexible child
+   so a sentence naming three sessions wraps under itself rather than squeezing
+   the button. `align-items: flex-start` keeps the mark on the first line. */
+.stop-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+.stop-error span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The confirm sheet, deliberately the tab menu's
+   (FolderWorkspaceView `.stop-confirm`): the two dialogs ask the same question
+   about the same kind of thing, from two menus a click apart, so they must not
+   look like two different features. */
+.stop-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  font-size: var(--fs-300);
+  line-height: var(--lh-300);
+}
+.stop-confirm p {
+  margin: 0;
+}
+.stop-confirm code {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+/* Scrolls rather than growing the sheet. Six rows of a ~28px line is the point
+   where the muted warning and the buttons would start leaving the viewport on a
+   short window — and those are the two things the dialog cannot afford to push
+   off screen. */
+.stop-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-2);
+  max-height: 168px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.stop-list li + li {
+  margin-top: var(--sp-1);
+}
+.stop-confirm .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+.stop-confirm .btn-secondary,
+.stop-confirm .btn-danger {
+  height: var(--control-h);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
+  font-weight: var(--fw-semibold);
+  transition: background var(--dur-fast) var(--ease);
+}
+.stop-confirm .btn-secondary {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--fg);
+}
+.stop-confirm .btn-secondary:hover {
+  background: var(--state-hover);
+}
+/* Solid error, not a tinted ghost: a confirm dialog whose dangerous option is
+   the quieter of the two is a trap. */
+.stop-confirm .btn-danger {
+  background: var(--error);
+  border: 1px solid var(--error);
+  color: var(--on-accent);
+}
+.stop-confirm .btn-danger:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+
+/* The menu's destructive item. `:deep` because PopupMenu's items arrive through
+   its slot and so carry THIS component's scope id, not the menu's — the same
+   reason PopupMenu publishes `.menu-item` with `:deep` from its side. The hover
+   fill is the error tint rather than the ordinary grey, so the row confirms
+   what it is as the cursor lands on it and before it is clicked. */
+.popup-menu :deep(.menu-item.danger) {
+  color: var(--error);
+}
+.popup-menu :deep(.menu-item.danger:hover) {
+  background: var(--error-soft);
+}
+.popup-menu :deep(.menu-item.danger:disabled) {
+  color: var(--fg-muted);
+}
+.popup-menu :deep(.menu-item.danger:disabled:hover) {
+  background: transparent;
 }
 
 /* Below ~270px the row cannot hold every field. The timestamp goes first: it

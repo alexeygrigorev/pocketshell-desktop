@@ -34,12 +34,26 @@ import type { SessionSummary } from '../../src/shared/types';
 
 const sessionsList = vi.fn<() => Promise<SessionSummary[]>>();
 const projectsHome = vi.fn<() => Promise<{ ok: boolean; home?: string; error?: string }>>();
+/**
+ * `projects:killSession`, which the panel now reaches for once per session in a
+ * stopped folder. It never throws in the real preload — a refusal comes back as
+ * `ok: false` with a code — so the default here is the ordinary success and the
+ * tests that care about refusals set their own.
+ */
+const killSession =
+  vi.fn<
+    (connectionId: string, name: string) => Promise<{ ok: boolean; code?: string; error?: string }>
+  >();
 
 vi.mock('../../src/renderer/ipc', () => ({
   api: {
     // The two calls the panel makes on mount.
     helper: { sessionsList: () => sessionsList() },
-    projects: { home: () => projectsHome(), onCloneProgress: vi.fn() },
+    projects: {
+      home: () => projectsHome(),
+      killSession: (connectionId: string, name: string) => killSession(connectionId, name),
+      onCloneProgress: vi.fn(),
+    },
     // Present because constructing the connection store subscribes to them,
     // not because this component uses them.
     ssh: { onState: vi.fn(), listConfigHosts: vi.fn().mockResolvedValue([]) },
@@ -170,6 +184,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
   vi.clearAllMocks();
+  killSession.mockResolvedValue({ ok: true });
 });
 
 describe('SessionTree — the foot button is gone, and nothing went with it', () => {
@@ -319,7 +334,10 @@ describe('SessionTree — right-clicking a folder row', () => {
     expect(wrapper.find('.menu-stub').exists()).toBe(false);
 
     await wrapper.findAll('.dir-header')[0]!.trigger('contextmenu');
-    expect(menuItems(wrapper)).toEqual([{ text: 'New session…', disabled: false }]);
+    expect(menuItems(wrapper)).toEqual([
+      { text: 'New session…', disabled: false },
+      { text: 'Stop session…', disabled: false },
+    ]);
 
     await wrapper.get('.menu-stub .menu-item').trigger('click');
     // The whole point: the picker opens IN the folder, expanded to a real
@@ -372,12 +390,185 @@ describe('SessionTree — right-clicking a folder row', () => {
     const wrapper = await open([session('nowhere', null)]);
     expect(dirLabels(wrapper)).toEqual(['nowhere']);
     await wrapper.get('.dir-header').trigger('contextmenu');
-    expect(menuItems(wrapper)).toEqual([{ text: 'New session…', disabled: true }]);
+    // Only the CREATE half is disabled. Stopping needs a session name and not a
+    // directory, so the folder tmux could not place is still one this menu can
+    // clear — the two items fail independently because they depend on different
+    // things.
+    expect(menuItems(wrapper)).toEqual([
+      { text: 'New session…', disabled: true },
+      { text: 'Stop session…', disabled: false },
+    ]);
     expect(wrapper.get('.menu-stub .menu-item').attributes('title')).toContain(
       'no directory on this host',
     );
     await wrapper.get('.menu-stub .menu-item').trigger('click');
     expect(dialogStartIn(wrapper)).toBeUndefined();
+  });
+});
+
+/**
+ * Stopping every session in a folder.
+ *
+ * The tab menu can already stop ONE session (docs/WORKSPACE.md §14); what it
+ * cannot do is clear a folder without opening its workspace and confirming once
+ * per tab. The folder row is the only control that stands for the whole set, so
+ * this is the only place the action can live.
+ *
+ * It is the second destructive thing in the app and it multiplies the first, so
+ * what is pinned here is mostly what must NOT happen: nothing dies before the
+ * confirm, nothing outside the folder dies at all, the sessions are named on
+ * screen before the user agrees to lose them, and a partial failure says which
+ * ones survived instead of reporting a clean sweep.
+ */
+describe('SessionTree — stopping every session in a folder', () => {
+  /** The names in the open confirm, in rendered order. */
+  function confirmList(wrapper: VueWrapper): string[] {
+    return wrapper.findAll('.stop-list li').map((li) => li.text());
+  }
+
+  async function openStopConfirm(wrapper: VueWrapper, row = 0): Promise<void> {
+    await wrapper.findAll('.dir-header')[row]!.trigger('contextmenu');
+    await wrapper.get('.menu-stub .menu-item.danger').trigger('click');
+  }
+
+  const FOLDER = [
+    session('git-dataqna', `${HOME}/git/dataqna`, 300),
+    session('git-dataqna-2', `${HOME}/git/dataqna`, 250),
+    session('git-other', `${HOME}/git/other`, 200),
+  ];
+
+  it('counts the folder in the item and names every session in the confirm', async () => {
+    const wrapper = await open(FOLDER);
+    await wrapper.findAll('.dir-header')[0]!.trigger('contextmenu');
+    // Counted, because the row shows a number and no names: `Stop session…`
+    // on a folder holding two would understate what the click does.
+    expect(menuItems(wrapper)).toEqual([
+      { text: 'New session…', disabled: false },
+      { text: 'Stop all 2 sessions…', disabled: false },
+    ]);
+
+    await wrapper.get('.menu-stub .menu-item.danger').trigger('click');
+    // Opening the confirm closes the menu, and kills nothing: the dialog is a
+    // question, and everything before the answer has to cost the user nothing.
+    expect(wrapper.find('.menu-stub').exists()).toBe(false);
+    expect(killSession).not.toHaveBeenCalled();
+    // The names are the point. A folder row carries a dot, a label and a count,
+    // so without this the user would be agreeing to two things they cannot
+    // see — and the sibling folder must be visibly NOT among them.
+    expect(confirmList(wrapper)).toEqual(['git-dataqna', 'git-dataqna-2']);
+    expect(wrapper.get('.stop-confirm').text()).toContain('dataqna');
+  });
+
+  it('kills exactly the folder it was opened on, by tmux name', async () => {
+    const wrapper = await open(FOLDER);
+    await openStopConfirm(wrapper);
+    await wrapper.get('.stop-confirm .btn-danger').trigger('click');
+    await flush(wrapper);
+
+    expect(killSession.mock.calls).toEqual([
+      ['conn-1', 'git-dataqna'],
+      ['conn-1', 'git-dataqna-2'],
+    ]);
+    // The listing is re-read rather than left to the poll: the rows the user
+    // just cleared have to be gone by the time the dialog is.
+    expect(sessionsList).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('.stop-confirm').exists()).toBe(false);
+    expect(wrapper.find('.stop-error').exists()).toBe(false);
+  });
+
+  it('acts on the row under the cursor, not on the first one', async () => {
+    const wrapper = await open(FOLDER);
+    await openStopConfirm(wrapper, 1);
+    // One session in that folder, so the confirm names it in the sentence
+    // rather than in a list — and the two it did NOT open on are absent.
+    expect(wrapper.get('.stop-confirm p').text()).toBe('Stop git-other ?');
+    await wrapper.get('.stop-confirm .btn-danger').trigger('click');
+    await flush(wrapper);
+    expect(killSession.mock.calls).toEqual([['conn-1', 'git-other']]);
+  });
+
+  it('asks the tab menu\'s own question when the folder holds one session', async () => {
+    // Not a near-miss of it: the same words, so the two confirms read as one
+    // feature reached from two menus rather than as two features. The list goes
+    // with the count — it could only repeat the name the sentence now carries.
+    const wrapper = await open([session('git-solo', `${HOME}/git/solo`)]);
+    await wrapper.get('.dir-header').trigger('contextmenu');
+    expect(menuItems(wrapper)[1]).toEqual({ text: 'Stop session…', disabled: false });
+    await wrapper.get('.menu-stub .menu-item.danger').trigger('click');
+    expect(wrapper.get('.stop-confirm p').text()).toBe('Stop git-solo ?');
+    expect(confirmList(wrapper)).toEqual([]);
+    expect(wrapper.get('.stop-confirm .btn-danger').text()).toBe('Stop session');
+  });
+
+  it('says Stop, never Kill or Close, everywhere a user can read it', async () => {
+    // `Close` in this app closes a TAB and leaves the session running, and the
+    // tab menu's word for killing one is `Stop`. Two words for one destructive
+    // act, in two menus a click apart, is how one of them starts looking like
+    // the safe one. `kills` survives inside the confirm's explanation, where
+    // the tab menu's dialog uses it too — that is the sentence saying what
+    // Stop actually costs.
+    const wrapper = await open(FOLDER);
+    await wrapper.findAll('.dir-header')[0]!.trigger('contextmenu');
+    const item = wrapper.get('.menu-stub .menu-item.danger');
+    expect(item.text()).toContain('Stop');
+    expect(item.attributes('title')).toBe('Stop 2 sessions on the host');
+    await item.trigger('click');
+    for (const text of [
+      wrapper.get('.stop-confirm p').text(),
+      wrapper.get('.stop-confirm .btn-danger').text(),
+    ]) {
+      expect(text).not.toMatch(/close|kill/i);
+    }
+  });
+
+  it('kills nothing when the confirm is cancelled', async () => {
+    const wrapper = await open(FOLDER);
+    await openStopConfirm(wrapper);
+    await wrapper.get('.stop-confirm .btn-secondary').trigger('click');
+    expect(killSession).not.toHaveBeenCalled();
+    expect(wrapper.find('.stop-confirm').exists()).toBe(false);
+  });
+
+  it('treats a session the host says is already gone as stopped', async () => {
+    // The ordinary race, not an exotic one: the panel refreshes on a timer, so
+    // a session can go away between the right-click and the confirm. The state
+    // the user asked for is the state that exists — reporting it as a failure
+    // would teach them to distrust a message that means nothing went wrong.
+    killSession.mockResolvedValueOnce({ ok: false, code: 'not-found' });
+    const wrapper = await open(FOLDER);
+    await openStopConfirm(wrapper);
+    await wrapper.get('.stop-confirm .btn-danger').trigger('click');
+    await flush(wrapper);
+    expect(killSession).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('.stop-error').exists()).toBe(false);
+  });
+
+  it('names the sessions that survived a refused batch, and stops the rest', async () => {
+    // A batch that half-worked is the case a single "could not stop" sentence
+    // would lie about. Worded as the tab bar words its own refusals — the
+    // session in double quotes, the host's sentence carried rather than
+    // replaced — and it NAMES what survived rather than counting it: `1 of 2`
+    // says how much of the folder is still up, but not which half the user can
+    // act on.
+    killSession.mockResolvedValueOnce({ ok: false, code: 'kill-failed', error: 'server refused' });
+    const wrapper = await open(FOLDER);
+    await openStopConfirm(wrapper);
+    await wrapper.get('.stop-confirm .btn-danger').trigger('click');
+    await flush(wrapper);
+
+    // The refusal does not abort the batch: the second session still dies.
+    expect(killSession).toHaveBeenCalledTimes(2);
+    const error = wrapper.get('.stop-error').text();
+    expect(error).toContain('Could not stop "git-dataqna" in dataqna.');
+    expect(error).toContain('server refused');
+    // The one that DID die is not in the sentence: a refusal that names every
+    // session it was asked about reads as a batch that failed outright.
+    expect(error).not.toContain('git-dataqna-2');
+
+    // And it is dismissable, because nothing else clears it: the listing's own
+    // error belongs to the poll, which rewrites it every few seconds.
+    await wrapper.get('.stop-error button').trigger('click');
+    expect(wrapper.find('.stop-error').exists()).toBe(false);
   });
 });
 

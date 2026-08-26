@@ -1097,11 +1097,12 @@ reading our own capability out of the host's record.
 > Right-click a session tab -> a menu including an action that kills that tmux
 > session.
 
-**The only destructive action in this app.** The file tree's menu (c614e7e)
-deliberately omitted delete as "destructive-adjacent with no undo"; this was
-asked for explicitly, so it ships — and it is the only thing in its menu that
-can lose work, so it looks like it: separated, tinted with `--error`, and behind
-a confirmation.
+**The only destructive action in this app**, reachable from two menus: this one,
+and the session panel's folder row, which stops a whole folder at once (§14.4).
+The file tree's menu (c614e7e) deliberately omitted delete as
+"destructive-adjacent with no undo"; this was asked for explicitly, so it ships
+— and it is the only thing in either menu that can lose work, so it looks like
+it: separated, tinted with `--error`, and behind a confirmation.
 
 The menu reuses `PopupMenu.vue`, which exists precisely for this shape: the tab
 strip is `overflow-x: auto`, which per CSS makes `overflow-y` compute to `auto`
@@ -1200,6 +1201,44 @@ dead one's tty rendezvous.
 
 Selection then goes through §12's `tabAfterClose` — the same path a closed Files
 tab takes — and focus lands in the newly selected tab's surface.
+
+### 14.4 Stopping a folder, from the session panel
+
+> Right-click a folder row in the session panel -> `Stop all 3 sessions…`.
+
+The tab menu above stops ONE session, and it can only be reached from the
+workspace of the folder that session is in. Clearing a folder through it means
+opening that workspace and confirming once per tab; the panel's folder row is
+the only control in the app that stands for the whole SET, so it is the only
+place the batch can live. It sits under `New session…` in the same row menu
+(SessionTree.vue), separated and `--error`-tinted by the rule this section
+already sets.
+
+**It is called Stop, not Close.** `Close` in this app closes a TAB and leaves
+the session running (§12). Two words for one destructive act, in two menus a
+click apart, is how a user comes to believe one of them is the safe one.
+
+**The confirm LISTS the sessions**, which is the one thing it does that §14.1's
+does not have to. The tab menu could name a single session because the tab was
+under the cursor; a folder row carries a dot, a label and a count and never a
+name, so without the list the user would be agreeing to lose things they cannot
+see. It scrolls at six rows rather than growing the sheet, so the warning and
+the buttons stay on screen.
+
+**Sequential kills, and a partial failure is reported by name.** Each kill is an
+ssh exec, and a folder's worth fired at once is the load the panel's own poll is
+already guarded against. `not-found` counts as success per §14.2. What refuses
+does not abort the batch: the rest are still stopped, and the message names the
+survivors under the tree — in its own dismissable line rather than in
+`sessions.error`, which the five-second poll rewrites and would erase seconds
+after the user was told.
+
+Of §14.3's three pieces of desktop state, this panel can reach exactly one and
+needs only that one. The pool's client goes main-side from the ipc handler
+whatever the caller is; the composer record is dropped here, per session, and
+only for the sessions that actually died; and the workspace's mounted pane needs
+no help, because `sessionPanes` is filtered against the live tabs — a session
+that leaves the listing takes its terminal with it.
 
 ---
 
