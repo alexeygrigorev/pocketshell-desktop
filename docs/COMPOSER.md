@@ -641,6 +641,43 @@ in mind when adding any future dismissal:
 
 It does not move focus either: the click already decided where focus goes.
 
+##### The press that dismissed it does not also arm the hatch
+
+That paragraph was true of the handler and false of the app, and the gap was the
+bug the user reported next:
+
+> "in some cases my inpurt isn't captured i type directly into teminal no promt
+> composer"
+
+The commonest press outside the composer lands in a **terminal pane**, which is
+also the gesture that arms the plain-terminal hatch (below). So one `mousedown`
+answered two rules at once: it dismissed the empty card here, and it silenced the
+intercept there. The user clicked the terminal to read some output, the composer
+got out of the way as designed, and then their next prompt went into the shell
+from a screen with no composer on it to explain why.
+
+Neither handler could detect the collision from state. The composer listens on
+`window` in the **capture** phase (so a press is seen wherever it lands) and
+`TerminalView` listens on its own element, so the dismissal always ran first and
+the arming always found a composer that was already hidden — indistinguishable
+from one that had been hidden all along.
+
+The **press object** is what they share, so it is what they agree on: the
+dismissal goes through `composer.dismissOnOutsidePress(e)`, which marks the event
+as answered, and `suppressTyping(key, press)` declines a press that has already
+spoken. Exact rather than heuristic — no ordering assumption, no timer, no "was
+it hidden a moment ago" — and there is nothing to reset, because an answered
+press is remembered only as long as the event object lives.
+
+> **One press, one meaning.**
+
+What this costs, and why it is the right way round: a user who pressed in the
+terminal *intending* to type a command there gets the composer back on their
+first character instead. That is a visible, one-keystroke annoyance with nothing
+lost — the character is in the draft. The other way round loses a whole prompt
+into a shell, invisibly, which is the failure this feature exists to prevent. It
+only applies when the card was **empty**, so there was never any work at stake.
+
 #### SUPERSEDED — "closed is two states, not one"
 
 This section said that closing the composer YOURSELF suppressed the typing
@@ -678,9 +715,10 @@ of them needs to differ.
 
 #### The plain-terminal hatch is now a PRESS IN THE TERMINAL
 
-`typingSuppressed` survives, and now means what its name says: the user is
+`typingSuppressedKeys` survives, and now means what its name says: the user is
 typing at the shell, so withhold the intercept. It is armed by a `mousedown`
-inside a terminal pane and by nothing else.
+inside a terminal pane and by nothing else — and not by one that has already
+been answered as a dismissal (above).
 
 The model is that **the intent follows the pointer** — you type where you last
 pointed. That is a better home for the meaning than Escape, and not only because
@@ -702,19 +740,38 @@ The rule the previous revision drew still holds, with its second half rewritten:
 
 `TerminalView` reports the press as a fact (`pressed`) and the workspace decides
 what it means — the same division `typed` and `paste-into-composer` already use,
-so the pane goes on knowing nothing about the composer.
+so the pane goes on knowing nothing about the composer. It reports the press
+*itself*, which is not a leak of DOM detail across that boundary but the press's
+identity: see "one press, one meaning" above.
+
+**It is ONE ENTRY PER PANE, not one flag for the app.** "I am typing at the
+shell" is a statement about the pane you pressed in — the same class of fact as a
+draft, and drafts are keyed for the same reason (§12.4). As a single boolean it
+was too big a hatch for what it says: a press in `main` decided what the next
+keystroke did in `build`, and it outlived the pane that made it, because the
+workspace re-mounts on a route change, on a folder change and on a reconnect
+while an app-level store does not. Keyed, those leaks close by construction, and
+`forget`/`rekey` carry the entry with the record it belongs to — so a killed
+session cannot hand its suppression to the next session of that name, which
+`sessions create` produces routinely.
 
 **What lifts the suppression:**
 
 - **any opening.** `Ctrl+\`` (the summons the user explicitly endorsed —
   *"ctrl + ` is okay"*), the toggle, `Ctrl+Shift+K`, `Ctrl+Shift+↑`, a seed
-  action, an explicit Ctrl+V. `setMode` clears the flag whenever it opens the
-  panel, so no caller has to remember to.
+  action, an explicit Ctrl+V. `setMode` clears **every** pane's entry whenever it
+  opens the panel, so no caller has to remember to: the panel is app-level, so
+  summoning it is a statement about the tool rather than about one session.
 - **a press INSIDE the composer**, the exact counterpart of the press that armed
-  it. The pointer moved, so the intent moved.
+  it. The pointer moved, so the intent moved. That session's pane only.
 - **A session switch.** A decision about where you are typing spoke for the pane
   you were in; another session is a different job and very often a different
-  intent.
+  intent. The destination's entry is cleared, so coming *back* to a pane starts
+  unsuppressed too — the behaviour this had as one app-wide flag.
+- **arriving at a workspace** — app start, a reload, coming back from Settings or
+  the host picker, or a folder-to-folder navigation. Every one of those replaces
+  the panes, and a user who has been driving the app's chrome is not mid-sentence
+  at a shell.
 
 It is not persisted — it is a statement about this moment, not a preference.
 

@@ -200,6 +200,23 @@ export const useComposerStore = defineStore('composer', () => {
    * elsewhere in the window (the tab strip, the session panel) is about
    * neither.
    *
+   * ## ONE ENTRY PER PANE, not one flag for the app
+   *
+   * It was a single boolean, and that was too big a hatch for what it says.
+   * "I am typing at the shell" is a statement about the pane the user pressed
+   * in — the same class of fact as a draft, and drafts are keyed for exactly
+   * this reason (see the header comment's per-session/app-level split). A single
+   * flag let a press in `main` decide what the next keystroke did in `build`,
+   * and it outlived the pane it was said about: the workspace re-mounts on a
+   * route change, on a folder change and on a reconnect, and a boolean sitting
+   * in an app-level store survives all three while the pane it described does
+   * not.
+   *
+   * Keyed, those leaks close by construction rather than by remembering to
+   * clear the flag at each of the places a pane can go away — and {@link forget}
+   * and {@link rekey} carry the entry with the record it belongs to, so a killed
+   * session cannot hand its suppression to the next session of that name.
+   *
    * ## Still a separate flag from `mode === 'hidden'`, and still not the
    * send-close path
    *
@@ -219,7 +236,43 @@ export const useComposerStore = defineStore('composer', () => {
    *
    * Not persisted: it is a statement about this moment, not a preference.
    */
-  const typingSuppressed = ref(false);
+  const typingSuppressedKeys = ref(new Set<string>());
+
+  /**
+   * Presses this composer has already ANSWERED, so that one press means one
+   * thing (docs/COMPOSER.md §12.2).
+   *
+   * The bug this exists to remove, reported as *"in some cases my inpurt isn't
+   * captured i type directly into teminal no promt composer"*: a single
+   * `mousedown` in a terminal pane was doing two jobs at once. The composer's
+   * click-outside rule dismissed the card (it was empty, so the press was
+   * "incidental" and nothing was lost), and the SAME press then armed the
+   * plain-terminal hatch — so the next prompt the user typed went into the
+   * shell, from a screen with no composer on it to explain why.
+   *
+   * That was never the specified behaviour. §12.2 says of the click-outside
+   * dismissal, in as many words, "it does not suppress the typing intercept…
+   * typing afterwards almost certainly means they want it back", and
+   * PromptComposer's `onOutsidePointerDown` says the same. The code disagreed
+   * with both because the two handlers could not see each other: the composer
+   * listens on `window` in the CAPTURE phase (so it sees a press wherever it
+   * lands) and TerminalView listens on its own element, so the dismissal always
+   * ran first and the arming always found a composer that was already hidden.
+   * No state either of them could read told them apart.
+   *
+   * The event object does. Both handlers are called with the same `MouseEvent`
+   * during one dispatch, so the dismissal marks it and the arming declines a
+   * press that has already spoken. That is exact rather than heuristic — no
+   * ordering assumption, no timer, no "was it hidden a moment ago" — and a
+   * WeakSet means an answered press is remembered for exactly as long as the
+   * event object lives, which is the dispatch. A plain variable would pin the
+   * last event, and with it its `target`, keeping a detached pane alive.
+   *
+   * A press that dismissed the card while landing somewhere OTHER than a
+   * terminal (the tab strip, the session panel) is marked too and simply never
+   * asked about, which is why nothing has to reset this.
+   */
+  const answeredPresses = new WeakSet<object>();
 
   // -------------------------------------------------------------------------
   // Persistence — the desktop replacement for SavedStateHandle (:2544, :2558).
@@ -696,6 +749,13 @@ export const useComposerStore = defineStore('composer', () => {
    */
   function rekey(from: string, to: string): void {
     if (from === to) return;
+    // Moved BEFORE the early return, because a suppression can outlive the
+    // record: `ensure()` is never called for a pane the user has only ever
+    // typed at the shell in, so a renamed session with no draft would otherwise
+    // leave its "I am working here" behind under a key nothing will ask for
+    // again — and the renamed pane would start answering to the intercept
+    // mid-keystroke.
+    if (typingSuppressedKeys.value.delete(from)) typingSuppressedKeys.value.add(to);
     const existing = states.value[from];
     if (!existing) return;
     const next = { ...states.value, [to]: existing };
@@ -728,6 +788,12 @@ export const useComposerStore = defineStore('composer', () => {
   function forget(key: string): void {
     const batch = batches.get(key);
     if (batch) batch.cancel = 'discard';
+    // Same reasoning as `rekey`'s, and the same placement above the early
+    // return: the pane is gone, so the statement it was making about where the
+    // user types is gone with it. `sessions create` reuses names, so a
+    // suppression left behind here would be inherited by a session that never
+    // asked for it.
+    typingSuppressedKeys.value.delete(key);
     if (!(key in states.value)) return;
     const next = { ...states.value };
     delete next[key];
@@ -754,7 +820,12 @@ export const useComposerStore = defineStore('composer', () => {
       // Any opening is a summons, and a summons ends the suppression whatever
       // set it. That covers the chord, the toggle, a seed action and a restored
       // session in one line, so no caller has to remember to clear it.
-      typingSuppressed.value = false;
+      //
+      // EVERY pane, not just the one being opened onto: the panel is app-level,
+      // so summoning it is a statement about the tool rather than about one
+      // session, and a user who asked for the composer has stopped saying "I am
+      // typing at the shell" everywhere they said it.
+      typingSuppressedKeys.value.clear();
     }
     mode.value = next;
     schedulePersist();
@@ -772,16 +843,21 @@ export const useComposerStore = defineStore('composer', () => {
    * world even when they produce the same state, which is precisely what the
    * flag's own comment says went wrong when they last shared a boolean.
    *
-   * See {@link typingSuppressed} for what the user reported and why Escape
+   * See {@link typingSuppressedKeys} for what the user reported and why Escape
    * stopped speaking for the next keystroke.
    */
   function dismiss(): void {
     setMode('hidden');
   }
 
+  /** Is [key]'s pane one the user said they were typing at the shell in? */
+  function isTypingSuppressed(key: string): boolean {
+    return typingSuppressedKeys.value.has(key);
+  }
+
   /**
-   * The user is typing at the SHELL, not at the composer: withhold the intercept
-   * until they say otherwise.
+   * The user is typing at the SHELL of [key]'s pane, not at the composer:
+   * withhold the intercept there until they say otherwise.
    *
    * Called on a press inside the terminal pane, which is the only gesture in the
    * window that unambiguously means the shell. It is the replacement for the
@@ -789,25 +865,52 @@ export const useComposerStore = defineStore('composer', () => {
    * live: pressing Escape is a statement about the PANEL, whereas pointing at
    * the terminal is a statement about where you intend to type.
    *
-   * Cleared by any opening ({@link setMode}) and by
-   * {@link allowTypingToOpen}, which the composer calls when a press lands
-   * inside it. So the flag tracks the last surface the user pointed at rather
-   * than accumulating.
+   * [press] is the `mousedown` that says so, and passing it is what keeps ONE
+   * press to ONE meaning: a press that has already been answered by
+   * {@link dismissOnOutsidePress} dismissed the card, and a dismissal is a
+   * statement about the VIEW. See {@link answeredPresses} for the bug that came
+   * of the two being the same press. It is optional so a caller with no event in
+   * hand — a test, a future non-pointer gesture — can still say the thing this
+   * action says.
+   *
+   * Cleared by any opening ({@link setMode}) and by {@link allowTypingToOpen},
+   * which the composer calls when a press lands inside it. So an entry tracks
+   * the last surface the user pointed at IN THAT PANE rather than accumulating
+   * — and a pane never accumulates a second entry, since the key is the pane.
    */
-  function suppressTyping(): void {
-    typingSuppressed.value = true;
+  function suppressTyping(key: string, press?: object): void {
+    if (press !== undefined && answeredPresses.has(press)) return;
+    typingSuppressedKeys.value.add(key);
   }
 
   /**
    * Let typing open it again without opening it now.
    *
-   * Two callers, and they are the same statement from two directions: a press
-   * inside the composer ("I am working here"), and a session switch — a
-   * different pane, a different job, and very often a different intent, so a
-   * decision made about the last one does not carry over.
+   * With a [key], one pane; without one, all of them. Three callers, and they
+   * are the same statement from three directions: a press inside the composer
+   * ("I am working here", this pane), a session switch — a different pane, a
+   * different job, and very often a different intent, so a decision made about
+   * the last one does not carry over — and ARRIVING at a workspace, which is a
+   * user who has been driving the app's chrome rather than any shell.
    */
-  function allowTypingToOpen(): void {
-    typingSuppressed.value = false;
+  function allowTypingToOpen(key?: string): void {
+    if (key === undefined) typingSuppressedKeys.value.clear();
+    else typingSuppressedKeys.value.delete(key);
+  }
+
+  /**
+   * Close it because a press landed OUTSIDE an empty composer (§12.2).
+   *
+   * Its own action rather than a bare `setMode('hidden')` purely so the press
+   * can be recorded as answered — see {@link answeredPresses}. The rule it
+   * enforces is the one §12.2 already stated and the code did not keep: **a
+   * click dismisses the view, and a press that dismissed the view does not also
+   * dismiss the intent.** The card was empty, so nothing was lost and typing
+   * afterwards almost certainly means the user wants it back.
+   */
+  function dismissOnOutsidePress(press: object): void {
+    answeredPresses.add(press);
+    setMode('hidden');
   }
 
   /**
@@ -855,7 +958,8 @@ export const useComposerStore = defineStore('composer', () => {
     mode,
     lastOpenMode,
     geometry,
-    typingSuppressed,
+    typingSuppressedKeys,
+    isTypingSuppressed,
     targetKey,
     ensure,
     setDraft,
@@ -876,6 +980,7 @@ export const useComposerStore = defineStore('composer', () => {
     setConnectionDegraded,
     setMode,
     dismiss,
+    dismissOnOutsidePress,
     suppressTyping,
     allowTypingToOpen,
     toggleHidden,

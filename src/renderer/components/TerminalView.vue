@@ -99,11 +99,21 @@ const props = defineProps<{
  * composer's `onPaste` already owns that path. So this stays the same shape as
  * `typed`: a statement that a keystroke was withheld, not an instruction about
  * what to do with it.
+ *
+ * `pressed` carries the `mousedown` ITSELF, and for once that is not a leak of
+ * DOM detail across a boundary this component is trying to keep — it is the
+ * identity of the press. The composer's click-outside rule listens for the same
+ * press on `window` in the capture phase, so both handlers run during one
+ * dispatch and neither can see what the other did to any state. Handing over
+ * the event is what lets them agree about WHICH press they are talking about;
+ * the store's `answeredPresses` is where that agreement is spent. This stays a
+ * statement — "my pane was pressed, here is the press" — and the workspace goes
+ * on deciding what it means.
  */
 const emit = defineEmits<{
   (e: 'typed', text: string): void;
   (e: 'paste-into-composer'): void;
-  (e: 'pressed'): void;
+  (e: 'pressed', press: MouseEvent): void;
 }>();
 
 /** The tmux session this pane should be showing, or '' for a bare shell. */
@@ -582,7 +592,10 @@ function onTerminalMouseDown(e: MouseEvent): void {
   // A statement, not an instruction — the same shape as `typed` and
   // `paste-into-composer`. This component knows nothing about the composer; it
   // reports that its pane was pressed and the workspace decides what that means.
-  emit('pressed');
+  //
+  // The event goes with it because the same press is also being answered
+  // elsewhere in this dispatch — see the `pressed` declaration above.
+  emit('pressed', e);
 }
 
 /**

@@ -98,7 +98,7 @@ beforeEach(async () => {
   // the terminal (docs/COMPOSER.md §12.2). This is exactly the state a user is
   // in when they click into the shell, work there, and then hit Ctrl+V.
   composer.dismiss();
-  composer.suppressTyping();
+  composer.suppressTyping(key);
   await nextTick();
 });
 
@@ -128,7 +128,7 @@ describe('an image on the clipboard', () => {
     expect(composer.mode).not.toBe('hidden');
     // Through `setMode`, which clears it for every summons — not a second
     // unsuppression route bolted on for this chord.
-    expect(composer.typingSuppressed).toBe(false);
+    expect(composer.isTypingSuppressed(key)).toBe(false);
   });
 
   it('shows the tile it just uploaded', async () => {
@@ -160,7 +160,7 @@ describe('text on the clipboard', () => {
 
     expect(composer.states[key]!.draft).toBe('deploy the thing');
     expect(composer.mode).not.toBe('hidden');
-    expect(composer.typingSuppressed).toBe(false);
+    expect(composer.isTypingSuppressed(key)).toBe(false);
     expect(stage).not.toHaveBeenCalled();
   });
 
@@ -188,7 +188,7 @@ describe('nothing usable — nothing visible', () => {
   /** The composer must be exactly as it was: away, and still suppressed. */
   function expectUntouched(): void {
     expect(composer.mode).toBe('hidden');
-    expect(composer.typingSuppressed).toBe(true);
+    expect(composer.isTypingSuppressed(key)).toBe(true);
     expect(composer.states[key]?.draft ?? '').toBe('');
     expect(stage).not.toHaveBeenCalled();
   }

@@ -258,7 +258,12 @@ watch(
     slashDismissed.value = false;
     // A dismissal spoke for the session the user was in. This is a different
     // pane and very often a different job, so typing may summon it again.
-    composer.allowTypingToOpen();
+    //
+    // `key` has already recomputed onto the NEW session by the time a watcher
+    // runs, which is the one this is about: arriving somewhere is the fresh
+    // intent, and the pane being left keeps whatever it was told (it is a
+    // per-pane fact now — see the store's `typingSuppressedKeys`).
+    composer.allowTypingToOpen(key.value);
     if (mode.value !== 'hidden') focusDraft();
   },
 );
@@ -446,7 +451,7 @@ async function readClipboardText(): Promise<string | null> {
  *
  * Both live branches lift the dismissal suppression, and neither does it by
  * hand: `openComposer` and `typeInto` both go through the store's `setMode`,
- * which clears `typingSuppressed` on any opening because "any opening is a
+ * which clears `typingSuppressedKeys` on any opening because "any opening is a
  * summons". An explicit Ctrl+V is as much a summons as Ctrl+` is, so that is
  * the behaviour wanted — and taking it from the one place that already decides
  * it is what stops a second way to unsuppress existing.
@@ -991,7 +996,7 @@ function openComposer(): void {
  * Escape's job is to put the panel away, and typing afterwards means the same
  * thing it means from any other closed state. The plain-terminal hatch moved to
  * a press in the terminal, which is the gesture that actually says "I am
- * working at the shell" — see the store's `typingSuppressed`.
+ * working at the shell" — see the store's `typingSuppressedKeys`.
  *
  * The focus half is what makes the two coexist. Escape hands the keyboard back
  * to the pane, so every NON-printable key (Ctrl-C, the arrows, Enter, tmux's
@@ -1029,6 +1034,24 @@ function hideComposer(): void {
  * want it back, which is the premise of §26.1. The split is: a CLICK dismisses
  * the view, a KEY dismisses the intent.
  *
+ * ## `dismissOnOutsidePress`, and why that paragraph needed enforcing
+ *
+ * The paragraph above was true of this handler and false of the app. The
+ * plain-terminal hatch is armed by a press in a terminal pane, and a press in a
+ * terminal pane is also the commonest OUTSIDE press there is — so the single
+ * `mousedown` that dismissed the empty card here went on to arm the hatch in
+ * TerminalView, and the next thing the user typed went to the shell with no
+ * composer on screen to explain it. That is the reported bug: *"in some cases
+ * my inpurt isn't captured i type directly into teminal no promt composer"*.
+ *
+ * This handler runs FIRST — `window`, capture phase, so the press is seen
+ * wherever it lands — which is why neither side could detect the collision from
+ * state alone: by the time the pane's own handler ran, the card was already
+ * hidden and looked like it had been hidden all along. Going through
+ * `dismissOnOutsidePress` instead of `setMode('hidden')` marks the press as
+ * ANSWERED, and the arming declines a press that has already spoken. One press,
+ * one meaning.
+ *
  * It does not move focus either. The click already decided where focus goes;
  * stealing it back to the terminal would fight the user's own pointer.
  */
@@ -1047,12 +1070,18 @@ function onOutsidePointerDown(e: MouseEvent): void {
     // decide whether an OUTSIDE press dismisses, and an inside press must still
     // be heard when the card is closed (the pinned toggle is inside the root)
     // or when the draft has content.
-    composer.allowTypingToOpen();
+    //
+    // This session's pane only. The user pointed at the composer for the
+    // session they are looking at; a pane they left working at a shell is not
+    // part of that statement.
+    composer.allowTypingToOpen(key.value);
     return;
   }
 
   if (mode.value === 'hidden' || !isEmpty.value) return;
-  composer.setMode('hidden');
+  // Not `setMode('hidden')`: the press has to be handed over so that whatever
+  // else it lands on cannot read a second meaning into it. See the header.
+  composer.dismissOnOutsidePress(e);
 }
 
 /**
