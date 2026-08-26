@@ -275,8 +275,11 @@ is **never** mutated by attaching — stated at `:301-309`, `:2176-2179`,
   an uncommitted IME composing region still enables Send.
 - ViewModel guards (`:662`, `:672`): no-op if a send is already in flight; no-op
   if the *composed* text is empty.
-- Sending while an attachment batch is still uploading **cancels the upload**
-  and sends what has already been staged (`:684-688`).
+- Sending while an attachment batch is still uploading **waits for it**, then
+  sends with the image included. This note used to say the opposite — cancel the
+  upload, send what is staged — citing `:684-688`; the user, who wrote the phone
+  app, says that is not what it does: *"that's not how the phone app works. it
+  waits"*. See §16.3.
 
 ### 5.3 "Send" vs "Send + Enter"
 
@@ -895,12 +898,39 @@ Copy the strings exactly:
 
 ## 16. Send path
 
+### 16.0 An upload in flight is waited for, not abandoned
+
+> "If I'm uploading an image and hit enter, I wait till image is uploaded and
+> then send the prompt" — and, on the old rule citing the phone: "that's not how
+> the phone app works. it waits"
+
+The desktop used to mark the in-flight batch cancelled and deliver whatever was
+already staged. The user attaches an image and then writes a prompt ABOUT that
+image, so what went out was not a smaller version of what they asked for: it was
+a question with its subject missing, to an agent that answered it anyway, having
+never seen the picture.
+
+Four things make the wait safe rather than a hang:
+
+- **`sendInFlight` goes up BEFORE the wait.** The Send button reads it, so it
+  disables; the single-flight guard reads it, so a second Enter is a no-op
+  rather than a second prompt queued behind the same upload; `isEmpty` reads it,
+  so a click-outside cannot dismiss a prompt parked on its own picture. #745's
+  rule — draft and tiles stay on screen — simply holds through a longer wait.
+- **The batch always settles.** `Batch.done` resolves on every exit including a
+  throw, and the upload's own `uploadTimeoutMs` bounds the wait.
+- **The payload is composed AFTER the wait.** Reading it first is precisely how
+  the old rule managed to send a prompt about an image with the image missing.
+- **A failed upload does not send.** The banner and the intact draft are what
+  every other refusal in this store leaves behind, and the user can retry
+  without retyping.
+
 ### 16.1 Sequence
 
 1. Compose: `payload = appendAttachmentPaths(draft, attachments.map(a => a.remotePath))`.
 2. Guard: return if `payload === ''` or `sendInFlight` (`:662`, `:672`).
-3. If an upload is in flight, abort it and send with the tiles already staged
-   (`:684-688`).
+3. If an upload is in flight, **wait for it** and compose the payload
+   afterwards (§16.3).
 4. `sendInFlight = true`, `error = null`. **Leave the draft and the tiles on
    screen** — this is #745 and it is the single most user-visible send rule.
 5. Deliver (§16.2) with a 12 000 ms timeout (`SEND_TIMEOUT_MS`, `:2535`).

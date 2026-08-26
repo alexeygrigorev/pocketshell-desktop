@@ -114,18 +114,39 @@ function blankState(): ComposerSessionState {
 }
 
 /**
- * A staging batch in flight. Android cancels the coroutine; we cannot un-send an
- * IPC call that is already on the wire, so we mark the batch instead and drop
- * its result when it lands. Two cancel reasons, both discarding:
- *   'send'    — the user hit Send mid-upload, so the send goes out with the
- *               tiles already staged (:684-688) and the late batch is abandoned
- *               rather than materialising tiles for a prompt that already left.
- *   'discard' — the user hit Discard (:783-800).
- * Note this is cancellation, NOT the #570 partial-failure path: a result that
- * arrives normally always keeps its survivors, even when `ok` is false.
+ * A staging batch in flight.
+ *
+ * We cannot un-send an IPC call that is already on the wire, so a batch is
+ * MARKED and its result dropped when it lands. One cancel reason is left:
+ * 'discard' — the user hit Discard (:783-800). This is cancellation, NOT the
+ * #570 partial-failure path: a result that arrives normally always keeps its
+ * survivors, even when `ok` is false.
+ *
+ * ## 'send' is gone, and `done` is what replaced it
+ *
+ * There used to be a second reason: hitting Send mid-upload abandoned the batch
+ * and sent the prompt with whatever was already staged. This code cited the
+ * phone for it (`:684-688`) and the user — who wrote the phone app — says that
+ * is not what the phone does: "that's not how the phone app works. it waits".
+ * Their report of the desktop behaviour is what a dropped batch feels like from
+ * the outside: "If I'm uploading an image and hit enter, I wait till image is
+ * uploaded and then send the prompt" — the image simply was not in the prompt.
+ *
+ * Abandoning it was the worse rule on its own merits, whatever the phone does.
+ * The user attached an image and then wrote a prompt ABOUT that image; sending
+ * the words without the picture does not deliver a smaller version of what they
+ * asked for, it delivers a question with its subject missing — to an agent that
+ * will answer it anyway, having never seen the image.
+ *
+ * So the batch now carries a promise that settles when staging is finished, and
+ * `send` awaits it. It settles on EVERY exit — success, partial failure, the
+ * upload timeout, a thrown IPC — because a send parked on a promise that never
+ * resolves is a composer that has silently stopped working.
  */
 interface Batch {
-  cancel: null | 'send' | 'discard';
+  cancel: null | 'discard';
+  /** Resolves when staging has finished, whatever the outcome. */
+  done: Promise<void>;
 }
 
 export const useComposerStore = defineStore('composer', () => {
@@ -421,11 +442,46 @@ export const useComposerStore = defineStore('composer', () => {
     if (s.uploadingCount > 0) return; // single-flight
     if (payload.sources.length === 0) return;
 
-    const batch: Batch = { cancel: null };
+    // `settle` is assigned synchronously by the Promise constructor, so the
+    // definite-assignment assertion is a statement of fact rather than a hope.
+    let settle!: () => void;
+    const batch: Batch = {
+      cancel: null,
+      done: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    };
     batches.set(key, batch);
     s.uploadingCount = payload.sources.length;
     s.error = null;
 
+    try {
+      await stageBatch(key, s, batch, payload);
+    } finally {
+      // EVERY exit settles it, including a throw. `send` may be parked on this
+      // promise, and a send that never resumes is a composer that has quietly
+      // stopped working — a worse failure than any upload error it could be
+      // waiting on.
+      settle();
+    }
+  }
+
+  /**
+   * The body of {@link stage}, split out so the promise the batch publishes can
+   * be settled in one `finally` rather than at each of the five ways staging
+   * can end.
+   */
+  async function stageBatch(
+    key: string,
+    s: ComposerSessionState,
+    batch: Batch,
+    payload: {
+      connectionId: ConnectionId;
+      scopeKey: string;
+      sources: AttachmentSource[];
+      previews?: (string | undefined)[];
+    },
+  ): Promise<void> {
     const result = await withTimeout(
       api.attachments.stage({
         connectionId: payload.connectionId,
@@ -522,15 +578,39 @@ export const useComposerStore = defineStore('composer', () => {
   ): Promise<boolean> {
     const s = ensure(key);
     if (s.sendInFlight) return false; // :662
-    const payload = composedPayload(key);
-    if (payload.trim() === '') return false; // :672
 
-    // :684-688 — sending mid-upload abandons the batch and sends what is staged.
+    // WAIT FOR THE UPLOAD, then send — "I wait till image is uploaded and then
+    // send the prompt", and the phone does the same. See `Batch` for what this
+    // replaced and why abandoning the batch was wrong.
+    //
+    // `sendInFlight` goes up BEFORE the wait, and that is what makes the wait
+    // safe rather than a race: the Send button reads it (so it disables), the
+    // guard above reads it (so a second Enter is a no-op instead of a second
+    // send queued behind the same upload), and `isEmpty` reads it (so the
+    // composer cannot be dismissed by a click-outside while a prompt is parked
+    // waiting for its picture). The card stays on screen with its tiles the
+    // whole time, which is #745's rule holding through a longer wait rather
+    // than a new one.
+    //
+    // The batch always settles (see `Batch.done`), so there is no arm of this
+    // that parks forever — the upload's own timeout is the bound.
     const batch = batches.get(key);
     if (batch) {
-      batch.cancel = 'send';
-      s.uploadingCount = 0;
+      s.sendInFlight = true;
+      await batch.done;
+      s.sendInFlight = false;
+      // The upload had something to say. Do NOT send: the prompt was written
+      // about the attachment, so delivering it without one is the failure this
+      // whole change exists to remove — and the banner plus the intact draft is
+      // the state every other refusal in this store leaves behind.
+      if (s.error !== null) return false;
     }
+
+    // Composed AFTER the wait, not before: the paths that just landed are the
+    // whole point. Reading the payload first was how the old rule managed to
+    // send a prompt about an image with the image missing.
+    const payload = composedPayload(key);
+    if (payload.trim() === '') return false; // :672
 
     s.sendInFlight = true;
     s.error = null;

@@ -166,6 +166,121 @@ describe('attachments', () => {
     expect(composer.states[KEY]?.uploadingCount).toBe(0);
   });
 
+  it('WAITS for an upload in flight, then sends the prompt WITH the image', async () => {
+    // The user's report, in their words: "If I'm uploading an image and hit
+    // enter, I wait till image is uploaded and then send the prompt" — and, on
+    // being told the old rule cited the phone for abandoning the batch: "that's
+    // not how the phone app works. it waits".
+    //
+    // What the old rule did was drop the in-flight batch and send what was
+    // already staged, so a prompt written ABOUT an image went out without it,
+    // to an agent that answered anyway having never seen the picture.
+    let release!: (r: StageAttachmentsResult) => void;
+    stage.mockReturnValueOnce(
+      new Promise<StageAttachmentsResult>((resolve) => {
+        release = resolve;
+      }),
+    );
+    composer.setDraft(KEY, 'what is wrong in this screenshot?');
+    const staging = composer.stage(KEY, {
+      connectionId: CONN,
+      scopeKey: 'main',
+      sources: [{ kind: 'file', path: 'shot.png' }],
+    });
+    expect(composer.states[KEY]?.uploadingCount).toBe(1);
+
+    // Enter, mid-upload. Nothing may be delivered yet.
+    //
+    // Typed argument list, not `vi.fn(async () => true)`: an inferred zero-arg
+    // spy makes `mock.calls` a tuple of length 0, and the assertions below are
+    // entirely about WHAT was delivered.
+    const deliver = vi.fn(async (_payload: string) => true);
+    const sending = composer.send(KEY, deliver);
+    await Promise.resolve();
+    expect(deliver).not.toHaveBeenCalled();
+    // And the composer must not look idle while it waits, or a click-outside
+    // could dismiss a prompt that is parked on its own upload.
+    expect(composer.states[KEY]?.sendInFlight).toBe(true);
+
+    release(okResult([A]));
+    await staging;
+    expect(await sending).toBe(true);
+
+    // ONE delivery, carrying the path that landed while the send waited.
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]![0]).toContain(A);
+    expect(deliver.mock.calls[0]![0]).toContain('what is wrong in this screenshot?');
+  });
+
+  it('does NOT send when the upload it waited for failed', async () => {
+    // The prompt was written about the attachment, so delivering it without one
+    // is the failure this whole rule exists to remove. The draft and the banner
+    // stay, which is what every other refusal in this store leaves behind.
+    let release!: (r: StageAttachmentsResult) => void;
+    stage.mockReturnValueOnce(
+      new Promise<StageAttachmentsResult>((resolve) => {
+        release = resolve;
+      }),
+    );
+    composer.setDraft(KEY, 'look at this');
+    const staging = composer.stage(KEY, {
+      connectionId: CONN,
+      scopeKey: 'main',
+      sources: [{ kind: 'file', path: 'shot.png' }],
+    });
+
+    const deliver = vi.fn(async () => true);
+    const sending = composer.send(KEY, deliver);
+    release({ ok: false, paths: [], failedCount: 1, error: 'connection lost' });
+    await staging;
+
+    expect(await sending).toBe(false);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(composer.states[KEY]?.draft).toBe('look at this');
+    expect(composer.states[KEY]?.error).toContain('connection lost');
+    // The wait must not leave the flag stuck on, or the composer is bricked:
+    // every later send would return at the single-flight guard.
+    expect(composer.states[KEY]?.sendInFlight).toBe(false);
+  });
+
+  it('takes one send while waiting, not two', async () => {
+    // Enter pressed twice during a slow upload. The second must be the ordinary
+    // single-flight no-op rather than a second prompt queued behind the same
+    // picture.
+    let release!: (r: StageAttachmentsResult) => void;
+    stage.mockReturnValueOnce(
+      new Promise<StageAttachmentsResult>((resolve) => {
+        release = resolve;
+      }),
+    );
+    composer.setDraft(KEY, 'twice');
+    const staging = composer.stage(KEY, {
+      connectionId: CONN,
+      scopeKey: 'main',
+      sources: [{ kind: 'file', path: 'shot.png' }],
+    });
+
+    const deliver = vi.fn(async () => true);
+    const first = composer.send(KEY, deliver);
+    await Promise.resolve();
+    const second = await composer.send(KEY, deliver);
+    expect(second).toBe(false);
+
+    release(okResult([A]));
+    await staging;
+    expect(await first).toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it('still sends immediately when nothing is uploading', async () => {
+    // The wait is only for a batch in flight. A prompt with no upload behind it
+    // must not pay a tick for the feature.
+    composer.setDraft(KEY, 'plain');
+    const deliver = vi.fn(async () => true);
+    expect(await composer.send(KEY, deliver)).toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it('removing a tile never touches the draft (:520-527)', async () => {
     composer.setDraft(KEY, 'keep me');
     await attach(KEY, [A, B]);
