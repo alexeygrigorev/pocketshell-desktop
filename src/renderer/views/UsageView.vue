@@ -146,6 +146,12 @@ async function onRefresh(): Promise<void> {
       </button>
     </div>
 
+    <!-- The failure line stands ALONGSIDE stale rows rather than replacing
+         them: a table that is a few minutes old with a reason attached beats
+         an empty one — the same call the sessions store makes for its poll,
+         and the store keeps the rows for exactly this. -->
+    <p v-if="agents.usageError" class="error fetch-error">{{ agents.usageError }}</p>
+
     <div v-if="agents.usage.length" class="usage-table">
       <span class="th">provider</span>
       <span class="th">window</span>
@@ -202,8 +208,18 @@ async function onRefresh(): Promise<void> {
       </template>
     </div>
 
-    <p v-else class="muted empty">
-      no usage data — is `pocketshell usage` available on this host?
+    <!-- While the INITIAL fetch is in flight there is nothing to compare yet,
+         and the empty state below would flash its "is the helper there?"
+         question at a host that has not had the chance to answer. A quiet
+         holding line instead; once rows exist a refresh spins the header icon
+         and the table stays put. -->
+    <p v-else-if="agents.loading" class="muted empty">loading usage…</p>
+
+    <!-- Only when the host ANSWERED and the answer was empty. A failed fetch is
+         the error line above, not this — accusing the helper of being missing
+         when we never managed to ask would be the wrong sentence. -->
+    <p v-else-if="!agents.usageError" class="muted empty">
+      no usage data — is <code>pocketshell usage</code> available on this host?
     </p>
   </div>
 </template>
@@ -382,5 +398,20 @@ h2 {
 }
 .empty {
   padding: var(--sp-4) 0;
+}
+/* The fetch-failure line. Colour and size come from the global `.error`; the
+   margin keeps it clear of the stale table it can sit above. */
+.fetch-error {
+  margin: 0 0 var(--sp-3);
+}
+/* Same inline-code treatment as HostPickerView's empty state — the app's
+   convention for command names, instead of literal backtick glyphs. */
+code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
 }
 </style>

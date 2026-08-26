@@ -26,11 +26,31 @@ export const useAgentsStore = defineStore('agents', () => {
   const usage = ref<UsageRow[]>([]);
   /** True while `loadUsage` is in flight — drives the refresh spinner. */
   const loading = ref(false);
+  /**
+   * Set when the usage fetch itself failed, distinguishing "this host reports
+   * no usage" from "we could not ask" — the same split `profilesError` below
+   * exists for, and for the same reason: an empty table is a normal state the
+   * panel explains in a line, whereas a failed fetch (no helper on the host, a
+   * dropped link) deserves to be said out loud so the user knows the numbers
+   * are missing rather than zero. Before this ref existed, `loadUsage` had a
+   * try/finally with no catch, so the rejection escaped to whichever button
+   * handler called it and the panel silently kept whatever it had.
+   */
+  const usageError = ref<string | null>(null);
 
+  /**
+   * Never rejects. A failure lands in `usageError` and deliberately does NOT
+   * blank `usage`: a refresh that fails mid-session leaves the previous rows in
+   * place, because a table that is a few minutes old with a reason attached
+   * beats an empty one — the same call the sessions store makes for its poll.
+   */
   async function loadUsage(connectionId: ConnectionId): Promise<void> {
     loading.value = true;
+    usageError.value = null;
     try {
       usage.value = await api.helper.usage(connectionId);
+    } catch (e) {
+      usageError.value = (e as Error).message || 'Could not read this host’s provider usage.';
     } finally {
       loading.value = false;
     }
@@ -145,6 +165,7 @@ export const useAgentsStore = defineStore('agents', () => {
   return {
     usage,
     loading,
+    usageError,
     loadUsage,
     profiles,
     profilesLoading,

@@ -60,11 +60,41 @@ describe('agents store (usage)', () => {
     expect(store.loading).toBe(false);
   });
 
-  it('lowers `loading` even when the fetch rejects', async () => {
+  /**
+   * `loadUsage` used to have a try/finally with no catch, so a host without
+   * the helper made the rejection escape to the refresh button's handler and
+   * the panel silently kept whatever it had. It now answers the same way
+   * `loadProfiles` does: resolve, and put the reason in `usageError`.
+   */
+  it('records a failure in `usageError` instead of throwing', async () => {
     usage.mockRejectedValue(new Error('no helper'));
     const store = useAgentsStore();
-    await expect(useAgentsStore().loadUsage('conn-1')).rejects.toThrow('no helper');
+    await expect(store.loadUsage('conn-1')).resolves.toBeUndefined();
+    expect(store.usageError).toBe('no helper');
     expect(store.loading).toBe(false);
+  });
+
+  it('keeps the stale rows when a refresh fails', async () => {
+    // A table that is a few minutes old with a reason attached beats an empty
+    // one — the store keeps the rows so the view can show both.
+    usage.mockResolvedValueOnce([{ provider: 'codex', status: 'ok' }]);
+    usage.mockRejectedValueOnce(new Error('connection lost'));
+    const store = useAgentsStore();
+    await store.loadUsage('conn-1');
+    await store.loadUsage('conn-1');
+    expect(store.usage).toHaveLength(1);
+    expect(store.usageError).toBe('connection lost');
+  });
+
+  it('clears the error on the next attempt, so a recovery does not keep accusing', async () => {
+    usage.mockRejectedValueOnce(new Error('no helper'));
+    usage.mockResolvedValueOnce([{ provider: 'claude', status: 'ok' }]);
+    const store = useAgentsStore();
+    await store.loadUsage('conn-1');
+    expect(store.usageError).toBe('no helper');
+    await store.loadUsage('conn-1');
+    expect(store.usageError).toBeNull();
+    expect(store.usage).toHaveLength(1);
   });
 });
 
@@ -72,8 +102,9 @@ describe('agents store (usage)', () => {
  * The profile half, which had no renderer caller at all until the launch
  * dialog. `agent:profiles` has been wired end to end since 88cc932 taught it
  * the 0.4.44 `{"profiles": […]}` envelope, so what is new here is only the
- * store: parsing rows into something the picker can render, and — unlike
- * `loadUsage` above — SWALLOWING a failure rather than rethrowing it.
+ * store: parsing rows into something the picker can render, and SWALLOWING a
+ * failure rather than rethrowing it — the pattern `loadUsage` above has since
+ * adopted too.
  *
  * The swallow is deliberate and is why it gets a test. A profile is optional:
  * omitting `--profile` launches the engine default, which is exactly what a
