@@ -11,10 +11,14 @@
 //   - THE PICKER IS NEVER REPLACED BY A SPINNER. The host list stays on screen
 //     for the whole attempt, with a banner above it. There is no state in which
 //     the user is looking at a screen with nothing to press.
-//   - CANCEL IS ALWAYS VISIBLE while dialling. Pressing it abandons the attempt
-//     immediately from the user's point of view, and hangs up on the connection
-//     if it lands afterwards, so a cancelled auto-connect cannot leave a live
-//     link the user did not ask for.
+//   - CANCEL IS ALWAYS VISIBLE while dialling — for ANY dial, clicked or
+//     automatic. A clicked dial hangs exactly as long as an automatic one (the
+//     30s backstop below is one layer down from both), and every row is
+//     disabled while one is out, so a picker without this strip is a picker
+//     with nothing to press for half a minute. Pressing it abandons the
+//     attempt immediately from the user's point of view, and hangs up on the
+//     connection if it lands afterwards, so a cancelled dial cannot leave a
+//     live link the user no longer wants.
 //   - NO EXTRA RENDERER-SIDE TIMEOUT. `SshService.connect` already caps the
 //     dial at DEFAULT_TIMEOUT_MS (30s) and resolves — never rejects — with a
 //     real diagnostic. A second timer here would race it and would usually win,
@@ -48,10 +52,23 @@ const connectError = ref<string | null>(null);
 const connectingTo = ref<string | null>(null);
 const settingsOpen = ref(false);
 
-/** True while the in-flight dial was started by the app, not by a click. */
+/** True while the in-flight dial was started by the app, not by a click.
+ *  Only the banner's wording reads it now — "(your default host)" is the one
+ *  thing an automatic dial says that a clicked one does not. */
 const autoConnecting = ref(false);
-/** Set by Cancel; read when the dial finally resolves. */
-let autoConnectCancelled = false;
+/**
+ * The in-flight dial's cancellation token, flipped by the banner's Cancel.
+ *
+ * A token per dial rather than the shared boolean this used to be, because a
+ * boolean has to be reset by SOMETHING and every choice goes wrong once a
+ * second dial can start while the first is still out — which is exactly what
+ * Cancel enables, by re-enabling the rows. Reset at the next dial's start, and
+ * cancelling A then clicking B un-cancels A the moment B begins, so A's late
+ * success navigates after all; reset on resolution, and an abandoned dial's
+ * verdict leaks into the next one. Each dial closes over its own token, so a
+ * Cancel press can only ever mean the dial whose banner was on screen.
+ */
+let activeDial: { cancelled: boolean } | null = null;
 
 const defaultMissing = computed(
   () => defaultHostStatus(settings.defaultHost, connection.hosts) === 'missing',
@@ -93,27 +110,23 @@ async function runAutoConnect(host: HostEntry): Promise<void> {
   // a hang that the user escapes — this launch has had its one attempt. This
   // is what stops Back from the workspace bouncing straight back in.
   markAutoConnectAttempted();
-  autoConnectCancelled = false;
   autoConnecting.value = true;
+  // Cancellation lives inside `dial` now: a cancelled attempt reports false
+  // (and has already hung up on a late success), so this stays a plain
+  // succeeded-or-not question and a cancelled auto-connect cannot navigate.
   const ok = await dial(host);
   autoConnecting.value = false;
-  if (autoConnectCancelled) {
-    // The dial won the race with the Cancel click. Hang up rather than leaving
-    // a connection the user explicitly abandoned — but only if this is still
-    // the connection in hand. `connect()` claims `activeHost` synchronously, so
-    // a different name here means the user already started dialling somewhere
-    // else in the meantime and tearing "the" connection down would tear down
-    // theirs. The abandoned link then survives until the app exits, which is
-    // the cheaper of the two failures by a wide margin.
-    if (ok && connection.activeHost?.name === host.name) await connection.disconnect();
-    connectError.value = null;
-    return;
-  }
   if (ok) enterWorkspace(host);
 }
 
-function onCancelAutoConnect(): void {
-  autoConnectCancelled = true;
+/**
+ * The banner's Cancel, one handler for both kinds of dial. The user's half is
+ * instant — the banner goes, the rows re-enable, they can click elsewhere at
+ * once — while `dial` is left holding the token, to notice it whenever the
+ * attempt finally resolves and clean up whatever it produced.
+ */
+function onCancelConnect(): void {
+  if (activeDial) activeDial.cancelled = true;
   autoConnecting.value = false;
   connectingTo.value = null;
 }
@@ -141,13 +154,38 @@ async function onDisconnect(): Promise<void> {
  * decision, and neither has an auto-connect-specific variant — an automatic
  * dial gets exactly the credentials and exactly the host-key treatment a
  * clicked one does.
+ *
+ * Cancellation lives here too, for the same reason: both kinds of dial hang
+ * the same way and must escape the same way. A cancelled attempt reports
+ * FALSE whatever the transport eventually said, which is the one bit both
+ * callers act on — neither can navigate to a workspace the user walked out of.
  */
 async function dial(host: HostEntry): Promise<boolean> {
   connectError.value = null;
   connectingTo.value = host.name;
+  const token = { cancelled: false };
+  activeDial = token;
   const ok = await connection.connect(host);
-  connectingTo.value = null;
-  if (!ok) connectError.value = connection.error ?? 'Connection failed';
+  // Only put the picker back if a newer dial has not claimed it: after a
+  // cancel the rows re-enable, so by the time this resolves `connectingTo`
+  // and the error slot may belong to a dial the user started since, and a
+  // slow failure here must not wipe that dial's banner or its diagnostic.
+  if (activeDial === token) {
+    activeDial = null;
+    connectingTo.value = null;
+    if (!ok && !token.cancelled) connectError.value = connection.error ?? 'Connection failed';
+  }
+  if (token.cancelled) {
+    // The dial won the race with the Cancel click. Hang up rather than leaving
+    // a connection the user explicitly abandoned — but only if this is still
+    // the connection in hand. `connect()` claims `activeHost` synchronously, so
+    // a different name here means the user already started dialling somewhere
+    // else in the meantime and tearing "the" connection down would tear down
+    // theirs. The abandoned link then survives until the app exits, which is
+    // the cheaper of the two failures by a wide margin.
+    if (ok && connection.activeHost?.name === host.name) await connection.disconnect();
+    return false;
+  }
   return ok;
 }
 
@@ -172,14 +210,24 @@ function onToggleDefault(host: HostEntry): void {
       </button>
     </header>
     <main>
-      <!-- The escape hatch. It sits above the list, and the list stays usable
-           underneath, so an auto-connect is something happening ON the picker
-           rather than instead of it. -->
-      <p v-if="autoConnecting" class="auto-banner">
-        <span>Connecting to <strong>{{ connectingTo }}</strong> (your default host)…</span>
-        <button class="btn-ghost" @click="onCancelAutoConnect">Cancel</button>
+      <!-- The escape hatch, for ANY dial — automatic or clicked. It sits
+           above the list, and the list stays usable underneath, so a dial is
+           something happening ON the picker rather than instead of it. It used
+           to render only for auto-connect, which made the header's "cancel is
+           always visible" promise false for the commonest case: a clicked row
+           disables every row and, on a typo'd Host or a sleeping box, held the
+           whole picker for the 30s backstop with nothing to press. Only the
+           wording knows which kind of dial it is. -->
+      <p v-if="connectingTo !== null" class="auto-banner">
+        <span v-if="autoConnecting">
+          Connecting to <strong>{{ connectingTo }}</strong> (your default host)…
+        </span>
+        <span v-else>Connecting to <strong>{{ connectingTo }}</strong>…</span>
+        <button class="btn-ghost" @click="onCancelConnect">Cancel</button>
       </p>
-      <p v-if="defaultMissing && !autoConnecting" class="auto-banner stale">
+      <!-- `connectingTo`, not `autoConnecting`: any dial's banner displaces
+           this one, so the two strips can never stack. -->
+      <p v-if="defaultMissing && connectingTo === null" class="auto-banner stale">
         <AppIcon name="alert-triangle" :size="14" />
         <span>
           Your default host <strong>{{ settings.defaultHost }}</strong> is not in

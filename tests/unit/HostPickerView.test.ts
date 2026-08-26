@@ -1,0 +1,233 @@
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { mount, type VueWrapper } from '@vue/test-utils';
+import type { HostEntry } from '../../src/shared/types';
+
+/**
+ * The picker's cancel affordance, tested for the promise its own header makes:
+ * "CANCEL IS ALWAYS VISIBLE while dialling".
+ *
+ * That sentence used to be true only for the AUTO dial. A clicked row disabled
+ * every row and showed nothing but the word "connecting…", and since
+ * `SshService.connect` caps a dial at 30s, a typo'd Host or a sleeping box
+ * locked the whole picker for half a minute with nothing to press. So the
+ * properties pinned here are:
+ *
+ *   1. **A clicked dial shows the banner and its Cancel**, worded without the
+ *      "(your default host)" tail that belongs to the auto case.
+ *   2. **Cancel frees the picker instantly** — banner gone, rows re-enabled —
+ *      and when the dial later lands anyway, the connection is HUNG UP rather
+ *      than entered. A cancelled dial must never navigate.
+ *   3. **The hang-up is guarded**: a cancelled dial landing late must not tear
+ *      down a connection the user has started dialling since.
+ *   4. **The auto dial lost nothing** — its wording and its cancel behave as
+ *      they always did.
+ *
+ * The dial is a promise the tests resolve BY HAND, because every one of these
+ * is a race: cancel against a connect that is still out.
+ */
+
+const routerPush = vi.fn();
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: routerPush }),
+}));
+
+const sshConnect = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const sshClose = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const listConfigHosts = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+
+/**
+ * The renderer api, as a Proxy — the same shape folderWorkspaceCreate.test.ts
+ * uses and for the same reason: the stores this view constructs touch far more
+ * channels than the three that carry the behaviour under test, and spelling
+ * every one out would bury them. Anything not named answers
+ * `Promise<undefined>`.
+ */
+const overrides: Record<string, unknown> = {
+  'ssh.connect': (...a: unknown[]) => sshConnect(...a),
+  'ssh.close': (...a: unknown[]) => sshClose(...a),
+  'ssh.listConfigHosts': (...a: unknown[]) => listConfigHosts(...a),
+};
+
+function channel(group: string): unknown {
+  return new Proxy(
+    {},
+    {
+      get: (_t, key: string) =>
+        overrides[`${group}.${key}`] ?? ((): Promise<unknown> => Promise.resolve(undefined)),
+    },
+  );
+}
+
+vi.mock('../../src/renderer/ipc', () => ({
+  api: new Proxy({}, { get: (_t, key: string) => channel(key) }),
+}));
+
+const HostPickerView = (await import('../../src/renderer/views/HostPickerView.vue')).default;
+const { useSettingsStore } = await import('../../src/renderer/stores/settings');
+const { resetAutoConnectLatch } = await import('../../src/renderer/autoConnect');
+
+/** Terse HostEntry factory — only `name` matters to these tests. */
+function host(name: string): HostEntry {
+  return {
+    name,
+    hostname: `${name}.example`,
+    port: 22,
+    user: 'me',
+    identityFile: null,
+    proxyJump: null,
+    forwardAgent: false,
+    localForwards: [],
+    remoteForwards: [],
+    fromConfig: true,
+  };
+}
+
+type ConnectResult = { ok: boolean; connectionId?: string; error?: string };
+
+/**
+ * Arm the NEXT `ssh.connect` call with a promise the test holds the resolver
+ * to. Each call gets its own promise, so a test can have two dials out and
+ * land them in either order.
+ */
+function pendingConnect(): { resolve: (r: ConnectResult) => void } {
+  const out: { resolve: (r: ConnectResult) => void } = { resolve: () => {} };
+  sshConnect.mockImplementationOnce(
+    () =>
+      new Promise((r) => {
+        out.resolve = r;
+      }),
+  );
+  return out;
+}
+
+/** Mount the picker over [hosts] and let the mounted host load settle. */
+async function openPicker(hosts: HostEntry[]): Promise<VueWrapper> {
+  listConfigHosts.mockResolvedValue(hosts);
+  const wrapper = mount(HostPickerView, {
+    // Neither renders until Settings is opened; stubbed so this file cannot
+    // start failing when their internals move.
+    global: { stubs: { OverlayPanel: true, SettingsView: true } },
+  });
+  await flush(wrapper);
+  return wrapper;
+}
+
+async function flush(wrapper: VueWrapper): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
+  await wrapper.vm.$nextTick();
+}
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  window.localStorage.clear();
+  vi.clearAllMocks();
+  // The once-per-launch latch is module scope on purpose; a test file is one
+  // long launch unless each test puts it back.
+  resetAutoConnectLatch();
+  sshClose.mockResolvedValue(undefined);
+});
+
+describe('HostPickerView — cancel is always visible while dialling', () => {
+  it('shows the banner, with Cancel, for a clicked dial — not only for auto-connect', async () => {
+    const wrapper = await openPicker([host('hetzner')]);
+    expect(wrapper.find('.auto-banner').exists()).toBe(false);
+
+    pendingConnect();
+    await wrapper.get('.host-row').trigger('click');
+
+    const banner = wrapper.get('.auto-banner');
+    expect(banner.text()).toContain('Connecting to hetzner');
+    // "(your default host)" is the auto dial's phrase. A click did this.
+    expect(banner.text()).not.toContain('default host');
+    expect(banner.get('button').text()).toBe('Cancel');
+  });
+
+  it('cancelling frees the picker at once, and a late success hangs up instead of navigating', async () => {
+    const wrapper = await openPicker([host('hetzner')]);
+    const dial = pendingConnect();
+    await wrapper.get('.host-row').trigger('click');
+    expect(wrapper.get('.host-row').attributes('disabled')).toBeDefined();
+
+    await wrapper.get('.auto-banner button').trigger('click');
+    // The user's half is instant: banner gone, rows clickable again.
+    expect(wrapper.find('.auto-banner').exists()).toBe(false);
+    expect(wrapper.get('.host-row').attributes('disabled')).toBeUndefined();
+
+    // The dial then lands anyway. Hung up, not entered.
+    dial.resolve({ ok: true, connectionId: 'c1' });
+    await flush(wrapper);
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(sshClose).toHaveBeenCalledWith('c1');
+  });
+
+  it('a cancelled dial that then fails reports nothing — the user already left', async () => {
+    const wrapper = await openPicker([host('hetzner')]);
+    const dial = pendingConnect();
+    await wrapper.get('.host-row').trigger('click');
+    await wrapper.get('.auto-banner button').trigger('click');
+
+    dial.resolve({ ok: false, error: 'All configured authentication methods failed' });
+    await flush(wrapper);
+    expect(wrapper.find('.error').exists()).toBe(false);
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it('a cancelled dial landing late does not tear down a dial started since', async () => {
+    const wrapper = await openPicker([host('alpha'), host('beta')]);
+    const first = pendingConnect();
+    await wrapper.findAll('.host-row')[0]!.trigger('click');
+    await wrapper.get('.auto-banner button').trigger('click');
+
+    // The user has already moved on to beta — which Cancel made possible.
+    const second = pendingConnect();
+    await wrapper.findAll('.host-row')[1]!.trigger('click');
+    expect(wrapper.get('.auto-banner').text()).toContain('beta');
+
+    // alpha's dial now lands. Its connection is not the one in hand any more,
+    // so the hang-up must NOT fire: `connect()` claims `activeHost`
+    // synchronously, and closing "the" connection here would close beta's.
+    first.resolve({ ok: true, connectionId: 'c-alpha' });
+    await flush(wrapper);
+    expect(sshClose).not.toHaveBeenCalled();
+    // beta's banner survived alpha's late resolution.
+    expect(wrapper.get('.auto-banner').text()).toContain('beta');
+
+    second.resolve({ ok: true, connectionId: 'c-beta' });
+    await flush(wrapper);
+    expect(routerPush).toHaveBeenCalledWith({ name: 'host-sessions', params: { name: 'beta' } });
+  });
+
+  it('an uncancelled clicked dial still enters the workspace', async () => {
+    const wrapper = await openPicker([host('hetzner')]);
+    const dial = pendingConnect();
+    await wrapper.get('.host-row').trigger('click');
+    dial.resolve({ ok: true, connectionId: 'c1' });
+    await flush(wrapper);
+    expect(routerPush).toHaveBeenCalledWith({
+      name: 'host-sessions',
+      params: { name: 'hetzner' },
+    });
+    expect(sshClose).not.toHaveBeenCalled();
+  });
+
+  it('the auto dial keeps its wording, and its cancel still hangs up a late success', async () => {
+    useSettingsStore().set('defaultHost', 'hetzner');
+    // Armed before the mount: the auto dial starts from onMounted.
+    const dial = pendingConnect();
+    const wrapper = await openPicker([host('hetzner')]);
+
+    const banner = wrapper.get('.auto-banner');
+    expect(banner.text()).toContain('Connecting to hetzner');
+    expect(banner.text()).toContain('(your default host)');
+
+    await banner.get('button').trigger('click');
+    dial.resolve({ ok: true, connectionId: 'c1' });
+    await flush(wrapper);
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(sshClose).toHaveBeenCalledWith('c1');
+  });
+});
