@@ -17,6 +17,31 @@
  * arithmetic) is what keeps the mapping right when a row contains a double-width
  * character, which occupies two cells but one string index.
  *
+ * ## Why `isWrapped` is not enough, in THIS pane
+ *
+ * `isWrapped` is set when xterm itself ran out of columns — the writer kept
+ * printing past the right margin and the terminal moved to the next row. That
+ * is not how anything writes to this pane. The pane is always a tmux client and
+ * tmux redraws row by row (`tty_cursor(tty, 0, y)` before each one), and the
+ * agent TUIs inside it are full-screen renderers that position every cell they
+ * paint. Neither ever lets a line overflow, so a line the USER sees broken
+ * across two rows arrives here as two rows with `isWrapped` false on both — and
+ * a path that spans the break is never seen whole by the detector.
+ *
+ * Two user reports, both against a Codex TUI, are the shapes {@link joinedRowSkip}
+ * reconstructs:
+ *
+ *   - the TUI wrapped mid-token and continued at column 0 of the next row, i.e.
+ *     exactly the hard wrap xterm would have flagged had it done the wrapping;
+ *   - the TUI wrapped its own block and prefixed the continuation with its
+ *     box-drawing gutter (`  │ `), which has to be dropped as well as joined.
+ *
+ * Both rules are deliberately narrow, for the reason terminalPaths.ts's header
+ * gives: joining two rows that were never one line can only invent a path that
+ * does not exist, and an underline stretched across a boundary is the most
+ * visible way this feature can look broken. Each condition is spelled out at
+ * the rule.
+ *
  * ## Appearance
  *
  * A path link is decorated exactly like the http links this terminal already
@@ -66,7 +91,7 @@
  * follows it cleanly — the same modifier that already bypasses mouse reporting
  * for drag-selection in this pane.
  */
-import type { ILink, ILinkProvider, Terminal } from '@xterm/xterm';
+import type { IBuffer, IBufferCell, ILink, ILinkProvider, Terminal } from '@xterm/xterm';
 import { findPaths } from './terminalPaths';
 import { useFilesStore } from './stores/files';
 import { useSessionsStore } from './stores/sessions';
@@ -91,11 +116,143 @@ export interface TerminalPathContext {
  */
 const MAX_SCAN_CHARS = 2048;
 
+/**
+ * Cap on rows joined by RECONSTRUCTION ({@link joinedRowSkip}), in each
+ * direction. xterm's own `isWrapped` chain is left uncapped because it is a
+ * fact the terminal recorded; a reconstruction is a guess, and a guess that
+ * chained down a screenful of gutter-prefixed rows would spend a whole buffer
+ * walk on a hover. Three rows is the longest either user report needed.
+ */
+const MAX_JOIN_ROWS = 8;
+
+/**
+ * The gutter a TUI puts in front of the continuation rows of a block it wrapped
+ * itself — `  │ ` in the Codex output the user reported.
+ *
+ * Box-drawing only, and only with the single trailing space the TUIs actually
+ * emit. ASCII `|` is deliberately NOT here: `| ` starts a markdown table row
+ * and appears in the middle of shell pipelines, and admitting it would let this
+ * rule glue together two rows of a table.
+ */
+const GUTTER = /^ {0,8}[│┃] /;
+
+/**
+ * A token that is unambiguously a path SO FAR: anchored by `/`, `~/`, `./` or
+ * `../`.
+ *
+ * This is the load-bearing guard on both join rules. Everything the detector's
+ * false-positive suite is built from — `and/or`, `client/server`, `w/o`, `y/N`,
+ * `9/10` — is unanchored, so a row ending in one of them is never a row we will
+ * glue anything onto. Joining is only ever done in service of a path, and only
+ * when the row above already committed to being one.
+ */
+const ROOTED = /^(?:\/|~\/|\.\/|\.\.\/)/;
+
 /** One flattened logical line, plus the cell each character came from. */
 export interface ScannedLine {
   text: string;
   /** `cells[i]` is the 0-based buffer cell that produced `text[i]`. */
   cells: { x: number; y: number }[];
+}
+
+/** A row read for the join rules: its text and where its content actually ends. */
+interface RowRead {
+  /** The whole row, untouched cells read as spaces. Never trimmed. */
+  text: string;
+  /** Column of the last cell holding anything but a space, or -1 for a blank row. */
+  lastCol: number;
+  /** Cells in the row — which, in xterm, is the terminal's column count. */
+  width: number;
+}
+
+/**
+ * Read one row for the join rules only.
+ *
+ * Separate from the flattening loop because the rules need to look at a row
+ * BEFORE deciding whether to consume it, and because they need a COLUMN
+ * (`lastCol`) rather than a string offset — the two part company the moment the
+ * row holds a double-width character, which is the same reason the flattening
+ * walks cells instead of using `translateToString`.
+ */
+function readRow(buf: IBuffer, y: number, scratch: IBufferCell): RowRead | null {
+  const line = buf.getLine(y);
+  if (!line) return null;
+  const parts: string[] = [];
+  let lastCol = -1;
+  for (let x = 0; x < line.length; x++) {
+    const cell = line.getCell(x, scratch);
+    if (!cell || cell.getWidth() === 0) continue;
+    const content = cell.getChars();
+    if (content === '' || content === ' ') {
+      parts.push(' ');
+      continue;
+    }
+    parts.push(content);
+    lastCol = x;
+  }
+  return { text: parts.join(''), lastCol, width: line.length };
+}
+
+/**
+ * Does [next] continue [prev], even though xterm did not flag it wrapped?
+ *
+ * @returns how many leading CELLS of [next] to drop before joining (0 for a
+ *   plain wrap, the gutter's width for a gutter-marked one), or null for "these
+ *   are two different lines" — which is the answer this function is built to
+ *   give, and gives for everything it is not certain about.
+ */
+function joinedRowSkip(prev: RowRead, next: RowRead): number | null {
+  if (prev.lastCol < 0) return null;
+  const tail = /\S+$/.exec(prev.text.trimEnd())?.[0] ?? '';
+  if (!ROOTED.test(tail)) return null;
+  // A URL belongs to WebLinksAddon and is never extended across a row break:
+  // gluing a second row onto one would produce a link to a host nobody named.
+  if (tail.includes('://')) return null;
+
+  const gutter = GUTTER.exec(next.text);
+  if (gutter === null) {
+    // RULE 1 — the hard wrap tmux repainted away.
+    //
+    // The evidence is geometric and it is the strongest available: the row
+    // above is full to its very last column, so whoever wrote it had no room
+    // left, and the row below starts at column 0 with a non-blank. That is the
+    // exact situation in which xterm would have set `isWrapped` had the bytes
+    // reached it as one overlong line instead of as two positioned rows.
+    //
+    // Not caught, deliberately: a row whose last column was left blank because
+    // a double-width character would not fit in it. Reconstructing that needs a
+    // second guess on top of this one, and the cost of being wrong is an
+    // underline running through unrelated text.
+    if (prev.lastCol !== prev.width - 1) return null;
+    const first = next.text.charAt(0);
+    return first === '' || first === ' ' ? null : 0;
+  }
+
+  // RULE 2 — the TUI wrapped its own block and marked the continuation.
+  //
+  // Three conditions, each guarding a different way of being wrong:
+  //
+  //   - the tail ends with `/`. A TUI that wraps its own text breaks at a
+  //     boundary it chose, and `…/` is the only break point that leaves the
+  //     path visibly unfinished. Without this, `  │ wrote /tmp/out` followed by
+  //     `  │ done` would join into `/tmp/outdone`.
+  //   - the continuation does not itself start with `/`. `…/` plus `/x` is not
+  //     a path anyone wrote; it is two paths, and the second one is whole
+  //     already.
+  //   - the continuation's first token WOULD NOT HAVE FIT on the row above.
+  //     This is the wrapper's own arithmetic, run backwards: if the token fit,
+  //     the row above did not end because it ran out of room, so the row below
+  //     is a new line that merely happens to carry the same gutter. It is what
+  //     stops `  │ created /tmp/out/` + `  │ done` from ever joining, since
+  //     `done` had eighty columns of room to sit in.
+  if (!tail.endsWith('/')) return null;
+  const rest = next.text.slice(gutter[0].length);
+  const head = /^\S+/.exec(rest)?.[0] ?? '';
+  if (head === '' || head.startsWith('/')) return null;
+  if (prev.lastCol + 1 + head.length <= prev.width) return null;
+  // The gutter is spaces and a narrow box-drawing character, so its string
+  // length is also its cell count — no double-width correction needed.
+  return gutter[0].length;
 }
 
 /**
@@ -106,22 +263,39 @@ export function scanBufferLine(term: Terminal, bufferLineNumber: number): Scanne
   const buf = term.buffer.active;
   const chars: string[] = [];
   const cells: { x: number; y: number }[] = [];
+  const scratch = buf.getNullCell();
 
   // Walk up to the row the logical line STARTS on. A row is a continuation of
-  // the one above it exactly when it is flagged wrapped, so the first row that
-  // is not is where the line begins.
+  // the one above it when it is flagged wrapped, or when the rules above can
+  // reconstruct a wrap xterm never saw; the first row that is neither is where
+  // the line begins.
   let y = bufferLineNumber - 1;
-  while (y > 0 && chars.length < MAX_SCAN_CHARS) {
+  let joined = 0;
+  while (y > 0) {
     const line = buf.getLine(y);
-    if (!line?.isWrapped) break;
+    if (line?.isWrapped) {
+      y--;
+      continue;
+    }
+    if (joined >= MAX_JOIN_ROWS) break;
+    // Two extra row walks, and only on the row the mouse is actually over —
+    // xterm asks a link provider once per hovered ROW, not once per cell.
+    const above = readRow(buf, y - 1, scratch);
+    const here = readRow(buf, y, scratch);
+    if (above === null || here === null) break;
+    if (joinedRowSkip(above, here) === null) break;
+    joined++;
     y--;
   }
 
-  const scratch = buf.getNullCell();
+  // Cells to drop from the front of the row about to be read: a reconstructed
+  // gutter, never anything else.
+  let skip = 0;
+  joined = 0;
   for (;;) {
     const line = buf.getLine(y);
     if (!line) break;
-    for (let x = 0; x < line.length; x++) {
+    for (let x = skip; x < line.length; x++) {
       const cell = line.getCell(x, scratch);
       if (!cell) continue;
       // Width 0 is the right-hand half of a double-width character: it holds no
@@ -143,8 +317,31 @@ export function scanBufferLine(term: Terminal, bufferLineNumber: number): Scanne
       }
     }
     if (chars.length >= MAX_SCAN_CHARS) break;
+
     const next = buf.getLine(y + 1);
-    if (!next?.isWrapped) break;
+    if (next?.isWrapped) {
+      skip = 0;
+      y++;
+      continue;
+    }
+    if (joined >= MAX_JOIN_ROWS) break;
+    const here = readRow(buf, y, scratch);
+    const below = readRow(buf, y + 1, scratch);
+    if (here === null || below === null) break;
+    const continues = joinedRowSkip(here, below);
+    if (continues === null) break;
+    // A row a TUI wrapped itself stops short of the margin, so the cells after
+    // it read as spaces — and a run of spaces in the middle of the flattened
+    // line would break the path back into the two tokens we just went to the
+    // trouble of joining. They are dropped rather than emitted. Nothing is lost
+    // with them: an `isWrapped` row is full by definition and never gets here,
+    // and rule 1 only fires on a row whose last column is occupied.
+    while (chars.length > 0 && chars[chars.length - 1] === ' ') {
+      chars.pop();
+      cells.pop();
+    }
+    skip = continues;
+    joined++;
     y++;
   }
 

@@ -45,6 +45,26 @@ function fakeTerminal(rows: string[], wrapped: number[] = []): Terminal {
   return buildTerminal(lines);
 }
 
+/**
+ * A fake buffer with a real WIDTH, for the rules that reconstruct a wrap xterm
+ * never flagged.
+ *
+ * Every row of a real xterm buffer is `cols` cells long whether or not anything
+ * was written to the far end of it, and both join rules read that geometry: one
+ * asks whether the row above is full to its last column, the other whether the
+ * next token could have fitted on it. `fakeTerminal` above pads nothing, so a
+ * row there is as wide as its text and every row would look full — which is
+ * exactly the mistake these tests exist to catch.
+ */
+function fakeScreen(rows: string[], width: number): Terminal {
+  return buildTerminal(
+    rows.map((row) => ({
+      cells: [...row.padEnd(width, ' ')].map((ch) => ({ chars: ch, width: 1 })),
+      isWrapped: false,
+    })),
+  );
+}
+
 function buildTerminal(lines: FakeRow[]): Terminal {
   const buffer = {
     getNullCell: () => ({ getChars: () => '', getWidth: () => 1 }),
@@ -127,6 +147,148 @@ describe('scanBufferLine', () => {
       { x: 0, y: 0 },
       { x: 2, y: 0 },
     ]);
+  });
+});
+
+/**
+ * The two shapes the user reported, transcribed from their pane.
+ *
+ * Neither row is flagged `isWrapped`, because neither was wrapped BY xterm:
+ * this pane is always a tmux client and the agent TUI inside it positions every
+ * row it paints. The joining rules reconstruct the break from geometry instead.
+ */
+describe('scanBufferLine — a path a TUI broke across two rows', () => {
+  const PNG =
+    '/home/alexey/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-62ab287b-39b5-461a-9d45-69e2eae3d41a.png';
+  const TILDE_PNG =
+    '~/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-de1a03f1-2d3f-4d2d-8a44-c5da743f849e.png';
+
+  /** The Codex block: a wrapped command with `  │ ` in front of every continuation. */
+  const GUTTER_ROWS = [
+    'Ran for f in /home/alexey/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/',
+    '  │ exec-62ab287b-39b5-461a-9d45-69e2eae3d41a.png /home/alexey/.codex/',
+    '  │ generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/',
+  ];
+
+  it('joins a gutter-marked continuation and drops the gutter itself', () => {
+    const term = fakeScreen(GUTTER_ROWS, 100);
+    expect(scanBufferLine(term, 1).text.trimEnd()).toBe(
+      `Ran for f in ${PNG} /home/alexey/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/`,
+    );
+  });
+
+  it('gives the same logical line whichever of its rows the mouse is over', () => {
+    const term = fakeScreen(GUTTER_ROWS, 100);
+    const first = scanBufferLine(term, 1).text;
+    expect(scanBufferLine(term, 2).text).toBe(first);
+    expect(scanBufferLine(term, 3).text).toBe(first);
+  });
+
+  it('linkifies the split path, underlining from the first row into the second', () => {
+    const term = fakeScreen(GUTTER_ROWS, 100);
+    const links = pathLinks(term, 1, () => ({ sessionName: 'git-foo' }));
+
+    expect(links.map((l) => l.text)).toEqual([
+      PNG,
+      '/home/alexey/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/',
+    ]);
+    // 1-based and inclusive: the path starts at column 14 of row 1 and ends at
+    // column 49 of row 2 — the gutter's four cells sit inside the underline
+    // because an xterm range is a span of cells, which is equally true of the
+    // wrapped web links this decoration was copied from.
+    expect(links[0]?.range).toEqual({ start: { x: 14, y: 1 }, end: { x: 49, y: 2 } });
+  });
+
+  it('opens the whole path, not the directory the first row ended at', () => {
+    const term = fakeScreen(GUTTER_ROWS, 100);
+    const links = pathLinks(term, 1, () => ({ sessionName: 'git-foo' }));
+    const files = useFilesStore();
+    const sessions = useSessionsStore();
+    sessions.sessions = [
+      { name: 'git-foo', created: 0, activity: 0, attached: true, path: '~/git/foo' },
+    ];
+
+    links[0]?.activate(CLICK, links[0].text);
+    // Absolute, so the session's cwd is ignored entirely — an image outside the
+    // repo is as openable as one inside it.
+    expect(files.reveal).toBe(PNG);
+  });
+
+  it('joins a hard wrap tmux repainted, where the break lands mid-token', () => {
+    // The "Viewed Image" case. The row is full to its last column, so the TUI
+    // ran out of room mid-UUID and continued at column 0.
+    const first = '    └ ~/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-de1a03f1-2d3f-';
+    const term = fakeScreen([first, '4d2d-8a44-c5da743f849e.png'], first.length);
+
+    expect(scanBufferLine(term, 1).text.trimEnd()).toBe(`    └ ${TILDE_PNG}`);
+    expect(pathLinks(term, 2, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(TILDE_PNG);
+  });
+
+  it('opens the tilde form without anyone expanding $HOME', () => {
+    const first = '    └ ~/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-de1a03f1-2d3f-';
+    const term = fakeScreen([first, '4d2d-8a44-c5da743f849e.png'], first.length);
+    const links = pathLinks(term, 1, () => ({ sessionName: 'git-foo' }));
+    const files = useFilesStore();
+
+    links[0]?.activate(CLICK, links[0].text);
+    // `stripTilde` drops the `~/` and leaves a path relative to the SFTP root,
+    // which IS the login home. No host lookup, one round trip, and nothing to
+    // get wrong when `$HOME` has not been reported.
+    expect(files.reveal).toBe(
+      '.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-de1a03f1-2d3f-4d2d-8a44-c5da743f849e.png',
+    );
+  });
+});
+
+/**
+ * The other half of the joining rules, and the half that decides whether this
+ * feature is trustworthy: two rows that merely follow one another must stay two
+ * lines. A join that should not have happened invents a path nothing can open
+ * and drags an underline through text the remote program never meant to link.
+ */
+describe('scanBufferLine — rows that must NOT be joined', () => {
+  const scan = (rows: string[], width: number): string =>
+    scanBufferLine(fakeScreen(rows, width), 1).text.trimEnd();
+
+  it('refuses a full row whose last token is not an anchored path', () => {
+    // `and/` is the false-positive suite's own shape. A row can end in one and
+    // be exactly as wide as the window; that is not evidence of anything.
+    const first = 'the mount is configured read/write and/';
+    expect(scan([first, 'or so the docs claim'], first.length)).toBe(first);
+  });
+
+  it('refuses two complete paths on consecutive rows', () => {
+    // The row above stops well short of the margin, so nothing ran out of room
+    // and there is no wrap to reconstruct. Joining these would produce
+    // `/tmp/a.txt/tmp/b.txt`, a link to a file that cannot exist.
+    expect(scan(['wrote /tmp/a.txt', '/tmp/b.txt is next'], 80)).toBe('wrote /tmp/a.txt');
+  });
+
+  it('refuses a gutter row whose first token would have fitted above', () => {
+    // Both rows carry the block's gutter and the row above ends at a directory,
+    // which is the exact shape rule 2 fires on — except that `done` had sixty
+    // columns of room, so the row above did not end because it was full.
+    expect(scan(['  │ created /tmp/out/', '  │ done'], 80)).toBe('  │ created /tmp/out/');
+  });
+
+  it('refuses a gutter row when the path above is already finished', () => {
+    // No trailing slash: `/tmp/out` is a whole name, and gluing `done` onto it
+    // would silently rename it.
+    expect(scan(['  │ wrote /tmp/out', '  │ done and dusted'], 80)).toBe('  │ wrote /tmp/out');
+  });
+
+  it('refuses a gutter row that starts a path of its own', () => {
+    expect(scan(['  │ cp /tmp/out/', '  │ /srv/media/b.mp3'], 80)).toBe('  │ cp /tmp/out/');
+  });
+
+  it('refuses an ASCII pipe, which is a table or a shell pipeline', () => {
+    // Only box-drawing counts as a gutter. A markdown table's `| ` looks the
+    // same to a naive rule and appears far more often.
+    expect(scan(['| /tmp/out/', '| next.png    |'], 80)).toBe('| /tmp/out/');
+  });
+
+  it('still refuses to join when the row above is blank', () => {
+    expect(scan(['', '  │ tmp/a.mp3'], 80)).toBe('');
   });
 });
 

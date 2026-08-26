@@ -84,6 +84,56 @@ describe('findPaths — absolute paths, verbatim from the user', () => {
   });
 });
 
+describe('findPaths — the Codex TUI output, verbatim from the user', () => {
+  /**
+   * Both of these are ONE token and both match here, which is the useful thing
+   * this block records: the rules never had a problem with the user's paths.
+   * What the user saw unlinkified was the same path broken over two terminal
+   * ROWS, and the fix for that is in terminalLinks.ts's flattening — see its
+   * "why `isWrapped` is not enough" header and the tests beside it.
+   */
+  const ABSOLUTE =
+    '/home/alexey/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-62ab287b-39b5-461a-9d45-69e2eae3d41a.png';
+  const TILDE =
+    '~/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-de1a03f1-2d3f-4d2d-8a44-c5da743f849e.png';
+
+  it('matches the absolute generated-image path in the command it appeared in', () => {
+    expect(paths(`Ran for f in ${ABSOLUTE}`)).toEqual([ABSOLUTE]);
+  });
+
+  it('matches the tilde form under the TUI bullet it was printed with', () => {
+    // `└` is its own whitespace-delimited token and carries no slash, so it is
+    // rejected the way any bare word is and never joins the path beside it.
+    expect(paths(`    └ ${TILDE}`)).toEqual([TILDE]);
+  });
+
+  it('is not fooled by the 36-character UUID segments or the dot-directory', () => {
+    // Both were suspects while this was being diagnosed: a UUID is well under
+    // NAME_MAX, and `.codex` is a segment like any other — only `.` and `..`
+    // are treated as naming nothing.
+    expect(paths('/home/alexey/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd')).toEqual(
+      ['/home/alexey/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd'],
+    );
+  });
+
+  it('yields only the truncated directory when the row is read on its own', () => {
+    // This is what the user was hovering over. The first row of the split ends
+    // at a directory, so a detector working one row at a time can only ever
+    // offer the directory — correctly, and uselessly. It is the reason
+    // scanBufferLine has to join the rows before the detector is asked.
+    const firstRow =
+      'Ran for f in /home/alexey/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/';
+    expect(paths(firstRow)).toEqual([
+      '/home/alexey/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/',
+    ]);
+
+    const gutterRow = '  │ exec-62ab287b-39b5-461a-9d45-69e2eae3d41a.png /home/alexey/.codex/';
+    // The filename alone carries no slash, so it is a bare word and refused;
+    // only the second argument's truncated directory survives.
+    expect(paths(gutterRow)).toEqual(['/home/alexey/.codex/']);
+  });
+});
+
 describe('findPaths — shapes that are paths', () => {
   it('matches an absolute path', () => {
     expect(paths('wrote /home/alexey/notes.md')).toEqual(['/home/alexey/notes.md']);
@@ -254,6 +304,15 @@ describe('findPaths — rejections (each one seen next to a real path)', () => {
 
   it('rejects another user home, which relative resolution would get wrong', () => {
     expect(paths('~alexey/git/foo')).toEqual([]);
+  });
+
+  it('admits `~/` without admitting the tilde on its own', () => {
+    // `~` is punctuation in prose and a home directory in a path, and only the
+    // slash tells them apart. Both of these fall to THE rule — a candidate with
+    // no slash in it is a word — which is what keeps the tilde form from
+    // widening the detector when it is the shape an agent TUI prints.
+    expect(paths('roughly ~ 40 seconds')).toEqual([]);
+    expect(paths('~ and ~foo and ~bar')).toEqual([]);
   });
 
   it('rejects shell metacharacters and escapes', () => {
