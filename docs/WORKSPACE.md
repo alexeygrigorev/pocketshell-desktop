@@ -164,14 +164,21 @@ a terminal, full stop.**
 Session tabs first, in **creation order, oldest first**; Files tabs after, in
 the order the user opened them.
 
-Creation order rather than activity order, and this is worth stating because
-every other list in this app sorts by activity. A tab bar is a set of
-*targets*: the user aims at a tab with the mouse, and a bar that reorders under
-the refresh timer moves the target between the decision to click and the click.
-The panel can sort by recency because its rows are read; the tab bar cannot,
-because its rows are hit. Creation order is also what makes "session one is one
-tab, session two is another tab" literally true — `sessions create` walks
-`<base>`, `<base>-2`, `<base>-3` in exactly that order.
+Creation order rather than activity order. A tab bar is a set of *targets*: the
+user aims at a tab with the mouse, and a bar that reorders under the refresh
+timer moves the target between the decision to click and the click. Creation
+order is also what makes "session one is one tab, session two is another tab"
+literally true — `sessions create` walks `<base>`, `<base>-2`, `<base>-3` in
+exactly that order.
+
+This used to add that it was worth stating "because every other list in this app
+sorts by activity", and that "the panel can sort by recency because its rows are
+read; the tab bar cannot, because its rows are hit". Both are now out of date,
+and it is the PANEL that changed rather than this section: once its rows became
+one per folder and `Ctrl+↑`/`Ctrl+↓` began walking them, they were targets too,
+and the user reported the reordering as confusing. The session panel sorts by
+creation as well now (docs/SESSIONLIST.md §6.0). The argument did not move — it
+turned out to apply more widely than it claimed.
 
 `SessionSummary.created` is what the sort reads. Note that
 `parseSessionsList` sets `activity === created` (the helper's table carries
@@ -1331,6 +1338,20 @@ that leaves the listing takes its terminal with it.
 ## 15. Rearranging tabs
 
 > "I also want to be able to rearrange tabs like drag and drop them around."
+
+**This section is now a precedent as well as a spec.** The session panel's
+folder rows are draggable too (docs/SESSIONLIST.md §14), and they reuse this
+design rather than inventing a second one: `applyFolderOrder` is §15.2's
+ranking, `canDropFolderAt` is §15.1's visible refusal, and the interaction is
+§15.4's native drag turned ninety degrees. Two places in this app deviate, both
+deliberately, and both are argued in §14 rather than here — the panel refuses a
+cross-ROOT drag on a stronger footing than §15.1's "cheap to relax" (a root is a
+real directory, so a row leaving it would be a lie about where the folder
+lives), and the panel's order lives in the settings store rather than in
+`localStorage` because it is a per-host map the panel reads before any workspace
+is mounted.
+
+If a rule below is changed, check §14 before assuming the change is local.
 
 ### 15.1 The conflict, and how it was resolved
 

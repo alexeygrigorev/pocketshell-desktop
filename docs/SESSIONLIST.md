@@ -29,9 +29,14 @@ requirement out:
 
 **What is still true:** everything this document says about a ROOT row or a
 FOLDER row. The measurement in §1, the display-label rules in §4, truncation
-(§5), the timestamp and sort (§6), the panel width (§7), and registered roots
-(§12) are all unchanged and are the reason those parts of the panel look the
-way they do.
+(§5), the panel width (§7), and registered roots (§12) are all unchanged and are
+the reason those parts of the panel look the way they do.
+
+**Revision 6 — the panel stops rearranging itself.** §6's recency sort is
+overturned: rows render in CREATION order (§6.0, with the original argument kept
+under §6.1), and the user can drag them up and down to override it (§14). The
+root header also now names its directory — `~/git`, not `git` — with its count
+beside it rather than pinned right (§15).
 
 **What changed:** the panel is now `root -> folder`, TWO levels, one row per
 folder. There is no session level. Clicking a folder row opens a folder
@@ -409,9 +414,9 @@ A `<button>`, so collapse is keyboard-reachable and `aria-expanded` is real.
 |---|-------|------|
 | 1 | Disclosure | `AppIcon name="chevron-right"` at 14px, rotated 90° when open — the app's one disclosure pattern. Never a text glyph (designGates gate 2) |
 | 2 | Status dot | The same 8px dot the session row uses, `--success` when **any** session under the root is attached. This is the collapsed root's only way to say "something live is in here", which is the state where it matters |
-| 3 | Root label | `--font-ui` `--fs-300` `--fw-semibold`, `flex: 0 1 auto; min-width: 0`, end-ellipsis. The `other` bucket renders `--fw-regular` `--fg-secondary` instead: it is a bucket, not a directory the user could navigate to |
-| 4 | Count | Bare integer, `--fs-100` `--fg-muted` `tabular-nums`, `margin-left: auto`. **Not** `· 3 sessions` — the number is the whole message, and the phrase form retreats to the header tooltip |
-| 5 | New session | **Revision 5.** `AppIcon name="plus"` at 12px in an `.icon-btn.sm`, trailing the count. `@click.stop`, `opacity: 0` until the row is hovered or the button itself is `:focus-visible`. Absent on `other`; disabled when `rootHostPath` cannot resolve the root. See §0a |
+| 3 | Root label | `--font-ui` `--fs-300` `--fw-semibold`, `flex: 0 1 auto; min-width: 0`, end-ellipsis. The `other` bucket renders `--fw-regular` `--fg-secondary` instead: it is a bucket, not a directory the user could navigate to. **Revision 6:** the text is the root's KEY (`~/git`), with the `~/` in a `.path-prefix` span at `--fg-muted` — see §15 |
+| 4 | Count | Bare integer, `--fs-100` `--fg-muted` `tabular-nums`. **Not** `· 3 sessions` — the number is the whole message, and the phrase form retreats to the header tooltip. **Revision 6:** it sits immediately after the label; the `margin-left: auto` it used to carry moved to field 5 (§15) |
+| 5 | New session | **Revision 5.** `AppIcon name="plus"` at 12px in an `.icon-btn.sm`, trailing the count. `@click.stop`, `opacity: 0` until the row is hovered or the button itself is `:focus-visible`. Absent on `other`; disabled when `rootHostPath` cannot resolve the root. See §0a. **Revision 6:** it carries `margin-left: auto` and holds the right edge of the row |
 
 **Header tooltip:** `~/git` + `3 sessions`. The path is written home-relative
 because the grouping key *is* home-relative (§8). The `other` header says
@@ -439,9 +444,9 @@ disambiguate. `select` is emitted from leaves only, and it still carries a
 |---|-------|------|
 | 1 | Left inset + disclosure | 2px rail + 18px, so the 14px `chevron-right` box sits at 20–34 and a 4px gap lands the dot at **38**, one 8px step right of the root's. Revision 2 pinned this dot at 30 because directory headers and single-session directory rows alternated down the list and a stepped dot would have read as jitter; there is no such alternation now |
 | 2 | Status dot | **Aggregate**: `--success` when *any* session in the directory is attached. Same rule §3a gives the root header, for the same reason — a collapsed node's only way to say "something live is in here" |
-| 3 | Directory label | The directory's own name — its trailing path component, never the full path and never a session name. `--font-ui` `--fs-300`. Middle-truncates (§5). Wins the width fight: `flex: 1 1 auto; min-width: 0` |
-| 4 | Count | Bare integer, `--fs-100` `--fg-muted` — **only from 2 up**. This is the one place §1's measurement still binds: a `1` beside a header whose only child is drawn on the next row is exactly the dead field §1 named, and dropping it hands the label back width the new level took |
-| 5 | Relative time | **The newest activity in the directory** — which is also the key it sorts on (§6), so a header can never display an older time than a header below it. The alternative (no time) makes a collapsed directory the one row in the panel that cannot answer "was this touched recently?", which is the question the panel exists to answer |
+| 3 | Directory label | The directory's own name — its trailing path component, never the full path and never a session name. `--font-ui` `--fs-300`. Middle-truncates (§5). Wins the width fight: `flex: 0 1 auto; min-width: 0` — it shrinks last but no longer GROWS, which is what let the count drift to the right edge (§15) |
+| 4 | Count | Bare integer, `--fs-100` `--fg-muted` — **only from 2 up**. This is the one place §1's measurement still binds: a `1` beside a header whose only child is drawn on the next row is exactly the dead field §1 named, and dropping it hands the label back width the new level took. **Revision 6:** it sits immediately after the label, ahead of the agent badges, matching the root header (§15) |
+| 5 | Relative time | **The newest activity in the directory.** It used to be the key the row sorted on too, so a header could never display an older time than one below it; revision 6 breaks that pairing (§6.0) and the time is now an independent field — which makes it carry more, not less. It holds the right edge with `margin-left: auto`. The alternative (no time) makes a directory row the one row in the panel that cannot answer "was this touched recently?" |
 
 **Header tooltip:** the directory's full path + `1 session` / `3 sessions`.
 The phrase form lives only here; the visible count is a bare integer or
@@ -604,6 +609,13 @@ the two-span CSS trick** — no measurement code:
 
 ## 6. Timestamp, sort, and finding "the session I was just in"
 
+> **Revision 6 (this section is overturned in part).** Everything below about
+> the TIMESTAMP stands. The SORT does not: the panel now renders **creation
+> order**, and the user may drag rows to override it (§14). The original
+> argument is kept verbatim under §6.1 rather than deleted, because it was
+> right about the question and wrong about one premise, and the difference is
+> worth being able to read.
+
 **Timestamp → compact relative.** `Aug 24, 01:10 PM` costs ~90px per row to
 say what a flat recency-sorted list already says by position. Replace
 `fmtTime` (SessionTree.vue:115-119) with: `now` (<60s), `12m`, `3h`, `2d`
@@ -613,6 +625,66 @@ every 60s (activity values themselves only change on store refresh, so this
 is cosmetic re-rendering only). The comment at SessionTree.vue:13-14 ("the
 desktop has the room") is what this reverses — the desktop does not have
 the room at 280px.
+
+### 6.0 What ships: creation order
+
+> "let's not rearrange workspaces/sessions in here because it's confusing.
+> let's use wheveer order we had when creating."
+
+**Directory sort, within each root:** oldest `created` asc → case-insensitive
+label asc. **Row sort inside a directory:** oldest `created` asc → name asc.
+**Root sort:** registered roots in registered order (unchanged, §12); derived
+roots by oldest `created` asc → case-insensitive label asc; `other` still
+pinned last however recent it is.
+
+A directory's and a root's key is the creation time of the **oldest** session
+in it. Oldest is the only member timestamp that does not move when the set
+changes: starting a session in a folder cannot change it, and killing any
+session but the first cannot either. A newest-session key would send a folder
+to the bottom of its root every time the user started something in it — at the
+exact moment they were looking at that folder.
+
+Both keys the old sort used move on their own, and that is the whole complaint:
+
+- **`mostRecentActivity` is re-sampled every five seconds.** The panel polls
+  (`POLL_MS` in SessionTree.vue), so a row whose folder produced output climbed
+  while the user was reading the list.
+- **`attached` flips as a side effect of NAVIGATING.** Opening a folder
+  workspace attaches a session, so the row the user had just clicked jumped to
+  the top of its root. The list rearranged itself in response to being used.
+
+`Ctrl+↑` / `Ctrl+↓` (docs/WORKSPACE.md §11.0a) walk this same list, which
+raises the cost from untidy to hostile: a moving order means the keyboard lands
+somewhere other than where the eye aimed.
+
+**What the timestamp costs now.** It no longer doubles as the sort key, so
+times run in no particular direction down a root — a row can display an older
+time than the row below it. That is a real loss and it is paid deliberately: an
+order you can predict is worth more than one that happens to be legible from a
+column of ages. It also makes the timestamp carry MORE than it used to, since
+position no longer says any of it, which is worth remembering the next time §7's
+container query proposes dropping it first.
+
+**What replaced attached-first.** Finding "the session I was just in" no longer
+needs the sort to do it. The row carries a green dot and a semibold label, the
+open folder carries the accent rail, and the arrow chords step between folders
+from wherever the user is. The marks stayed; only the movement went.
+
+*Agents-first stays dropped*, for the reason §6.1 gives — it was never a
+panel-level key. `isAgentSession` is still exported and still used by
+`groupSessionsByFolder`, the phone-parity anchor.
+
+Order recomputes on every store refresh, as it always did, but it now recomputes
+to the **same answer**, which is the point.
+
+### 6.1 SUPERSEDED — the recency sort, and why it was right at the time
+
+*Kept verbatim. The premise it rests on — that the panel is READ rather than
+HIT — is the part that turned out to be wrong, and §15 of docs/WORKSPACE.md had
+already reached the opposite conclusion for the tab bar ("the panel can sort by
+recency because its rows are read; the tab bar cannot, because its rows are
+hit"). Once the panel gained arrow-key navigation and one row per folder rather
+than one per session, its rows became targets too.*
 
 **Directory sort, applied within each root:** *any session attached* desc →
 most-recent activity desc → case-insensitive label asc. **Row sort inside a
@@ -1175,3 +1247,155 @@ reuses `LaunchSessionDialog` whole — it is mounted *instead of* the picker
 rather than on top of it, because two `OverlayPanel`s share a z-index and both
 listen for Escape on `document`, so one keypress would have closed two dialogs
 and thrown away the browse.
+
+---
+
+## 14. Rearranging folder rows
+
+> "but I can also pull them up and down to rearraange"
+
+The second half of the sentence §6.0 answers the first half of. Creation order
+is what a row gets until the user moves it; a manual position wins once there is
+one. `src/renderer/folderOrder.ts` is the whole rule, with
+`tests/unit/folderOrder.test.ts` beside it.
+
+### 14.1 This is docs/WORKSPACE.md §15, one level up
+
+The workspace's tab bar already solved this problem, and the shape is reused
+rather than reinvented: `applyFolderOrder` is `applyTabOrder`,
+`canDropFolderAt` is `canDropTabAt`, `reorderFolders` is `reorderTabs`, and the
+interaction is the same native HTML5 drag turned ninety degrees. Everything
+§15.4 specifies carries over unchanged — the dragged row fades but stays in
+place, the landing place is a 2px accent rule that flips at the row's midpoint,
+a refused drop draws nothing, and the drag does not fight the click because
+native DnD suppresses the one that would otherwise follow it.
+
+Reusing it is not laziness about the design. The two are one gesture in the
+user's hands — drag a thing along the strip it lives in — and a panel that felt
+different from the tab bar would be a second thing to learn for nothing.
+
+**The stored value is a RANKING, not a list of rows** (§15.2), and the argument
+applies with more force here: the folder set changes when sessions are created
+and killed AND on a five-second poll, across every root on the box. As a list it
+would need reconciling on every tick, and every reconciliation is a chance to
+invent a row or lose one. As a ranking, a new folder is unranked and lands at
+the bottom of its root (where creation order would have put it), a dead folder
+is simply absent and leaves no hole, and a key naming nothing is inert.
+
+### 14.2 A row may NOT leave its root
+
+This is the one place the panel reaches a different answer from the tab bar, and
+for a different kind of reason. §15.1's session/files boundary is a
+presentational grouping, and it says so — "cheap to relax if that reading is
+wrong". A root is not presentational. It is a real directory on the host, or one
+the user registered in Settings, and a folder row sits under it because its
+working directory is genuinely inside it (`bestRootForPath` / `rootForPath`). A
+row dragged from `git` into `tmp` would be a claim about where the folder LIVES,
+and the row's own tooltip — which prints `dir.path` — would contradict its
+position on screen the moment the user hovered it. There is nothing to relax;
+the constraint is the filesystem's.
+
+So the ranking is applied WITHIN each root and never across, and the ROOT
+sequence is never touched by a drag either: roots render in registered order, or
+by §6.0's creation key, with `other` pinned last. `canDropFolderAt` refuses a
+cross-root drop **visibly**, while the drag is still in the air, because a drop
+that is accepted and then snaps back reads as a bug rather than as a rule.
+
+### 14.3 Where the order lives
+
+The **settings store** (`AppSettings.folderOrder`), keyed by host alias:
+`{ hetzner: ['~/git/dataops', '~/git/dtc-website', …] }`.
+
+**Per host**, unlike `sessionRoots`, which is deliberately app-level. The two
+are not inconsistent: a registered root is written home-relative, so `~/git`
+names the same place on every box, but an arrangement is a statement about the
+folders that are actually THERE, and no two hosts have the same ones. The
+`~/.ssh/config` alias rather than the connection id, for §15.3's reason exactly
+— a connection id is an opaque handle minted per connect, so an order keyed on
+it would be a fresh key every launch and would never survive a restart.
+
+**The settings store rather than `localStorage`**, which is where the tab order
+went. §15.3's rule — "the settings store is for preferences a user sets BY NAME
+in the Settings overlay" — points the other way, and it is overruled here
+because the two cases differ in scope. A tab order belongs to one folder of one
+host and is written by the workspace that owns it. This is a per-host map the
+PANEL has to read before any workspace is mounted, and the settings store is
+already the thing that loads a validated per-user blob synchronously at
+construction. Splitting it across N `localStorage` keys would mean the panel
+enumerating storage to find them. The store's own conventions are followed in
+full: one spec entry, a parser that degrades per host and per key, and a
+reference default copied on the way out.
+
+An empty arrangement REMOVES the host's entry rather than storing `[]`, on both
+the read and the write paths, because "this host is not arranged" and "there is
+no entry for it" are one state.
+
+**A key that is not on screen is dropped**, because a drag writes the whole
+panel's rows in draw order. That costs nothing: an unranked folder sorts to the
+bottom of its root anyway, so a folder that has been away since the last
+arrangement would rank after every visible row either way. Retaining stale keys
+would buy the same position at the price of a list that only grows. (The tab bar
+arrives at the same place from the other side, by pruning against the live bar.)
+
+### 14.4 One derivation, or the chord and the panel disagree
+
+The ranking is applied in `src/renderer/folderTree.ts`, **not** in the component
+— on top of `groupSessionsIntoRoots` and below both readers. That file's header
+already explains why the tree is derived once: `Ctrl+↑`/`Ctrl+↓` walk
+`useFolderTree().folders`, and a chord navigating by a second derivation opens a
+workspace with no tabs and highlights no row. A manual order is the same hazard
+in a new coat — a chord that visited rows in an order the panel does not draw
+would be a different feature wearing the same keys.
+
+It is applied as a **pure projection** re-run on every recompute, never as a
+mutation of the row list. That is what makes a drag survive the poll rather than
+race it: the store holds a ranking, the poll brings a fresh list, and the two are
+combined again from scratch five seconds later.
+
+---
+
+## 15. The root header names its directory
+
+> "for git and tmp let's show ~/git ~/tmp (~/ part can be somewhat muted) and
+> move 10 closer to git"
+
+Two presentation changes to §3a's row, over values it already carried.
+
+**The header prints the root's KEY, not its label.** `~/git` rather than `git`.
+The key has always been home-relative (§8) and the header tooltip has always
+printed it, so this is not a new derivation — `rootHeaderParts` in
+`sessionGrouping.ts` is a split, not a computation. The `~/` goes in its own
+span at `--fg-muted`: it is the fragment every root repeats, so it is the
+fragment that should recede. A colour on a span rather than `opacity` on the
+label, because fading the whole thing would tone down the word that identifies
+the root — the opposite of what a prefix-mute is for.
+
+Three keys carry no `~/` and must not be given one:
+
+- **`other`** is a bucket, not a directory, and keeps its word and its
+  `--fg-secondary` styling. `~/other` would name a folder that exists nowhere;
+- **`$HOME` itself**, registrable as `~`, keeps `defaultLabelForPath`'s named
+  form `~ (home)`. Splitting it would leave a muted `~` and an empty remainder —
+  a header whose only legible content is the part meant to recede;
+- **a registered root outside `$HOME`** (`/srv/apps`) renders its absolute key
+  verbatim. Same promise, kept for a root whose real directory is not under home.
+
+A side effect worth noting: two roots cannot share a key (`resolveRoots` dedupes
+on it), so two headers can no longer read alike. `labelRootsApart`'s collision
+growing is still there and still correct for `root.label`, which the `+`'s
+tooltip and the empty-root sentence still use — a short word is what those want.
+
+**The count sits beside the label.** §3a field 4 specified `margin-left: auto`,
+which threw `10` to the far end of the row where it sat level with `git` and
+related to nothing. The `auto` moves to the two elements that genuinely want the
+right edge — the root row's `+` and the folder row's timestamp — each of which
+is a column the eye reads down. `.label` drops from `flex: 1 1 auto` to
+`0 1 auto` so it still shrinks first but no longer grows to push the count away.
+
+**The folder rows match**, and their count moves ahead of the agent badges
+(§3b field 4). A reader scans ONE column of rows; a count that hugged its label
+on the header and floated right on the rows beneath would be two conventions in
+one list. The `+` keeps its place and its reveal-on-hover, and because the
+square is always laid out and only its opacity changes, nothing reflows when the
+cursor arrives — which is what keeps the header legible at the 200px drag floor
+where the strip is tightest.

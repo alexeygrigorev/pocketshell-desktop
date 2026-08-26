@@ -44,6 +44,30 @@
  * `groupSessionsByFolder` stays exported as the phone-parity anchor for the
  * leaf level, and `canonicalisePath` / `defaultLabelForPath` remain the shared
  * label rules the folder-first creation flow also speaks.
+ *
+ * ## The panel's order is CREATION order (docs/SESSIONLIST.md §6, revised)
+ *
+ * Everything the PANEL renders — roots, the folder rows inside them, and the
+ * sessions inside a folder — is ordered oldest-created first, with a stable
+ * label or name tiebreak. It used to be ordered by recency and attachment, and
+ * the file still carries both of those as the phone's rules where the phone's
+ * rules are what is being ported (`compareSessions`, used by
+ * `groupSessionsByFolder`). What changed is the DESKTOP PANEL's three
+ * comparators — `compareRows`, `compareDirectories`, `compareRoots` — each of
+ * which has its own note on which moving key it dropped and why.
+ *
+ * The one-line reason, from the user: "let's not rearrange workspaces/sessions
+ * in here because it's confusing. let's use wheveer order we had when
+ * creating." The panel re-reads the host every five seconds (SessionTree's
+ * `POLL_MS`), so a recency key is a key that moves rows while they are being
+ * read, and `Ctrl+↑`/`Ctrl+↓` walk this same list.
+ *
+ * The user's MANUAL arrangement — dragging a folder row up or down — is not
+ * here. It is a projection applied ON TOP of this one, in
+ * `renderer/folderOrder.ts`, for the same reason the workspace's manual tab
+ * order is separate from `buildWorkspaceTabs`: this module answers "what order
+ * did these arrive in", which is a fact about the host, and that module answers
+ * "where did the user put them", which is a preference about the panel.
  */
 import { sanitisePart } from '../shared/sessionNameParts';
 import type { SessionAgentKind, SessionSummary } from '../shared/types';
@@ -100,6 +124,26 @@ export function defaultLabelForPath(path: string): string {
 /** Last-activity epoch for a session, falling back to its creation time. */
 export function sessionActivity(session: SessionSummary): number {
   return session.activity || session.created || 0;
+}
+
+/**
+ * Creation epoch for a session, falling back to its last activity.
+ *
+ * The mirror of {@link sessionActivity}, and it is what the PANEL now orders
+ * by (docs/SESSIONLIST.md §6, revised). The fallback is the same defensive
+ * shape and for the same reason: `parseSessionsList` fills both columns from
+ * the helper's three-column table, and a host whose table yields one usable
+ * timestamp must still produce a total order rather than a list of zeroes that
+ * collapses onto the label tiebreak.
+ *
+ * The property that makes this the right key is that IT DOES NOT MOVE.
+ * `activity` is re-sampled every five seconds by the panel's poll, so a row
+ * ordered by it changes place while the user is looking at it; `created` is
+ * fixed for the lifetime of the session, so a row ordered by it changes place
+ * only when a session is created or killed — which the user did on purpose.
+ */
+export function sessionCreated(session: SessionSummary): number {
+  return session.created || session.activity || 0;
 }
 
 /**
@@ -267,20 +311,45 @@ function tailSegments(path: string, count: number): string {
 }
 
 /**
- * Global row order (docs/SESSIONLIST.md §6): attached first, then most-recent
- * activity, then name.
+ * Global row order (docs/SESSIONLIST.md §6, REVISED): CREATION order, oldest
+ * first, ties broken on the name.
  *
- * The phone's agents-first key is deliberately NOT applied here. It is a
- * *within-folder* tiebreak so a folder's shells cannot bury its agent; as a
- * GLOBAL key over one-session folders it pins every agent above every shell
- * regardless of recency, which hides precisely the recently-used shell the
- * user is hunting for. Agent-ness stays visible as the row badge.
+ * ## What this replaced, and why
+ *
+ * It was `attached` desc -> activity desc -> name, and both of those keys move
+ * on their own. `activity` is re-sampled by the panel's five-second poll, and
+ * `attached` flips the moment the user opens a workspace — so the list
+ * rearranged itself both while the user was reading it and as a side effect of
+ * the user reading it. The report was one sentence: "let's not rearrange
+ * workspaces/sessions in here because it's confusing. let's use wheveer order
+ * we had when creating." A list that reorders itself is one you cannot build
+ * muscle memory for, and `Ctrl+↑`/`Ctrl+↓` (docs/WORKSPACE.md §11.0a) walk this
+ * same list, so a moving order is not merely untidy — it makes the keyboard
+ * land somewhere other than where the eye aimed.
+ *
+ * Creation order is the property being asked for: it is fixed for the lifetime
+ * of a session, so the only thing that moves a row is creating or killing one.
+ *
+ * This is also the order the workspace's TAB BAR has always used, for exactly
+ * the reason it now applies here too (`buildWorkspaceTabs`, docs/WORKSPACE.md
+ * §3.2: "a bar that reorders under the session store's refresh timer moves the
+ * target between those two moments"). The two surfaces the user hits — panel
+ * row and tab — no longer disagree about what order a folder's sessions are in.
+ *
+ * The name tiebreak is what keeps the order TOTAL on a host whose table reports
+ * one timestamp for everything (`parseSessionsList` sets `activity === created`
+ * from a three-column table), and it is a stable key rather than a moving one.
+ *
+ * The phone's agents-first key is still deliberately NOT applied here, for the
+ * reason it never was: it is a *within-folder* tiebreak so a folder's shells
+ * cannot bury its agent, and as a GLOBAL key it pins every agent above every
+ * shell regardless of anything else. Agent-ness stays visible as the row badge.
+ * `attached`-ness stays visible as the green dot and the semibold label, which
+ * is where it belongs — a fact about a row, not a reason to move it.
  */
 function compareRows(a: SessionSummary, b: SessionSummary): number {
-  const byAttached = Number(b.attached) - Number(a.attached);
-  if (byAttached !== 0) return byAttached;
-  const byActivity = sessionActivity(b) - sessionActivity(a);
-  if (byActivity !== 0) return byActivity;
+  const byCreated = sessionCreated(a) - sessionCreated(b);
+  if (byCreated !== 0) return byCreated;
   return a.name.localeCompare(b.name);
 }
 
@@ -443,7 +512,34 @@ export interface SessionDirectory {
   labelTail: string;
   /** The directory's sessions, in the flat list's order. Never empty. */
   rows: SessionRow[];
-  /** Newest activity across the directory — drives its order and its age. */
+  /**
+   * Creation epoch of the OLDEST session in the directory — the key the folder
+   * rows are ordered by (docs/SESSIONLIST.md §6).
+   *
+   * Oldest rather than newest, and this is the decision that makes a FOLDER's
+   * creation order mean anything at all. A folder row stands in for a SET of
+   * sessions, and a set has no creation time of its own, so one has to be
+   * chosen from its members. The oldest is the only choice that does not move
+   * when the set changes: creating a session in a folder cannot change it (a
+   * new session is newer than the one already there), and killing any session
+   * but the first cannot change it either. Keying on the NEWEST would send a
+   * folder to the bottom of its root every time the user started a session in
+   * it, which is the reordering this whole revision exists to stop — and it
+   * would do it at the exact moment the user was looking at that folder.
+   *
+   * The one thing that does move it is killing the folder's first session,
+   * which is unavoidable: the folder exists BECAUSE its sessions do, so the
+   * key has to come from a session that is still there.
+   */
+  created: number;
+  /**
+   * Newest activity across the directory — its displayed age.
+   *
+   * DISPLAY ONLY now. It used to be the sort key as well, which is what made
+   * the timestamp redundant enough to drop at narrow widths; with the order
+   * moved to {@link created} this field is the only place recency is reported
+   * at all. See SessionTree's container query.
+   */
   mostRecentActivity: number;
   /** True when any session here is attached (drives the dot). */
   active: boolean;
@@ -463,7 +559,17 @@ export interface SessionRootFolder {
   directories: SessionDirectory[];
   /** Sessions under this root, across every directory — the header count. */
   sessionCount: number;
-  /** Newest activity across the root's sessions — drives root order. */
+  /**
+   * Creation epoch of the OLDEST session under the root — the key DERIVED roots
+   * are ordered by. Same choice, and the same argument, as
+   * {@link SessionDirectory.created}: it is the member timestamp that does not
+   * move when the set gains or loses a member.
+   *
+   * REGISTERED roots ignore it and render in registered order, as they always
+   * have — a declared list is itself an ordering, and a stable one.
+   */
+  created: number;
+  /** Newest activity across the root's sessions — the header's age, display only. */
   mostRecentActivity: number;
   /** True when any session under this root is attached (drives the dot). */
   active: boolean;
@@ -839,29 +945,101 @@ export function rootFromSessionName(name: string, knownLabels: Iterable<string>)
   return null;
 }
 
-/** Root order: newest activity first, case-insensitive label tiebreak. */
+/**
+ * A root header's text, split so the `~/` can be toned down.
+ *
+ * > "for git and tmp let's show ~/git ~/tmp (~/ part can be somewhat muted)"
+ *
+ * The header used to read `git`, which is `root.label` — the root's own leaf
+ * component. The key it stands for has always been the home-relative `~/git`
+ * (it is what `rootTooltip` prints and what the `+` resolves against), so this
+ * is a presentation change over a value the root already carries and not a
+ * second derivation of it.
+ *
+ * Two spans rather than one, because the mute has to apply to the `~/` and to
+ * nothing else. Fading the whole label with `opacity` would tone down the word
+ * that identifies the root, which is the opposite of what a prefix-mute is for:
+ * `~/` is the part every root repeats, so it is the part that should recede.
+ *
+ * Three cases that are NOT `~/`-prefixed, and none of them may sprout one:
+ *
+ *   - **`other`** is a bucket, not a directory — the sessions that matched no
+ *     root. It keeps its word, and `~/other` would name a folder that does not
+ *     exist anywhere;
+ *   - **`$HOME` itself**, registrable as `~`, keeps `defaultLabelForPath`'s
+ *     named form (`~ (home)`). Splitting it would leave a muted `~` and an
+ *     empty remainder, i.e. a header whose only legible content is the part
+ *     that was meant to recede;
+ *   - **a registered root outside `$HOME`** (`/srv/apps`) has no `~` in it at
+ *     all and renders its absolute key verbatim. That is the same promise the
+ *     `~/` form makes — the header names the real directory — kept for a root
+ *     whose real directory happens not to be under home.
+ *
+ * The non-bucket cases render the KEY rather than the LABEL, which also makes
+ * `labelRootsApart`'s collision growing invisible in the header: two roots
+ * cannot share a key (`resolveRoots` dedupes on it), so two headers cannot read
+ * alike. `label` is still what the `+`'s tooltip and the empty-root sentence
+ * say, where a short word is what is wanted.
+ */
+export function rootHeaderParts(root: SessionRootFolder): { prefix: string; text: string } {
+  if (root.other) return { prefix: '', text: root.label };
+  if (root.key === '~' || root.key === '$HOME') return { prefix: '', text: root.label };
+  if (root.key.startsWith('~/')) return { prefix: '~/', text: root.key.slice(2) };
+  return { prefix: '', text: root.key };
+}
+
+/**
+ * DERIVED root order: oldest-created first, case-insensitive label tiebreak.
+ *
+ * It was newest-activity-first, and it goes for the same reason
+ * {@link compareDirectories} lost its two moving keys — a header that changes
+ * place under the poll takes every row beneath it along, so a moving root order
+ * is the same confusion one level up and multiplied by the size of the root.
+ *
+ * Registered roots never reach this comparator: they render in the order the
+ * user registered them, which was already the stable answer and is now simply
+ * the same answer arrived at by two routes.
+ */
 function compareRoots(a: SessionRootFolder, b: SessionRootFolder): number {
-  const byActivity = b.mostRecentActivity - a.mostRecentActivity;
-  if (byActivity !== 0) return byActivity;
+  const byCreated = a.created - b.created;
+  if (byCreated !== 0) return byCreated;
   return a.label.toLowerCase().localeCompare(b.label.toLowerCase());
 }
 
 /**
- * Directory order within a root, mirroring the row order it replaces: a
- * directory holding an attached session first, then most-recent activity
- * descending, then a case-insensitive label.
+ * Directory order within a root: oldest-created first, case-insensitive label
+ * tiebreak (docs/SESSIONLIST.md §6, revised).
  *
- * Attached-first is lifted to this level rather than dropped: at the 1:1
- * distribution a directory is a one-session node, so demoting the key would
- * move the session the user is currently in off the top of its root, which is
- * the one thing the sort exists to prevent. The header now sits above that
- * session rather than being it, which changes nothing about the ordering.
+ * ## Both of the keys this dropped moved on their own
+ *
+ * It was `active` desc -> `mostRecentActivity` desc -> label, and:
+ *
+ *   - **`mostRecentActivity` is re-sampled every five seconds.** The panel
+ *     polls (SessionTree's `POLL_MS`), so any row whose folder saw output
+ *     climbed while the user was reading the list. Rows that move under the
+ *     cursor are the reported complaint, verbatim: "let's not rearrange
+ *     workspaces/sessions in here because it's confusing."
+ *   - **`active` flips as a side effect of NAVIGATING.** Opening a folder
+ *     workspace attaches a session, so the row the user just clicked jumped to
+ *     the top of its root — the list rearranged itself in response to being
+ *     used, which is the worst version of this because it fires exactly when
+ *     the user is looking at the row it moves.
+ *
+ * The attached-first key was originally *lifted* to this level rather than
+ * dropped (§6: "the session I was just in"), and that argument is answered
+ * rather than ignored. Finding the session you were just in no longer needs the
+ * sort to do it: the row carries a green dot and a semibold label, the open
+ * folder carries the accent rail, and `Ctrl+↑`/`Ctrl+↓` step between folders
+ * from wherever the user is. What the sort was buying is now bought by marks
+ * that cost no movement.
+ *
+ * Ties break on the label rather than on anything derived from the sessions, so
+ * a host whose table reports one timestamp for everything still gets a total
+ * order that is stable across polls.
  */
 function compareDirectories(a: SessionDirectory, b: SessionDirectory): number {
-  const byAttached = Number(b.active) - Number(a.active);
-  if (byAttached !== 0) return byAttached;
-  const byActivity = b.mostRecentActivity - a.mostRecentActivity;
-  if (byActivity !== 0) return byActivity;
+  const byCreated = a.created - b.created;
+  if (byCreated !== 0) return byCreated;
   return a.label.toLowerCase().localeCompare(b.label.toLowerCase());
 }
 
@@ -879,11 +1057,12 @@ function compareDirectories(a: SessionDirectory, b: SessionDirectory): number {
  * **Root order** depends on which mode is in play. Registered roots render in
  * REGISTERED ORDER: a declared list is itself an ordering, and re-sorting it
  * by recency would reshuffle the panel's top level under the sessions store's
- * refresh timer. Derived roots have no declared order, so they keep the
- * most-recent-activity sort. Either way `other` is pinned last, however recent
- * it is: it is a bucket, not a place, and letting it float to the top would
- * put the least-organised rows where the eye lands first. Rows keep the flat
- * list's global order within each root.
+ * refresh timer. Derived roots have no declared order, so they are sorted
+ * oldest-created first ({@link compareRoots}) — which is that same sentence
+ * applied to the case where there is no declaration to obey. Either way
+ * `other` is pinned last, however recent it is: it is a bucket, not a place,
+ * and letting it float to the top would put the least-organised rows where the
+ * eye lands first. Rows keep the flat list's global order within each root.
  */
 export function groupSessionsIntoRoots(
   sessions: SessionSummary[],
@@ -961,6 +1140,12 @@ export function groupSessionsIntoRoots(
       label: bucket.label,
       directories,
       sessionCount: bucket.rows.length,
+      // A REGISTERED root can legitimately hold nothing, and an empty reduce
+      // needs a seed that sorts sensibly rather than one that throws. Infinity
+      // puts an empty registered root last among derived roots — which it can
+      // never be, because registered mode never consults `compareRoots` at all
+      // — and keeps the field honest: "no session here has a creation time yet".
+      created: directories.reduce((min, d) => Math.min(min, d.created), Number.POSITIVE_INFINITY),
       mostRecentActivity: directories.reduce((max, d) => Math.max(max, d.mostRecentActivity), 0),
       active: directories.some((d) => d.active),
       other: bucket.key === OTHER_ROOT,
@@ -1011,6 +1196,7 @@ function buildDirectories(rows: SessionRow[], home: string | null): SessionDirec
       label,
       ...splitLabel(label),
       rows: [row],
+      created: 0,
       mostRecentActivity: 0,
       active: false,
       untracked: row.untracked,
@@ -1020,6 +1206,14 @@ function buildDirectories(rows: SessionRow[], home: string | null): SessionDirec
 
   const directories = [...byKey.values()];
   for (const dir of directories) {
+    // MIN for the creation key, MAX for the age. Two reductions rather than one
+    // because they answer opposite questions: "when did this folder start
+    // existing" (which must not move as the folder grows) and "how long since
+    // anything happened here" (which must). See the two fields' own comments.
+    dir.created = dir.rows.reduce(
+      (min, r) => Math.min(min, sessionCreated(r.session)),
+      Number.POSITIVE_INFINITY,
+    );
     dir.mostRecentActivity = dir.rows.reduce(
       (max, r) => Math.max(max, sessionActivity(r.session)),
       0,

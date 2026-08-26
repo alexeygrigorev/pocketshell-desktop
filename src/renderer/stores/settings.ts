@@ -6,6 +6,7 @@ import {
   sanitiseFontFamily,
   TERMINAL_FONT_SIZE_DEFAULT,
 } from '../fonts';
+import { type FolderOrder, normaliseFolderOrder } from '../folderOrder';
 import { normaliseRootList, normaliseRootPath, SESSION_ROOTS_MAX } from '../sessionGrouping';
 import { parseThemeChoice, THEME_CHOICE_DEFAULT } from '../themes';
 import { parseZoomPercent, stepZoomPercent, ZOOM_PERCENT_DEFAULT } from '../zoom';
@@ -144,6 +145,42 @@ export interface AppSettings {
    * three roots on each box they connect to.
    */
   sessionRoots: string[];
+  /**
+   * The session panel's HAND-ARRANGED folder order, per host alias.
+   *
+   * > "but I can also pull them up and down to rearraange"
+   *
+   * A RANKING of `SessionDirectory` keys, best first — not a list of the rows
+   * that exist. The whole argument is in `renderer/folderOrder.ts` and in
+   * docs/WORKSPACE.md §15.2, which the panel is reusing: the folder set changes
+   * under a five-second poll, so a stored list would need reconciling on every
+   * tick and every reconciliation is a chance to invent a row or lose one.
+   *
+   * **Empty is meaningful and is the default**, the same way `sessionRoots`'
+   * empty is: nothing arranged means the panel renders creation order, which is
+   * what it does for a user who never drags anything.
+   *
+   * PER HOST, keyed on the `~/.ssh/config` alias — unlike `sessionRoots`, which
+   * is deliberately app-level. The two are not inconsistent: a registered root
+   * is written home-relative, so `~/git` names the same place on every box, but
+   * an arrangement is a statement about the folders that are actually THERE,
+   * and no two hosts have the same ones. The alias rather than the connection
+   * id for the reason the tab order gives (§15.3): a connection id is an opaque
+   * handle minted per connect, so an order keyed on it would be a fresh key
+   * every launch and would never survive a restart.
+   *
+   * It lives in this store rather than in `localStorage`, which is where the
+   * tab order went. §15.3's rule — "the settings store is for preferences a
+   * user sets BY NAME in the Settings overlay" — points the other way, and it
+   * is overruled here because the two cases differ in scope: a tab order
+   * belongs to ONE folder of ONE host and is written by the workspace that owns
+   * it, whereas this is a per-host map the panel has to read before any
+   * workspace is mounted, and this store is already the thing that loads a
+   * validated per-user blob synchronously at construction. Splitting it across
+   * N `localStorage` keys would mean the panel enumerating storage to find
+   * them.
+   */
+  folderOrder: FolderOrder;
   /**
    * What the agent-launch dialog pre-selects, carried over from last time.
    *
@@ -337,6 +374,10 @@ export const SETTING_SPECS: SettingSpecs = {
   // Empty means "derive roots from $HOME", which is what shipped before this
   // setting existed — the same rule the typography defaults follow.
   sessionRoots: { default: [], parse: asRootList },
+  // Empty means "creation order, as the host reported it", which is what the
+  // panel does for a user who has never dragged a row — the same rule every
+  // other default here follows.
+  folderOrder: { default: {}, parse: normaliseFolderOrder },
   // Matches the helper's own `[default: skip-permissions]` and the phone's
   // first segment, so a fresh install opens the dialog on claude / skip ON.
   agentLaunchDefaults: { default: AGENT_LAUNCH_DEFAULTS, parse: asAgentLaunchDefaults },
@@ -539,6 +580,48 @@ export const useSettingsStore = defineStore('settings', () => {
     values.sessionRoots = values.sessionRoots.filter((root) => root !== path);
   }
 
+  /**
+   * The folder rows [host] has been arranged into, or `[]` when it has none.
+   *
+   * A read helper rather than a bare index, so every caller gets the same
+   * answer for an alias that has never been arranged — an empty array, which is
+   * what `applyFolderOrder` reads as "use creation order" — instead of one
+   * caller having to remember the `?? []` and another forgetting it. A blank
+   * alias (no host connected yet) is answered the same way, because there is no
+   * arrangement to have.
+   */
+  function folderOrderFor(host: string): string[] {
+    return values.folderOrder[host] ?? [];
+  }
+
+  /**
+   * Record a drag: [order] becomes [host]'s arrangement.
+   *
+   * REPLACED rather than merged, because `reorderFolders` already returns the
+   * whole panel's keys in draw order — merging here would be a second opinion
+   * about an answer that module has already given, and the two would drift.
+   *
+   * An EMPTY order removes the host's entry rather than storing `[]`. "This
+   * host is not arranged" and "there is no entry for this host" are one state,
+   * and keeping one spelling of it means a host whose sessions all went away
+   * does not leave a key behind forever. Same rule the tab order follows on the
+   * way out (docs/WORKSPACE.md §15.3) and the same one `normaliseFolderOrder`
+   * applies on the way in, so a blob written by this app is already in the form
+   * the parser would have produced.
+   *
+   * The map is rebuilt rather than mutated in place, for the reason
+   * `sessionRoots` and `shortcutOverrides` are: the spec's default `{}` is a
+   * shared object until `applyDefault` copies it, and an in-place write is one
+   * way to reach a copy that was never made.
+   */
+  function setFolderOrder(host: string, order: readonly string[]): void {
+    if (host === '') return;
+    const next = { ...values.folderOrder };
+    if (order.length === 0) delete next[host];
+    else next[host] = [...order];
+    values.folderOrder = next;
+  }
+
   /* --- Keyboard ----------------------------------------------------------
    * The bindings IN FORCE, and the three moves that change them.
    *
@@ -621,6 +704,8 @@ export const useSettingsStore = defineStore('settings', () => {
     resetZoom,
     addSessionRoot,
     removeSessionRoot,
+    folderOrderFor,
+    setFolderOrder,
     shortcutBindings,
     hasShortcutOverrides,
     rebindShortcut,

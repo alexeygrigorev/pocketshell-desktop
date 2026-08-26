@@ -178,12 +178,22 @@ export function numberCollisions<T extends { label: string }>(tabs: T[]): T[] {
  * Order: session tabs, then Files tabs — "the tabs are always ordered: first
  * agent sessions, then files."
  *
- * Session tabs sort by CREATION time, oldest first, and this is the one place
- * in the app that does not sort by activity. A tab bar is a set of targets:
- * the user aims at a tab and then clicks it, and a bar that reorders under the
- * session store's refresh timer moves the target between those two moments.
- * The panel can sort by recency because its rows are read; the tab bar cannot,
- * because its rows are hit. Creation order is also what makes "session one is
+ * Session tabs sort by CREATION time, oldest first. A tab bar is a set of
+ * targets: the user aims at a tab and then clicks it, and a bar that reorders
+ * under the session store's refresh timer moves the target between those two
+ * moments.
+ *
+ * This used to say it was "the one place in the app that does not sort by
+ * activity", and the sentence after it was "the panel can sort by recency
+ * because its rows are read; the tab bar cannot, because its rows are hit."
+ * Both are now out of date, and the panel is what changed rather than this:
+ * once its rows became one per FOLDER and `Ctrl+↑`/`Ctrl+↓` began walking them,
+ * they were targets too, and the user reported the reordering as confusing.
+ * The session panel therefore sorts by creation as well (docs/SESSIONLIST.md
+ * §6.0). The reasoning here did not move — it turned out to apply more widely
+ * than it claimed.
+ *
+ * Creation order is also what makes "session one is
  * one tab, session two is another tab" literally true, since `sessions create`
  * walks `<base>`, `<base>-2`, `<base>-3` in exactly that order. Ties break on
  * the name so the order is total even on a host whose table reports one

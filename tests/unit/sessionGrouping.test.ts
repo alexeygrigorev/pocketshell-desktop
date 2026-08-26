@@ -339,11 +339,14 @@ describe('groupSessionsIntoRoots', () => {
   }
 
   it('renders one root per $HOME child, holding that root directories', () => {
+    // Timestamps ascend in the order the assertions expect, because the panel
+    // renders CREATION order now (§6): `dataops` was made before `pocketshell`,
+    // and both before anything in `tmp`.
     const roots = groupSessionsIntoRoots(
       [
-        session('git-dataops', '/home/alexey/git/dataops', 300),
+        session('git-dataops', '/home/alexey/git/dataops', 100),
         session('git-pocketshell', '/home/alexey/git/pocketshell', 200),
-        session('tmp-scratch', '/home/alexey/tmp/scratch', 100),
+        session('tmp-scratch', '/home/alexey/tmp/scratch', 300),
       ],
       home,
     );
@@ -385,9 +388,9 @@ describe('groupSessionsIntoRoots', () => {
     // one node per directory, its sessions as children, at every size.
     const [git] = groupSessionsIntoRoots(
       [
-        session('git-solo', '/home/alexey/git/solo', 400),
+        session('git-solo', '/home/alexey/git/solo', 200),
         session('git-pair-a', '/home/alexey/git/pair', 300),
-        session('git-pair-b', '/home/alexey/git/pair', 200),
+        session('git-pair-b', '/home/alexey/git/pair', 400),
       ],
       home,
     );
@@ -414,9 +417,9 @@ describe('groupSessionsIntoRoots', () => {
   it('branches a directory holding more than one session, listing them by name', () => {
     const [git] = groupSessionsIntoRoots(
       [
-        session('git-pocketshell', '/home/alexey/git/pocketshell', 200),
-        session('git-pocketshell-quse', '/home/alexey/git/pocketshell', 100),
-        session('git-dataops', '/home/alexey/git/dataops', 50),
+        session('git-pocketshell', '/home/alexey/git/pocketshell', 100),
+        session('git-pocketshell-quse', '/home/alexey/git/pocketshell', 200),
+        session('git-dataops', '/home/alexey/git/dataops', 300),
       ],
       home,
     );
@@ -461,8 +464,8 @@ describe('groupSessionsIntoRoots', () => {
 
   it('infers home when it was not supplied, instead of dumping everything in other', () => {
     const roots = groupSessionsIntoRoots([
-      session('git-a', '/home/alexey/git/a', 300),
-      session('tmp-b', '/home/alexey/tmp/b', 200),
+      session('git-a', '/home/alexey/git/a', 200),
+      session('tmp-b', '/home/alexey/tmp/b', 300),
     ]);
     expect(roots.map((r) => r.label)).toEqual(['git', 'tmp']);
   });
@@ -471,8 +474,8 @@ describe('groupSessionsIntoRoots', () => {
     const roots = groupSessionsIntoRoots(
       [
         session('git-a', '/home/alexey/git/a', 300),
-        session('var-log', '/var/log', 200),
-        session('nowhere', null, 100),
+        session('var-log', '/var/log', 100),
+        session('nowhere', null, 200),
       ],
       home,
     );
@@ -500,17 +503,59 @@ describe('groupSessionsIntoRoots', () => {
     expect(roots.map((r) => r.label)).toEqual(['git', OTHER_LABEL]);
   });
 
-  it('orders roots by most-recent activity, then case-insensitive label', () => {
+  it('orders derived roots by OLDEST creation, then case-insensitive label', () => {
     const roots = groupSessionsIntoRoots(
       [
-        session('a', '/home/alexey/old/a', 100),
-        session('b', '/home/alexey/new/b', 900),
-        session('c', '/home/alexey/mid/c', 500),
+        session('a', '/home/alexey/first/a', 100),
+        session('b', '/home/alexey/third/b', 900),
+        session('c', '/home/alexey/second/c', 500),
       ],
       home,
     );
-    expect(roots.map((r) => r.label)).toEqual(['new', 'mid', 'old']);
-    expect(roots[0]!.mostRecentActivity).toBe(900);
+    expect(roots.map((r) => r.label)).toEqual(['first', 'second', 'third']);
+    // The age is still the NEWEST activity — it is what the header displays,
+    // and it is no longer what the header sorts on. Two different questions,
+    // two fields.
+    expect(roots[0]!.created).toBe(100);
+    expect(roots[0]!.mostRecentActivity).toBe(100);
+  });
+
+  it('does not move a root when its newest activity changes', () => {
+    // The poll re-samples `activity` every five seconds. Under the old
+    // recency sort that was enough to swap two headers under the cursor; under
+    // creation order the two lists are identical.
+    const before = groupSessionsIntoRoots(
+      [
+        { name: 'a', created: 100, activity: 100, attached: false, path: '/home/alexey/one/a' },
+        { name: 'b', created: 200, activity: 200, attached: false, path: '/home/alexey/two/b' },
+      ],
+      home,
+    );
+    const after = groupSessionsIntoRoots(
+      [
+        { name: 'a', created: 100, activity: 100, attached: false, path: '/home/alexey/one/a' },
+        // `two` just produced output, and `one` did not.
+        { name: 'b', created: 200, activity: 9_000, attached: false, path: '/home/alexey/two/b' },
+      ],
+      home,
+    );
+    expect(before.map((r) => r.label)).toEqual(['one', 'two']);
+    expect(after.map((r) => r.label)).toEqual(['one', 'two']);
+  });
+
+  it('takes a root creation key from its OLDEST session, so a new one cannot move it', () => {
+    // The property the whole revision turns on. `two` holds the newest session
+    // on the box and still sits second, because it was started second.
+    const roots = groupSessionsIntoRoots(
+      [
+        session('one-a', '/home/alexey/one/a', 100),
+        session('two-b', '/home/alexey/two/b', 200),
+        session('two-c', '/home/alexey/two/c', 9_000),
+      ],
+      home,
+    );
+    expect(roots.map((r) => r.label)).toEqual(['one', 'two']);
+    expect(roots[1]!.created).toBe(200);
   });
 
   it('breaks a root tie on a case-insensitive label', () => {
@@ -521,19 +566,51 @@ describe('groupSessionsIntoRoots', () => {
     expect(roots.map((r) => r.label)).toEqual(['alpha', 'Beta']);
   });
 
-  it('orders directories attached-first, then recency, then label', () => {
+  it('orders directories by OLDEST creation, then case-insensitive label', () => {
+    const roots = groupSessionsIntoRoots(
+      [
+        session('git-first', '/home/alexey/git/first', 10),
+        session('git-third', '/home/alexey/git/third', 900),
+        session('git-second', '/home/alexey/git/second', 100),
+      ],
+      home,
+    );
+    expect(roots[0]!.directories.map((d) => d.label)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('breaks a directory tie on a case-insensitive label, not on anything that moves', () => {
+    // A host whose table reports one timestamp for everything still gets a
+    // total order, and it is one that survives a poll.
+    const [git] = groupSessionsIntoRoots(
+      [session('x', '/home/alexey/git/Beta', 100), session('y', '/home/alexey/git/alpha', 100)],
+      home,
+    );
+    expect(git!.directories.map((d) => d.label)).toEqual(['alpha', 'Beta']);
+  });
+
+  it('does NOT move an attached folder to the top of its root any more', () => {
+    // The key that was dropped, pinned as dropped. Attaching happens as a side
+    // effect of OPENING a folder workspace, so the old comparator rearranged
+    // the panel in response to the panel being used — the row the user had just
+    // clicked jumped out from under the cursor. The mark stays (`active`), the
+    // movement went (docs/SESSIONLIST.md §6).
     const roots = groupSessionsIntoRoots(
       [
         session('git-old', '/home/alexey/git/old', 100),
         session('git-new', '/home/alexey/git/new', 900),
-        session('git-live', '/home/alexey/git/live', 10, true),
+        session('git-live', '/home/alexey/git/live', 950, true),
       ],
       home,
     );
-    expect(roots[0]!.directories.map((d) => d.label)).toEqual(['live', 'new', 'old']);
+    expect(roots[0]!.directories.map((d) => d.label)).toEqual(['old', 'new', 'live']);
+    expect(roots[0]!.directories.find((d) => d.label === 'live')!.active).toBe(true);
   });
 
-  it('keeps attached-first inside a branch too', () => {
+  it('orders a branch by creation too, so the panel and the tab bar agree', () => {
+    // `buildWorkspaceTabs` has always sorted session tabs by `created`, oldest
+    // first (docs/WORKSPACE.md §3.2). This is the panel arriving at the same
+    // order, so a folder's tooltip and the bar it opens list its sessions the
+    // same way round.
     const [git] = groupSessionsIntoRoots(
       [
         session('git-app-new', '/home/alexey/git/app', 900),
@@ -545,6 +622,23 @@ describe('groupSessionsIntoRoots', () => {
       'git-app-live',
       'git-app-new',
     ]);
+  });
+
+  it('takes a directory creation key from its OLDEST session, so a new one cannot move it', () => {
+    // The folder-level half of the same property, and the reason `created` is a
+    // MIN: starting a second session in `app` must not send `app` to the bottom
+    // of `git` — which is exactly what a newest-session key would do, at the
+    // moment the user was looking at that folder.
+    const [git] = groupSessionsIntoRoots(
+      [
+        session('git-app-a', '/home/alexey/git/app', 100),
+        session('git-app-b', '/home/alexey/git/app', 9_000),
+        session('git-zoo', '/home/alexey/git/zoo', 200),
+      ],
+      home,
+    );
+    expect(git!.directories.map((d) => d.label)).toEqual(['app', 'zoo']);
+    expect(git!.directories[0]!.created).toBe(100);
   });
 
   it('marks a root active when any session under it is attached', () => {
@@ -574,7 +668,7 @@ describe('groupSessionsIntoRoots', () => {
 
   it('never merges untracked sessions into one Untracked branch', () => {
     const [other] = groupSessionsIntoRoots(
-      [session('foreign-0', null, 200), session('foreign-1', null, 100)],
+      [session('foreign-0', null, 100), session('foreign-1', null, 200)],
       home,
     );
     expect(other!.directories.map((d) => d.label)).toEqual(['foreign-0', 'foreign-1']);
@@ -798,7 +892,7 @@ describe('groupSessionsIntoRoots with registered roots', () => {
     // mean an empty tree or one giant `other`. The phone does dump everything
     // into `Other folders` here; we deliberately do not.
     const roots = groupSessionsIntoRoots(
-      [session('git-a', '/home/alexey/git/a', 300), session('tmp-b', '/home/alexey/tmp/b', 200)],
+      [session('git-a', '/home/alexey/git/a', 200), session('tmp-b', '/home/alexey/tmp/b', 300)],
       home,
       [],
     );
@@ -824,8 +918,8 @@ describe('groupSessionsIntoRoots with registered roots', () => {
       [
         session('git-a', '/home/alexey/git/a', 100),
         // Under $HOME, but under no registered root — the new `other` case.
-        session('work-b', '/home/alexey/work/b', 900),
-        session('var-c', '/var/log', 800),
+        session('work-b', '/home/alexey/work/b', 800),
+        session('var-c', '/var/log', 900),
       ],
       home,
       ['~/git'],
@@ -884,8 +978,8 @@ describe('groupSessionsIntoRoots with registered roots', () => {
   it('still nests three levels under a registered root', () => {
     const roots = groupSessionsIntoRoots(
       [
-        session('git-dataops', '/home/alexey/git/dataops', 300),
-        session('git-pocketshell', '/home/alexey/git/pocketshell', 200),
+        session('git-dataops', '/home/alexey/git/dataops', 200),
+        session('git-pocketshell', '/home/alexey/git/pocketshell', 300),
       ],
       home,
       ['~/git'],
@@ -949,14 +1043,14 @@ describe('groupSessionsIntoRoots — a folder whose sessions are gone', () => {
   it('drops the directory but keeps the root while a sibling folder is still live', () => {
     const roots = groupSessionsIntoRoots(
       [
-        session('git-dataqna', `${home}/git/dataqna`, 300),
-        session('git-dataops', `${home}/git/dataops`, 200),
+        session('git-dataqna', `${home}/git/dataqna`, 200),
+        session('git-dataops', `${home}/git/dataops`, 300),
       ],
       home,
     );
     expect(roots[0]!.directories.map((d) => d.label)).toEqual(['dataqna', 'dataops']);
 
-    const after = groupSessionsIntoRoots([session('git-dataops', `${home}/git/dataops`, 200)], home);
+    const after = groupSessionsIntoRoots([session('git-dataops', `${home}/git/dataops`, 300)], home);
     expect(after.map((r) => r.label)).toEqual(['git']);
     expect(after[0]!.directories.map((d) => d.label)).toEqual(['dataops']);
     expect(after[0]!.sessionCount).toBe(1);

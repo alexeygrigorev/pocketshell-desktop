@@ -511,3 +511,79 @@ describe('shortcut overrides', () => {
     expect(settings.defaultHost).toBe('hetzner');
   });
 });
+
+/**
+ * The session panel's hand-arranged folder order (docs/SESSIONLIST.md §14).
+ *
+ * The RULES live in `renderer/folderOrder.ts` and are tested there; what this
+ * store owns is the three things a store owns — the default, the round trip,
+ * and refusing to trust what was on disk. Plus one decision that is genuinely
+ * this file's: an empty arrangement is an absent key, not a stored `[]`.
+ */
+describe('folder order', () => {
+  it('defaults to nothing arranged, which means "creation order"', () => {
+    expect(useSettingsStore().folderOrder).toEqual({});
+    expect(useSettingsStore().folderOrderFor('hetzner')).toEqual([]);
+  });
+
+  it('hands every caller its own object, never the spec default itself', () => {
+    const a = settingsDefaults();
+    a.folderOrder['hetzner'] = ['~/git/a'];
+    expect(settingsDefaults().folderOrder).toEqual({});
+  });
+
+  it('records a drag against the host alias and persists it', () => {
+    const settings = useSettingsStore();
+    settings.setFolderOrder('hetzner', ['~/git/c', '~/git/a']);
+    expect(settings.folderOrderFor('hetzner')).toEqual(['~/git/c', '~/git/a']);
+    expect(stored()['folderOrder']).toEqual({ hetzner: ['~/git/c', '~/git/a'] });
+  });
+
+  it('keeps hosts apart, because no two hosts hold the same folders', () => {
+    const settings = useSettingsStore();
+    settings.setFolderOrder('hetzner', ['~/git/a']);
+    settings.setFolderOrder('laptop', ['~/git/b']);
+    expect(settings.folderOrderFor('hetzner')).toEqual(['~/git/a']);
+    expect(settings.folderOrderFor('laptop')).toEqual(['~/git/b']);
+  });
+
+  it('REMOVES a host entry rather than storing an empty arrangement', () => {
+    // "This host is not arranged" and "there is no entry for it" are one
+    // state, so a host whose folders all went away leaves no key behind.
+    const settings = useSettingsStore();
+    settings.setFolderOrder('hetzner', ['~/git/a']);
+    settings.setFolderOrder('hetzner', []);
+    expect(settings.folderOrder).toEqual({});
+  });
+
+  it('ignores a write with no host, because there is nothing to key it on', () => {
+    const settings = useSettingsStore();
+    settings.setFolderOrder('', ['~/git/a']);
+    expect(settings.folderOrder).toEqual({});
+  });
+
+  it('survives a restart', () => {
+    useSettingsStore().setFolderOrder('hetzner', ['~/git/c', '~/git/a']);
+    setActivePinia(createPinia());
+    expect(useSettingsStore().folderOrderFor('hetzner')).toEqual(['~/git/c', '~/git/a']);
+  });
+
+  it('degrades a corrupt blob per HOST and per KEY, not per setting', () => {
+    expect(
+      coerceSettings({
+        folderOrder: { good: ['~/git/a', 7, '~/git/b'], broken: 'not-a-list' },
+      }).folderOrder,
+    ).toEqual({ good: ['~/git/a', '~/git/b'] });
+  });
+
+  it('falls back to the default when the value is not an object at all', () => {
+    expect(coerceSettings({ folderOrder: ['~/git/a'] }).folderOrder).toEqual({});
+    expect(coerceSettings({ folderOrder: null }).folderOrder).toEqual({});
+  });
+
+  it('keeps the rest of the blob when only the arrangement is corrupt', () => {
+    const settings = coerceSettings({ folderOrder: 3, defaultHost: 'hetzner' });
+    expect(settings.folderOrder).toEqual({});
+    expect(settings.defaultHost).toBe('hetzner');
+  });
+});

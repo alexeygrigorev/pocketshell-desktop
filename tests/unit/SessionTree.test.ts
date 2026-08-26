@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils';
 import { defineComponent, type PropType } from 'vue';
-import type { SessionSummary } from '../../src/shared/types';
+import type { HostEntry, SessionSummary } from '../../src/shared/types';
 
 /**
  * The session panel's creation controls.
@@ -119,6 +119,10 @@ async function open(
   );
   const connection = useConnectionStore();
   connection.connectionId = 'conn-1';
+  // The manual folder order is keyed on the host ALIAS (`HostEntry.name`), so
+  // the panel needs a connected host before a drag has anywhere to persist to.
+  // The rest of the entry is inert here — nothing in this component reads it.
+  connection.activeHost = { name: 'hetzner' } as HostEntry;
   useSettingsStore().sessionRoots = roots;
 
   const wrapper = mount(SessionTree, {
@@ -172,6 +176,25 @@ function menuItems(wrapper: VueWrapper): { text: string; disabled: boolean }[] {
     text: b.text(),
     disabled: b.attributes('disabled') !== undefined,
   }));
+}
+
+/**
+ * The FIRST class of each child element, in DOM order.
+ *
+ * DOM order is the assertion for a layout request like "move 10 closer to git":
+ * the field order in the markup is what the row's reading order rests on, and
+ * it is the half a jsdom test can see — scoped-SFC CSS is not applied here, so
+ * `margin-left: auto` has to be verified by reading the stylesheet.
+ */
+function childClasses(el: Element): string[] {
+  // An indexed loop rather than a spread: `HTMLCollection` is only iterable
+  // under `lib.dom.iterable`, which this project does not enable, so spreading
+  // it yields `any[]` and the lint rules — rightly — refuse it.
+  const out: string[] = [];
+  for (let i = 0; i < el.children.length; i += 1) {
+    out.push(el.children[i]?.className.split(' ')[0] ?? '');
+  }
+  return out;
 }
 
 /** The stubbed dialog's `startIn`, or `undefined` when it is shut. */
@@ -253,11 +276,15 @@ describe('SessionTree — the header strip', () => {
 describe('SessionTree — the per-root +', () => {
   it('puts one on every real root and none on `other`', async () => {
     const wrapper = await open([
-      session('git-a', `${HOME}/git/a`, 300),
+      session('git-a', `${HOME}/git/a`, 100),
       session('tmp-b', `${HOME}/tmp/b`, 200),
-      session('elsewhere', '/srv/app', 100),
+      session('elsewhere', '/srv/app', 300),
     ]);
-    expect(wrapper.findAll('.folder-label').map((l) => l.text())).toEqual(['git', 'tmp', 'other']);
+    expect(wrapper.findAll('.folder-label').map((l) => l.text())).toEqual([
+      '~/git',
+      '~/tmp',
+      'other',
+    ]);
     // Three roots, two `+`s. `other` is where paths that matched no root went;
     // there is no directory for the picker to start in.
     expect(rootAdds(wrapper).map((a) => a.title)).toEqual([
@@ -327,8 +354,8 @@ describe('SessionTree — the per-root +', () => {
 describe('SessionTree — right-clicking a folder row', () => {
   it('offers a new session in the folder that was right-clicked', async () => {
     const wrapper = await open([
-      session('git-dataqna', `${HOME}/git/dataqna`, 300),
-      session('git-other', `${HOME}/git/other`, 200),
+      session('git-dataqna', `${HOME}/git/dataqna`, 200),
+      session('git-other', `${HOME}/git/other`, 300),
     ]);
     expect(dirLabels(wrapper)).toEqual(['dataqna', 'other']);
     expect(wrapper.find('.menu-stub').exists()).toBe(false);
@@ -351,8 +378,8 @@ describe('SessionTree — right-clicking a folder row', () => {
 
   it('acts on the row under the cursor, not on the first one', async () => {
     const wrapper = await open([
-      session('git-dataqna', `${HOME}/git/dataqna`, 300),
-      session('git-other', `${HOME}/git/other`, 200),
+      session('git-dataqna', `${HOME}/git/dataqna`, 200),
+      session('git-other', `${HOME}/git/other`, 300),
     ]);
     await wrapper.findAll('.dir-header')[1]!.trigger('contextmenu');
     await wrapper.get('.menu-stub .menu-item').trigger('click');
@@ -431,10 +458,13 @@ describe('SessionTree — stopping every session in a folder', () => {
     await wrapper.get('.menu-stub .menu-item.danger').trigger('click');
   }
 
+  // Timestamps ascend with the row order the assertions expect, because the
+  // panel renders CREATION order now (docs/SESSIONLIST.md §6): `dataqna` was
+  // started before `other`, and its second session after both.
   const FOLDER = [
-    session('git-dataqna', `${HOME}/git/dataqna`, 300),
+    session('git-dataqna', `${HOME}/git/dataqna`, 200),
     session('git-dataqna-2', `${HOME}/git/dataqna`, 250),
-    session('git-other', `${HOME}/git/other`, 200),
+    session('git-other', `${HOME}/git/other`, 300),
   ];
 
   it('counts the folder in the item and names every session in the confirm', async () => {
@@ -688,5 +718,262 @@ describe('SessionTree — the panel keeps up with the host', () => {
     const after = sessionsList.mock.calls.length;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(sessionsList.mock.calls.length).toBe(after);
+  });
+});
+
+/**
+ * The root header row's anatomy.
+ *
+ * > "for git and tmp let's show ~/git ~/tmp (~/ part can be somewhat muted) and
+ * > move 10 closer to git"
+ *
+ * Two presentation changes over values the row already carried, so what is
+ * pinned here is that neither invented anything: the header prints the root's
+ * own KEY (which `rootTooltip` has always printed) with the shared `~/` in a
+ * span of its own, and the count sits beside the label instead of being thrown
+ * to the right edge — where the `+` now lives alone.
+ */
+describe('SessionTree — the root header row', () => {
+  /** Each root header, as its full text and its muted prefix (or ''). */
+  function headers(wrapper: VueWrapper): { text: string; prefix: string }[] {
+    return wrapper.findAll('.folder-header').map((h) => ({
+      text: h.get('.folder-label').text(),
+      prefix: h.find('.path-prefix').exists() ? h.get('.path-prefix').text() : '',
+    }));
+  }
+
+  it('names the real directory, with `~/` in its own span so it can recede', async () => {
+    const wrapper = await open([
+      session('git-a', `${HOME}/git/a`, 100),
+      session('tmp-b', `${HOME}/tmp/b`, 200),
+    ]);
+    expect(headers(wrapper)).toEqual([
+      { text: '~/git', prefix: '~/' },
+      { text: '~/tmp', prefix: '~/' },
+    ]);
+  });
+
+  it('gives the `other` bucket no prefix, because it names no directory', async () => {
+    // `~/other` would be a folder that exists nowhere. The bucket keeps its
+    // word and its toned-down `.bucket` styling.
+    const wrapper = await open([session('nowhere', null, 100)]);
+    expect(headers(wrapper)).toEqual([{ text: 'other', prefix: '' }]);
+    expect(wrapper.get('.folder-label').classes()).toContain('bucket');
+  });
+
+  it('renders a registered root outside $HOME verbatim, with nothing muted', async () => {
+    // The same promise the `~/` form makes — the header names the real
+    // directory — kept for a root whose real directory is not under home.
+    const wrapper = await open([session('app', '/srv/apps/x', 100)], ['/srv/apps']);
+    expect(headers(wrapper)).toEqual([{ text: '/srv/apps', prefix: '' }]);
+  });
+
+  it('keeps the named form for $HOME itself rather than muting it away', async () => {
+    // A key of `~` would split into a muted `~` and nothing at all, i.e. a
+    // header whose only legible content is the part meant to recede.
+    const wrapper = await open([session('home-alexey', HOME, 100)], ['~']);
+    expect(headers(wrapper)).toEqual([{ text: '~ (home)', prefix: '' }]);
+  });
+
+  it('puts the count beside the label and leaves the right edge to the +', async () => {
+    // DOM order is the assertion: label, then count, then the `+`. "Move 10
+    // closer to git" is a layout request, and the layout is what carries it.
+    const wrapper = await open([
+      session('git-a', `${HOME}/git/a`, 100),
+      session('git-b', `${HOME}/git/b`, 200),
+    ]);
+    const header = wrapper.get('.folder-header');
+    expect(header.get('.folder-count').text()).toBe('2');
+    expect(childClasses(header.element)).toEqual([
+      'dot',
+      'folder-label',
+      'folder-count',
+      'icon-btn',
+    ]);
+    // The `+` is still there and still reachable — it took over the right edge
+    // rather than being displaced by the count arriving.
+    expect(header.get('.root-add').attributes('title')).toBe('New session in ~/git');
+  });
+
+  it('puts a folder row count beside its label too, ahead of the badges', async () => {
+    // One convention down the whole panel: a count that hugged its label on the
+    // header and floated right on the rows beneath would be two.
+    const wrapper = await open([
+      { ...session('git-app-a', `${HOME}/git/app`, 100), agentKind: 'claude' as const },
+      session('git-app-b', `${HOME}/git/app`, 200),
+    ]);
+    const row = wrapper.get('.dir-header');
+    expect(childClasses(row.element)).toEqual([
+      'dot',
+      'label',
+      'folder-count',
+      'agent-badge',
+      'row-time',
+    ]);
+  });
+});
+
+/**
+ * Dragging a folder row up and down (docs/SESSIONLIST.md §14).
+ *
+ * > "but I can also pull them up and down to rearraange"
+ *
+ * The properties worth pinning are the ones a reader cannot check by looking at
+ * the handlers: that the arrangement is PERSISTED as a ranking rather than
+ * applied to a list in place, that it therefore survives the five-second poll,
+ * that a row cannot be dragged out of its root, and that none of this disturbs
+ * what the row already did on click and on right-click.
+ *
+ * jsdom has no drag machinery, so the events are synthesised. `clientY` is the
+ * one field that matters: `getBoundingClientRect` is all zeros here, so the
+ * midpoint of every row is 0 — `clientY: -1` means "above this row" and
+ * `clientY: 0` means "below it", which is exactly the flip the real handler
+ * computes against a real box.
+ */
+describe('SessionTree — dragging a folder row', () => {
+  /** Three folders under `git`, created a, b, c — so creation order is a, b, c. */
+  const THREE = [
+    session('git-a', `${HOME}/git/a`, 100),
+    session('git-b', `${HOME}/git/b`, 200),
+    session('git-c', `${HOME}/git/c`, 300),
+  ];
+
+  /** Drag row [from] onto row [to], landing above it or below it. */
+  async function drag(
+    wrapper: VueWrapper,
+    from: number,
+    to: number,
+    where: 'above' | 'below' = 'above',
+  ): Promise<void> {
+    const rows = wrapper.findAll('.dir-header');
+    await rows[from]!.trigger('dragstart');
+    await rows[to]!.trigger('dragover', { clientY: where === 'above' ? -1 : 0 });
+    await rows[to]!.trigger('drop');
+    await wrapper.vm.$nextTick();
+  }
+
+  /** What was written for this host, as a ranking. */
+  function storedOrder(): string[] {
+    return useSettingsStore().folderOrderFor('hetzner');
+  }
+
+  it('renders creation order until something is dragged', async () => {
+    const wrapper = await open(THREE);
+    expect(dirLabels(wrapper)).toEqual(['a', 'b', 'c']);
+    expect(storedOrder()).toEqual([]);
+  });
+
+  it('moves a row to the top and persists the WHOLE panel as a ranking', async () => {
+    const wrapper = await open(THREE);
+    await drag(wrapper, 2, 0);
+    expect(dirLabels(wrapper)).toEqual(['c', 'a', 'b']);
+    // The whole list, not a delta: with only the moved row ranked, every other
+    // row would be unranked and the one drag would have moved everything.
+    expect(storedOrder()).toEqual(['~/git/c', '~/git/a', '~/git/b']);
+  });
+
+  it('moves a row down, past the row it was dropped on', async () => {
+    const wrapper = await open(THREE);
+    await drag(wrapper, 0, 2, 'below');
+    expect(dirLabels(wrapper)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('SURVIVES THE POLL, because the order is re-applied and not remembered', async () => {
+    // The property the whole design turns on. The panel re-reads the host every
+    // five seconds; a drag that were applied to a list in place would be undone
+    // by the very next tick.
+    const wrapper = await open(THREE);
+    await drag(wrapper, 2, 0);
+    expect(dirLabels(wrapper)).toEqual(['c', 'a', 'b']);
+
+    // A refresh that brings a NEW folder and drops one of the arranged ones.
+    sessionsList.mockResolvedValue([
+      session('git-a', `${HOME}/git/a`, 100),
+      session('git-c', `${HOME}/git/c`, 300),
+      session('git-e', `${HOME}/git/e`, 500),
+    ]);
+    await wrapper.get('[title="Refresh"]').trigger('click');
+    await flush(wrapper);
+    // `c` keeps the place the user gave it, `a` follows it, and the folder
+    // nobody has arranged lands at the bottom — where creation order would
+    // have put it anyway.
+    expect(dirLabels(wrapper)).toEqual(['c', 'a', 'e']);
+  });
+
+  it('REFUSES a drop in another root, and draws nothing while refusing', async () => {
+    const wrapper = await open([
+      session('git-a', `${HOME}/git/a`, 100),
+      session('git-b', `${HOME}/git/b`, 200),
+      session('tmp-d', `${HOME}/tmp/d`, 300),
+    ]);
+    const rows = wrapper.findAll('.dir-header');
+    await rows[0]!.trigger('dragstart');
+    await rows[2]!.trigger('dragover', { clientY: -1 });
+    // No indicator anywhere — a refused drop draws nothing, and that absence
+    // IS the refusal. A root is a real directory, so a row that left it would
+    // be a claim about where the folder lives.
+    expect(wrapper.findAll('.drop-above, .drop-below')).toHaveLength(0);
+    await rows[2]!.trigger('drop');
+    expect(dirLabels(wrapper)).toEqual(['a', 'b', 'd']);
+    expect(storedOrder()).toEqual([]);
+  });
+
+  it('draws the landing place on the row it would land above', async () => {
+    const wrapper = await open(THREE);
+    const rows = wrapper.findAll('.dir-header');
+    await rows[2]!.trigger('dragstart');
+    await rows[0]!.trigger('dragover', { clientY: -1 });
+    expect(wrapper.findAll('.dir-list li')[0]!.classes()).toContain('drop-above');
+    // And the row being carried fades in place rather than leaving the flow.
+    expect(wrapper.findAll('.dir-header')[2]!.classes()).toContain('dragging');
+  });
+
+  it('clears the indicator when a drag is abandoned', async () => {
+    const wrapper = await open(THREE);
+    const rows = wrapper.findAll('.dir-header');
+    await rows[2]!.trigger('dragstart');
+    await rows[0]!.trigger('dragover', { clientY: -1 });
+    // `dragend` is listened for on the LIST, so a drag released over anything
+    // — including nothing at all — still resets the row.
+    await wrapper.get('.folder-list').trigger('dragend');
+    expect(wrapper.findAll('.drop-above, .drop-below')).toHaveLength(0);
+    expect(wrapper.findAll('.dragging')).toHaveLength(0);
+  });
+
+  it('writes nothing for a drag that ended where it started', async () => {
+    const wrapper = await open(THREE);
+    await drag(wrapper, 1, 1, 'above');
+    expect(storedOrder()).toEqual([]);
+    expect(dirLabels(wrapper)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('does NOT open the folder it was dragging', async () => {
+    // A row is a `<button>` that navigates. Native DnD suppresses the click
+    // that would otherwise follow a drag, and neither the start nor the drop
+    // may stand in for one.
+    const wrapper = await open(THREE);
+    await drag(wrapper, 2, 0);
+    expect(wrapper.emitted('select')).toBeUndefined();
+    // The click itself still works, unchanged.
+    await wrapper.findAll('.dir-header')[0]!.trigger('click');
+    expect(wrapper.emitted('select')).toHaveLength(1);
+  });
+
+  it('leaves the row right-click menu exactly as it was', async () => {
+    const wrapper = await open(THREE);
+    await drag(wrapper, 2, 0);
+    // The row now at the top is `c`, and its menu is still its own.
+    await wrapper.findAll('.dir-header')[0]!.trigger('contextmenu');
+    await wrapper.get('.menu-stub .menu-item').trigger('click');
+    expect(dialogStartIn(wrapper)).toBe('/home/alexey/git/c');
+  });
+
+  it('marks every row draggable, so the affordance is not one row deep', async () => {
+    const wrapper = await open(THREE);
+    expect(wrapper.findAll('.dir-header').map((r) => r.attributes('draggable'))).toEqual([
+      'true',
+      'true',
+      'true',
+    ]);
   });
 });

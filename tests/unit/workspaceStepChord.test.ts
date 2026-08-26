@@ -82,14 +82,20 @@ function session(name: string, path: string | null, activity = 100): SessionSumm
 }
 
 /**
- * Three folders under `git` and one under `tmp`, most recent first, so the walk
- * has an order to respect AND a root boundary to cross without stopping.
+ * Three folders under `git` and one under `tmp`, OLDEST FIRST, so the walk has
+ * an order to respect AND a root boundary to cross without stopping.
+ *
+ * Oldest first because the panel renders creation order now
+ * (docs/SESSIONLIST.md §6). The chord reads `useFolderTree().folders`, which is
+ * the panel's own list — that is the whole point of the shared derivation — so
+ * a fixture written against the old recency sort would silently be asserting
+ * that the two disagree.
  */
 const SESSIONS = [
-  session('git-a', `${HOME}/git/a`, 400),
-  session('git-b', `${HOME}/git/b`, 300),
-  session('git-c', `${HOME}/git/c`, 200),
-  session('tmp-d', `${HOME}/tmp/d`, 100),
+  session('git-a', `${HOME}/git/a`, 100),
+  session('git-b', `${HOME}/git/b`, 200),
+  session('git-c', `${HOME}/git/c`, 300),
+  session('tmp-d', `${HOME}/tmp/d`, 400),
 ];
 
 function makeRouter(): Router {

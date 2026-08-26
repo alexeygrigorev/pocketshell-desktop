@@ -20,14 +20,26 @@
  * is the code that used to sit in `SessionTree`, unchanged in behaviour: the
  * store reads are the same, the `$HOME` fallback is the same, and
  * `groupSessionsIntoRoots` is the same pure function it always was.
+ *
+ * ## The user's manual arrangement is applied HERE, for the same reason
+ *
+ * A dragged folder row (docs/SESSIONLIST.md §14) changes the order the panel
+ * draws, and `Ctrl+↑`/`Ctrl+↓` must walk the order the panel draws — the chord
+ * exists to move between the rows the user can see, and a chord that skipped a
+ * row or visited them in a second order would be a different feature wearing
+ * the same keys. So the ranking is applied in this file, on top of the
+ * projection and below both readers, exactly as `$HOME` is: one derivation, two
+ * consumers, no chance of disagreement.
  */
 import { computed, type ComputedRef } from 'vue';
+import { applyFolderOrder } from './folderOrder';
 import {
   groupSessionsIntoRoots,
   inferHome,
   type SessionDirectory,
   type SessionRootFolder,
 } from './sessionGrouping';
+import { useConnectionStore } from './stores/connection';
 import { useProjectsStore } from './stores/projects';
 import { useSessionsStore } from './stores/sessions';
 import { useSettingsStore } from './stores/settings';
@@ -38,7 +50,18 @@ export interface FolderTree {
    * had either way, which is the case the panel's `+` renders disabled for.
    */
   home: ComputedRef<string | null>;
-  /** Root sections, in panel order. */
+  /**
+   * The `~/.ssh/config` alias of the host these folders are on, or `''` when
+   * nothing is connected.
+   *
+   * Published because it is the key the manual arrangement is stored under, and
+   * the component that WRITES a drag has to spell that key exactly as the code
+   * that reads it does. One definition, handed out, rather than two call sites
+   * both reaching into the connection store and one of them eventually reaching
+   * for `hostname` or `connectionId` instead.
+   */
+  host: ComputedRef<string>;
+  /** Root sections, in panel order — creation order with the user's drags applied. */
   roots: ComputedRef<SessionRootFolder[]>;
   /**
    * Every folder row, flattened in the order they are drawn — root by root,
@@ -51,6 +74,7 @@ export interface FolderTree {
 }
 
 export function useFolderTree(): FolderTree {
+  const connection = useConnectionStore();
   const projects = useProjectsStore();
   const sessions = useSessionsStore();
   const settings = useSettingsStore();
@@ -64,11 +88,33 @@ export function useFolderTree(): FolderTree {
    */
   const home = computed(() => projects.home ?? inferHome(sessions.sessions.map((s) => s.path)));
 
+  /**
+   * `HostEntry.name` is the `Host` directive from `~/.ssh/config` — the same
+   * string `FolderWorkspaceView` reads off the route as `:name` and keys its
+   * tab order on, so the two persisted arrangements agree about what a host is
+   * called without either of them knowing about the other.
+   */
+  const host = computed(() => connection.activeHost?.name ?? '');
+
   const roots = computed(() =>
-    groupSessionsIntoRoots(sessions.sessions, home.value, settings.sessionRoots),
+    // Derived first, the user's own arrangement on top. The ORDER OF THE TWO
+    // STEPS is the resolution of the two halves of one request: creation order
+    // is what a folder row gets until the user moves it, and a manual position
+    // wins once there is one. Same shape, same order, as the workspace's tab
+    // bar (docs/WORKSPACE.md §15).
+    //
+    // A pure projection, deliberately: the sessions store refreshes every five
+    // seconds and this recomputes each time, so the arrangement has to be
+    // re-APPLIED rather than remembered. Nothing here mutates the store, holds
+    // a copy of the row list, or reconciles anything — which is what makes a
+    // drag survive the poll instead of racing it.
+    applyFolderOrder(
+      groupSessionsIntoRoots(sessions.sessions, home.value, settings.sessionRoots),
+      settings.folderOrderFor(host.value),
+    ),
   );
 
   const folders = computed(() => roots.value.flatMap((root) => root.directories));
 
-  return { home, roots, folders };
+  return { home, host, roots, folders };
 }

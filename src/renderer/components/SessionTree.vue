@@ -56,7 +56,7 @@
 //     stop rendering identically when the panel is narrow.
 //   - the tooltip carries the full truth: session name, full path, absolute
 //     time.
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
 import NewSessionDialog from './NewSessionDialog.vue';
 import HostActionsMenu from './HostActionsMenu.vue';
@@ -69,11 +69,14 @@ import { useConnectionStore } from '../stores/connection';
 import { useProjectsStore } from '../stores/projects';
 import { useSessionsStore } from '../stores/sessions';
 import { useFolderTree } from '../folderTree';
+import { canDropFolderAt, reorderFolders } from '../folderOrder';
 import {
+  rootHeaderParts,
   rootHostPath,
   type SessionDirectory,
   type SessionRootFolder,
 } from '../sessionGrouping';
+import { useSettingsStore } from '../stores/settings';
 import type { SessionAgentKind } from '../../shared/types';
 
 const props = defineProps<{
@@ -115,6 +118,7 @@ const composer = useComposerStore();
 const connection = useConnectionStore();
 const projects = useProjectsStore();
 const sessions = useSessionsStore();
+const settings = useSettingsStore();
 
 /**
  * The folder-first creation dialog: null when shut, otherwise the directory it
@@ -188,7 +192,20 @@ function openPanel(name: HostPanel): void {
  * the same way. Two derivations of one key is a row that opens a workspace with
  * no tabs in it — see the header of `folderTree.ts` for the whole argument.
  */
-const { home, roots } = useFolderTree();
+const { home, host, roots } = useFolderTree();
+
+/**
+ * The roots, each paired with its header text already split for the muted `~/`.
+ *
+ * Paired here rather than called three times inside the `v-for` — once for the
+ * `v-if`, once for the prefix, once for the rest. The cost is nothing (a handful
+ * of roots, a four-line pure function), but the template is where this panel's
+ * decisions are written down and a line that says `rootHeaderParts(root).prefix`
+ * twice in a row reads as an accident rather than as a rule.
+ */
+const rootRows = computed(() =>
+  roots.value.map((root) => ({ root, header: rootHeaderParts(root) })),
+);
 
 /**
  * Clock for the relative timestamps. The activity values only change when the
@@ -372,6 +389,127 @@ function dirTooltip(dir: SessionDirectory): string {
     lines.push(`  … and ${dir.rows.length - TOOLTIP_NAME_LIMIT} more`);
   }
   return lines.join('\n');
+}
+
+/* ── Dragging a folder row up and down (docs/SESSIONLIST.md §14) ───────────
+ * > "but I can also pull them up and down to rearraange"
+ *
+ * The same native HTML5 drag the workspace's tab bar uses (docs/WORKSPACE.md
+ * §15.4), turned ninety degrees. It is deliberately the same family and not a
+ * pointer-events implementation of its own: the two are one gesture in the
+ * user's hands — drag a thing along the strip it lives in — and a panel that
+ * felt different from the tab bar would be a second thing to learn for nothing.
+ *
+ * All three of the rules the tab drag obeys carry over unchanged:
+ *
+ *   - **the drag does not fight the click.** A row is a `<button>` that
+ *     navigates, and native DnD suppresses the `click` that would otherwise
+ *     follow a drag — which is exactly what the tab bar already relies on for
+ *     its own `<button class="tab" draggable>`. So dragging a row does not open
+ *     its workspace, and nothing here has to guess at a threshold or swallow a
+ *     click after the fact. The row's other behaviours are untouched for the
+ *     same reason: the context menu is a right-button gesture and a drag is a
+ *     left-button one, and `draggable` changes nothing about the keyboard, so
+ *     Enter/Space still activate the row and `Ctrl+↑`/`Ctrl+↓` still walk it.
+ *   - **the dragged row fades but stays in place.** Removing it from the flow
+ *     would shift every row below it the instant the drag began, moving the
+ *     target the user is aiming at at precisely the wrong moment.
+ *   - **the landing place is drawn**, as a 2px accent rule in the gap. Without
+ *     it a reorder is "let go and find out", and the one rule this drag
+ *     enforces — a row cannot leave its root — is invisible unless something
+ *     draws it. A refused drop draws nothing, and that absence IS the refusal.
+ */
+const FOLDER_DRAG_TYPE = 'application/x-pocketshell-folder';
+
+/** The folder key being dragged, and the gap the drop indicator is sitting in. */
+const dragging = ref<string | null>(null);
+const dropTarget = ref<{ root: string; gap: number } | null>(null);
+
+function onRowDragStart(dir: SessionDirectory, e: DragEvent): void {
+  dragging.value = dir.key;
+  dropTarget.value = null;
+  if (!e.dataTransfer) return;
+  e.dataTransfer.effectAllowed = 'move';
+  // A payload is required — Firefox refuses to start a drag without one — and
+  // a type nothing else in the window claims is what stops the composer's file
+  // drop zone lighting up as a row passes over it. (The composer's own
+  // `dragover` also tests for `Files` in `dataTransfer.types`, so the two are
+  // independent of each other in both directions.) The id carried here is
+  // deliberately NOT what the drop reads: `dragging` is, because the drop only
+  // ever happens inside this component and a folder key from another window
+  // would name nothing here.
+  e.dataTransfer.setData(FOLDER_DRAG_TYPE, dir.key);
+}
+
+/**
+ * Which gap the pointer is in, given the row it is over.
+ *
+ * The MIDPOINT of the hovered row, vertically — the tab bar's rule with `clientY`
+ * where it uses `clientX`. It is what makes the first and last positions of a
+ * root reachable without pixel accuracy: past half of the top row means "above
+ * it", and past half of the bottom row means "below it".
+ */
+function gapFor(index: number, e: DragEvent): number {
+  const box = (e.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+  if (!box) return index;
+  return e.clientY >= box.top + box.height / 2 ? index + 1 : index;
+}
+
+/**
+ * The pointer is over row [index] of [root].
+ *
+ * `root` is the root the pointer is IN, not the one the drag started in, and
+ * that is what refuses a cross-root drag without this handler knowing anything
+ * about roots: `canDropFolderAt` asks whether the dragged key is one of THIS
+ * root's rows, and a key from `git` is not one of `tmp`'s. A root is a real
+ * directory on the host, so a row that moved out of it would be a claim about
+ * where the folder lives — see `folderOrder.ts` for the whole argument.
+ */
+function onRowDragOver(root: SessionRootFolder, index: number, e: DragEvent): void {
+  const from = dragging.value;
+  if (from === null) return;
+  const gap = gapFor(index, e);
+  // REFUSED VISIBLY: no indicator, and no `preventDefault`, so the pointer
+  // keeps its `no-drop` cursor. A drop that is accepted and then snaps back
+  // reads as a bug; one that never lights up reads as a rule.
+  if (!canDropFolderAt(root, from, gap)) {
+    dropTarget.value = null;
+    return;
+  }
+  // `preventDefault` is what MAKES this a drop target — without it the browser
+  // refuses the drop and plays the snap-back animation, which is the exact
+  // thing the refusal above is trying not to look like.
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  dropTarget.value = { root: root.key, gap };
+}
+
+/**
+ * Commit the drag.
+ *
+ * `reorderFolders` is handed `roots.value` — the list as the panel is drawing it
+ * THIS instant, poll and all — and returns the whole panel's keys in draw
+ * order, which is what gets stored. It returns null for a move that ended where
+ * it started, and writing then would persist an arrangement for nothing.
+ *
+ * Nothing here re-sorts anything. The store holds a ranking, `folderTree.ts`
+ * applies it to whatever the next refresh brings, and this handler's only job is
+ * to write the ranking down — which is why a drag survives the five-second poll
+ * instead of racing it.
+ */
+function onRowDrop(): void {
+  const from = dragging.value;
+  const target = dropTarget.value;
+  dragging.value = null;
+  dropTarget.value = null;
+  if (from === null || target === null) return;
+  const next = reorderFolders(roots.value, from, target.gap);
+  if (next) settings.setFolderOrder(host.value, next);
+}
+
+function onRowDragEnd(): void {
+  dragging.value = null;
+  dropTarget.value = null;
 }
 
 /* ── The folder row's context menu ─────────────────────────────────────────
@@ -766,8 +904,14 @@ function fmtRelative(epochSeconds: number): string {
       />
     </div>
 
-    <div class="folder-list">
-      <section v-for="root in roots" :key="root.key" class="folder">
+    <!-- `dragend` sits on the LIST, not on the row: it fires on the source
+         element and bubbles, so one listener here covers every row and — more
+         to the point — covers the cancelled drag, where the pointer was
+         released over something that is not a row at all. Without it a drag
+         abandoned over the header would leave the dragged row faded forever.
+         Same placement, same reason, as the tab strip's `<nav @dragend>`. -->
+    <div class="folder-list" @dragend="onRowDragEnd">
+      <section v-for="{ root, header } in rootRows" :key="root.key" class="folder">
         <!-- A plain element, not a <button>, and no disclosure mark: now that
              sessions live in workspace tabs the panel is root -> folder, and a
              root row is a grouping HEADER over its folders rather than a node
@@ -790,7 +934,21 @@ function fmtRelative(epochSeconds: number): string {
                root with nothing running it is the difference between "quiet"
                and "not loaded". -->
           <span class="dot" :class="{ active: root.active }" />
-          <span class="folder-label" :class="{ bucket: root.other }">{{ root.label }}</span>
+          <!-- The header names the real directory — `~/git`, not `git` — with
+               the `~/` in its own span so it can recede. It is the part every
+               root repeats, so it is the part worth toning down; see
+               `rootHeaderParts` for the three keys that carry no `~/` at all
+               and must not be given one. -->
+          <span class="folder-label" :class="{ bucket: root.other }">
+            <!-- No whitespace between the two: a newline here is a text node,
+                 and the header would read `~/ git`. -->
+            <span v-if="header.prefix" class="path-prefix">{{ header.prefix }}</span>{{ header.text }}
+          </span>
+          <!-- Beside the label, not pinned to the right edge. A count thrown to
+               the far end of the row reads as its own column — "10" floating
+               level with `git` but nowhere near it — and the user asked for it
+               back: "move 10 closer to git". The `+` takes over the
+               `margin-left: auto` and keeps the right end of the row. -->
           <span class="folder-count muted">{{ root.sessionCount }}</span>
           <!-- Per-root `+`: create a session UNDER THIS ROOT. It opens the same
                folder picker the header's `+` does, one level in — the root is
@@ -838,17 +996,40 @@ function fmtRelative(epochSeconds: number): string {
                it is a control that navigates, and marked `current` by the
                folder key so a workspace holding four session tabs still
                highlights exactly one row. -->
-          <li v-for="dir in root.directories" :key="dir.key">
+          <!-- The drop indicator lives on the `<li>`, not on the button: the
+               button already spends its left border on the selection rail, and
+               a landing rule drawn on the same element would have to fight it
+               for the one border the row has. -->
+          <li
+            v-for="(dir, i) in root.directories"
+            :key="dir.key"
+            :class="{
+              'drop-above': dropTarget?.root === root.key && dropTarget.gap === i,
+              'drop-below':
+                dropTarget?.root === root.key &&
+                dropTarget.gap === root.directories.length &&
+                i === root.directories.length - 1,
+            }"
+          >
+            <!-- `draggable` for §14's "pull them up and down". It changes
+                 nothing about the click, the context menu or the keyboard —
+                 see the drag section in the script for why each of those is
+                 safe rather than merely untested. -->
             <button
               class="dir-header"
               :class="{
                 current: dir.key === props.activeFolder,
                 orphan: dir.untracked,
                 attached: dir.active,
+                dragging: dragging === dir.key,
               }"
               :title="dirTooltip(dir)"
+              draggable="true"
               @click="emit('select', dir)"
               @contextmenu.prevent="openFolderMenu(dir, $event)"
+              @dragstart="onRowDragStart(dir, $event)"
+              @dragover="onRowDragOver(root, i, $event)"
+              @drop.prevent="onRowDrop"
             >
               <!-- The dot says "something live is in here". It used to be an
                    aggregate standing in for a collapsed branch; now it is the
@@ -864,6 +1045,18 @@ function fmtRelative(epochSeconds: number): string {
                 <span class="label-head">{{ dir.labelHead }}</span>
                 <span v-if="dir.labelTail" class="label-tail">{{ dir.labelTail }}</span>
               </span>
+              <!-- Counted only from 2 up. The `1` is the dead field §1 of
+                   SESSIONLIST measured: every folder row stands for at least
+                   one session, so saying so on most of them is noise.
+                   IMMEDIATELY AFTER THE LABEL, ahead of the badges, for the
+                   same reason the root's count moved: a reader scans ONE column
+                   of rows, and a count that hugs its label on the header row
+                   and floats to the right edge on the rows underneath would be
+                   two conventions in one list. The badges follow, and the time
+                   keeps the right edge. -->
+              <span v-if="dir.rows.length > 1" class="folder-count muted">
+                {{ dir.rows.length }}
+              </span>
               <span
                 v-for="badge in agentBadges(dir)"
                 :key="badge"
@@ -872,15 +1065,14 @@ function fmtRelative(epochSeconds: number): string {
               >
                 {{ badge }}
               </span>
-              <!-- Counted only from 2 up. The `1` is the dead field §1 of
-                   SESSIONLIST measured: every folder row stands for at least
-                   one session, so saying so on most of them is noise. -->
-              <span v-if="dir.rows.length > 1" class="folder-count muted">
-                {{ dir.rows.length }}
-              </span>
-              <!-- The folder's age is its NEWEST session's, which is also the
-                   key it sorts on — so a row never displays an older time than
-                   a row sitting below it. -->
+              <!-- The folder's age is its NEWEST session's, and it is now
+                   INDEPENDENT of where the row sits: the list is ordered by
+                   creation and by the user's own arrangement, so times run in
+                   no particular direction down a root. That is a cost of the
+                   change and it is paid deliberately — an order you can predict
+                   is worth more than one that happened to double as a sort key
+                   — and it makes this field carry MORE than it used to rather
+                   than less, since position no longer says any of it. -->
               <span class="row-time">{{ fmtRelative(dir.mostRecentActivity) }}</span>
             </button>
           </li>
@@ -1142,6 +1334,17 @@ function fmtRelative(epochSeconds: number): string {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The `~/` every root header repeats, receding so the part that IDENTIFIES the
+   root is what the eye lands on. A colour rather than an opacity, and on its
+   own span rather than on the label: `opacity` on the label would fade `git`
+   too, which is the one word in the row that has to stay crisp.
+
+   `--fg-muted` rather than `--fg-secondary` — one step further down than the
+   `other` bucket below, because that row's whole label is toned to say what
+   KIND of row it is, whereas this tones a fragment inside an ordinary one. */
+.path-prefix {
+  color: var(--fg-muted);
+}
 /* `other` is a bucket, not a directory: lowered so it does not read as a
    folder the user could navigate to. */
 .folder-label.bucket {
@@ -1149,9 +1352,14 @@ function fmtRelative(epochSeconds: number): string {
   color: var(--fg-secondary);
 }
 /* Bare count, no `· 3 sessions`: the number is the whole message, and the
-   header is the one row per root this design is allowed to spend. */
+   header is the one row per root this design is allowed to spend.
+
+   NEXT TO THE LABEL, not pinned right. It carried `margin-left: auto`, which
+   threw it to the far end of the row where `10` sat level with `git` and
+   related to nothing — "move 10 closer to git". The `auto` moved to the two
+   elements that genuinely want the right edge: the root row's `+` and the
+   folder row's timestamp, each of which is a column in its own right. */
 .folder-count {
-  margin-left: auto;
   flex: none;
   font-weight: var(--fw-regular);
   font-size: var(--fs-100);
@@ -1187,9 +1395,14 @@ function fmtRelative(epochSeconds: number): string {
    would make the control appear and disappear as sessions come and go — the
    same trap the root rows' own comment records about expansion state. Every
    root row carries the same mark, always, in the same place. */
+/* `margin-left: auto` is what keeps the `+` on the right edge now that the
+   count no longer holds it there. It is the one control in this row rather
+   than a field, so it is the one that belongs in the right column — and
+   because the square is always LAID OUT (only its opacity changes), the label
+   and count never reflow when the cursor arrives. */
 .root-add {
   flex: none;
-  margin-left: var(--sp-1);
+  margin-left: auto;
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease);
 }
@@ -1210,6 +1423,32 @@ function fmtRelative(epochSeconds: number): string {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+/* ---- dragging a folder row (docs/SESSIONLIST.md §14) ---------------------
+ *
+ * The tab bar's three rules, turned ninety degrees (docs/WORKSPACE.md §15.4 and
+ * FolderWorkspaceView's `.tab.dragging`): the carried row FADES BUT STAYS IN
+ * PLACE, because removing it from the flow would shift every row below it the
+ * instant the drag began and move the target the user is aiming at; the landing
+ * place is a 2px accent rule in the gap, because without one a reorder is "let
+ * go and find out"; and a REFUSED drop draws nothing at all, which is how the
+ * one rule this drag enforces — a row cannot leave its root — is made visible
+ * while the drag is still in the air.
+ *
+ * `inset` box-shadow rather than a real border, exactly as the tabs do it: a
+ * border would change the row's height and shove the whole list down by 2px as
+ * the indicator moved between gaps, which is the same "target moves under the
+ * cursor" failure the fade is avoiding. The shadow is drawn on the `<li>`
+ * because the button's own left border is already spent on the selection rail.
+ */
+.dir-header.dragging {
+  opacity: var(--disabled-opacity);
+}
+.dir-list li.drop-above {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+.dir-list li.drop-below {
+  box-shadow: inset 0 -2px 0 0 var(--accent);
 }
 /* ── The indent budget, in one place ───────────────────────────────────────
    TWO levels, and no chevron column on either of them now that a root row is a
@@ -1292,20 +1531,29 @@ function fmtRelative(epochSeconds: number): string {
 .dot.active {
   background: var(--success);
 }
-/* The label wins the width fight; everything else shrinks first. */
+/* The label wins the width fight; everything else shrinks first.
+
+   `flex: 0 1 auto`, not `1 1 auto`: it may still SHRINK before the badges and
+   the count do, but it no longer GROWS to eat the free space — growing is what
+   pushed the count away from the label it belongs to. The right edge is held
+   by `.row-time`'s `auto` margin instead, so the timestamps still line up in a
+   column down the panel. */
 .label {
   display: flex;
   align-items: baseline;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   color: var(--fg);
 }
 .label.mono {
   font-family: var(--font-mono);
 }
-/* A folder holding an attached session is semibold, so weight, colour (the
-   green dot) and sort position all say the same thing. This is what replaced
-   the `attached` tag. */
+/* A folder holding an attached session is semibold, so weight and colour (the
+   green dot) say the same thing. This is what replaced the `attached` tag —
+   and it now carries the whole of that job, because attachment is no longer a
+   SORT key: a row that jumped to the top of its root the moment you opened it
+   was the list rearranging itself in response to being used
+   (docs/SESSIONLIST.md §6). The mark stays; the movement went. */
 .dir-header.attached .label {
   font-weight: var(--fw-semibold);
 }
@@ -1344,8 +1592,14 @@ function fmtRelative(epochSeconds: number): string {
   background: transparent;
   border-color: var(--border);
 }
+/* Holds the right edge, which the count used to. It is a column the eye reads
+   down — ages only compare against each other — so it is the field that has to
+   stay aligned. When the container query below hides it, the `auto` goes with
+   it and the row simply hugs the left, which is the right shape for a row that
+   has run out of width. */
 .row-time {
   flex: none;
+  margin-left: auto;
   font-size: var(--fs-100);
   color: var(--fg-secondary);
   font-variant-numeric: tabular-nums;
@@ -1478,8 +1732,15 @@ function fmtRelative(epochSeconds: number): string {
 }
 
 /* Below ~270px the row cannot hold every field. The timestamp goes first: it
-   is the least operational of them, and a recency-sorted list already carries
-   most of what it says. Dot, label and badge survive to the 200px floor. The
+   is still the least operational of them, though the ORIGINAL reason for
+   picking it — "a recency-sorted list already carries most of what it says" —
+   died with the recency sort (docs/SESSIONLIST.md §6). What survives the
+   revision is the comparison rather than the absolute: at 200px something has
+   to go, and every other field on the row either identifies it (label),
+   locates it (dot) or says what is running in it (badge), and an age answers
+   none of those. It is a genuine loss at that width now rather than a
+   redundancy, and it is recorded as one. Dot, label and badge survive to the
+   200px floor. The
    rule is unscoped on purpose, so a directory header drops its aggregate age
    at the same width its children drop theirs — a header still showing a time
    above rows that had theirs removed would read as its own, separate fact.
