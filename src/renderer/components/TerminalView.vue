@@ -863,6 +863,33 @@ watch(
 );
 
 /**
+ * Re-attach when the CONNECTION changes underneath the pane, not only the
+ * session. A reconnect after a dropped link mints a brand-new connectionId —
+ * the store deliberately keeps the dead id alive through 'lost' so the `v-if`
+ * gates hold these panes mounted and the scrollback survives — and the
+ * workspace then passes the new id down as this prop. Without this watcher the
+ * pane never noticed: `requestShell` reads `props.connectionId` only inside
+ * `showTarget`, so the component sat on a shellId minted against the dead
+ * connection forever, and the tab stayed frozen even though the link was back.
+ *
+ * `showTarget` is genuinely the whole fix, because it already handles every
+ * shape this can take: main answers with a PTY on the NEW connection, which
+ * can never equal the old `shellId`, so the "different PTY came back" branch
+ * runs — unbind the dead streams, `reset()` the grid (the dead tmux client
+ * never sent its mode-teardown, same reasoning as the reset in that branch),
+ * adopt, rebind, re-register with the shells store, and push fresh geometry.
+ * Nothing here needs to close the old shell first: it belonged to a connection
+ * main has already torn down, and `showTarget` never closes before asking for
+ * the same reason a session switch must not.
+ */
+watch(
+  () => props.connectionId,
+  () => {
+    void showTarget();
+  },
+);
+
+/**
  * Lets the workspace hand focus back to the pane — the Escape ladder's third
  * rung blurs the composer draft and returns the user to the terminal
  * (docs/COMPOSER.md §12.2).

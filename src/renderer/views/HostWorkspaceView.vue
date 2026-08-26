@@ -33,6 +33,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAgentsStore } from '../stores/agents';
 import { useConnectionStore } from '../stores/connection';
+import { useSessionsStore } from '../stores/sessions';
 import { api } from '../ipc';
 import { windowTitle } from '../../shared/windowTitle';
 import AppIcon from '../components/AppIcon.vue';
@@ -50,6 +51,7 @@ const route = useRoute();
 const router = useRouter();
 const connection = useConnectionStore();
 const agents = useAgentsStore();
+const sessions = useSessionsStore();
 
 /**
  * The host's identity, projected into the OS title bar. Watched rather than
@@ -123,6 +125,75 @@ function loadPanelWidth(): number {
 }
 
 const panelWidth = ref(loadPanelWidth());
+
+/**
+ * The lost-link banner's own memory of the re-dial it started.
+ *
+ * The connection store already knows everything about the DROP — its
+ * `ssh.onState` subscription flips `state` to 'lost' and stocks `error` — but
+ * until this banner existed no view rendered any of it, so the terminal froze,
+ * the file browser listed nothing, and the session panel's poll surfaced a raw
+ * IPC rejection ("Unknown connection: …") as the only clue. The store's own
+ * comment promised "the state flag is enough for the UI to say the link is
+ * gone and offer reconnect"; this is that UI.
+ *
+ * A local ref on top of the store's state, because the store's `state` alone
+ * cannot keep the banner up for the whole recovery arc: pressing Reconnect
+ * moves it to 'connecting' (no longer 'lost'), and a FAILED re-dial lands on
+ * 'idle' — the same value a fresh app has. A banner gated purely on
+ * `state === 'lost'` would therefore vanish the moment the button was pressed
+ * and stay gone after a failure, which is precisely when the user needs the
+ * error and a pressable button most. So the banner shows while the state is
+ * 'lost' OR while a re-dial this banner started is unresolved or failed, and
+ * only a re-dial that actually lands clears it.
+ */
+const redial = ref<'none' | 'inflight' | 'failed'>('none');
+
+/** The banner is up for the whole arc: drop, attempt, failure. */
+const linkLost = computed(() => connection.state === 'lost' || redial.value !== 'none');
+
+/** True while the re-dial is on the wire — the button says so and disarms. */
+const reconnecting = computed(() => connection.state === 'connecting');
+
+/**
+ * Re-dial the host, then wake the surfaces that went stale with the old link.
+ *
+ * The sessions refresh is not a courtesy: a successful reconnect mints a NEW
+ * connectionId, and the session panel's last poll against the dead one left a
+ * raw "Unknown connection" rejection in `sessions.error`. Refreshing against
+ * the new id replaces both the stale list and that message in one move — the
+ * panel comes back to life at the same moment the banner drops.
+ *
+ * On failure the store has already written `connection.error` (connect() sets
+ * it before resolving false), so all that is left here is to keep the banner
+ * standing and re-arm the button.
+ */
+async function onReconnect(): Promise<void> {
+  redial.value = 'inflight';
+  const ok = await connection.reconnect();
+  if (ok && connection.connectionId) {
+    // Drop the banner before the refresh settles — the link is back, and
+    // holding an error-toned strip up through a listing round-trip would say
+    // otherwise.
+    redial.value = 'none';
+    await sessions.refresh(connection.connectionId);
+  } else {
+    redial.value = 'failed';
+  }
+}
+
+/**
+ * What the strip says. The standing sentence names the frozen surfaces because
+ * that is the question a dead pane actually poses ("did my session die?" — no,
+ * the LINK did, the tmux sessions are fine on the host); after a failed
+ * re-dial the store's error replaces it, so the user is never shown a stale
+ * "connection lost" over a fresher, more specific failure.
+ */
+const linkLostText = computed(() => {
+  if (redial.value === 'failed') return connection.error ?? 'Reconnect failed';
+  const host = connection.activeHost?.name;
+  return `Connection to ${host ?? 'the host'} was lost. The sessions and terminals on screen are frozen until you reconnect.`;
+});
 
 /**
  * The host tools that are not installed.
@@ -206,6 +277,20 @@ async function onRefreshUsage(): Promise<void> {
 
 <template>
   <div class="workspace">
+    <!-- The lost-link strip. Same shape as the install-ask below but
+         error-toned, because the two are different in kind: missing tools are
+         an instruction the user can act on later, a dead transport is the
+         reason everything on screen has stopped answering. It carries the ONE
+         recovery action right where the symptom is — before this, the only
+         route back was guessing to navigate to hosts and reconnect by hand. -->
+    <p v-if="linkLost" class="link-lost">
+      <AppIcon name="alert-triangle" :size="14" />
+      <span class="link-lost-text">{{ linkLostText }}</span>
+      <button class="reconnect-btn" :disabled="reconnecting" @click="onReconnect">
+        {{ reconnecting ? 'Reconnecting…' : 'Reconnect' }}
+      </button>
+    </p>
+
     <!-- Only rendered when something is actually missing. The always-on
          chip row this replaces spent header space telling the user their
          host was fine, which is the case that needs no words at all. -->
@@ -340,6 +425,53 @@ async function onRefreshUsage(): Promise<void> {
   display: flex;
   flex-direction: column;
   height: 100vh;
+}
+/* Error-toned twin of .install-ask below, and a strip rather than a modal on
+   purpose: the scrollback in the frozen panes is still worth reading — the
+   store keeps `connectionId` alive through 'lost' precisely so those panes
+   stay mounted — and a dialog would sit on top of the very thing the user
+   wants to look at while deciding whether to reconnect. */
+.link-lost {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--error);
+  background: var(--error-soft);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-200);
+  line-height: var(--lh-200);
+}
+/* The text takes the slack so the button keeps its place at the right edge —
+   the strip's message changes length (lost sentence vs. a failure reason) and
+   the one control must not wander with it. */
+.link-lost-text {
+  flex: 1;
+  min-width: 0;
+}
+/* Solid error, like the stop-confirm's danger button: this is the strip's one
+   action and the whole reason it exists, so it must not read as a tinted
+   afterthought beside its own message. */
+.reconnect-btn {
+  flex: 0 0 auto;
+  height: var(--control-h);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-200);
+  font-weight: var(--fw-semibold);
+  background: var(--error);
+  border: 1px solid var(--error);
+  color: var(--on-accent);
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.reconnect-btn:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
 }
 /* Warning-toned but not an alarm: it is an instruction, and the user can
    still use every other part of the app while it stands. With the topbar gone
