@@ -973,6 +973,41 @@ const addAnchor = ref<Box | null>(null);
 const addButtonEl = ref<HTMLElement | null>(null);
 const createError = ref<string | null>(null);
 
+/**
+ * What the strip under the tab bar shows: the rename's refusal when there is
+ * one, otherwise the create's.
+ *
+ * A refused rename used to surface only as a tooltip on the field and a 1px
+ * border tint — a user who pressed Enter and got a host-side refusal saw a
+ * field that just stayed there, subtly red, with nothing on screen saying why.
+ * Worst on the `@blur` commit, where the field is not even focused any more,
+ * so there was nothing to hover and nothing to read. A refused CREATE has been
+ * a visible sentence in this strip all along ("a failed create is a sentence,
+ * not a dialog" — see `.bar-error` below), and a refused rename is the same
+ * shape of news about the same bar, so it borrows the strip rather than
+ * growing a second one. The field keeps its `.invalid` tint — the strip says
+ * WHY, the tint says WHERE.
+ *
+ * Rename wins when both are somehow set (a failed create left its sentence up
+ * and the user then started a rename that also failed): the rename field is
+ * the edit that is open NOW, so its complaint is the one the user can act on.
+ */
+const barError = computed(() => renameError.value ?? createError.value);
+
+/**
+ * Clear the strip by hand. Until now the sentence persisted until the next
+ * action or a folder switch — tolerable for the short refusals, but the
+ * launch-timeout remedy runs to three lines and otherwise sat there for the
+ * life of the folder. Both sources are cleared, not just the one showing:
+ * the button's promise is "make this strip go away", and leaving the other
+ * message queued behind the first would have the strip survive its own
+ * dismissal.
+ */
+function dismissBarError(): void {
+  createError.value = null;
+  renameError.value = null;
+}
+
 function toggleAddMenu(): void {
   if (addAnchor.value) {
     addAnchor.value = null;
@@ -1689,7 +1724,27 @@ function onFocusTerminal(): void {
       </PopupMenu>
     </header>
 
-    <p v-if="createError" class="bar-error">{{ createError }}</p>
+    <!-- Create and rename refusals share this one strip; see `barError` in the
+         script for why. The dismiss is the app's ghost `.icon-btn sm` register
+         (App.vue) and nothing louder: the strip is already error-tinted, and a
+         button that outshouted the sentence would make the remedy read like a
+         second problem. `@mousedown.prevent` is load-bearing, not tidiness:
+         while a rename field is open, an unprevented mousedown here would blur
+         the field, the blur would re-run the failing commit, and the message
+         would be re-set moments after the click cleared it — a dismiss button
+         that un-dismisses itself. -->
+    <p v-if="barError" class="bar-error">
+      <span class="bar-error-text">{{ barError }}</span>
+      <button
+        class="icon-btn sm bar-error-dismiss"
+        title="Dismiss"
+        aria-label="Dismiss this message"
+        @mousedown.prevent
+        @click="dismissBarError"
+      >
+        <AppIcon name="close" :size="12" />
+      </button>
+    </p>
 
     <div class="workspace-body">
       <div class="tab-body">
@@ -2052,15 +2107,31 @@ function onFocusTerminal(): void {
   cursor: default;
 }
 /* A failed create is a sentence, not a dialog: the tab bar is still usable and
-   the message is about the one action that did not happen. */
+   the message is about the one action that did not happen. A failed rename
+   rents the same line now, for the same reason (see `barError` in the script).
+   Flex, so the dismiss button sits at the end of the strip; the TEXT is the
+   flexible child, so the three-line launch-timeout remedy wraps under itself
+   rather than under the button. */
 .bar-error {
   margin: 0;
   padding: var(--sp-1) var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   color: var(--error);
   background: var(--error-soft);
   border-bottom: 1px solid var(--border);
   font-size: var(--fs-200);
   line-height: var(--lh-200);
+}
+.bar-error-text {
+  flex: 1;
+  min-width: 0;
+}
+/* The shared `.icon-btn` is square by construction; pinned rigid here so a
+   long message cannot squeeze it below its tap target. */
+.bar-error-dismiss {
+  flex: 0 0 auto;
 }
 .workspace-body {
   display: flex;
