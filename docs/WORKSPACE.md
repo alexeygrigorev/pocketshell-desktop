@@ -1209,10 +1209,29 @@ correctly sends nothing, and the disagreement is stable.
 So the item does both halves, in this order: forget what the remote was told
 (`sent = null`) so the size goes out again unchanged, then push with a repaint.
 A `refresh-client` alone would redraw at the size tmux currently believes in,
-which is the wrong one. It is manual on purpose — a timer would mean an exec and
-a full-screen repaint per tab every few seconds forever to correct a state that
-is usually fine, which is the cost the session poll and the repo-root cache are
-both written against.
+which is the wrong one.
+
+**The item is no longer the only way out.** It shipped manual-only because
+watching for this state was assumed to mean an exec AND a full-screen repaint
+per tab every few seconds forever. Those are two costs, and only the first is
+unconditional: `tmux display-message -p -t $tty '#{window_width}
+#{window_height}'` answers read-only, no bytes into the pane, nothing repainted.
+So a visible pane now asks that question every five seconds
+(`shell:windowSize` → `TmuxClientPool.windowSize`, driven by TerminalView's
+`reconcileTick`) and pulls exactly this repair — forget `sent`, resize,
+`refresh-client` — only when the answer disagrees with its own grid. Healthy
+steady state costs one short-lived exec channel per visible pane per interval;
+the pool answers null for bare shells without spending an exec at all, hidden
+panes (the `v-show`'d majority) skip the tick on their zero measurement, and an
+obscured window skips it too. The menu item stays as the instant,
+user-pulled version of the same lever; both call `resyncDisplay`.
+
+What this buys is that the disagreement above stops being stable. A client that
+takes `latest` while nobody drives the session wins back whatever size it likes
+the moment someone types into it again — the repair only claims panes nobody
+else is actively using, which is precisely when a garbled pane cannot be fixed
+by anything else.
+
 A right-click does NOT select the tab. The items name the tab they came from, so
 acting on a background tab is unambiguous — and selecting first would mean a
 right-click the user then dismisses had already moved them, and moved the
