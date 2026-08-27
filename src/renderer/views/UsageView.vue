@@ -13,7 +13,9 @@
 // DATA SHAPE (helper 0.4.44, see parsers.ts): `percent_remaining` is null for
 // codex and grok, `reset_at` can be null independently, and `window` carries a
 // human label (`5h`/`7d`/`weekly`/`monthly`) that beats the generic
-// short-term/long-term wording when present.
+// short-term/long-term wording when present. The installed helper now emits a
+// keyed `windows` map rather than the top-level pair; `parseUsageNdjson` folds
+// it into `short_term`/`long_term` before rows get here.
 //
 // A null percentage is NOT an empty row. It means the meter is unknown, not
 // that the provider has nothing to say: the reset time is still real and is
@@ -62,7 +64,12 @@ function hasPct(p: number | null | undefined): p is number {
   return typeof p === 'number' && Number.isFinite(p);
 }
 
-function toWindow(w: UsageWindow, fallback: string): WindowRow {
+function toWindow(w: UsageWindow | null | undefined, fallback: string): WindowRow {
+  // Guard, not tidiness: a row without this window used to throw right here —
+  // during render, which aborts the patch and leaves the whole panel blank
+  // (the "click Usage and nothing happens" report). An unreported row is the
+  // honest degradation; see the header comment on null percentages.
+  if (!w) return { label: fallback, pct: null, reset: null };
   return {
     label: (w.window ?? '').trim() || fallback,
     pct: hasPct(w.percent_remaining) ? w.percent_remaining : null,

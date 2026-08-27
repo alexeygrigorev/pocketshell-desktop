@@ -86,6 +86,27 @@ describe('UsageView states', () => {
     expect(wrapper.find('.error').exists()).toBe(false);
   });
 
+  it('renders a raw windows-map row as unreported instead of throwing', async () => {
+    // What the installed helper actually emits — no short_term/long_term pair.
+    // Before the view guarded `toWindow`, this row threw during render and the
+    // whole panel stayed blank (the "click Usage, nothing happens" bug); the
+    // parser now normalizes it upstream, and this pins the view's own net.
+    usage.mockResolvedValue([
+      {
+        provider: 'claude',
+        status: 'ok',
+        error: null,
+        details: {},
+        windows: { '5h': { percent_remaining: 94, reset_at: '2026-08-27T20:20:00Z' } },
+      },
+    ]);
+    const wrapper = await show();
+
+    expect(wrapper.find('.usage-table').exists()).toBe(true);
+    expect(wrapper.text()).toContain('claude');
+    expect(wrapper.text()).toContain('not reported');
+  });
+
   it('shows the empty state only for an ANSWERED empty, with <code> not backticks', async () => {
     usage.mockResolvedValue([]);
     const wrapper = await show();
