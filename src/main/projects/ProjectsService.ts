@@ -535,7 +535,19 @@ export class ProjectsService {
     // its own name as taken.
     if (target === from) return { ok: true, sessionName: from, error: null, code: null };
 
-    const taken = await this.ssh.exec(connectionId, pathAwareCommand(sessionExistsCommand(target)));
+    // Locate `from` FIRST, and let its server answer both remaining questions:
+    // uniqueness and the rename itself. Names are per-SERVER in the
+    // per-session-server world, so "is `target` free" means "free on the
+    // server the rename will run on" — the same reason the kill aims with
+    // `-S`. A failed or empty sweep (`unknown`) leaves the bare default-socket
+    // spelling, which is the only query that existed before this.
+    const located = await this.helper.locateSession(connectionId, from);
+    const socketPath = located.status === 'found' ? located.socketPath : null;
+
+    const taken = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(sessionExistsCommand(target, socketPath)),
+    );
     if (taken.exitCode === 0) {
       return {
         ok: false,
@@ -547,7 +559,7 @@ export class ProjectsService {
 
     const renamed = await this.ssh.exec(
       connectionId,
-      pathAwareCommand(renameSessionCommand(from, target)),
+      pathAwareCommand(renameSessionCommand(from, target, socketPath)),
     );
     if (renamed.exitCode !== 0) {
       // tmux's own stderr is the useful sentence here ("can't find session"),
@@ -589,6 +601,19 @@ export class ProjectsService {
    * probe is `sessionExistsCommand`'s exact `has-session -t '=<name>'`, the same
    * one the rename path uses.
    *
+   * ## Why the probe is preceded by a LOCATOR, and the kill aimed by it
+   *
+   * Probing and killing through a bare `tmux` asks the DEFAULT socket, and the
+   * helper's ecosystem now runs one tmux SERVER per session — so `git-aplexer`
+   * sat alive on its own `tmuxctl-*` server while every Stop click answered
+   * "already gone" against the default one, for days, silently, because
+   * `not-found` is the outcome the UI is built to treat as the ordinary race.
+   * The locator is one sweep of every socket (the same exec the list already
+   * runs); when it saw the name, both commands carry `-S` to that server; when
+   * it proves the name is nowhere, `not-found` comes back without a round trip
+   * and is finally TRUE; and when the sweep itself died, the bare commands run
+   * exactly as before this existed.
+   *
    * ## What this does NOT clean up
    *
    * Everything the DESKTOP keys by session name: the pool's live client and its
@@ -598,7 +623,24 @@ export class ProjectsService {
    * there.
    */
   async killSession(connectionId: string, name: string): Promise<KillSessionResult> {
-    const alive = await this.ssh.exec(connectionId, pathAwareCommand(sessionExistsCommand(name)));
+    const located = await this.helper.locateSession(connectionId, name);
+    if (located.status === 'absent') {
+      return {
+        ok: false,
+        error: `"${name}" is not running on this host any more.`,
+        code: 'not-found',
+      };
+    }
+    // `unknown` keeps the bare default-socket spelling: a failed sweep proves
+    // nothing, and the legacy probe is the only query left. `found` aims both
+    // commands at the session's own server even when the column was missing
+    // (null socket ⇒ bare form ⇒ default server, the old hosts' only one).
+    const socketPath = located.status === 'found' ? located.socketPath : null;
+
+    const alive = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(sessionExistsCommand(name, socketPath)),
+    );
     if (alive.exitCode !== 0) {
       return {
         ok: false,
@@ -607,7 +649,10 @@ export class ProjectsService {
       };
     }
 
-    const killed = await this.ssh.exec(connectionId, pathAwareCommand(killSessionCommand(name)));
+    const killed = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(killSessionCommand(name, socketPath)),
+    );
     if (killed.exitCode !== 0) {
       const detail = killed.stderr.trim() || killed.stdout.trim();
       return { ok: false, error: detail || `Could not stop "${name}".`, code: 'kill-failed' };

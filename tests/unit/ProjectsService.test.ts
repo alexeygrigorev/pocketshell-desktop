@@ -685,3 +685,98 @@ describe('ProjectsService.killSession', () => {
     expect(commands.map(inner).filter((c) => c.includes('kill-session'))).toHaveLength(1);
   });
 });
+
+/**
+ * The locator's three answers, aimed at the user's own report: "when I click
+ * on stop session it doesn't actually stop". The host's helper had migrated to
+ * one tmux SERVER per session (`tmuxctl-*` sockets), while both halves of Stop
+ * asked the default socket only — so a live session answered "already gone"
+ * silently, forever. Each test pins one of the three ways a sweep can come
+ * back, and what Stop must do about it.
+ */
+describe('ProjectsService.killSession — aimed by the locator', () => {
+  const SOCKET = '/tmp/tmux-1000/tmuxctl-42';
+
+  /** The multi-socket sweep, answering with `names`, each on its own server. */
+  const sweepResponder =
+    (names: string[]): Responder =>
+    (c) =>
+      c.includes('list-panes -a')
+        ? ok(
+            names
+              .map((n) => `${n}::1::1::/home/x::/home/x::0::claude::${SOCKET}-${n}`)
+              .join('\n'),
+          )
+        : null;
+
+  it('aims probe AND kill at the session’s own tmux server', async () => {
+    const { projects, commands } = service([
+      sweepResponder(['git-aplexer']),
+      (c) => (c.includes('has-session') ? ok() : null),
+      (c) => (c.includes('kill-session') ? ok() : null),
+    ]);
+    expect(await projects.killSession(CONN, 'git-aplexer')).toEqual({
+      ok: true,
+      error: null,
+      code: null,
+    });
+    const aimed = commands.map(inner).filter((c) => c.includes("-S '"));
+    // Both the existence probe and the kill carry `-S` to the server the sweep
+    // reported — the default socket is never consulted for this session.
+    expect(aimed).toContain(
+      `tmux -S '${SOCKET}-git-aplexer' has-session -t '=git-aplexer' 2>/dev/null`,
+    );
+    expect(aimed).toContain(`tmux -S '${SOCKET}-git-aplexer' kill-session -t '=git-aplexer'`);
+    expect(commands.map(inner).some((c) => c.includes('has-session') && !c.includes('-S'))).toBe(
+      false,
+    );
+  });
+
+  it('answers not-found from the sweep alone when the name is on NO server', async () => {
+    // The sweep enumerated servers and the name is on none of them — asking
+    // again through a bare probe could only repeat the sweep's own answer.
+    const { projects, commands } = service([sweepResponder(['git-other'])]);
+    const out = await projects.killSession(CONN, 'git-aplexer');
+    expect(out).toMatchObject({ ok: false, code: 'not-found' });
+    expect(out.error).toContain('git-aplexer');
+    expect(commands.some((c) => c.includes('kill-session'))).toBe(false);
+    expect(commands.some((c) => c.includes('has-session'))).toBe(false);
+  });
+
+  it('keeps the legacy bare commands when the sweep itself failed', async () => {
+    // A dead sweep proves nothing, and Stop is destructive: absence may never
+    // be claimed on a transport failure. The pre-locator spelling runs.
+    const { projects, commands } = service([
+      (c) => (c.includes('list-panes -a') ? fail(1, 'ssh died') : null),
+      noSessionResponder,
+    ]);
+    const out = await projects.killSession(CONN, 'git-x');
+    expect(out).toMatchObject({ ok: false, code: 'not-found' });
+    expect(commands.map(inner)).toContain("tmux has-session -t '=git-x' 2>/dev/null");
+    // The sweep's own loop body contains a `-S` — the assertion is about the
+    // two real commands, not about the sweep text.
+    const real = commands.map(inner).filter((c) => !c.includes('list-panes'));
+    expect(real.every((c) => !c.includes('-S '))).toBe(true);
+  });
+});
+
+describe('ProjectsService.renameSession — aimed like the kill', () => {
+  it('asks the session’s own server about the target and renames there', async () => {
+    const SOCKET = '/tmp/tmux-1000/tmuxctl-7-api';
+    const { projects, commands } = service([
+      (c) =>
+        c.includes('list-panes -a')
+          ? ok(`api::1::1::/home/x::/home/x::0::shell::${SOCKET}`)
+          : null,
+      (c) => (c.includes('has-session') ? fail(1) : null), // target name is free
+      (c) => (c.includes('rename-session') ? ok() : null),
+    ]);
+    const out = await projects.renameSession(CONN, 'api', 'api-2');
+    expect(out).toEqual({ ok: true, sessionName: 'api-2', error: null, code: null });
+    const innered = commands.map(inner);
+    // Uniqueness is a question about the server the rename will run on; in the
+    // per-session-server world there is no single host-wide namespace to ask.
+    expect(innered).toContain(`tmux -S '${SOCKET}' has-session -t '=api-2' 2>/dev/null`);
+    expect(innered).toContain(`tmux -S '${SOCKET}' rename-session -t '=api' -- 'api-2'`);
+  });
+});

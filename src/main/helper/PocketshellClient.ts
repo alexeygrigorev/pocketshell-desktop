@@ -17,6 +17,7 @@ import {
   parseSessionEnrichment,
   diagnoseSessionPaths,
   mergeSessionEnrichment,
+  findEnrichment,
   SESSION_ENRICHMENT_COMMAND,
   SESSION_SOCKET_DIAGNOSTIC_COMMAND,
   type UsageRow,
@@ -485,6 +486,48 @@ export class PocketshellClient {
       stdout: res.stdout,
       stderr: res.stderr,
     };
+  }
+
+  /**
+   * Where does session [name] live, and does it live anywhere at all?
+   *
+   * One run of the multi-socket enrichment probe, read as a LOCATOR rather
+   * than as list decoration. This is the half that lets Stop and rename aim
+   * their tmux commands: the per-session-server world means a name in the
+   * panel can belong to a server a bare `tmux` has never heard of, and the
+   * user's Stop spent days answering "already gone" for exactly that reason.
+   *
+   * Three answers, deliberately distinct:
+   *
+   *   - `found` — the probe saw the name; `socketPath` is its server (null
+   *     only when the probe's tmux predates the socket column, in which case
+   *     the caller's bare commands were already the best available spelling).
+   *   - `absent` — the probe ran and enumerated sockets, and the name is on
+   *     none of them. A kill can skip straight to `not-found`; nothing on this
+   *     host answers to that name.
+   *   - `unknown` — the probe itself failed (empty output, non-zero exit), so
+   *     no absence verdict may be drawn from it; the caller falls back to the
+   *     legacy bare commands, which is the behaviour this method replaced.
+   */
+  async locateSession(
+    connectionId: string,
+    name: string,
+  ): Promise<
+    { status: 'found'; socketPath: string | null } | { status: 'absent' } | { status: 'unknown' }
+  > {
+    const probe = await this.sessionEnrichment(connectionId);
+    if (probe.enrichment.size === 0) {
+      // An empty map has two causes and they must not be confused. A sweep
+      // that RAN against a host with no live servers prints nothing and is
+      // definitive — but so does an exec that died, and killing on the first
+      // reading would be a destructive command trusting a transport failure.
+      // Both arrive as size 0, so neither may claim `absent`; the caller's
+      // legacy probe stays in charge whenever the sweep produced nothing.
+      return { status: 'unknown' };
+    }
+    const hit = findEnrichment(probe.enrichment, name);
+    if (hit) return { status: 'found', socketPath: hit.socketPath };
+    return { status: 'absent' };
   }
 
   /**

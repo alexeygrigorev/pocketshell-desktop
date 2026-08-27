@@ -1300,6 +1300,23 @@ by parsing tmux's prose — "can't find session" is a message, and messages are
 not an API. The UI treats it as success: the state the user asked for is the
 state that exists.
 
+### 14.2a The probe and the kill are AIMED at the session's own server
+
+`git-aplexer` sat alive on its own tmux server — `/tmp/tmux-1000/tmuxctl-git-aplexer`,
+one of the per-session servers the helper's ecosystem now runs beside the legacy
+default socket — while every Stop click answered `not-found` against the default
+one, silently, for days, because `not-found` is precisely the outcome §14.2
+treats as the ordinary race. The row kept rendering because the listing sweeps
+every socket and correctly still saw it; only the two destructive halves of Stop
+were still asking a single server. Both the probe and the kill now carry
+`-S <socket_path>`, learned from the same multi-socket sweep the list already
+runs (`PocketshellClient.locateSession`); a sweep that proves the name is on no
+server returns `not-found` without a round trip, and a sweep that itself failed
+falls back to the bare default-socket spelling, which is all a failed probe ever
+owed. Rename is aimed the same way, and its uniqueness check asks the session's
+OWN server — in a per-session-server world that is the only namespace a rename
+can collide in.
+
 ### 14.3 Cleaning up our side
 
 Three pieces of desktop state are keyed by session name, and they are the same
