@@ -132,6 +132,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | See every shortcut, grouped by surface, in Settings | `b36ba69` |
 | ✅ | Rebind a shortcut, with conflicts named and the shell protected | `b36ba69` |
 | ✅ | Drop the Ctrl+Tab / Ctrl+Shift+Tab tab cycle; keep only `Ctrl+←`/`Ctrl+→`, handing completion and back-tab back to the shell (`docs/WORKSPACE.md` §11.0b) | `7447cc4` |
+| ✅ | Move that step onto `Ctrl+[`/`Ctrl+]` — "ctrl+left and right conflicts with jumping over words" — at the price of ESC/GS bytes at a prompt, stated in the registry note (`docs/SHORTCUTS.md` §1.2) | `c655bad`, this change |
 | ✅ | Every chord handler reads that registry, so a rebinding takes effect on the next keystroke (`docs/SHORTCUTS.md` §6) | `86bf3dc`, `836eb6b`, `aaec2cd`, `e456a08`, `549c44b` |
 | ✅ | A readline habit restored: delete-word-backward on `Ctrl+W` in text fields, with bash's semantics and the terminal's `\x17` untouched (`docs/SHORTCUTS.md`, `text.deleteWordBackward`) | `10276a3` |
 | ✅ | CodeMirror's baked `dark: true` | `435ddcf` |

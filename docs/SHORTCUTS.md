@@ -65,15 +65,15 @@ mirrors the layout.
 
 | Chord | Does | Owner |
 |---|---|---|
-| `Ctrl+←` / `Ctrl+→` | The tab to the left / right; **stops** at the ends | `FolderWorkspaceView.vue` |
+| `Ctrl+[` / `Ctrl+]` | The tab to the left / right; **stops** at the ends | `FolderWorkspaceView.vue` |
 | `Ctrl+↑` / `Ctrl+↓` | The folder workspace above / below in the panel; **stops** at the ends; crosses root headers without stopping | `HostWorkspaceView.vue` |
 
-**The arrows clamp.** An arrow is a direction — being thrown to the opposite
-end is not what "further left" asked for. A `Ctrl+Tab` cycle once lived beside
-them and was RELEASED after measurement (§1.1's table) showed it costing the
-shell real keys: Ctrl+Tab is HT (completion) and Ctrl+Shift+Tab is ESC [ Z,
-back-tab. It went the way of its digits-and-move siblings — see §7 for the
-record of what was withdrawn and why.
+**The tab step clamps.** A direction — being thrown to the opposite end is not
+what "further left" asked for. Two predecessors came and went here: a
+`Ctrl+Tab` cycle, RELEASED after measurement (§1.1's table) showed it costing
+the shell real keys (Ctrl+Tab is HT, completion; Ctrl+Shift+Tab is ESC [ Z,
+back-tab), then arrows carrying the step itself until they collided with
+word-jump in every text field the chord works over.
 
 **The vertical pair lives in `HostWorkspaceView`** because it changes WHICH
 workspace is mounted, and that view owns the route. Both read the same folder
@@ -81,15 +81,15 @@ list (`renderer/folderTree.ts`): `$HOME` decides whether a folder is keyed
 `~/git/foo` or `/home/me/git/foo`, and a chord navigating by a second
 derivation would open a workspace with no tabs and highlight no row.
 
-**What the arrows cost**, stated rather than assumed. `Ctrl+←`/`Ctrl+→` is
-readline's backward-word / forward-word at a shell prompt (xterm sends
-`ESC [ 1 ; 5 D` / `C`) — a real key, gone from the pane; `Alt+B` / `Alt+F` are
-bound to the same two commands and are untouched. `Ctrl+↑`/`Ctrl+↓` is the
-cheaper pair: readline leaves those unbound by default.
+**What the brackets cost**, stated rather than assumed. Through xterm `Ctrl+[`
+IS Escape (`0x1B`) — the physical escape of older keyboards and readline's
+meta-prefix, which vim users feel immediately — and `Ctrl+]` is GS (`0x1D`).
+Meta chords stay reachable through Alt. `Ctrl+↑`/`Ctrl+↓` remains the cheaper
+pair: readline leaves those unbound by default.
 
 **Where they stand down:** inside a real text field — the composer's draft, the
-path bar, the tree filter, the editor — where `Ctrl+arrow` is an editing
-gesture. The terminal is deliberately NOT in that set even though xterm's input
+path bar, the tree filter, the editor — where typing should not be interrupted.
+The terminal is deliberately NOT in that set even though xterm's input
 sink is literally a `<textarea>` (`.xterm-helper-textarea`); an editable inside
 `.xterm` is not an editable, or the chords would do nothing in the one place
 they exist for.

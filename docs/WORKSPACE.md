@@ -911,25 +911,27 @@ resolved and why.
 
 ## 11. Tab chords
 
-> `Ctrl+←` / `Ctrl+→` to step — and ONLY that, now.
+> `Ctrl+[` / `Ctrl+]` to step — and ONLY that, now.
 
-The cycle (`Ctrl+Tab` / `Ctrl+Shift+Tab`) that once sat beside the arrows is
-GONE, released at the user's request ("remove these hotkeys let's keep only
-ctrl left and ctrl right") once §11.2's measurement showed it was never free:
-`Ctrl+Tab` is C0.HT at a shell prompt — completion, since xterm ignores Ctrl on
-Tab — and `Ctrl+Shift+Tab` is ESC [ Z, back-tab. What keyboard navigation
-remains lives entirely in the arrows below; the drag (§15) is still the way to
-reorder. After a chord, focus lands in the new tab's surface through the SAME
-`focusActiveTab` a click uses, so the two cannot drift; the key handling is a
-window-level capture listener in `FolderWorkspaceView`, reading the registry
-(`tabs.stepLeftRight`).
+The cycle (`Ctrl+Tab` / `Ctrl+Shift+Tab`) was released first ("remove these
+hotkeys let's keep only ctrl left and ctrl right") once §11.2's measurement
+showed it was never free: `Ctrl+Tab` is C0.HT at a shell prompt — completion,
+since xterm ignores Ctrl on Tab — and `Ctrl+Shift+Tab` is ESC [ Z, back-tab.
+Then the step itself moved ONTO brackets from the arrows it started on, because
+those collided with word-jump in every text field the chord works over. The
+drag (§15) is still the way to reorder. After a chord, focus lands in the new
+tab's surface through the SAME `focusActiveTab` a click uses, so the two cannot
+drift; the key handling is a window-level capture listener in
+`FolderWorkspaceView`, reading the registry (`tabs.stepLeftRight`).
 
-### 11.0a The arrows, and the pair they belong to
+### 11.0a The step, and the pair it belongs to
 
 > "ctrl left goes to the left tab right to the right tab. up to the session
 > before and down to the session after" — then, on being asked which list the
 > vertical pair should walk: "up and down - different workspaces", "left and
-> right - tabs within workspace".
+> right - tabs within workspace" — and finally, when word-jump lost its keys to
+> the answer: "ctrl+left and right conflicts with jumping over words. let's use
+> ctrl+[ and ] instead". The KEYS moved; the axes did not.
 
 Two axes of ONE gesture, and the axes match the screen: the tab bar runs across
 the top of this workspace, the folder rows run down the panel on the left. The
@@ -940,26 +942,26 @@ decides whether a folder is keyed `~/git/foo` or `/home/me/git/foo`, and a chord
 navigating by a second derivation would open a workspace with no tabs in it and
 highlight no row.
 
-**The arrows CLAMP.** An arrow is a direction, not a cycle: being thrown from
+**The step CLAMPS.** A direction, not a cycle: being thrown from
 the leftmost tab to the rightmost answers a question the user did not ask, and
-the position lost is the one thing an arrow preserves. `adjacentIndex` in
+the position lost is the one thing a directional key preserves. `adjacentIndex` in
 `src/shared/listNavigation.ts` is that rule, shared by both pairs so the two
 ends of one gesture cannot drift apart. (It was once justified as "clamps where
 `Ctrl+Tab` wraps"; the wrap-chord it disagreed with has been released back to
 the shell.)
 
 **They stand down inside a real text field** — the composer's draft, the path
-bar, the tree filter, the editor — where `Ctrl+arrow` is word-jump, an editing
-gesture people have had for decades. The terminal is deliberately not in that
+bar, the tree filter, the editor. Brackets carry no editing gesture there any
+more, but navigation does not interrupt typing regardless. The terminal is deliberately not in that
 set, and that exception is what the feature rests on: xterm's input sink is
 literally a `<textarea class="xterm-helper-textarea">` and is focused whenever
 the pane has the keyboard, so a naive editable check would exempt the one
 surface these chords are for. An editable inside `.xterm` is not an editable.
 
 **What they cost** is stated rather than assumed, as §11.2 does for `Ctrl+Tab`:
-xterm encodes `Ctrl+←`/`Ctrl+→` as `ESC [ 1 ; 5 D` / `C`, which readline binds
-to backward-word and forward-word. That is a real key, gone from the pane;
-`Alt+B` / `Alt+F` are the same two commands and are untouched. `Ctrl+↑`/`Ctrl+↓`
+through xterm `Ctrl+[` IS Escape — C0 0x1B, the physical escape of older
+keyboards and readline's meta-prefix, which vim users feel immediately — and
+`Ctrl+]` is GS. Meta chords stay reachable through Alt. `Ctrl+↑`/`Ctrl+↓`
 is the cheaper pair — readline leaves those unbound.
 
 ### 11.0b What was removed to make room
@@ -1012,15 +1014,17 @@ the family:
 |---|---|
 | `Ctrl+Tab` | `C0.HT` — a literal TAB. `case 9` is reached before any ctrl branch and is gated only on Shift, so the modifier is ignored |
 | `Ctrl+Shift+Tab` | `ESC [ Z` (back-tab) |
-| `Ctrl+←` / `Ctrl+→` | `ESC [ 1 ; 5 D` / `C` — readline's backward-word / forward-word |
+| `Ctrl+[` | `C0.ESC` (`0x1B`) — readline's meta-prefix; the escape of older keyboards |
+| `Ctrl+]` | `C0.GS` |
+| `Ctrl+←` / `Ctrl+→` | `ESC [ 1 ; 5 D` / `C` — readline's backward-word / forward-word (keys RELEASED back to this) |
 | `Ctrl+↑` / `Ctrl+↓` | `ESC [ 1 ; 5 A` / `B` — readline leaves these unbound |
 | `Ctrl+3` .. `Ctrl+7` | `ESC`, `FS`, `GS`, `RS`, `US` — keyCodes 51-55 map to `keyCode - 51 + 27` |
 | `Ctrl+8` | `C0.DEL` |
 | `Ctrl+1`, `Ctrl+2`, `Ctrl+9` | nothing |
 
-So the chords are **not free**. `Ctrl+Tab` at a shell prompt is completion and
-`Ctrl+←`/`Ctrl+→` is word-jump; the cost is recorded rather than assumed, and
-two things follow:
+So the chords are **not free**. `Ctrl+Tab` at a shell prompt is completion,
+`Ctrl+[` is Escape, and the arrows were word-jump; the cost is recorded rather
+than assumed, and two things follow:
 
 The digit rows stay in this table even though the family that claimed them is
 gone (§11.0b). They are the measurement that says what removing it GAVE BACK,
@@ -1209,7 +1213,6 @@ which is the wrong one. It is manual on purpose — a timer would mean an exec a
 a full-screen repaint per tab every few seconds forever to correct a state that
 is usually fine, which is the cost the session poll and the repo-root cache are
 both written against.
-
 A right-click does NOT select the tab. The items name the tab they came from, so
 acting on a background tab is unambiguous — and selecting first would mean a
 right-click the user then dismisses had already moved them, and moved the
