@@ -70,7 +70,6 @@ import {
   buildWorkspaceTabs,
   applyTabOrder,
   canDropTabAt,
-  nextWorkspaceTabId,
   pruneTabIds,
   pushMru,
   reorderTabs,
@@ -817,11 +816,11 @@ function onTabDragEnd(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * `Ctrl+Tab` / `Ctrl+Shift+Tab` to cycle, `Ctrl+1`..`Ctrl+9` to jump.
+ * `Ctrl+←` / `Ctrl+→` to step one tab left or right.
  *
  * ## Why this is a WINDOW listener and not the terminal's key handler
  *
- * The chords have to work with focus in the terminal, the Files tree or the
+ * The chord has to work with focus in the terminal, the Files tree or the
  * composer, and those are three different keyboard owners: xterm consults its
  * own custom handler, CodeMirror runs a keymap, and the composer's textarea is
  * an ordinary field. Routing the chord through each of them would be three
@@ -837,39 +836,37 @@ function onTabDragEnd(): void {
  *
  * `stopPropagation` is what stops the event ever reaching xterm's textarea, so
  * xterm never gets to encode it. `preventDefault` is what stops CHROMIUM acting
- * on it — Electron still has a browser underneath, and `Ctrl+Tab` is a real
- * browser gesture there. Leaving either off is the defect that has now landed
- * three times in this app (bc86cf7's doubled first letter, 3628090's doubled
- * paste, and the Ctrl+V route after them): one keystroke, two paths.
+ * on it — Electron still has a browser underneath, and a modified arrow can be
+ * a real browser gesture there. Leaving either off is the defect that has now
+ * landed three times in this app (bc86cf7's doubled first letter, 3628090's
+ * doubled paste, and the Ctrl+V route after them): one keystroke, two paths.
  *
- * ## The terminal is NOT a safe place to let these fall through
+ * ## The terminal is NOT a safe place to let this fall through
  *
  * The brief's premise was that a tab chord is affordable "because terminals
  * cannot encode it". Measured against the xterm this app ships (@xterm/xterm 6,
- * `evaluateKeyboardEvent`), that is not true, and the correction is the reason
- * TerminalView also declines what this handler claims:
- *
- *   - **`Ctrl+Tab` is `\t`.** `case 9` is reached before the ctrl branch and is
- *     not gated on any modifier: Tab produces `HT` and `Ctrl+Shift+Tab`
- *     produces `ESC [ Z`. At a shell prompt that is completion, not nothing.
- *   - **`Ctrl+←`/`Ctrl+→` are `ESC [ 1 ; 5 D` / `ESC [ 1 ; 5 C`**, which
- *     readline reads as backward-word and forward-word. That is the cost of the
- *     arrow chords, and it is a real one — `Alt+B` / `Alt+F` do the same two
- *     things and are untouched.
+ * `evaluateKeyboardEvent`), that is not true for THIS chord, which is why
+ * TerminalView also declines it: **`Ctrl+←`/`Ctrl+→` are `ESC [ 1 ; 5 D` /
+ * `ESC [ 1 ; 5 C`**, which readline reads as backward-word and forward-word.
+ * That is a real cost — `Alt+B` / `Alt+F` do the same two things and are
+ * untouched — and it is stated rather than assumed.
  *
  * ## What went, and what came back with it
  *
- * `Ctrl+1`..`Ctrl+9` (jump to the Nth tab) and `Ctrl+Shift+PageUp`/`PageDown`
- * (move the active tab) were both removed at the user's request — "remove ctrl
- * 1 2 3 hotkey", "Move the active tab left or right remove this too" — when the
- * arrow chords arrived to do the navigating.
+ * `Ctrl+1`..`Ctrl+9` (jump to the Nth tab), `Ctrl+Shift+PageUp`/`PageDown`
+ * (move the active tab) and finally the CYCLE — `Ctrl+Tab` / `Ctrl+Shift+Tab`
+ * — were removed at the user's request: "remove ctrl 1 2 3 hotkey", "Move the
+ * active tab left or right remove this too", "remove these hotkeys let's keep
+ * only ctrl left and ctrl right".
  *
  * Removing them GIVES KEYS BACK to the pane, which is the part worth writing
  * down: `Ctrl+3`..`Ctrl+8` are the C0 controls `ESC`, `FS`, `GS`, `RS`, `US`
- * and `DEL` (`Ctrl+3` is a widely used stand-in for Escape), and
- * `Ctrl+Shift+PageUp`/`PageDown` reach xterm's own scrollback. All of them
- * were being swallowed for chords that no longer exist, so the declines in
- * TerminalView went with them.
+ * and `DEL` (`Ctrl+3` is a widely used stand-in for Escape);
+ * `Ctrl+Shift+PageUp`/`PageDown` reach xterm's own scrollback; and `Ctrl+Tab`
+ * is C0.HT — completion at a shell prompt, since xterm ignores Ctrl on Tab —
+ * while `Ctrl+Shift+Tab` is ESC [ Z, back-tab. All of them were being
+ * swallowed for chords that no longer exist, so the declines in TerminalView
+ * went with them (`nextWorkspaceTabId` went with the cycle).
  *
  * Moving a tab from the keyboard went with the chord. The drag
  * (docs/WORKSPACE.md §15) is unaffected and is still the way to reorder.
@@ -880,7 +877,7 @@ function onTabDragEnd(): void {
  * layouts, where the digit row carries printable characters on several of them —
  * the same reason TerminalView's Ctrl+V branch demands `!e.altKey`. And a
  * rename in progress owns the keyboard: the field is a one-word edit with
- * Enter/Escape of its own, and cycling out of it would leave an orphaned edit
+ * Enter/Escape of its own, and stepping out of it would leave an orphaned edit
  * on a tab the user can no longer see.
  */
 function onWindowKeydown(e: KeyboardEvent): void {
@@ -888,20 +885,10 @@ function onWindowKeydown(e: KeyboardEvent): void {
   if (e.altKey) return;
   if (renaming.value !== null) return;
 
-  // The chords are DATA (src/shared/shortcuts.ts). This copy and the decline
+  // The chord is DATA (src/shared/shortcuts.ts). This copy and the decline
   // branch in TerminalView's `onCustomKey` are the two that would otherwise
   // drift; reading the same table is what keeps them saying the same thing.
   const bindings = settings.shortcutBindings;
-
-  const forward = isShortcut(bindings, 'tabs.next', e);
-  const backward = isShortcut(bindings, 'tabs.previous', e);
-  if (forward || backward) {
-    const next = nextWorkspaceTabId(tabs.value, activeTab.value?.id ?? null, forward ? 1 : -1);
-    e.preventDefault();
-    e.stopPropagation();
-    if (next !== null) goToTab(next);
-    return;
-  }
 
   // The old hand-spelled `if (e.shiftKey) return;` went with the inline chords:
   // it was a stand-in for "these are all Shift-free", which is now each chord's
@@ -916,9 +903,9 @@ function onWindowKeydown(e: KeyboardEvent): void {
   // horizontal axis is the tab bar and the vertical one is the panel down the
   // side, which is where those two things actually sit on screen.
   //
-  // THEY CLAMP, where `Ctrl+Tab` above wraps, and the difference is deliberate
-  // (see `adjacentIndex`). Tab is a cycle; an arrow is a direction, and landing
-  // at the opposite end of the bar is not what "further left" asks for.
+  // THEY CLAMP, and that is deliberate (see `adjacentIndex`). An arrow is a
+  // direction, not a cycle: landing at the opposite end of the bar is not what
+  // "further left" asks for.
   //
   // WHAT IT COSTS is `Ctrl+←`/`Ctrl+→` at the shell, which readline binds to
   // backward-word / forward-word. That is a real key some people use every day

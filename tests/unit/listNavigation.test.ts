@@ -9,9 +9,11 @@ import { adjacentIndex } from '../../src/shared/listNavigation';
  * — because "which index does this keypress land on" is one decision, and the
  * two ends of a single gesture must not drift apart.
  *
- * The property that earns the module is the CLAMP, and it is a deliberate
- * disagreement with `nextWorkspaceTabId` next door, which wraps for `Ctrl+Tab`.
- * Tab is a cycle; an arrow is a direction.
+ * The property that earns the module is the CLAMP. An arrow is a direction,
+ * not a cycle: landing on the opposite end of a list is not what "further
+ * left" asked for, and the position lost is the one thing an arrow preserves.
+ * (The `Ctrl+Tab` cycle this once disagreed with is gone; see the tombstone
+ * in shared/shortcuts.ts.)
  */
 describe('adjacentIndex', () => {
   it('steps one place in the direction asked for', () => {

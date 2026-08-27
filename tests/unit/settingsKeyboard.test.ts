@@ -113,12 +113,16 @@ describe('Settings — the shortcut list', () => {
     wrapper.unmount();
   });
 
-  it('says what each terminal chord costs the shell, both ways round', () => {
+  it('says what the surviving tab chord costs the shell, both ways round', () => {
     // Derived from the chord in force, not written down — and the unflattering
-    // half is shown too. The tab chords were briefed as free and are not:
-    // xterm encodes Ctrl+Tab as a plain tab.
+    // half is shown too. The cycle chords (Ctrl+Tab / Ctrl+Shift+Tab) were
+    // briefed as free and were not — xterm encodes Ctrl+Tab as a plain tab —
+    // which measurement is part of why they were released back to the shell.
+    // The step chord survives with the same honest labelling.
     const wrapper = mountSettings();
-    const next = wrapper.findAll('.key-row').find((el) => el.text().includes('Next tab'))!;
+    const next = wrapper
+      .findAll('.key-row')
+      .find((el) => el.text().includes('tab to the left'))!;
     expect(next.text()).toContain('A terminal CAN send this key');
 
     const copy = wrapper

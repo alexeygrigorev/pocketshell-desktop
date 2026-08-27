@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildWorkspaceTabs,
   labelForRemainder,
-  nextWorkspaceTabId,
   numberCollisions,
   applyTabOrder,
   canDropTabAt,
@@ -237,14 +236,14 @@ describe('renamedSessionName', () => {
   });
 });
 
-describe('nextWorkspaceTabId', () => {
+describe('the bar order the arrows walk', () => {
   const prefix = 'git-dtc-website';
 
-  /**
-   * A real bar, built the way the view builds it, so the traversal is pinned
-   * against the DISPLAY order rather than against a hand-written array that
-   * could drift from it: two session tabs, then two Files tabs.
-   */
+  // A real bar, built the way the view builds it, pinned against DISPLAY
+  // order: two session tabs, then two Files tabs. The `Ctrl+Tab` cycle that
+  // first wanted this assertion is gone; the arrows clamp along the same
+  // order, and a future change to buildWorkspaceTabs must keep ids aligned
+  // with labels however they are produced.
   const bar = buildWorkspaceTabs(
     [
       { name: 'git-dtc-website', created: 100 },
@@ -257,64 +256,6 @@ describe('nextWorkspaceTabId', () => {
   it('is built in the order it will be traversed', () => {
     expect(bar.map((t) => t.id)).toEqual(['git-dtc-website', 'git-dtc-website-2', 'f1', 'f2']);
     expect(bar.map((t) => t.label)).toEqual(['Terminal', 'Terminal 2', 'Files', 'Files 2']);
-  });
-
-  it('steps forward one tab', () => {
-    expect(nextWorkspaceTabId(bar, 'git-dtc-website', 1)).toBe('git-dtc-website-2');
-  });
-
-  it('steps backward one tab', () => {
-    expect(nextWorkspaceTabId(bar, 'f2', -1)).toBe('f1');
-  });
-
-  it('crosses from the session tabs into the Files tabs, in display order', () => {
-    // Files tabs are tabs. A chord that stopped at the last session would
-    // strand the user one press short of something they can see.
-    expect(nextWorkspaceTabId(bar, 'git-dtc-website-2', 1)).toBe('f1');
-    expect(nextWorkspaceTabId(bar, 'f1', -1)).toBe('git-dtc-website-2');
-  });
-
-  it('walks the whole bar and returns to where it started', () => {
-    const walked: string[] = [];
-    let at: string | null = bar[0]?.id ?? null;
-    for (let i = 0; i < bar.length; i += 1) {
-      at = nextWorkspaceTabId(bar, at, 1);
-      walked.push(at as string);
-    }
-    expect(walked).toEqual(['git-dtc-website-2', 'f1', 'f2', 'git-dtc-website']);
-  });
-
-  it('wraps off the end forward', () => {
-    expect(nextWorkspaceTabId(bar, 'f2', 1)).toBe('git-dtc-website');
-  });
-
-  it('wraps off the start backward', () => {
-    // `%` keeps the sign of its left operand in JS, so index 0 stepping back is
-    // the one place this arithmetic can quietly produce -1.
-    expect(nextWorkspaceTabId(bar, 'git-dtc-website', -1)).toBe('f2');
-  });
-
-  it('starts from outside the bar when the active id names no tab', () => {
-    // A stale selection — a session that vanished under the bar — is exactly
-    // the state a user reaches for this chord to escape, so it must move.
-    expect(nextWorkspaceTabId(bar, 'git-dtc-website-gone', 1)).toBe('git-dtc-website');
-    expect(nextWorkspaceTabId(bar, 'git-dtc-website-gone', -1)).toBe('f2');
-  });
-
-  it('treats a null active id the same way', () => {
-    expect(nextWorkspaceTabId(bar, null, 1)).toBe('git-dtc-website');
-    expect(nextWorkspaceTabId(bar, null, -1)).toBe('f2');
-  });
-
-  it('cycles a single tab to itself rather than to null', () => {
-    const one = buildWorkspaceTabs([{ name: 'git-dtc-website', created: 100 }], prefix);
-    expect(nextWorkspaceTabId(one, 'git-dtc-website', 1)).toBe('git-dtc-website');
-    expect(nextWorkspaceTabId(one, 'git-dtc-website', -1)).toBe('git-dtc-website');
-  });
-
-  it('has nothing to name on an empty bar', () => {
-    expect(nextWorkspaceTabId([], null, 1)).toBeNull();
-    expect(nextWorkspaceTabId([], 'anything', -1)).toBeNull();
   });
 });
 

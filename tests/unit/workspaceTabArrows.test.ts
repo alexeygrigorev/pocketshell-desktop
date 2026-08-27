@@ -16,10 +16,10 @@ import { ref } from 'vue';
  * What is pinned here:
  *
  *   1. **Direction**, and that it acts on the ACTIVE tab rather than the first.
- *   2. **It CLAMPS**, where `Ctrl+Tab` wraps. Tab is a cycle; an arrow is a
- *      direction, and being thrown to the far end is not what "further left"
- *      asked for. This is the one property a future edit is most likely to
- *      "fix" by reaching for `nextWorkspaceTabId`.
+ *   2. **It CLAMPS.** An arrow is a direction, not a cycle, and being thrown to
+ *      the far end is not what "further left" asked for. This is the one
+ *      property a future edit is most likely to "fix" by reaching for a
+ *      wrap-around helper.
  *   3. **The keystroke is cancelled**, both ways — `preventDefault` so Chromium
  *      does not also act, `stopPropagation` so it never reaches xterm's
  *      textarea, where `Ctrl+←` is `ESC [ 1 ; 5 D`. One keystroke, two paths,
@@ -29,11 +29,11 @@ import { ref } from 'vue';
  *      even though xterm's input sink is literally a `<textarea>`. That
  *      exception is the whole feature: a naive editable test would exempt the
  *      one surface these chords exist for.
- *   5. **The removed families stay removed.** `Ctrl+1`..`Ctrl+9` and
- *      `Ctrl+Shift+PageUp`/`PageDown` were dropped at the user's request, and
- *      what proves it here is that the workspace no longer CANCELS them: the
- *      keys have to reach the pane, where they are C0 controls and xterm's
- *      scrollback.
+ *   5. **The removed families stay removed.** `Ctrl+1`..`Ctrl+9`, the tab-move
+ *      chords, and finally the whole cycle (`Ctrl+Tab` / `Ctrl+Shift+Tab`)
+ *      were dropped at the user's request, and what proves it here is that the
+ *      workspace no longer CANCELS them: the keys have to reach the pane, where
+ *      they are C0 controls, xterm's scrollback, and completion/back-tab.
  *
  * Mounting, stubbing and the ipc Proxy follow folderWorkspaceRename.test.ts
  * exactly; see the reasoning there.
@@ -207,10 +207,9 @@ describe('Ctrl+Left / Ctrl+Right step one tab', () => {
   });
 
   it('STOPS at the wall instead of wrapping round', async () => {
-    // The property most likely to be "fixed" by a future edit reaching for
-    // `nextWorkspaceTabId`, which cycles for Ctrl+Tab. An arrow is a direction:
-    // being thrown to the opposite end of the bar loses the position the key
-    // exists to preserve.
+    // An arrow is a direction: being thrown to the opposite end of the bar
+    // loses the position the key exists to preserve. (The `Ctrl+Tab` cycle
+    // this comment once guarded against reaching for is gone entirely.)
     const wrapper = await openWorkspace();
     const labels = tabLabels(wrapper);
 
@@ -374,16 +373,20 @@ describe('the families that were removed stay removed', () => {
     wrapper.unmount();
   });
 
-  it('keeps Ctrl+Tab cycling, which is NOT what the arrows do', async () => {
-    // The two coexist on purpose and differ at the wall: Tab wraps, the arrows
-    // clamp. Asserted here so a future tidy-up cannot quietly make them the
-    // same chord twice.
+  it('lets Ctrl+Tab and Ctrl+Shift+Tab through — the cycle was released', async () => {
+    // "remove these hotkeys let's keep only ctrl left and ctrl right". The
+    // workspace neither moves a tab nor cancels the key: at a prompt Ctrl+Tab
+    // is completion (xterm ignores Ctrl on Tab) and Ctrl+Shift+Tab is back-tab,
+    // and the keys have to reach the pane.
     const wrapper = await openWorkspace();
     const labels = tabLabels(wrapper);
     await clickTab(wrapper, labels[labels.length - 1]!);
 
-    await press(wrapper, 'Tab');
-    expect(activeTab(wrapper)).toBe(labels[0]);
+    for (const mods of [{}, { shiftKey: true }]) {
+      const e = await press(wrapper, 'Tab', mods);
+      expect(e.defaultPrevented, JSON.stringify(mods)).toBe(false);
+    }
+    expect(activeTab(wrapper)).toBe(labels[labels.length - 1]);
     wrapper.unmount();
   });
 });

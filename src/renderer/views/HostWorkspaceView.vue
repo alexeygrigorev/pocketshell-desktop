@@ -287,9 +287,9 @@ function onSelectFolder(folder: SessionDirectory, session?: string): void {
  * the first folder under the next root. The user is stepping down the PANEL,
  * and a root header is a label, not a stop.
  *
- * It CLAMPS at both ends (`adjacentIndex`), unlike `Ctrl+Tab`, which cycles.
- * Same reasoning as the tab arrows: an arrow is a direction, and being thrown
- * from the top of the panel to the bottom is not what "up" asked for.
+ * It CLAMPS at both ends (`adjacentIndex`), same as the tab arrows: an arrow
+ * is a direction, and being thrown from the top of the panel to the bottom is
+ * not what "up" asked for.
  *
  * ## What it costs, and where it stands down
  *

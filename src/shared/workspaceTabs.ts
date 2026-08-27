@@ -275,75 +275,21 @@ export function renamedSessionName(
   return /[A-Za-z0-9]/.test(full) ? full : null;
 }
 
-/**
- * The tab a "next tab"/"previous tab" chord should land on, as a pure decision.
- *
- * Split out of the key handling for the reason every other chord in this repo
- * is split out of it (`terminalPasteChord`, the composer's send rules): a
- * keydown handler is testable only through a mounted component and a synthetic
- * event, whereas the question this answers — given these tabs and this one,
- * which one is next — is a table.
- *
- * ## Array order IS traversal order
- *
- * No sorting, no re-grouping, no skipping. {@link buildWorkspaceTabs} has
- * already put the session tabs first, oldest first, then the Files tabs, and
- * that is what the user is looking at. A cycle that visited tabs in some other
- * order — kind first, or by recency — would be a second ordering to learn for
- * no gain, and it would break the only property that makes a repeated chord
- * usable: pressing it n times from the first tab must walk left to right along
- * the bar, exactly as the eye does.
- *
- * Files tabs are therefore in the cycle. They are tabs; the bar shows them as
- * tabs; a chord that stopped at the last session would strand the user one
- * press short of the thing they can see.
- *
- * ## Wrapping, and the unknown active tab
- *
- * Both directions wrap, because a bar is a ring for this purpose: the chord's
- * whole job is to get somewhere else with a repeated press, and a press that
- * silently does nothing at the end reads as a dropped keystroke rather than as
- * a boundary.
- *
- * When [activeId] names no tab — it is null, or it is a session that just
- * disappeared out from under the bar — treat the cursor as sitting just OUTSIDE
- * the bar, on the side the user is coming from: `+1` steps onto the first tab,
- * `-1` onto the last. That is the same arithmetic as starting from index -1 and
- * from index `length` respectively, and it means the chord always moves
- * somewhere rather than refusing on a stale selection, which is precisely the
- * state a user reaches for a tab chord to escape.
- *
- * Returns null only for an empty bar — there is no tab to name. A bar of one
- * returns that one tab's id, not null: the cycle is honestly a cycle of one,
- * and the caller re-selecting the tab it is already on is a no-op, whereas a
- * null would make it write a "no such tab" branch for a case that is not an
- * error.
- */
-export function nextWorkspaceTabId(
-  tabs: readonly WorkspaceTab[],
-  activeId: string | null,
-  direction: 1 | -1,
-): string | null {
-  if (tabs.length === 0) return null;
-  const current = activeId === null ? -1 : tabs.findIndex((t) => t.id === activeId);
-  // An unknown or null active id starts the cursor just outside the bar, on the
-  // side the step is coming from: index -1 for `+1`, index `length` for `-1`.
-  // Both then go through the same arithmetic as a real position.
-  const from = current < 0 ? (direction === 1 ? -1 : tabs.length) : current;
-  // `+ tabs.length` before the modulo: `%` keeps the sign of the left operand
-  // in JS, so stepping back off index 0 would otherwise land on -1.
-  return tabs[(from + direction + tabs.length) % tabs.length]?.id ?? null;
-}
+// `nextWorkspaceTabId` — the wrap-around traversal for the `Ctrl+Tab` /
+// `Ctrl+Shift+Tab` cycle — is GONE with the chords that called it, removed at
+// the user's request ("remove these hotkeys let's keep only ctrl left and ctrl
+// right"). Its shared-module neighbour `adjacentIndex` (listNavigation.ts) is
+// what the surviving tab arrows use, and it CLAMPS rather than wraps: an arrow
+// is a direction, not a cycle.
 
 /**
  * The tab at a 0-based position, or null when there is none.
  *
- * For the `Ctrl+1..9` direct jumps, which are the same decision as
- * {@link nextWorkspaceTabId} minus the traversal: the caller turns the digit
- * into an index and asks whether the bar is that long. Out of range returns
- * null rather than clamping to the last tab — `Ctrl+7` on a bar of three means
- * "the seventh tab", and there isn't one, so the honest answer is to do nothing
- * rather than to move the user somewhere they did not ask for.
+ * Kept from the `Ctrl+1..9` direct jumps, which are gone; the caller turns the
+ * digit into an index and asks whether the bar is that long. Out of range
+ * returns null rather than clamping to the last tab — `Ctrl+7` on a bar of
+ * three means "the seventh tab", and there isn't one, so the honest answer is
+ * to do nothing rather than to move the user somewhere they did not ask for.
  */
 export function tabIdAtIndex(tabs: readonly WorkspaceTab[], index: number): string | null {
   return tabs[index]?.id ?? null;
@@ -616,10 +562,9 @@ export function pruneTabIds(ids: readonly string[], tabs: readonly WorkspaceTab[
  * Right rather than left because it keeps the SELECTION INDEX where it was:
  * closing tab 3 of 5 leaves you on the tab that is now tab 3, so closing a run
  * of tabs from one position walks forward through the bar instead of retreating
- * to the start. That is what every browser and VS Code do, and it is also the
- * direction `Ctrl+Tab` travels, so the two gestures do not disagree about which
- * way the bar runs. Falling back to the left at the end is not a second rule —
- * it is the same rule finding nothing on the right.
+ * to the start. That is what every browser and VS Code do. Falling back to the
+ * left at the end is not a second rule — it is the same rule finding nothing on
+ * the right.
  *
  * Returns null only for a bar that had nothing but the closed tab on it.
  */

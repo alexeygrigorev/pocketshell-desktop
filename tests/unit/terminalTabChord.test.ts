@@ -4,14 +4,14 @@ import { mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 
 /**
- * The tab chords must not reach the shell (docs/WORKSPACE.md §11).
+ * The surviving tab chord must not reach the shell (docs/WORKSPACE.md §11).
  *
- * ## The premise this file exists to correct
+ * ## The premise this file once corrected, twice over
  *
- * `Ctrl+Tab` and `Ctrl+1..9` were chosen on the grounds that "terminals cannot
- * encode them". Measured against the xterm this app actually ships
- * (`@xterm/xterm` 6, `evaluateKeyboardEvent`, which is the function
- * `attachCustomKeyEventHandler` is consulted from), that is FALSE for most of
+ * The whole tab family was briefed as free because "terminals cannot encode
+ * them". Measured against the xterm this app actually ships (`@xterm/xterm` 6,
+ * `evaluateKeyboardEvent`, which is the function
+ * `attachCustomKeyEventHandler` is consulted from), that was FALSE for most of
  * the family:
  *
  *     Ctrl+Tab        -> C0.HT (`\t`)     `case 9` is reached before any ctrl
@@ -24,11 +24,13 @@ import { createPinia, setActivePinia } from 'pinia';
  *     Ctrl+8          -> C0.DEL
  *     Ctrl+1, Ctrl+2, Ctrl+9 -> nothing
  *
- * So the chords are not free. `Ctrl+Tab` at a shell prompt is completion, and
- * `Ctrl+3` is a widely used stand-in for Escape. The family is still worth
- * taking — the user asked for it, and a family with holes in it would be worse
- * than the cost — but the interception has to be airtight rather than merely
- * tidy, and that is what these cases pin.
+ * So the chords were never free: `Ctrl+Tab` at a shell prompt is completion and
+ * `Ctrl+3` is a widely used stand-in for Escape. The measurement is exactly why
+ * the digits went first ("remove ctrl 1 2 3 hotkey") and then the cycle
+ * followed ("remove these hotkeys let's keep only ctrl left and ctrl right") —
+ * each removal HANDS KEYS BACK to the pane rather than merely tidying up.
+ * `Ctrl+←` / `Ctrl+→` survive, and they cost readline's backward-word /
+ * forward-word (ESC [ 1 ; 5 D / C) — stated above, owned below.
  *
  * ## Two layers, and this file tests the second
  *
@@ -131,33 +133,27 @@ beforeEach(() => {
   customKeyHandler = null;
 });
 
-describe('the tab chords are taken away from xterm', () => {
-  it('CANCELS Ctrl+Tab, which xterm would otherwise send as a literal TAB', () => {
+describe('the surviving tab chord is taken away from xterm', () => {
+  it('LETS Ctrl+Tab and Ctrl+Shift+Tab through — the cycle was released back to the shell', () => {
+    // "remove these hotkeys let's keep only ctrl left and ctrl right". The
+    // decline went with the binding, and both chords are REAL keys at a shell
+    // prompt: Ctrl+Tab is C0.HT (completion — xterm ignores Ctrl on Tab) and
+    // Ctrl+Shift+Tab is ESC [ Z, back-tab. Passing through here means reaching
+    // the program the user is actually talking to.
     const wrapper = mountTerminal();
-    const e = keydown('Tab', { ctrlKey: true });
-
-    expect(customKeyHandler).not.toBeNull();
-    expect(customKeyHandler!(e)).toBe(false);
-    // Both halves. Returning false stops xterm; preventDefault stops Chromium,
-    // which has its own Ctrl+Tab.
-    expect(e.defaultPrevented).toBe(true);
-    wrapper.unmount();
-  });
-
-  it('CANCELS Ctrl+Shift+Tab, which xterm would send as ESC [ Z', () => {
-    const wrapper = mountTerminal();
-    const e = keydown('Tab', { ctrlKey: true, shiftKey: true });
-
-    expect(customKeyHandler!(e)).toBe(false);
-    expect(e.defaultPrevented).toBe(true);
+    for (const mods of [{ ctrlKey: true }, { ctrlKey: true, shiftKey: true }]) {
+      const e = keydown('Tab', mods);
+      expect(customKeyHandler!(e), JSON.stringify(mods)).toBe(true);
+      expect(e.defaultPrevented, JSON.stringify(mods)).toBe(false);
+    }
     wrapper.unmount();
   });
 
   it('CANCELS Ctrl+Left and Ctrl+Right, which xterm sends as modified arrows', () => {
-    // The chords that replaced the digit family: step one tab left or right.
-    // xterm encodes these as ESC [ 1 ; 5 D / ESC [ 1 ; 5 C, which readline
-    // reads as backward-word and forward-word — so this branch is what stops
-    // one keystroke both moving the tab and jumping a word at the prompt.
+    // The one tab chord that survived: step one tab left or right. xterm
+    // encodes these as ESC [ 1 ; 5 D / ESC [ 1 ; 5 C, which readline reads as
+    // backward-word and forward-word — so this branch is what stops one
+    // keystroke both moving the tab and jumping a word at the prompt.
     const wrapper = mountTerminal();
     for (const key of ['ArrowLeft', 'ArrowRight']) {
       const e = keydown(key, { ctrlKey: true });
@@ -169,9 +165,10 @@ describe('the tab chords are taken away from xterm', () => {
 
   it('takes the Cmd spelling too', () => {
     const wrapper = mountTerminal();
-    for (const e of [keydown('Tab', { metaKey: true }), keydown('ArrowLeft', { metaKey: true })]) {
-      expect(customKeyHandler!(e)).toBe(false);
-      expect(e.defaultPrevented).toBe(true);
+    for (const key of ['ArrowLeft', 'ArrowRight']) {
+      const e = keydown(key, { metaKey: true });
+      expect(customKeyHandler!(e), key).toBe(false);
+      expect(e.defaultPrevented, key).toBe(true);
     }
     wrapper.unmount();
   });
@@ -180,7 +177,7 @@ describe('the tab chords are taken away from xterm', () => {
     // xterm consults this handler for all three. The chord is one keystroke.
     const wrapper = mountTerminal();
     for (const type of ['keypress', 'keyup']) {
-      const e = new KeyboardEvent(type, { key: 'Tab', ctrlKey: true, cancelable: true });
+      const e = new KeyboardEvent(type, { key: 'ArrowLeft', ctrlKey: true, cancelable: true });
       expect(customKeyHandler!(e)).toBe(true);
       expect(e.defaultPrevented).toBe(false);
     }

@@ -345,9 +345,10 @@ function onResetAllShortcuts(): void {
  *
  * BOTH answers are shown, not only the reassuring one. A screen that said "the
  * shell loses nothing" where that was true and went silent where it was not
- * would be worth very little — and "not" is the common case for the tab chords,
+ * would be worth very little — "not" was the common case for the tab chords,
  * whose briefing assumed the opposite and was wrong: Ctrl+Tab is a plain tab at
- * a shell prompt, and Ctrl+3..Ctrl+8 are C0 controls.
+ * a shell prompt, and Ctrl+3..Ctrl+8 are C0 controls. Being measured wrong is
+ * part of why the cycle chords were released back to the shell.
  *
  * Only for surfaces that sit in front of a shell, and never for a binding the
  * terminal itself owns — on the Files tab there is no shell to lose anything,

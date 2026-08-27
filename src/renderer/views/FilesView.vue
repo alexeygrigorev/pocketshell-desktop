@@ -291,7 +291,7 @@ const rootEl = ref<HTMLElement | null>(null);
  * Take the keyboard, on the workspace's behalf.
  *
  * FolderWorkspaceView.focusActiveTab() calls this when a Files tab is
- * selected — by click or by Ctrl+Tab — through the same ref-and-ask shape it
+ * selected — by click or by Ctrl+arrow — through the same ref-and-ask shape it
  * uses for terminals. Without it, focus stayed on the tab BUTTON and the
  * pane's own chords (Ctrl+S / Ctrl+L / Ctrl+F) were dead until the user
  * clicked inside the pane: the call site existed and did nothing, because

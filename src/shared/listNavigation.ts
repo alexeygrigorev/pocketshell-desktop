@@ -7,18 +7,14 @@
  * "which index does this keypress land on" is one decision, and writing it
  * twice is how the two ends of one gesture drift apart.
  *
- * ## Why this CLAMPS where the tab cycle wraps
+ * ## Why this CLAMPS instead of wrapping
  *
- * `nextWorkspaceTabId` — `Ctrl+Tab` — wraps, and that is right for it: Tab is a
- * CYCLE, the gesture every app uses to visit each tab in turn and come back
- * round. An arrow is not a cycle, it is a direction. A user pressing `Ctrl+←`
- * on the leftmost tab is asking to go further left; teleporting them to the
- * far right end answers a question they did not ask, and the position they lose
- * is the one thing an arrow key is supposed to preserve.
- *
- * So the two chords deliberately differ, and the difference is legible from the
- * keys themselves rather than something to memorise: Tab cycles, arrows travel
- * and stop at the wall.
+ * An arrow is a direction, not a cycle. A user pressing `Ctrl+←` on the
+ * leftmost tab is asking to go further left; teleporting them to the far right
+ * end answers a question they did not ask, and the position they lose is the
+ * one thing an arrow key is supposed to preserve. (The `Ctrl+Tab` cycle that
+ * wrapping was written for is gone — released back to the shell, where Tab at
+ * a prompt is completion; see the tombstone in shared/shortcuts.ts.)
  */
 
 /**
