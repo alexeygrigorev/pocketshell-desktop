@@ -10,8 +10,9 @@ import { ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from '
  * Nav: host picker -> host (persistent folder panel on the left, no host-level
  * tab bar) -> click a FOLDER -> its workspace fills the right pane with one tab
  * per tmux session in the folder plus a Files tab, while the panel stays put ->
- * close the folder -> back to the host list. Ports and Usage are host header
- * buttons that open overlays. See docs/WORKSPACE.md.
+ * close the folder -> back to the host list. Port forwarding and Provider
+ * usage are host header icons that open overlays, one click each (§5.3e).
+ * See docs/WORKSPACE.md.
  *
  * Terminal: switching between the fixture's two sessions repeatedly used to
  * stack an extra xterm `onData`/`onResize` handler per switch, so tmux's
@@ -129,13 +130,16 @@ test.describe('session-scoped navigation + terminal wiring', () => {
     await expect(page.locator('.session-placeholder')).toBeVisible();
   });
 
-  test('Ports and Usage are host header buttons that open overlays', async () => {
-    await page.getByRole('button', { name: 'Ports' }).click();
+  test('Port forwarding and Provider usage are header icons that open overlays', async () => {
+    // §5.3e: each overlay answers to its OWN button — one click, no menu. The
+    // names are the buttons' tooltips, as they were for every trigger this
+    // strip has had.
+    await page.getByRole('button', { name: 'Port forwarding' }).click();
     await expect(page.getByRole('dialog', { name: 'Port forwarding' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog', { name: 'Port forwarding' })).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Usage' }).click();
+    await page.getByRole('button', { name: 'Provider usage' }).click();
     await expect(page.getByRole('dialog', { name: 'Provider usage' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog', { name: 'Provider usage' })).toHaveCount(0);
