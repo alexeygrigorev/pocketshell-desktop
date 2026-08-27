@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import { textFontSize, textHalfLeading } from '../../src/shared/doodleGeometry';
 
 /**
@@ -122,6 +123,9 @@ const TOKENS: Record<string, string> = {
 let encoded: Op[] = [];
 
 beforeEach(() => {
+  // The canvas reads the shortcut registry for its undo chord, and the
+  // registry's bindings live in the settings store — which wants a Pinia.
+  setActivePinia(createPinia());
   ops = [];
   encoded = [];
   displayed = { ...SHEET };

@@ -55,6 +55,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import type { AppIconName } from './AppIcon.vue';
+import { useSettingsStore } from '../stores/settings';
+import { isShortcut } from '../../shared/shortcuts';
 import { doodleAttachmentName } from '../../shared/composerAttachments';
 import {
   arrowHead,
@@ -111,6 +113,10 @@ const emit = defineEmits<{
   commit: [{ data: Uint8Array; dataUrl: string; name: string }];
   close: [];
 }>();
+
+// The chord table, not any user preference: undo reads the registry so a
+// rebinding in Settings moves this key too.
+const settings = useSettingsStore();
 
 // ---------------------------------------------------------------------------
 // Tools and pens
@@ -929,7 +935,7 @@ defineExpose({ requestClose });
 function onKeydown(e: KeyboardEvent): void {
   // Ctrl/Cmd+Z only. Escape is the overlay's to handle, and it already does —
   // except while a text editor is open, where the textarea stops it first.
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && canUndo.value) {
+  if (isShortcut(settings.shortcutBindings, 'doodle.undo', e) && canUndo.value) {
     e.preventDefault();
     undo();
   }

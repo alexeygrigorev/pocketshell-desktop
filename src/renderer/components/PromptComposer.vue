@@ -82,6 +82,7 @@ import {
 } from '../../shared/composerSend';
 import { filteredCommands, insertionTextFor, type AgentCommand } from '../../shared/agentCommands';
 import { decideClipboardPaste } from '../../shared/clipboardPaste';
+import { isShortcut } from '../../shared/shortcuts';
 import {
   clampGeometry,
   maximizedGeometry,
@@ -1184,7 +1185,7 @@ function onDraftKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  if (mod && e.shiftKey && e.key === 'Backspace') {
+  if (isShortcut(settings.shortcutBindings, 'composer.discard', e)) {
     e.preventDefault();
     onDiscard();
   }
@@ -1198,40 +1199,39 @@ function onRootKeydown(e: KeyboardEvent): void {
 }
 
 /**
- * Global chords. Every one is a Ctrl/Cmd+SHIFT chord on purpose: bare Ctrl+K/L/
- * A/E/R are real terminal keys and must keep reaching the pane. Ctrl/Cmd+Shift+C
- * and +V belong to TerminalView's clipboard bindings and are untouched here.
+ * Global chords. Every default here is a Ctrl/Cmd+SHIFT chord on purpose (the
+ * toggle's Ctrl+` excepted): bare Ctrl+K/L/A/E/R are real terminal keys and
+ * must keep reaching the pane. That reasoning now lives beside each binding in
+ * src/shared/shortcuts.ts; the tests read the same table, so which chord fires
+ * which command is the registry's fact, not the shape of these branches.
  *
  * Capture phase + stopPropagation so xterm's textarea never sees them.
  */
 function onGlobalKey(e: KeyboardEvent): void {
   if (!(e.ctrlKey || e.metaKey)) return;
+  const bindings = settings.shortcutBindings;
 
-  // Ctrl+` — the VS Code panel chord, and the primary toggle here. Deliberately
-  // NOT a Shift chord: it is the one users already have in their fingers, and
-  // it collides with nothing the terminal needs.
-  if (!e.shiftKey && e.key === '`') {
+  // Two chords for one command (`composer.toggle`, `composer.toggleAlt`), so
+  // the toggle takes both ids. Which of them is the "primary" one is a fact
+  // about the registry now, not about the order of the branches here.
+  if (isShortcut(bindings, 'composer.toggle', e) || isShortcut(bindings, 'composer.toggleAlt', e)) {
     onToggleRail();
     e.preventDefault();
     e.stopPropagation();
     return;
   }
 
-  if (!e.shiftKey) return;
-  const lower = e.key.toLowerCase();
-  if (lower === 'k') {
-    onToggleRail();
-  } else if (e.key === 'ArrowUp') {
+  if (isShortcut(bindings, 'composer.grow', e)) {
     composer.grow();
     focusDraft();
-  } else if (e.key === 'ArrowDown') {
+  } else if (isShortcut(bindings, 'composer.shrink', e)) {
     const wasOpen = mode.value !== 'hidden';
     composer.shrink();
     // Shrinking past `docked` closes it, and a close hands focus back. Read the
     // store directly: `mode.value` was narrowed by the line above and TS cannot
     // see that `shrink()` changed it.
     if (wasOpen && composer.mode === 'hidden') emit('focus-terminal');
-  } else if (lower === 'a') {
+  } else if (isShortcut(bindings, 'composer.attach', e)) {
     void onAttachClick();
   } else {
     return;
