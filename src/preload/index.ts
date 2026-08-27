@@ -202,6 +202,20 @@ const api = {
     redraw: (shellId: ShellId): Promise<boolean> =>
       ipcRenderer.invoke(ipc.shell.redraw, shellId),
 
+    /**
+     * Ask tmux what size IT believes the window behind this shell currently
+     * is. Read-only: no resize, no repaint, no bytes into the pane.
+     *
+     * This is the noticing half of the stale-geometry repair — the far end can
+     * move the window under us (`window-size latest`, a second client such as
+     * the phone becoming latest) without anything on this side changing, and
+     * `resize`'s own change-detection then correctly sends nothing forever.
+     * Resolves null when there is nothing to ask (a bare shell this pool never
+     * opened, an evicted tab); that is a normal answer, not a failure.
+     */
+    windowSize: (shellId: ShellId): Promise<{ cols: number; rows: number } | null> =>
+      ipcRenderer.invoke(ipc.shell.windowSize, shellId),
+
     /** Close a shell. */
     close: (shellId: ShellId): Promise<boolean> => ipcRenderer.invoke(ipc.shell.close, shellId),
 

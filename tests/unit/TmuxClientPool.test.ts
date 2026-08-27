@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_LIVE_CLIENTS, TmuxClientPool } from '../../src/main/ssh/TmuxClientPool';
 import type { SshService } from '../../src/main/ssh/SshService';
-import type { ShellId } from '../../src/shared/types';
+import type { ExecResult, ShellId } from '../../src/shared/types';
 
 /**
  * The pool's job is deciding, per attach, between two outcomes: hand back the
@@ -37,10 +37,16 @@ function makeSsh(): {
   opened: ShellId[];
   /** Kill a shell the way a dropped channel or a renderer close would. */
   forget(id: ShellId): void;
+  /** Every command exec() was asked to run, in order. */
+  execCalls: string[];
+  /** Install what the NEXT exec() answers with (and the ones after it). */
+  answerExecWith(result: ExecResult): void;
 } {
   const calls: FakeCall[] = [];
   const opened: ShellId[] = [];
   const liveShells = new Set<ShellId>();
+  const execCalls: string[] = [];
+  let execResult: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
   let counter = 0;
 
   const ssh = {
@@ -58,9 +64,22 @@ function makeSsh(): {
       calls.push({ kind: 'close', detail: id });
       liveShells.delete(id);
     },
+    exec: async (_connectionId: string, command: string): Promise<ExecResult> => {
+      execCalls.push(command);
+      return execResult;
+    },
   } as unknown as SshService;
 
-  return { ssh, calls, opened, forget: (id) => liveShells.delete(id) };
+  return {
+    ssh,
+    calls,
+    opened,
+    forget: (id) => liveShells.delete(id),
+    execCalls,
+    answerExecWith: (result) => {
+      execResult = result;
+    },
+  };
 }
 
 const sink = { onData: () => {}, onExit: () => {} };
@@ -465,5 +484,74 @@ describe('TmuxClientPool — kills', () => {
     expect(pool.killed('c1', 'git-foo')).toBe(false);
     expect(closes(harness.calls)).toHaveLength(0);
     expect(pool.liveSessions('c1')).toEqual([]);
+  });
+});
+
+/**
+ * The read-only half of `redraw`: asking tmux what size IT thinks the window
+ * is, so TerminalView can notice the stale-geometry failure instead of waiting
+ * for a human to reach for the menu item (docs/WORKSPACE.md §14).
+ *
+ * The contract that matters here is what it costs: one exec for a shell the
+ * pool holds, NOTHING AT ALL for a shell it does not (bare shells are normal,
+ * and an exec spent discovering that would burn the reconcile interval's
+ * headroom), and null rather than a throw whenever tmux cannot answer.
+ */
+describe('TmuxClientPool — the geometry probe', () => {
+  const varNameOf = (d: string): string | undefined =>
+    /PS_DESKTOP_TTY_[A-Za-z0-9_]+/.exec(d)?.[0];
+
+  it('addresses our client by its tty and parses the answer', async () => {
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh);
+    const joined = await pool.attach('c1', 'alpha', sink);
+    harness.answerExecWith({ stdout: '132 41\n', stderr: '', exitCode: 0 });
+
+    await expect(pool.windowSize(joined.shellId)).resolves.toEqual({ cols: 132, rows: 41 });
+
+    // The join published THIS session's tty under a global-environment
+    // variable; the probe must recover THAT variable (so the question is about
+    // our client, never whoever else is attached) and ask for the WINDOW's
+    // size, which is the quantity `window-size latest` moves under us.
+    expect(harness.execCalls).toHaveLength(1);
+    // pathAwareCommand wraps in `/bin/sh -lc '...'` and spells every inner
+    // quote as `'\''`; undo that layer so the fragments can be read plainly.
+    const command = harness.execCalls[0]!.replace(/'\\''/g, "'");
+    expect(command).toContain(varNameOf(harness.calls[0]!.detail)!);
+    expect(command).toContain(`sed -n 's/^${varNameOf(harness.calls[0]!.detail)}=//p'`);
+    expect(command).toContain(`display-message -p -t "$tty" '#{window_width} #{window_height}'`);
+  });
+
+  it('answers null for a shell this pool never opened, without spending an exec', async () => {
+    // A bare-shell tab probes too; discovering "not mine" has to be free, or
+    // every pane without a tmux client pays a round trip per tick forever.
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh);
+    await pool.attach('c1', 'alpha', sink);
+
+    await expect(pool.windowSize('shell-not-ours')).resolves.toBeNull();
+    expect(harness.execCalls).toHaveLength(0);
+  });
+
+  it('answers null when the handshake variable or the client is gone', async () => {
+    // `[ -n "$tty" ]` failing leaves tmux unasked and exits non-zero; a client
+    // detached since the join reads the same from here.
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh);
+    const joined = await pool.attach('c1', 'alpha', sink);
+    harness.answerExecWith({ stdout: '', stderr: '', exitCode: 1 });
+
+    await expect(pool.windowSize(joined.shellId)).resolves.toBeNull();
+  });
+
+  it('answers null when tmux says something unparseable', async () => {
+    // Defensive output handling — a probe whose caller had to try/catch would
+    // push the cost of "no answer" onto every tick instead of this one point.
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh);
+    const joined = await pool.attach('c1', 'alpha', sink);
+    harness.answerExecWith({ stdout: 'not-a-number\n', stderr: '', exitCode: 0 });
+
+    await expect(pool.windowSize(joined.shellId)).resolves.toBeNull();
   });
 });

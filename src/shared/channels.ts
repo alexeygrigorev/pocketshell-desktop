@@ -56,6 +56,16 @@ export const ipc = {
      * tmux's point of view nothing moved. See TerminalView's `pushGeometry`.
      */
     redraw: 'shell:redraw',
+    /**
+     * Ask tmux what size IT believes the window behind this shell is, without
+     * touching anything. The read-only half of `redraw`: the stale-geometry
+     * failure starts when ANOTHER client of a shared session becomes
+     * `window-size latest` and moves the window while nothing changes here,
+     * and what cannot change locally cannot be noticed locally — so the
+     * renderer asks. Resolves null whenever there is no answer (a bare shell,
+     * an evicted tab): that is normal, not an error.
+     */
+    windowSize: 'shell:windowSize',
     close: 'shell:close', // close a shell
     data: 'shell:event:data', // event: { shellId, data: Uint8Array }
     exited: 'shell:event:exited', // event: { shellId, exitCode }

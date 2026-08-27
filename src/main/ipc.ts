@@ -262,6 +262,13 @@ export function registerIpcHandlers(deps: {
   ipcMain.handle(ipc.shell.redraw, async (_evt, shellId: string) =>
     tmuxClients.redraw(shellId),
   );
+  // The read-only question `redraw` exists to answer. Null means "no tmux
+  // client behind this shell to ask" — a bare shell, an evicted tab — which is
+  // an ordinary answer the renderer's reconcile loop treats as "nothing to
+  // check", never as a failure.
+  ipcMain.handle(ipc.shell.windowSize, async (_evt, shellId: string) =>
+    tmuxClients.windowSize(shellId),
+  );
   ipcMain.handle(ipc.shell.close, async (_evt, shellId: string) => {
     ssh.shellClose(shellId);
     return true;

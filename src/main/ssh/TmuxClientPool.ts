@@ -264,6 +264,67 @@ export class TmuxClientPool {
     }
   }
 
+  /**
+   * Ask tmux what size IT believes the window for [shellId] currently is.
+   *
+   * ## Why this exists
+   *
+   * The stale-geometry failure (docs/WORKSPACE.md §14) starts on the FAR side:
+   * under `window-size latest`, another client of the same session — the phone,
+   * the user's own terminal — can become latest and shrink or grow the window
+   * while nothing moves here. From this side nothing changed, so
+   * TerminalView's `sent` guard correctly sends nothing, and the disagreement
+   * sits on screen until something outside forces a repaint. Correcting what
+   * cannot be noticed requires being ABLE to notice it, and this read-only
+   * question is that ability.
+   *
+   * ## Why `display-message` and not the PTY's own size
+   *
+   * The kernel pty behind this channel already answers with our size — but it
+   * only ever repeats what WE told sshd, so comparing against it checks our
+   * bookkeeping against itself. The quantity whose drift breaks rendering is
+   * `#{window_width}`/`#{window_height}` of the window our client is showing,
+   * which is set by the tmux SERVER from every attached client. `-t "$tty"`
+   * names OUR client by its tty (the same rendezvous {@link redraw} uses), so
+   * the answer is about our view, not somebody else's.
+   *
+   * ## Cost and failure, both bounded to nothing
+   *
+   * One exec, one round trip, zero bytes into the pane and no repaint — that
+   * asymmetry is the whole point. The docs' original objection to watching was
+   * "an exec AND a full-screen repaint per tab every few seconds forever";
+   * splitting watch from repair removes the second half while healthy, which
+   * is the common case by far. A shell this pool did not open returns null
+   * WITHOUT an exec, as does anything that goes wrong: bare shells are normal,
+   * not errors, and a probe that cannot be answered must cost less than doing
+   * without one.
+   */
+  async windowSize(shellId: ShellId): Promise<{ cols: number; rows: number } | null> {
+    const held = this.clientForShell(shellId);
+    if (!held) return null;
+    const connectionId = this.connectionForShell(shellId);
+    if (!connectionId) return null;
+    // Same shape as {@link redraw}: recover our client's tty from the global
+    // environment and name it in the same shell, so the handshake costs one
+    // round trip instead of two.
+    const command =
+      `tty=$(tmux show-environment -g ${held.ttyVar} 2>/dev/null | ` +
+      `sed -n 's/^${held.ttyVar}=//p'); ` +
+      `[ -n "$tty" ] && tmux display-message -p -t "$tty" '#{window_width} #{window_height}'`;
+    try {
+      const res = await this.ssh.exec(connectionId, pathAwareCommand(command));
+      // An empty stdout means either the variable never published (the join
+      // raced, or tmux pre-dates `set-environment`) or the client has since
+      // detached — both "no answer", never an error worth raising.
+      if (res.exitCode !== 0) return null;
+      const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(res.stdout);
+      if (!m) return null;
+      return { cols: Number(m[1]), rows: Number(m[2]) };
+    } catch {
+      return null;
+    }
+  }
+
   /** Forget a connection's clients. Called when the connection goes away. */
   release(connectionId: string): void {
     this.clients.delete(connectionId);

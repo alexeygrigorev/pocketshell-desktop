@@ -657,7 +657,7 @@ function onCustomKey(e: KeyboardEvent): boolean {
   //
   //   Ctrl+3..Ctrl+8  -> `ESC`, `FS`, `GS`, `RS`, `US`, `DEL` (`Ctrl+3` is a
   //                      common stand-in for Escape).
-  //   Ctrl+Tab        -> C0.HT (`	`). `case 9` ignores Ctrl entirely, so at a
+  //   Ctrl+Tab        -> C0.HT (`\t`). `case 9` ignores Ctrl entirely, so at a
   //                      shell prompt this is completion again.
   //   Ctrl+Shift+Tab  -> ESC [ Z (back-tab).
   //   Ctrl+←/Ctrl+→   -> ESC [ 1 ; 5 D / C, readline's backward/forward-word.
@@ -841,6 +841,10 @@ onMounted(async () => {
     resizeObserver = new ResizeObserver(scheduleFit);
     resizeObserver.observe(containerEl.value);
   }
+  // And watch for the far end moving the geometry under us. Every tick
+  // re-checks visibility and liveness, so a hidden or closed pane costs
+  // nothing but the timer's own tick.
+  startProbing();
 });
 
 function onWindowResize(): void {
@@ -914,6 +918,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('mouseup', onDocumentMouseUp);
   containerEl.value?.removeEventListener('mousedown', onTerminalMouseDown);
   containerEl.value?.removeEventListener('contextmenu', onTerminalContextMenu);
+  stopProbing();
   for (const d of termDisposables) d.dispose();
   termDisposables = [];
   closeShell();
@@ -1062,16 +1067,117 @@ watch(
  *   2. push, with a repaint, so tmux draws all of it rather than the part it
  *      thinks changed.
  *
- * It is deliberately manual rather than automatic. Doing it on a timer would
- * mean an exec and a full-screen repaint on every tab, every few seconds,
- * forever — the cost the repo-root cache and the session poll are both written
- * against — to correct a state that is usually fine. A lever the user can reach
- * when they see the picture costs nothing until it is pulled.
+ * It USED to be manual only — a lever the user could reach when they saw the
+ * picture — because watching for this state was assumed to mean "an exec AND a
+ * full-screen repaint per tab every few seconds forever". Those two costs have
+ * since been split: `reconcileTick` below asks a read-only question on an
+ * interval and pulls THIS lever only when the answer says the geometry has
+ * actually drifted. The menu item stays: it is still the instant, on-demand
+ * version, and the thing the interval calls when it decides repair is due.
  */
 function resyncDisplay(): void {
   fitAddon?.fit();
   sent = null;
   pushGeometry({ redraw: true });
+}
+
+/**
+ * How often a VISIBLE pane checks whether the far end still agrees about the
+ * geometry. See {@link reconcileTick} for why this exists at all and what
+ * bounds its cost.
+ */
+const GEOMETRY_PROBE_INTERVAL_MS = 5000;
+/** The pending reconcile timer, when this pane is mounted. */
+let probeTimer: ReturnType<typeof setInterval> | null = null;
+/** True while a probe's round trip is in flight, so ticks cannot stack. */
+let probeInFlight = false;
+
+/**
+ * Watch for the far end moving the window under us, and repair when it has.
+ *
+ * ## Why this has to exist after all the wiring above
+ *
+ * Every route above reads true from the same assumption: before sending a
+ * size we compare against {@link sent}, what the far end was last TOLD. But
+ * there is a failure whose first move happens where no local bookkeeping can
+ * see it (docs/WORKSPACE.md §14): under tmux's `window-size latest`, another
+ * client of the same session — the phone, the user's own terminal — becomes
+ * latest and RESIZES THE WINDOW while nothing here moves. xterm's grid still
+ * matches `sent`, every guard correctly sends nothing, and the disagreement —
+ * tmux drawing its status line mid-pane over rows of stale text — is stable
+ * indefinitely. The user's reported workaround was leaving the workspace and
+ * coming back, which re-joins the session fresh; their longer-standing lever
+ * was the manual Redraw item.
+ *
+ * ## Why an interval, against the objection recorded in the docs
+ *
+ * The docs' case against watching was cost: "an exec AND a full-screen repaint
+ * per tab every few seconds forever". Those are two costs, and only the exec
+ * is unconditional. The watch therefore asks a READ-ONLY question —
+ * `display-message` reporting `#{window_width}`/`#{window_height}` for our own
+ * client ({@link api.shell.windowSize}) — which sends nothing into the pane
+ * and repaints nothing while the sizes agree. Healthy steady state costs one
+ * short-lived SSH channel per visible pane per five seconds, well inside the
+ * headroom `MAX_LIVE_CLIENTS` leaves under sshd's ceiling; the expensive half,
+ * resize plus `refresh-client`, runs only through {@link resyncDisplay} on an
+ * actual disagreement or via the menu item as before.
+ *
+ * ## The guards, in order
+ *
+ * A dead or never-opened shell does nothing (`shellGone` is set by exit; an
+ * evicted tab recovers through `scheduleFit`, not here). An obscured window
+ * (`document.hidden`) and a hidden pane (the zero-measure case behind another
+ * tab) skip the round trip entirely, because only the pane someone is LOOKING
+ * AT needs to be right promptly — exactly what makes the interval affordable
+ * when the channel budget counts. And since the answer takes a network round
+ * trip to arrive, everything below the await re-reads the world instead of
+ * trusting the world that asked.
+ *
+ * ## What a disagreement triggers
+ *
+ * Nothing clever: {@link resyncDisplay}, the same repair the menu item runs —
+ * re-measure locally, forget what was sent, push, ask for a full repaint.
+ * Both directions of drift heal, not just shrinkage, and if ANOTHER client is
+ * actively driving the session (someone typing on the phone) it will win its
+ * size back the moment they touch it again; a desktop pane sitting garbled
+ * while nobody else is using the host is the outcome being removed.
+ */
+async function reconcileTick(): Promise<void> {
+  if (!term || !shellId || !fitAddon || shellGone) return;
+  if (document.hidden) return;
+  // A v-show'd pane measures 0. Same question scheduleFit asks, deliberately:
+  // one definition of visible, wherever it is needed.
+  if (!containerEl.value?.clientHeight || !containerEl.value.clientWidth) return;
+  const id = shellId;
+  if (probeInFlight) return;
+  probeInFlight = true;
+  let far: { cols: number; rows: number } | null = null;
+  try {
+    far = await api.shell.windowSize(id);
+  } finally {
+    probeInFlight = false;
+  }
+  // The round trip took real time; the tab may have switched targets, been
+  // closed, or exited underneath the await. Any of those means the answer no
+  // longer describes the pane on screen.
+  if (!term || id !== shellId || shellGone) return;
+  if (far === null) return; // bare shell, or nothing tmux can be asked about
+  if (far.cols === term.cols && far.rows === term.rows) return;
+  resyncDisplay();
+}
+
+function startProbing(): void {
+  if (probeTimer !== null) return;
+  probeTimer = setInterval(() => {
+    void reconcileTick();
+  }, GEOMETRY_PROBE_INTERVAL_MS);
+}
+
+function stopProbing(): void {
+  if (probeTimer !== null) {
+    clearInterval(probeTimer);
+    probeTimer = null;
+  }
 }
 
 defineExpose({ focus: (): void => term?.focus(), resyncDisplay });
