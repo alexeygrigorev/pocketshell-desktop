@@ -5,10 +5,11 @@ import { mount, type VueWrapper } from '@vue/test-utils';
 import { ref } from 'vue';
 
 /**
- * `Ctrl+←` / `Ctrl+→` — the tab to the left, the tab to the right.
+ * `Ctrl+[` / `Ctrl+]` — the tab to the left, the tab to the right.
  *
- * Asked for in those words: "ctrl left goes to the left tab right to the right
- * tab", with `Ctrl+↑`/`Ctrl+↓` for the workspaces (`workspaceStepChord.test.ts`
+ * First carried by `Ctrl+←`/`Ctrl+→`, moved onto brackets at the user's word
+ * ("ctrl+left and right conflicts with jumping over words"), while
+ * `Ctrl+↑`/`Ctrl+↓` still walks workspaces (`workspaceStepChord.test.ts`
  * holds that half). The pairing is the design — horizontal is the tab bar,
  * vertical is the panel down the side — so the two files pin one gesture
  * between them and the rules they share are asserted in both.
@@ -16,19 +17,20 @@ import { ref } from 'vue';
  * What is pinned here:
  *
  *   1. **Direction**, and that it acts on the ACTIVE tab rather than the first.
- *   2. **It CLAMPS.** An arrow is a direction, not a cycle, and being thrown to
+ *   2. **It CLAMPS.** A step is a direction, not a cycle, and being thrown to
  *      the far end is not what "further left" asked for. This is the one
  *      property a future edit is most likely to "fix" by reaching for a
  *      wrap-around helper.
  *   3. **The keystroke is cancelled**, both ways — `preventDefault` so Chromium
  *      does not also act, `stopPropagation` so it never reaches xterm's
- *      textarea, where `Ctrl+←` is `ESC [ 1 ; 5 D`. One keystroke, two paths,
- *      is the defect that has landed in this app three times (bc86cf7,
- *      3628090, and the Ctrl+V route after them).
- *   4. **A real text field keeps its word-jump** — but the TERMINAL is not one,
- *      even though xterm's input sink is literally a `<textarea>`. That
- *      exception is the whole feature: a naive editable test would exempt the
- *      one surface these chords exist for.
+ *      textarea, where `Ctrl+[` IS Escape (C0 0x1B) and `Ctrl+]` is GS. One
+ *      keystroke, two paths, is the defect that has landed in this app three
+ *      times (bc86cf7, 3628090, and the Ctrl+V route after them).
+ *   4. **A real text field stays navigation-free** — brackets have no editing
+ *      role there any more, but prose being typed should not be interrupted —
+ *      yet the TERMINAL is still treated as NOT one, even though xterm's input
+ *      sink is literally a `<textarea>`. That exception is what lets the chord
+ *      fire with focus in the pane.
  *   5. **The removed families stay removed.** `Ctrl+1`..`Ctrl+9`, the tab-move
  *      chords, and finally the whole cycle (`Ctrl+Tab` / `Ctrl+Shift+Tab`)
  *      were dropped at the user's request, and what proves it here is that the
@@ -189,8 +191,8 @@ beforeEach(() => {
   useSessionsStore().sessions = [] as never[];
 });
 
-describe('Ctrl+Left / Ctrl+Right step one tab', () => {
-  it('moves to the tab on the side that was pressed', async () => {
+describe('Ctrl+[ / Ctrl+] step one tab', () => {
+  it('] moves forward, [ moves backward', async () => {
     const wrapper = await openWorkspace();
     const labels = tabLabels(wrapper);
     expect(labels.length).toBeGreaterThanOrEqual(3);
@@ -198,10 +200,10 @@ describe('Ctrl+Left / Ctrl+Right step one tab', () => {
     await clickTab(wrapper, labels[1]!);
     expect(activeTab(wrapper)).toBe(labels[1]);
 
-    await press(wrapper, 'ArrowRight');
+    await press(wrapper, ']');
     expect(activeTab(wrapper)).toBe(labels[2]);
 
-    await press(wrapper, 'ArrowLeft');
+    await press(wrapper, '[');
     expect(activeTab(wrapper)).toBe(labels[1]);
     wrapper.unmount();
   });
@@ -214,21 +216,21 @@ describe('Ctrl+Left / Ctrl+Right step one tab', () => {
     const labels = tabLabels(wrapper);
 
     await clickTab(wrapper, labels[0]!);
-    await press(wrapper, 'ArrowLeft');
+    await press(wrapper, '[');
     expect(activeTab(wrapper)).toBe(labels[0]);
 
     await clickTab(wrapper, labels[labels.length - 1]!);
-    await press(wrapper, 'ArrowRight');
+    await press(wrapper, ']');
     expect(activeTab(wrapper)).toBe(labels[labels.length - 1]);
     wrapper.unmount();
   });
 
   it('cancels the keystroke, so the shell never also receives it', async () => {
-    // xterm encodes Ctrl+← as ESC [ 1 ; 5 D, which readline reads as
-    // backward-word. Without the cancel the chord would move the tab AND jump a
-    // word at the prompt — one keystroke, two paths.
+    // Through xterm, Ctrl+[ IS Escape (C0 0x1B — readline's meta-prefix, the
+    // escape vim users live in) and Ctrl+] is GS. Without the cancel the chord
+    // would move the tab AND send the byte — one keystroke, two paths.
     const wrapper = await openWorkspace();
-    for (const key of ['ArrowLeft', 'ArrowRight']) {
+    for (const key of ['[', ']']) {
       const e = await press(wrapper, key);
       expect(e.defaultPrevented, key).toBe(true);
     }
@@ -240,30 +242,30 @@ describe('Ctrl+Left / Ctrl+Right step one tab', () => {
     const labels = tabLabels(wrapper);
     await clickTab(wrapper, labels[0]!);
 
-    await press(wrapper, 'ArrowRight', { ctrlKey: false, metaKey: true });
+    await press(wrapper, ']', { ctrlKey: false, metaKey: true });
     expect(activeTab(wrapper)).toBe(labels[1]);
 
-    // Ctrl+Alt is AltGr on European layouts; it is not this chord.
-    const e = await press(wrapper, 'ArrowRight', { altKey: true });
+    // Ctrl+Alt is AltGr on European layouts; [ and ] carry real characters
+    // there, and none of it is this chord's.
+    const e = await press(wrapper, ']', { altKey: true });
     expect(e.defaultPrevented).toBe(false);
     expect(activeTab(wrapper)).toBe(labels[1]);
     wrapper.unmount();
   });
 });
 
-describe('where the tab arrows stand down', () => {
-  it('leaves a real text field its word-jump', async () => {
-    // Ctrl+arrow is backward-word / forward-word in every text field on every
-    // platform, and this app has several the user types prose into. Taking the
-    // chord from those would trade an editing gesture people have had for
-    // decades for a navigation one.
+describe('where the tab step stands down', () => {
+  it('leaves a real text field alone while prose is being typed', async () => {
+    // Brackets carry no editing gesture in a field any more, but the rule
+    // survived the move from the arrows on purpose: navigation does not
+    // interrupt typing in a draft or a path box.
     const wrapper = await openWorkspace();
     const labels = tabLabels(wrapper);
     await clickTab(wrapper, labels[0]!);
 
     const field = document.createElement('textarea');
     document.body.appendChild(field);
-    const e = await press(wrapper, 'ArrowRight', {}, field);
+    const e = await press(wrapper, ']', {}, field);
 
     expect(e.defaultPrevented).toBe(false);
     expect(activeTab(wrapper)).toBe(labels[0]);
@@ -287,7 +289,7 @@ describe('where the tab arrows stand down', () => {
     pane.appendChild(sink);
     document.body.appendChild(pane);
 
-    const e = await press(wrapper, 'ArrowRight', {}, sink);
+    const e = await press(wrapper, ']', {}, sink);
     expect(e.defaultPrevented).toBe(true);
     expect(activeTab(wrapper)).toBe(labels[1]);
     pane.remove();

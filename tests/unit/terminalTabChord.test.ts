@@ -149,13 +149,14 @@ describe('the surviving tab chord is taken away from xterm', () => {
     wrapper.unmount();
   });
 
-  it('CANCELS Ctrl+Left and Ctrl+Right, which xterm sends as modified arrows', () => {
-    // The one tab chord that survived: step one tab left or right. xterm
-    // encodes these as ESC [ 1 ; 5 D / ESC [ 1 ; 5 C, which readline reads as
-    // backward-word and forward-word — so this branch is what stops one
-    // keystroke both moving the tab and jumping a word at the prompt.
+  it('CANCELS Ctrl+[ and Ctrl+], which xterm sends as ESC and GS', () => {
+    // The pair after its move off the arrows ("ctrl+left and right conflicts
+    // with jumping over words"): step one tab left or right. Through xterm
+    // these ARE bytes — 0x1B Escape, readline's meta-prefix, and 0x1D GS — so
+    // this branch is what stops one keystroke both moving the tab and feeding
+    // the shell.
     const wrapper = mountTerminal();
-    for (const key of ['ArrowLeft', 'ArrowRight']) {
+    for (const key of ['[', ']']) {
       const e = keydown(key, { ctrlKey: true });
       expect(customKeyHandler!(e), key).toBe(false);
       expect(e.defaultPrevented, key).toBe(true);
@@ -165,7 +166,7 @@ describe('the surviving tab chord is taken away from xterm', () => {
 
   it('takes the Cmd spelling too', () => {
     const wrapper = mountTerminal();
-    for (const key of ['ArrowLeft', 'ArrowRight']) {
+    for (const key of ['[', ']']) {
       const e = keydown(key, { metaKey: true });
       expect(customKeyHandler!(e), key).toBe(false);
       expect(e.defaultPrevented, key).toBe(true);
@@ -177,7 +178,7 @@ describe('the surviving tab chord is taken away from xterm', () => {
     // xterm consults this handler for all three. The chord is one keystroke.
     const wrapper = mountTerminal();
     for (const type of ['keypress', 'keyup']) {
-      const e = new KeyboardEvent(type, { key: 'ArrowLeft', ctrlKey: true, cancelable: true });
+      const e = new KeyboardEvent(type, { key: '[', ctrlKey: true, cancelable: true });
       expect(customKeyHandler!(e)).toBe(true);
       expect(e.defaultPrevented).toBe(false);
     }

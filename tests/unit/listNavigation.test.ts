@@ -4,14 +4,15 @@ import { adjacentIndex } from '../../src/shared/listNavigation';
 /**
  * Where a directional key lands.
  *
- * One rule shared by the two lists an arrow chord walks — the workspace's tab
- * bar (`Ctrl+←`/`Ctrl+→`) and the session panel's folder rows (`Ctrl+↑`/`Ctrl+↓`)
+ * One rule shared by the two lists a directional chord walks — the workspace's
+ * tab bar (`Ctrl+[`/`Ctrl+]`) and the session panel's folder rows
+ * (`Ctrl+↑`/`Ctrl+↓`)
  * — because "which index does this keypress land on" is one decision, and the
  * two ends of a single gesture must not drift apart.
  *
- * The property that earns the module is the CLAMP. An arrow is a direction,
- * not a cycle: landing on the opposite end of a list is not what "further
- * left" asked for, and the position lost is the one thing an arrow preserves.
+ * The property that earns the module is the CLAMP. A directional step is not a
+ * cycle: landing on the opposite end of a list is not what "further left"
+ * asked for, and the position lost is the one thing that key preserves.
  * (The `Ctrl+Tab` cycle this once disagreed with is gone; see the tombstone
  * in shared/shortcuts.ts.)
  */

@@ -502,10 +502,10 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
     id: 'tabs.stepLeftRight',
     surface: 'workspace',
     label: 'The tab to the left, the tab to the right',
-    defaults: ['Ctrl+ArrowLeft', 'Ctrl+ArrowRight'],
+    defaults: ['Ctrl+[', 'Ctrl+]'],
     owner: 'app',
     rebindable: false,
-    note: 'Asked for as half of one gesture — "ctrl left goes to the left tab right to the right tab", with Ctrl+Up/Down for the workspaces — and the pairing is the point: horizontal is the tab bar, vertical is the panel down the side, which is where each of those lists actually sits. A PAIR of chords, so it is fixed for the same reason a pair always is here: an override replaces a binding’s chords outright and would lose one. It CLAMPS at both ends. What it costs is readline’s backward-word / forward-word in the pane (xterm sends ESC [ 1 ; 5 D / C); Alt+B and Alt+F are the same two commands and are untouched. It stands down inside a real text field, where Ctrl+arrow is an editing gesture — but NOT inside the terminal, whose xterm-helper-textarea would otherwise exempt the one surface this is for.',
+    note: 'Moved here from Ctrl+ArrowLeft/ArrowRight, which collided with word-jump in every text field: "ctrl+left and right conflicts with jumping over words". A PAIR of chords, so it is fixed for the same reason a pair always is here: an override replaces a binding’s chords outright and would lose one. It CLAMPS at both ends. What it costs is real and stated rather than assumed: through xterm, Ctrl+[ IS Escape (C0 0x1B — the physical escape of older keyboards and the meta-prefix for readline’s ESC-chords) and Ctrl+] is GS. Esc does not reach the pane from anywhere this chord is live; Alt+B / Alt+F-style meta sequences should use Alt instead. Shifted ghosts (Ctrl+{ and Ctrl+}) match nothing and fall through. It stands down inside a real text field, where prose is being typed — but NOT inside the terminal, whose xterm-helper-textarea would otherwise exempt the one surface this is for.',
   },
   {
     id: 'workspaces.stepUpDown',

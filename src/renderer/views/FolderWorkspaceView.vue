@@ -816,7 +816,7 @@ function onTabDragEnd(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * `Ctrl+←` / `Ctrl+→` to step one tab left or right.
+ * `Ctrl+[` / `Ctrl+]` to step one tab left or right.
  *
  * ## Why this is a WINDOW listener and not the terminal's key handler
  *
@@ -836,28 +836,28 @@ function onTabDragEnd(): void {
  *
  * `stopPropagation` is what stops the event ever reaching xterm's textarea, so
  * xterm never gets to encode it. `preventDefault` is what stops CHROMIUM acting
- * on it — Electron still has a browser underneath, and a modified arrow can be
- * a real browser gesture there. Leaving either off is the defect that has now
- * landed three times in this app (bc86cf7's doubled first letter, 3628090's
- * doubled paste, and the Ctrl+V route after them): one keystroke, two paths.
+ * on it — Electron still has a browser underneath. Leaving either off is the
+ * defect that has now landed three times in this app (bc86cf7's doubled first
+ * letter, 3628090's doubled paste, and the Ctrl+V route after them): one
+ * keystroke, two paths.
  *
  * ## The terminal is NOT a safe place to let this fall through
  *
  * The brief's premise was that a tab chord is affordable "because terminals
  * cannot encode it". Measured against the xterm this app ships (@xterm/xterm 6,
- * `evaluateKeyboardEvent`), that is not true for THIS chord, which is why
- * TerminalView also declines it: **`Ctrl+←`/`Ctrl+→` are `ESC [ 1 ; 5 D` /
- * `ESC [ 1 ; 5 C`**, which readline reads as backward-word and forward-word.
- * That is a real cost — `Alt+B` / `Alt+F` do the same two things and are
- * untouched — and it is stated rather than assumed.
+ * `evaluateKeyboardEvent`), that is not true for THIS chord either, which is why
+ * TerminalView also declines it: **`Ctrl+[` is C0.ESC (`0x1B`)** — THE physical
+ * escape of older keyboards and readline's meta-prefix — **and `Ctrl+]` is
+ * C0.GS**. That is a real cost, in vim sessions most of all, and it is stated
+ * rather than assumed; meta sequences remain reachable through Alt.
  *
  * ## What went, and what came back with it
  *
  * `Ctrl+1`..`Ctrl+9` (jump to the Nth tab), `Ctrl+Shift+PageUp`/`PageDown`
- * (move the active tab) and finally the CYCLE — `Ctrl+Tab` / `Ctrl+Shift+Tab`
- * — were removed at the user's request: "remove ctrl 1 2 3 hotkey", "Move the
- * active tab left or right remove this too", "remove these hotkeys let's keep
- * only ctrl left and ctrl right".
+ * (move the active tab) and the CYCLE — `Ctrl+Tab` / `Ctrl+Shift+Tab` — were
+ * removed at the user's request: "remove ctrl 1 2 3 hotkey", "Move the active
+ * tab left or right remove this too", "remove these hotkeys let's keep only
+ * ctrl left and ctrl right".
  *
  * Removing them GIVES KEYS BACK to the pane, which is the part worth writing
  * down: `Ctrl+3`..`Ctrl+8` are the C0 controls `ESC`, `FS`, `GS`, `RS`, `US`
@@ -874,7 +874,7 @@ function onTabDragEnd(): void {
  * ## What it deliberately does not touch
  *
  * Anything with Alt or Meta. `Ctrl+Alt` is how AltGr arrives on European
- * layouts, where the digit row carries printable characters on several of them —
+ * layouts, where `[` and `]` carry printable characters on several of them —
  * the same reason TerminalView's Ctrl+V branch demands `!e.altKey`. And a
  * rename in progress owns the keyboard: the field is a one-word edit with
  * Enter/Escape of its own, and stepping out of it would leave an orphaned edit
@@ -895,29 +895,28 @@ function onWindowKeydown(e: KeyboardEvent): void {
   // own business in the registry. Keeping it would silently refuse any rebinding
   // that wears Shift.
 
-  // `Ctrl+←` / `Ctrl+→`: the tab to the left, the tab to the right.
+  // `Ctrl+[` / `Ctrl+]`: the tab to the left, the tab to the right.
   //
-  // Asked for in exactly those words — "ctrl left goes to the left tab right to
-  // the right tab" — alongside `Ctrl+↑`/`Ctrl+↓` for the workspaces, which
-  // `HostWorkspaceView` owns. The pair is what makes them worth having: the
+  // First carried by `Ctrl+←`/`Ctrl+→`, moved here at the user's word —
+  // "ctrl+left and right conflicts with jumping over words". The original ask
+  // stands underneath: step left / step right within THIS workspace, while
+  // `Ctrl+↑`/`Ctrl+↓` walks workspaces, which `HostWorkspaceView` owns. The
   // horizontal axis is the tab bar and the vertical one is the panel down the
   // side, which is where those two things actually sit on screen.
   //
-  // THEY CLAMP, and that is deliberate (see `adjacentIndex`). An arrow is a
-  // direction, not a cycle: landing at the opposite end of the bar is not what
-  // "further left" asks for.
+  // THEY CLAMP, and that is deliberate (see `adjacentIndex`). A direction, not
+  // a cycle: landing at the opposite end of the bar is not what "further left"
+  // asks for.
   //
-  // WHAT IT COSTS is `Ctrl+←`/`Ctrl+→` at the shell, which readline binds to
-  // backward-word / forward-word. That is a real key some people use every day
-  // — the same shape of trade `Ctrl+V` made for `quoted-insert` — and it is
-  // stated rather than assumed. `Alt+B` / `Alt+F` are bound to the same two
-  // readline commands and are untouched here.
+  // WHAT IT COSTS is stated rather than assumed: `Ctrl+[` is Escape at a shell
+  // prompt and `Ctrl+]` is GS (see the registry note). Vim users lose the
+  // bracket escape inside panes of this workspace; meta chords keep working
+  // through Alt.
   //
-  // Except in a real text field, which is the one place this does NOT fire: see
-  // `editingTarget`. Word-jump in a draft or a path box is an editing gesture,
-  // not a navigation one. The direction reads off `e.key`, not because it is a
-  // chord spelled here — it is which HALF of the pair fired, and only the
-  // registry knows that pair exists.
+  // Still not in a real text field — see `editingTarget`. No editing gesture
+  // rides these keys, but prose being typed should not be interrupted by
+  // navigation either. The direction reads off `e.key`: which HALF of the pair
+  // fired, and only the registry knows that pair exists.
   if (isShortcut(bindings, 'tabs.stepLeftRight', e)) {
     if (editingTarget(e.target)) return;
     e.preventDefault();
@@ -925,7 +924,7 @@ function onWindowKeydown(e: KeyboardEvent): void {
     const index = adjacentIndex(
       tabs.value.length,
       tabs.value.findIndex((t) => t.id === activeTab.value?.id),
-      e.key === 'ArrowRight' ? 1 : -1,
+      e.key === ']' ? 1 : -1,
     );
     const target = index === null ? null : (tabs.value[index]?.id ?? null);
     if (target !== null) goToTab(target);
@@ -935,11 +934,11 @@ function onWindowKeydown(e: KeyboardEvent): void {
 /**
  * Is this keystroke aimed at something the user is EDITING?
  *
- * `Ctrl+←`/`Ctrl+→` is word-jump in every text field on every platform, and
- * this app has several the user genuinely types prose into — the composer's
- * draft, the Files path box, the tree filter, the code editor. Taking the chord
- * from those would trade a navigation gesture for an editing one people have
- * had since before this app existed.
+ * Kept from the chord's arrow days, whose word-jump collision motivated this
+ * very move onto brackets. Brackets have no native editing role in a field,
+ * but the rule stays: while the user is typing prose — the composer's draft,
+ * the Files path box, the tree filter, the code editor — navigation chords do
+ * not interrupt.
  *
  * The terminal is deliberately NOT in that set, and it is the reason this is a
  * function rather than an `instanceof HTMLTextAreaElement` test: xterm's own

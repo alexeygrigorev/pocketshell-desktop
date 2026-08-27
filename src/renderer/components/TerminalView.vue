@@ -626,7 +626,7 @@ function onTerminalContextMenu(e: MouseEvent): void {
 function onCustomKey(e: KeyboardEvent): boolean {
   if (e.type !== 'keydown') return true;
 
-  // THE WORKSPACE'S TAB CHORDS. `Ctrl+←` / `Ctrl+→` step one tab left or right
+  // THE WORKSPACE'S TAB CHORDS. `Ctrl+[` / `Ctrl+]` step one tab left or right
   // (docs/WORKSPACE.md §11). They are handled by a window-level capture
   // listener in FolderWorkspaceView, which stops the event before it can
   // descend this far — so in the folder workspace this branch never runs.
@@ -636,9 +636,10 @@ function onCustomKey(e: KeyboardEvent): boolean {
   // @xterm/xterm 6's `evaluateKeyboardEvent`, the function this handler is
   // consulted from:
   //
-  //   Ctrl+←/Ctrl+→   -> ESC [ 1 ; 5 D / ESC [ 1 ; 5 C, the modified-arrow
-  //                      forms, which readline binds to backward-word and
-  //                      forward-word.
+  //   Ctrl+[          -> C0.ESC (0x1B) — THE physical escape of older
+  //                      keyboards, and readline's meta-prefix. vim users in
+  //                      tmux feel this one.
+  //   Ctrl+]          -> C0.GS (0x1D).
   //
   // So a pane mounted outside a folder workspace — a future caller, a test —
   // would otherwise turn a tab chord into shell input. Declining it here means
@@ -647,16 +648,19 @@ function onCustomKey(e: KeyboardEvent): boolean {
   // ## What is NOT in this list any more
   //
   // `Ctrl+1`..`Ctrl+9` used to be declined here, for the jump-to-Nth-tab
-  // family; the user asked for it to go ("remove ctrl 1 2 3 hotkey"). Later the
-  // CYCLE went too — `Ctrl+Tab` / `Ctrl+Shift+Tab` ("remove these hotkeys let's
-  // keep only ctrl left and ctrl right"). Both removals HAND KEYS BACK to the
-  // shell rather than merely tidying up:
+  // family; the user asked for it to go ("remove ctrl 1 2 3 hotkey"). Then the
+  // CYCLE went — `Ctrl+Tab` / `Ctrl+Shift+Tab` ("remove these hotkeys let's
+  // keep only ctrl left and ctrl right") — and finally the arrows themselves,
+  // when the pair moved onto brackets because they collided with word-jump in
+  // text fields. Every removal HANDS KEYS BACK to the shell rather than merely
+  // tidying up:
   //
   //   Ctrl+3..Ctrl+8  -> `ESC`, `FS`, `GS`, `RS`, `US`, `DEL` (`Ctrl+3` is a
   //                      common stand-in for Escape).
-  //   Ctrl+Tab        -> C0.HT (`\t`). `case 9` ignores Ctrl entirely, so at a
+  //   Ctrl+Tab        -> C0.HT (`	`). `case 9` ignores Ctrl entirely, so at a
   //                      shell prompt this is completion again.
   //   Ctrl+Shift+Tab  -> ESC [ Z (back-tab).
+  //   Ctrl+←/Ctrl+→   -> ESC [ 1 ; 5 D / C, readline's backward/forward-word.
   //
   // A chord this app no longer claims must reach the program the user is
   // actually talking to. `Ctrl+Shift+PageUp`/`PageDown` were never declined
@@ -665,22 +669,18 @@ function onCustomKey(e: KeyboardEvent): boolean {
   // `preventDefault()` AND `return false`, both, for the third time in this
   // function and for the reason the two branches below spell out: returning
   // false stops xterm (`_keyDown` bails at the custom handler and never calls
-  // its own `cancel()`) but leaves the DOM event LIVE, and Chromium still has
-  // its own default action for a modified arrow. One keystroke, two paths, is
-  // bc86cf7 and 3628090.
+  // its own `cancel()`) but leaves the DOM event LIVE. One keystroke, two
+  // paths, is bc86cf7 and 3628090.
   //
-  // `!e.altKey`: Ctrl+Alt is AltGr on European layouts. It guarded the digit
-  // row, which carries printable characters on several of them, and it still
-  // guards the arrows — AltGr+arrow is a real key combination on a few layouts
-  // and none of it is ours.
+  // `!e.altKey`: Ctrl+Alt is AltGr on European layouts. AltGr+[ and AltGr+] are
+  // real characters on several of them and none of it is ours.
   //
   // The chord is DATA (src/shared/shortcuts.ts) and this branch only DECLINES
   // it. Reading the registry rather than restating it here is the point:
   // this copy and FolderWorkspaceView's are the two that would otherwise drift,
   // and a chord chosen against a drifted copy is exactly what produced a
-  // keyboard nobody could look up. `Ctrl+Shift+←/→` matches nothing in the
-  // table and falls through here, as it did when the shift test was spelled by
-  // hand.
+  // keyboard nobody could look up. Shifted ghosts (`Ctrl+{` / `Ctrl+}`) match
+  // nothing in the table and fall through here, as the shifted arrows did.
   if (!e.altKey && isShortcut(settings.shortcutBindings, 'tabs.stepLeftRight', e)) {
     e.preventDefault();
     return false;
