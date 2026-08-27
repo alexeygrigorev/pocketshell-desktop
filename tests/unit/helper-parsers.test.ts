@@ -349,6 +349,65 @@ describe('parseUsageNdjson', () => {
     expect(out[3]!.status).toBe('ok');
     expect(out[3]!.long_term.percent_remaining).toBe(0.0);
   });
+
+  it('folds the installed helper\'s windows map into short_term/long_term', () => {
+    // Captured verbatim from the host the user actually runs (still
+    // self-reported as 0.4.44): the rows carry a keyed `windows` map and NO
+    // top-level pair. Consumed raw, `row.short_term` is undefined — the render
+    // throw that blanked the usage panel.
+    const out = parseUsageNdjson(readV44('v0.4.44-usage-windows.ndjson'));
+    expect(out.map((u) => u.provider)).toEqual(['claude', 'codex', 'copilot', 'grok', 'zai']);
+
+    // The map key becomes the window label.
+    const claude = out[0]!;
+    expect(claude.short_term).toEqual({
+      percent_remaining: 93,
+      reset_at: '2026-08-27T20:20:00Z',
+      window: '5h',
+    });
+    expect(claude.long_term).toEqual({
+      percent_remaining: 98,
+      reset_at: '2026-09-03T15:00:00Z',
+      window: '7d',
+    });
+
+    // codex reports only a 7d window: the empty slot is explicit nulls, the
+    // shape the pair-shaped rows already established for "no such window".
+    const codex = out[1]!;
+    expect(codex.short_term).toEqual({ percent_remaining: null, reset_at: null, window: null });
+    expect(codex.long_term.window).toBe('7d');
+    expect(codex.long_term.percent_remaining).toBe(92.0);
+
+    // copilot's map carries a literal `short_term` key — it must land in the
+    // short-term slot, beside `monthly` as the long term.
+    const copilot = out[2]!;
+    expect(copilot.short_term.window).toBe('short_term');
+    expect(copilot.long_term.window).toBe('monthly');
+
+    // grok: a lone `weekly` is a long term, leaving the short slot empty.
+    expect(out[3]!.long_term.window).toBe('weekly');
+    expect(out[3]!.short_term).toEqual({ percent_remaining: null, reset_at: null, window: null });
+
+    // zai: `5h` + `weekly`, one each side.
+    const zai = out[4]!;
+    expect(zai.short_term.window).toBe('5h');
+    expect(zai.long_term.window).toBe('weekly');
+  });
+
+  it('leaves a row that already carries the pair untouched', () => {
+    const row = {
+      provider: 'claude',
+      status: 'ok',
+      short_term: { percent_remaining: 1, reset_at: null, window: '5h' },
+      long_term: { percent_remaining: 2, reset_at: null, window: '7d' },
+      error: null,
+      details: {},
+      windows: { monthly: { percent_remaining: 99 } },
+    };
+    const out = parseUsageNdjson(JSON.stringify(row));
+    expect(out[0]!.short_term.percent_remaining).toBe(1);
+    expect(out[0]!.long_term.percent_remaining).toBe(2);
+  });
 });
 
 describe('parseCommandV', () => {
