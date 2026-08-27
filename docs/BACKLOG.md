@@ -132,6 +132,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | See every shortcut, grouped by surface, in Settings | `b36ba69` |
 | ✅ | Rebind a shortcut, with conflicts named and the shell protected | `b36ba69` |
 | ✅ | Every chord handler reads that registry, so a rebinding takes effect on the next keystroke (`docs/SHORTCUTS.md` §6) | `86bf3dc`, `836eb6b`, `aaec2cd`, `e456a08`, `549c44b` |
+| ✅ | A readline habit restored: delete-word-backward on `Ctrl+W` in text fields, with bash's semantics and the terminal's `\x17` untouched (`docs/SHORTCUTS.md`, `text.deleteWordBackward`) | `10276a3` |
 | ✅ | CodeMirror's baked `dark: true` | `435ddcf` |
 
 ### Housekeeping
@@ -160,7 +161,6 @@ earlier (`4c4b9bf`) and the chord handlers now read the shortcut registry
 |---|---|---|
 | ⬜ | A `serve` subcommand in the pocketshell CLI | Filed as `alexeygrigorev/pocketshell#2333`. The desktop side ships on `python3 -m http.server`; retiring that costs one function. |
 | ⬜ | A durable session→folder registry | The phone has `pocketshell tree get/upsert/reconcile`. It would replace the name-and-`test -d` heuristic that currently places sessions with no reported cwd. `docs/SESSIONLIST.md` §11 has the cost estimate. |
-| ⬜ | `Ctrl+W` in a text field now does nothing | Removing the menu gave the terminal its delete-word back and left every other surface with a dead key. Chromium has no delete-word-backward on Ctrl+W, so the composer's draft and the Files path box could have one — a readline habit that would now work everywhere instead of closing the app. Small, and nobody has asked. |
 
 ---
 
