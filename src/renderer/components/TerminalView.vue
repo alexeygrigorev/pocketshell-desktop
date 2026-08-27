@@ -44,6 +44,7 @@ import { useSettingsStore } from '../stores/settings';
 import { resolveMonoStack } from '../fonts';
 import { resolveTheme } from '../themes';
 import { isTypingKey } from '../../shared/composerText';
+import { isShortcut } from '../../shared/shortcuts';
 import type { ConnectionId, ShellId } from '../../shared/types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -673,14 +674,22 @@ function onCustomKey(e: KeyboardEvent): boolean {
   // row, which carries printable characters on several of them, and it still
   // guards the arrows — AltGr+arrow is a real key combination on a few layouts
   // and none of it is ours.
-  const arrow = e.key === 'ArrowLeft' || e.key === 'ArrowRight';
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'Tab' || arrow)) {
-    // The arrows only without Shift — `Ctrl+Shift+←/→` is a different chord and
-    // is nobody's here — while Tab takes Shift as its direction.
-    if (e.key === 'Tab' || !e.shiftKey) {
-      e.preventDefault();
-      return false;
-    }
+  //
+  // The chords are DATA (src/shared/shortcuts.ts) and this branch only DECLINES
+  // them. Reading the registry rather than restating the family is the point:
+  // this copy and FolderWorkspaceView's are the two that would otherwise drift,
+  // and a chord chosen against a drifted copy is exactly what produced a
+  // keyboard nobody could look up. `Ctrl+Shift+←/→` matches nothing in the
+  // table and falls through here, as it did when the shift test was spelled by
+  // hand.
+  if (
+    !e.altKey &&
+    (isShortcut(settings.shortcutBindings, 'tabs.next', e) ||
+      isShortcut(settings.shortcutBindings, 'tabs.previous', e) ||
+      isShortcut(settings.shortcutBindings, 'tabs.stepLeftRight', e))
+  ) {
+    e.preventDefault();
+    return false;
   }
 
   // Typing opens the composer instead of reaching the shell. Everything
@@ -702,8 +711,9 @@ function onCustomKey(e: KeyboardEvent): boolean {
     return false;
   }
 
-  const mod = e.ctrlKey || e.metaKey;
-  // BOTH paste chords go to the PROMPT COMPOSER, Shift or no Shift.
+  // BOTH paste chords go to the PROMPT COMPOSER, Shift or no Shift — which is
+  // why this is one binding with two defaults (`terminal.pasteIntoComposer`)
+  // rather than two branches.
   //
   // Ctrl+V was claimed first, and it was affordable only because it was
   // measured: on this exact xterm (3628090) plain Ctrl+V produces a single
@@ -728,9 +738,11 @@ function onCustomKey(e: KeyboardEvent): boolean {
   // real thing to want, it just no longer sits on the key most likely to be
   // pressed by reflex.
   //
-  // `!e.altKey` because Ctrl+Alt is how AltGr arrives on European layouts, and
-  // AltGr+V is a printable character on several of them. A user typing `@` or
-  // `~` must not have it swallowed by the composer.
+  // `!e.altKey` stays OUTSIDE the chord test, because it is not part of the
+  // chord: Ctrl+Alt is how AltGr arrives on European layouts, and AltGr+V is a
+  // printable character on several of them. A user typing `@` or `~` must not
+  // have it swallowed by the composer, and no chord table can express "and
+  // definitely not AltGr".
   //
   // preventDefault IS THE FEATURE here for the third time in this function, and
   // for the third identical reason — returning false stops xterm (`_keyDown`
@@ -742,13 +754,22 @@ function onCustomKey(e: KeyboardEvent): boolean {
   // whatever holds focus — about to be the composer's draft, which would then
   // receive the clipboard twice. One keystroke, two paths, is bc86cf7 and
   // 3628090; this line is what closes the native one.
-  if (mod && !e.altKey && (e.key === 'V' || e.key === 'v')) {
+  if (!e.altKey && isShortcut(settings.shortcutBindings, 'terminal.pasteIntoComposer', e)) {
     e.preventDefault();
     emit('paste-into-composer');
     return false;
   }
-  if (mod && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
+  if (isShortcut(settings.shortcutBindings, 'terminal.copySelection', e)) {
+    // Only WITH a selection, deliberately: with nothing selected the chord
+    // falls through and reaches the pane, which is the behaviour that shipped.
+    //
+    // `preventDefault()` sits here and not only at the return, because
+    // returning false stops xterm — `_keyDown` bails at the custom handler and
+    // never calls its own `cancel()` — but leaves the DOM event LIVE for
+    // Chromium to act on. Both, always: it is the same defect bc86cf7 and
+    // 3628090 fixed twice before, in the very function that documents it.
     if (term?.hasSelection()) {
+      e.preventDefault();
       void copyToClipboard(term.getSelection());
       return false;
     }
