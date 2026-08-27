@@ -206,31 +206,31 @@ export const TEXT = {
    * default among them. Hence "for annotations font size is too small": it was,
    * measurably, and at every setting but the heaviest.
    *
-   * At 8x they are 24 / 48 / 96 before the floor below applies, i.e. the old
-   * ladder moved up one notch with a new top. The default 48 lands at 16 CSS px
-   * on screen (between `--fs-400` and `--fs-500`) and is 2.3% of the width of a
-   * 2048px export, which is caption-sized on the PNG rather than fine print.
+   * At 8x with the toolbar's current ladder of 6 / 12 / 24 they are 48 / 96 /
+   * 192 — the same ratio that fixed the original complaint, applied to a mark
+   * ladder that has since shifted up one rung because the strokes themselves
+   * were reported too small (see `WIDTHS` in DoodleCanvas.vue). The default 96
+   * lands at ~33 CSS px on screen and is 4.7% of the width of a 2048px export:
+   * heading-sized, which is what the heaviest caption on a screenshot wants to
+   * be when the whole sheet shrinks to a third.
    */
   sizeRatio: 8,
 
   /**
    * The smallest font an annotation is ever set in, in logical pixels.
    *
-   * NEW. Without it the lightest mark weight is 3 * 8 = 24px, which is the
-   * exact size that was just reported as too small to read — the ratio alone
-   * would leave one setting of the control still producing the complaint.
+   * A GUARD now, not a rung. When it was introduced the toolbar's lightest
+   * weight was 3, and 3 * 8 = 24px was the exact size that had just been
+   * reported as too small to read — the ratio alone left one setting of the
+   * control still producing the complaint. The mark ladder has since shifted up
+   * to 6 / 12 / 24, so its lightest weight resolves to 48px and the floor never
+   * binds for a toolbar selection.
    *
-   * 36 because the sheet is shown at roughly a third (700 CSS px of panel
-   * against a 2048px backdrop), and a third of 36 is 12: `--fs-200`, the size
-   * the app sets its own buttons and secondary rows in. `--fs-100` at 11px is
-   * the absolute floor of legibility rather than a target, and aiming at it
-   * exactly would have meant 33px — a number chosen by a rounding error.
-   *
-   * The cost is that the ladder compresses at the light end — 36 / 48 / 96
-   * rather than 24 / 48 / 96 — so light-to-medium is 1.33x where medium-to-heavy
-   * is 2x. That is the right trade: three sizes that can all be read beats an
-   * evenly spaced ladder with an unusable rung on it, and what the weight
-   * control promises is an ORDERING, not a ratio.
+   * It stays because `textFontSize` is public arithmetic, not a private helper
+   * of the toolbar: anything that calls it with a width below 4.5 — a future
+   * ladder change, a custom tool, a test — would otherwise get sub-36px type,
+   * which is the size class this module has already been told once is
+   * unreadable on the shrunken sheet.
    */
   minSize: 36,
 
@@ -440,10 +440,10 @@ export function layoutText(input: TextLayoutInput): TextLayout {
   // within `edgePadding` of the right edge, and a non-positive width switches
   // `wrapLines` off entirely — text that runs off the bitmap and is cropped by
   // the PNG, invisibly, in the export. That was a 12px-wide sliver of the sheet
-  // when the font was 24px and would be a 48px one now that it is 96px at the
-  // heaviest weight, so the fallback moved from "unreachable" to "reachable by
-  // clicking near the edge". One character per line is ugly; silently losing
-  // the caption is worse. It also matches what the editing overlay already did
+  // when the font was 24px and is a 192px one at the heaviest weight now, so
+  // the fallback moved from "unreachable" to "reachable by clicking near the
+  // edge". One character per line is ugly; silently losing the caption is
+  // worse. It also matches what the editing overlay already did
   // — `Math.max(fontSize, available)` in DoodleCanvas.vue's `editorStyle` — so
   // the preview and the paint now break their lines by the same rule.
   const maxWidth = Math.max(fontSize, sheetWidth - origin.x - fontSize * TEXT.edgePadding);

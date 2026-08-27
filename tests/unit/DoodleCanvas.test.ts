@@ -304,7 +304,7 @@ describe('the arrow tool', () => {
       expect(barbs).toHaveLength(2);
       return Math.abs((barbs[0] ?? 0) - (barbs[1] ?? 0));
     };
-    expect(await headSpread('Mark weight 12')).toBeGreaterThan(await headSpread('Mark weight 3'));
+    expect(await headSpread('Mark weight 24')).toBeGreaterThan(await headSpread('Mark weight 6'));
   });
 
   /**
@@ -373,11 +373,13 @@ describe('the text tool', () => {
 
     const drawn = frame().find((o) => o.op === 'fillText');
     expect(drawn?.fill).toBe(TOKENS['--success']);
-    // Weight and family from tokens; the size follows the mark weight. 48px,
-    // not the 24px this used to assert: at the ~0.34 zoom a capped backdrop is
-    // shown at, 24px reached the eye as 8 CSS pixels — below `--fs-100`, the
-    // smallest type the app sets anywhere. See TEXT.sizeRatio.
-    expect(drawn?.font).toBe('600 48px Inter Variable, sans-serif');
+    // Weight and family from tokens; the size follows the mark weight. 96px at
+    // the new default weight of 12, not the 24px this used to assert: at the
+    // ~0.34 zoom a capped backdrop is shown at, 24px reached the eye as 8 CSS
+    // pixels — below `--fs-100`, the smallest type the app sets anywhere. The
+    // mark ladder has since shifted up a rung (WIDTHS is 6 / 12 / 24), so the
+    // default moved too. See TEXT.sizeRatio.
+    expect(drawn?.font).toBe('600 96px Inter Variable, sans-serif');
   });
 
   /**
@@ -390,8 +392,8 @@ describe('the text tool', () => {
     await pickTool(wrapper, 'Text');
     const button = wrapper
       .findAll('button')
-      .find((b) => b.attributes('aria-label') === 'Mark weight 3');
-    expect(button?.attributes('title')).toBe(`Text ${textFontSize(3)}px`);
+      .find((b) => b.attributes('aria-label') === 'Mark weight 6');
+    expect(button?.attributes('title')).toBe(`Text ${textFontSize(6)}px`);
   });
 
   /**
@@ -589,8 +591,8 @@ describe('placing text where the pointer is', () => {
     const style = editor(wrapper).style;
     expect(Number.parseFloat(style.left)).toBeCloseTo(150, 6);
     // Vertically the same, less the lift that makes the glyphs — not the box —
-    // start at the click.
-    const lift = textHalfLeading(textFontSize(6), LEADING);
+    // start at the click. Width 12 is the toolbar's default; none was picked.
+    const lift = textHalfLeading(textFontSize(12), LEADING);
     expect(Number.parseFloat(style.top)).toBeCloseTo((180 - lift) / 2, 6);
   });
 
@@ -607,8 +609,8 @@ describe('placing text where the pointer is', () => {
 
     // A textarea centres its glyphs in a line box of `line-height`, so its BOX
     // has to begin above the click by exactly that half-leading for the glyphs
-    // inside it to begin at the click.
-    const lift = textHalfLeading(textFontSize(6), LEADING);
+    // inside it to begin at the click. Width 12 is the toolbar's default.
+    const lift = textHalfLeading(textFontSize(12), LEADING);
     expect(lift).toBeGreaterThan(0);
     expect(Number.parseFloat(editor(wrapper).style.top)).toBeCloseTo((150 - lift) / 2, 6);
 
@@ -627,7 +629,7 @@ describe('placing text where the pointer is', () => {
    */
   it('keeps the caret on the click at every mark weight', async () => {
     displayed = { w: SHEET.w / 2, h: SHEET.h / 2 };
-    for (const weight of [3, 6, 12]) {
+    for (const weight of [6, 12, 24]) {
       const wrapper = await open();
       await pickTool(wrapper, 'Text');
       await pickTool(wrapper, `Mark weight ${weight}`);

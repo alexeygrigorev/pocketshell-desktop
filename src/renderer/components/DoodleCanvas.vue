@@ -154,13 +154,21 @@ type Pen = (typeof PENS)[number];
  * Logical stroke widths. Scaled with the canvas, so they hold at any zoom.
  *
  * Text size is derived from this too (see `TEXT.sizeRatio` and `TEXT.minSize`,
- * which make these three 36 / 48 / 96px of type), which is why the control's
+ * which make these three 48 / 96 / 192px of type), which is why the control's
  * label is deliberately generic: it is the weight of the mark, not the
- * thickness of a line. The two ladders are not the same shape — the floor lifts
- * the lightest text off 24px — and that is fine, because what the control
- * promises is an ORDERING, not a ratio.
+ * thickness of a line. The two ladders are not the same shape — the floor is a
+ * guard for callers below the toolbar's lightest weight — and that is fine,
+ * because what the control promises is an ORDERING, not a ratio.
+ *
+ * The lightest rung used to be 3 and was dropped when every weight but the
+ * heaviest was reported as too small: at the ~0.34 display scale of the sheet,
+ * a width-3 stroke is about one CSS pixel of ink. The ladder shifted up a rung
+ * rather than growing a fourth button — three choices is already two more
+ * decisions than annotating a screenshot wants — and the middle one is the
+ * default, so the complaint is answered by what opens, not by what must be
+ * hunted for.
  */
-const WIDTHS = [3, 6, 12] as const;
+const WIDTHS = [6, 12, 24] as const;
 
 const tool = ref<Tool>('pen');
 const pen = ref<Pen>('--error');
@@ -1100,7 +1108,14 @@ onBeforeUnmount(() => {
           :aria-pressed="width === w"
           @click="width = w"
         >
-          <span class="width-dot" :style="{ '--dot': `${Math.round(w / 1.5) + 2}px` }" />
+          <!-- The dot previews the weight, it does not measure it: capped at
+               16px because the button is 24px and an 18px dot leaves two
+               pixels of air on a side. Ordering survives the cap — 6 / 10 / 16
+               is still three visibly different dots. -->
+          <span
+            class="width-dot"
+            :style="{ '--dot': `${Math.min(Math.round(w / 1.5) + 2, 16)}px` }"
+          />
         </button>
       </div>
 

@@ -159,22 +159,28 @@ describe('constrainToAngle', () => {
 });
 
 /** The three mark weights the toolbar offers — `WIDTHS` in DoodleCanvas.vue. */
-const MARK_WEIGHTS = [3, 6, 12];
+const MARK_WEIGHTS = [6, 12, 24];
 
 describe('textFontSize', () => {
   it('follows the stroke width, so text and strokes are one hand', () => {
-    expect(textFontSize(6)).toBe(6 * TEXT.sizeRatio);
     expect(textFontSize(12)).toBe(12 * TEXT.sizeRatio);
+    expect(textFontSize(24)).toBe(24 * TEXT.sizeRatio);
     // Strictly increasing, which is the whole promise the weight control makes.
-    expect(textFontSize(3)).toBeLessThan(textFontSize(6));
     expect(textFontSize(6)).toBeLessThan(textFontSize(12));
+    expect(textFontSize(12)).toBeLessThan(textFontSize(24));
   });
 
-  it('floors the lightest weight instead of taking the ratio literally', () => {
-    // 3 * 8 = 24, which is the size that was reported as unreadable. The floor
-    // is what stops the lightest setting from reproducing the complaint.
+  it('floors widths below the toolbar rather than taking the ratio literally', () => {
+    // 3 * 8 = 24, the size that was reported as unreadable. The lightest weight
+    // the toolbar now offers is 6, so the floor never binds for a toolbar
+    // selection — it is a guard for any caller that passes a smaller width,
+    // and the test pins it where the complaint actually came from.
     expect(3 * TEXT.sizeRatio).toBeLessThan(TEXT.minSize);
     expect(textFontSize(3)).toBe(TEXT.minSize);
+    // And no offered weight needs it: the ratio alone stays above the floor.
+    for (const weight of MARK_WEIGHTS) {
+      expect(weight * TEXT.sizeRatio).toBeGreaterThan(TEXT.minSize);
+    }
   });
 
   /**
@@ -215,7 +221,7 @@ describe('textHalfLeading', () => {
 
   it('scales with the font, so one correction serves every mark weight', () => {
     const ratio = 1.3846;
-    for (const size of [36, 48, 96]) {
+    for (const size of [48, 96, 192]) {
       expect(textHalfLeading(size, ratio, size * 1.21)).toBeCloseTo(
         textHalfLeading(1, ratio, 1.21) * size,
         6,
