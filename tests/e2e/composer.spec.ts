@@ -84,7 +84,7 @@ async function openSession(page: Page, name: string): Promise<void> {
   await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 20_000 });
   await page.getByRole('button', { name, exact: true }).click();
   await expect(page.locator('.composer')).toBeVisible({ timeout: 15_000 });
-  await expect(page.locator('.terminal-area > .terminal')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.terminal-area > .terminal-slot > .terminal')).toBeVisible({ timeout: 15_000 });
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -126,7 +126,7 @@ test.describe('prompt composer panel', () => {
     await expect(page.locator('.composer .send')).toBeVisible();
     await expect(page.locator('.composer .sash')).toBeVisible();
 
-    const term = await page.locator('.terminal-area > .terminal').boundingBox();
+    const term = await page.locator('.terminal-area > .terminal-slot > .terminal').boundingBox();
     const panel = await page.locator('.composer').boundingBox();
     const body = await page.locator('.session-body').boundingBox();
     expect(term).not.toBeNull();
@@ -147,7 +147,7 @@ test.describe('prompt composer panel', () => {
     // exact same size, so the remote tmux is never asked to reflow.
     await page.locator('.rail').click();
     await expect(page.locator('.composer')).toHaveCount(0);
-    const closed = await page.locator('.terminal-area > .terminal').boundingBox();
+    const closed = await page.locator('.terminal-area > .terminal-slot > .terminal').boundingBox();
     expect(closed!.height).toBe(term!.height);
     expect(closed!.width).toBe(term!.width);
 
@@ -315,7 +315,7 @@ test.describe('prompt composer panel', () => {
   });
 
   test('Ctrl+` toggles the panel from the terminal', async () => {
-    await page.locator('.terminal-area > .terminal').first().click();
+    await page.locator('.terminal-area > .terminal-slot > .terminal').first().click();
     await page.keyboard.press('Control+`');
     await expect(page.locator('.composer')).toHaveCount(0);
     await page.keyboard.press('Control+`');
@@ -329,7 +329,7 @@ test.describe('prompt composer panel', () => {
     const restored = await page.locator('.composer').boundingBox();
     expect(maximized!.height).toBeGreaterThan(restored!.height);
     await expect(page.locator('.composer .draft')).toHaveValue('hello there');
-    await expect(page.locator('.terminal-area > .terminal')).toBeVisible();
+    await expect(page.locator('.terminal-area > .terminal-slot > .terminal')).toBeVisible();
   });
 
   test('the card can be dragged around the pane by its header', async () => {
@@ -432,7 +432,7 @@ test.describe('prompt composer panel', () => {
     // INCLUDES the container's padding, and then subtracts only the padding of
     // its own element. Assert the drawn screen fits the box that clips it.
     const fit = await page.evaluate(() => {
-      const host = document.querySelector('.terminal-area > .terminal');
+      const host = document.querySelector('.terminal-area > .terminal-slot > .terminal');
       const screen = host?.querySelector('.xterm-screen');
       if (!host || !screen) return null;
       const cs = getComputedStyle(host);
