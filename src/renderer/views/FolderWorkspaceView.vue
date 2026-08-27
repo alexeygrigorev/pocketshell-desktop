@@ -63,6 +63,7 @@ import LaunchSessionDialog from '../components/LaunchSessionDialog.vue';
 import { pointAnchor, type Box } from '../../shared/popupPlacement';
 import { composerAgentKind } from '../../shared/composerSend';
 import { agentMark } from '../../shared/agentBadge';
+import { isShortcut } from '../../shared/shortcuts';
 import { sanitisePart, sessionBaseName } from '../../shared/sessionNameParts';
 import { adjacentIndex } from '../../shared/listNavigation';
 import {
@@ -887,15 +888,25 @@ function onWindowKeydown(e: KeyboardEvent): void {
   if (e.altKey) return;
   if (renaming.value !== null) return;
 
-  if (e.key === 'Tab') {
-    const next = nextWorkspaceTabId(tabs.value, activeTab.value?.id ?? null, e.shiftKey ? -1 : 1);
+  // The chords are DATA (src/shared/shortcuts.ts). This copy and the decline
+  // branch in TerminalView's `onCustomKey` are the two that would otherwise
+  // drift; reading the same table is what keeps them saying the same thing.
+  const bindings = settings.shortcutBindings;
+
+  const forward = isShortcut(bindings, 'tabs.next', e);
+  const backward = isShortcut(bindings, 'tabs.previous', e);
+  if (forward || backward) {
+    const next = nextWorkspaceTabId(tabs.value, activeTab.value?.id ?? null, forward ? 1 : -1);
     e.preventDefault();
     e.stopPropagation();
     if (next !== null) goToTab(next);
     return;
   }
 
-  if (e.shiftKey) return;
+  // The old hand-spelled `if (e.shiftKey) return;` went with the inline chords:
+  // it was a stand-in for "these are all Shift-free", which is now each chord's
+  // own business in the registry. Keeping it would silently refuse any rebinding
+  // that wears Shift.
 
   // `Ctrl+←` / `Ctrl+→`: the tab to the left, the tab to the right.
   //
@@ -917,8 +928,10 @@ function onWindowKeydown(e: KeyboardEvent): void {
   //
   // Except in a real text field, which is the one place this does NOT fire: see
   // `editingTarget`. Word-jump in a draft or a path box is an editing gesture,
-  // not a navigation one.
-  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+  // not a navigation one. The direction reads off `e.key`, not because it is a
+  // chord spelled here — it is which HALF of the pair fired, and only the
+  // registry knows that pair exists.
+  if (isShortcut(bindings, 'tabs.stepLeftRight', e)) {
     if (editingTarget(e.target)) return;
     e.preventDefault();
     e.stopPropagation();

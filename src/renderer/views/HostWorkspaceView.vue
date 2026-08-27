@@ -35,7 +35,9 @@ import { useAgentsStore } from '../stores/agents';
 import { useConnectionStore } from '../stores/connection';
 import { useSessionsStore } from '../stores/sessions';
 import { api } from '../ipc';
+import { useSettingsStore } from '../stores/settings';
 import { windowTitle } from '../../shared/windowTitle';
+import { isShortcut } from '../../shared/shortcuts';
 import AppIcon from '../components/AppIcon.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
@@ -54,6 +56,9 @@ const router = useRouter();
 const connection = useConnectionStore();
 const agents = useAgentsStore();
 const sessions = useSessionsStore();
+// Read for the chord table only; see the panel comment below for why settings
+// is otherwise not this view's business.
+const settings = useSettingsStore();
 
 /**
  * The host's identity, projected into the OS title bar. Watched rather than
@@ -329,8 +334,12 @@ function editingTarget(target: EventTarget | null): boolean {
 
 function onWindowKeydown(e: KeyboardEvent): void {
   if (!e.ctrlKey && !e.metaKey) return;
-  if (e.altKey || e.shiftKey) return;
-  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  if (e.altKey) return;
+  // The chord lives in the registry (`workspaces.stepUpDown`). The old
+  // hand-spelled `e.shiftKey` exit went with the inline spelling, for the same
+  // reason FolderWorkspaceView's did: a stand-in for "this chord wears no Shift"
+  // would silently refuse any rebinding that does.
+  if (!isShortcut(settings.shortcutBindings, 'workspaces.stepUpDown', e)) return;
   if (editingTarget(e.target)) return;
   e.preventDefault();
   e.stopPropagation();
