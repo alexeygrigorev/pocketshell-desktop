@@ -103,11 +103,19 @@ const FIELD_SEP = '::';
  * recorded option values on hosts whose sshd exports no locale.
  *
  * Column order is `name, window_active, pane_active, pane_current_path,
- * session_path, session_attached, @ps_agent_kind`. Paths sit in the middle
- * rather than last (the phone parks `session_path` last for the same reason)
- * because a `::` inside a path would otherwise swallow the fields after it —
- * here the parser splits a FIXED count of fields, so only the two path
- * columns can be ambiguous and the scalar tail is always recoverable.
+ * session_path, session_attached, @ps_agent_kind, socket_path`. Paths sit in
+ * the middle rather than last (the phone parks `session_path` last for the
+ * same reason) because a `::` inside a path would otherwise swallow the
+ * fields after it — here the parser splits a FIXED count of fields, so only
+ * the two path columns can be ambiguous and the scalar tail is always
+ * recoverable.
+ *
+ * `socket_path` is the newest column and the reason aimed actions (Stop,
+ * rename) can be aimed at all: the ecosystem now runs one tmux SERVER per
+ * session, so two sessions can share a name legally and a bare `tmux` sees
+ * only the legacy default one. The parser reads the socket from the same
+ * positional end as the other scalars, and an old probe that lacks the
+ * column simply yields null there — see {@link SessionEnrichment.socketPath}.
  *
  * That reasoning holds, but only if the parser actually splits from BOTH
  * ends, which it did not: it took the first seven fields left to right, so a
@@ -119,7 +127,7 @@ const FIELD_SEP = '::';
 const ENRICHMENT_FORMAT =
   `#{session_name}${FIELD_SEP}#{window_active}${FIELD_SEP}#{pane_active}${FIELD_SEP}` +
   `#{pane_current_path}${FIELD_SEP}#{session_path}${FIELD_SEP}#{session_attached}` +
-  `${FIELD_SEP}#{@ps_agent_kind}`;
+  `${FIELD_SEP}#{@ps_agent_kind}${FIELD_SEP}#{socket_path}`;
 
 export const SESSION_ENRICHMENT_COMMAND =
   `tmux -u list-panes -a -F '${ENRICHMENT_FORMAT}' 2>/dev/null; ` +
@@ -178,6 +186,17 @@ export interface SessionEnrichment {
   path: string | null;
   attached: boolean;
   agentKind: SessionAgentKind | null;
+  /**
+   * The tmux server this session lives on, verbatim from `#{socket_path}`.
+   *
+   * The helper's ecosystem now runs one tmux SERVER per session (sockets
+   * `tmuxctl-*` beside the legacy shared one — see the doc block on
+   * `sessionExistsCommand`), so a name alone no longer says where a kill or a
+   * rename must be aimed. Null when the probe's tmux predates the column or
+   * the field came back empty; the caller then falls back to the bare,
+   * default-socket commands.
+   */
+  socketPath: string | null;
 }
 
 /**
@@ -228,7 +247,8 @@ export function parseSessionEnrichment(stdout: string): Map<string, SessionEnric
   for (const rawLine of stdout.split(/\r?\n/)) {
     const row = splitEnrichmentRow(rawLine);
     if (!row) continue;
-    const { name, windowActive, paneActive, panePath, sessionPath, attached, kind } = row;
+    const { name, windowActive, paneActive, panePath, sessionPath, attached, kind, socketPath } =
+      row;
 
     const isActive = windowActive === '1' && paneActive === '1';
     if (activeSeen.has(name) && !isActive) continue;
@@ -238,6 +258,7 @@ export function parseSessionEnrichment(stdout: string): Map<string, SessionEnric
       path: path ? path : null,
       attached: Number.isFinite(attachedCount) && attachedCount > 0,
       agentKind: agentKindFromTmuxOption(kind),
+      socketPath: socketPath ? socketPath : null,
     });
     if (isActive) activeSeen.add(name);
   }
@@ -253,19 +274,21 @@ interface EnrichmentRow {
   sessionPath: string;
   attached: string;
   kind: string;
+  socketPath: string;
 }
 
 /**
- * Split one probe line into its seven fields, tolerating both of the shapes
+ * Split one probe line into its fields, tolerating both of the shapes the
  * the old fixed left-to-right split got wrong.
  *
  * ## Too many fields
  *
- * A `::` inside either path column produces MORE than seven parts. Reading
+ * A `::` inside either path column produces MORE than the seven parts a
+ * socket-less row has (eight once the socket column is present). Reading
  * the first seven then shifted `session_attached` and `@ps_agent_kind` out of
  * a path fragment, which quietly reported the session as detached and
  * agent-less. Only the two path columns are ambiguous, so the three leading
- * scalars are taken from the front, the two trailing ones from the back, and
+ * scalars are taken from the front, the trailing ones from the back, and
  * whatever is left in the middle is the two paths.
  *
  * Splitting that middle is the one genuinely ambiguous decision here, and it
@@ -303,12 +326,37 @@ function splitEnrichmentRow(rawLine: string): EnrichmentRow | null {
   const windowActive = parts[1] ?? '';
   const paneActive = parts[2] ?? '';
 
+  // Trailing fields are counted from the END so a `::` in a path cannot shift
+  // them. The socket column arrived LAST and is optional: a probe from before
+  // it was added simply produces one fewer field, and empty is the right
+  // reading of both that and a blank value ("aim at the default server").
+  //
+  // Which tail shape a row has is decided by what the last field IS, not by
+  // how many fields there are — because a hostile path adds a part to BOTH
+  // shapes alike. A socket is an absolute tmux socket path; the two scalars
+  // beside it never look like one (`session_attached` is a digit, the agent
+  // word is an engine name or blank). So a last field starting with `/` is a
+  // socket, and anything else is a legacy row whose path grew the extra part,
+  // which then reads with exactly the pre-socket tail logic. The one row this
+  // can misread — new format, genuinely empty socket, hostile path — keeps its
+  // row and loses its path, which is the pre-socket behaviour anyway.
+  const n = parts.length;
+  const hasSocket = n >= 8 && (parts[n - 1] ?? '').startsWith('/');
+
+  if (hasSocket) {
+    const socketPath = parts[n - 1] ?? '';
+    const kind = parts[n - 2] ?? '';
+    const attached = parts[n - 3] ?? '';
+    const [panePath, sessionPath] = splitPathPair(parts.slice(3, n - 3));
+    return { name, windowActive, paneActive, panePath, sessionPath, attached, kind, socketPath };
+  }
+
   // The tail is taken from the END so a `::` in a path cannot shift it. When
   // the row is short the tail fields simply are not there, and empty is the
   // right reading of both: no attach count means "not attached", no recorded
   // option means "we did not launch this".
-  const hasKind = parts.length >= 7;
-  const hasAttached = parts.length >= 6;
+  const hasKind = n >= 7;
+  const hasAttached = n >= 6;
   const kind = hasKind ? (parts[parts.length - 1] ?? '') : '';
   const attached = hasAttached ? (parts[parts.length - (hasKind ? 2 : 1)] ?? '') : '';
 
@@ -316,7 +364,7 @@ function splitEnrichmentRow(rawLine: string): EnrichmentRow | null {
   const middle = parts.slice(3, middleEnd);
   const [panePath, sessionPath] = splitPathPair(middle);
 
-  return { name, windowActive, paneActive, panePath, sessionPath, attached, kind };
+  return { name, windowActive, paneActive, panePath, sessionPath, attached, kind, socketPath: '' };
 }
 
 /**
@@ -351,9 +399,8 @@ export function mergeSessionEnrichment(
   sessions: SessionSummary[],
   enrichment: Map<string, SessionEnrichment>,
 ): SessionSummary[] {
-  const { index: lenient } = lenientEnrichmentIndex(enrichment);
   const merged = sessions.map((session) => {
-    const extra = enrichment.get(session.name) ?? lenient.get(asciiSanitised(session.name));
+    const extra = findEnrichment(enrichment, session.name);
     if (!extra) return session;
     return {
       ...session,
@@ -613,6 +660,26 @@ function lenientEnrichmentIndex(enrichment: Map<string, SessionEnrichment>): {
   }
   for (const key of ambiguous) index.delete(key);
   return { index, ambiguous };
+}
+
+/**
+ * Look a session name up in the enrichment map exactly, then — and only then —
+ * under the ASCII sanitisation a non-`-u` tmux client would have printed
+ * ({@link asciiSanitised}).
+ *
+ * One function because the exact-then-lenient ORDER is load-bearing in more
+ * than one caller now: {@link mergeSessionEnrichment} joins paths with it and
+ * {@link PocketshellClient.locateSession} turns it into an aimed kill. A
+ * caller inlining the two lookups is how the order drifts.
+ */
+export function findEnrichment(
+  enrichment: Map<string, SessionEnrichment>,
+  name: string,
+): SessionEnrichment | null {
+  const exact = enrichment.get(name);
+  if (exact) return exact;
+  const lenient = lenientEnrichmentIndex(enrichment).index.get(asciiSanitised(name));
+  return lenient ?? null;
 }
 
 /**

@@ -166,12 +166,18 @@ describe('parseSessionEnrichment', () => {
       path: '/home/u/git/app',
       attached: false,
       agentKind: 'claude',
+      socketPath: null,
     });
   });
 
   it('falls back to session_path when no pane is active', () => {
     const out = parseSessionEnrichment('main::0::0::/tmp/other::/home/u::2::shell\n');
-    expect(out.get('main')).toEqual({ path: '/home/u', attached: true, agentKind: 'shell' });
+    expect(out.get('main')).toEqual({
+      path: '/home/u',
+      attached: true,
+      agentKind: 'shell',
+      socketPath: null,
+    });
   });
 
   it('degrades to an empty map for no-server / short output', () => {
@@ -251,10 +257,12 @@ describe('the missing-cwd capture', () => {
     const map = parseSessionEnrichment(panes);
     expect(map.get('git-od-ds')).toEqual({
       // Not truncated at the delimiter, which is what the old left-to-right
-      // split did — it reported `/home/testuser/git/od`.
+      // split did — it reported `/home/testuser/git/od`. The fixture predates
+      // the socket column, so the tail reads null there.
       path: '/home/testuser/git/od::ds',
       attached: false,
       agentKind: null,
+      socketPath: null,
     });
   });
 
@@ -280,7 +288,12 @@ describe('parseSessionEnrichment row splitting', () => {
     // A tmux too old for `#{@…}`, or a read cut short, loses the TAIL. The
     // row still says where the session is, which is the one thing it is for.
     const out = parseSessionEnrichment('main::1::1::/home/u/app::/home/u\n');
-    expect(out.get('main')).toEqual({ path: '/home/u/app', attached: false, agentKind: null });
+    expect(out.get('main')).toEqual({
+      path: '/home/u/app',
+      attached: false,
+      agentKind: null,
+      socketPath: null,
+    });
   });
 
   it('still skips lines with no path column at all', () => {
@@ -486,7 +499,12 @@ describe('diagnoseSessionPaths', () => {
     agentKind: null,
     ...(inferred ? { pathInferred: true } : {}),
   });
-  const probeRow = (path: string | null) => ({ path, attached: false, agentKind: null });
+  const probeRow = (path: string | null) => ({
+    path,
+    attached: false,
+    agentKind: null,
+    socketPath: null,
+  });
 
   it('says nothing when every session placed', () => {
     const report = diagnoseSessionPaths(
@@ -539,5 +557,57 @@ describe('diagnoseSessionPaths', () => {
       ]),
     );
     expect(report.unmatchedProbeKeys).toEqual(['ghost']);
+  });
+});
+
+/**
+ * The socket column is what lets Stop and rename be AIMED: the helper's
+ * ecosystem runs one tmux server per session, so a row without its server is a
+ * row nobody can act on. The column was added last, and the parser must keep
+ * reading seven-field rows — every capture and fixture in this file is one.
+ */
+describe('parseSessionEnrichment — the socket column', () => {
+  it('reads the eighth field as the server the session lives on', () => {
+    const out = parseSessionEnrichment(
+      'git-aplexer::1::1::/home/u/git/aplexer::/home/u/git/aplexer::0::claude::/tmp/tmux-1000/tmuxctl-42\n',
+    );
+    expect(out.get('git-aplexer')).toEqual({
+      path: '/home/u/git/aplexer',
+      attached: false,
+      agentKind: 'claude',
+      socketPath: '/tmp/tmux-1000/tmuxctl-42',
+    });
+  });
+
+  it('leaves socketPath null for a row from before the column existed', () => {
+    // Every capture fixture is a seven-field row; an old probe must keep
+    // parsing, with null meaning "aim at the default server" to the caller.
+    const out = parseSessionEnrichment('main::1::1::/home/u/a::/home/u::0::claude\n');
+    expect(out.get('main')).toEqual({
+      path: '/home/u/a',
+      attached: false,
+      agentKind: 'claude',
+      socketPath: null,
+    });
+  });
+
+  it('does not let a `::` inside a path shift the socket out of place', () => {
+    // Same rule as the tail scalars have always had: the socket is read from
+    // the END, so a path carrying the delimiter cannot steal it. The split of
+    // the middle stays the ancestor heuristic's business, exactly as it was
+    // before the column existed.
+    const out = parseSessionEnrichment(
+      'main::1::1::/data/x::y::/data::0::shell::/tmp/tmux-1000/tmuxctl-9\n',
+    );
+    expect(out.get('main')!.socketPath).toBe('/tmp/tmux-1000/tmuxctl-9');
+    expect(out.get('main')!.path).toBe('/data/x::y');
+  });
+
+  it('keeps the socket across the active-pane dedup', () => {
+    const out = parseSessionEnrichment(
+      'main::0::1::/tmp/other::/home/u::0::\n' +
+        'main::1::1::/home/u/app::/home/u::0::claude::/tmp/tmux-1000/tmuxctl-3\n',
+    );
+    expect(out.get('main')!.socketPath).toBe('/tmp/tmux-1000/tmuxctl-3');
   });
 });
