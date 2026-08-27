@@ -27,7 +27,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Group git worktrees under their repository | `c614e7e` |
 | ✅ | Root rows should not collapse | `1d89bf4` |
 | ✅ | Session grouping was invisible on a 1:1 layout | `dfd8780` |
-| ✅ | Pick the agent when starting a session from the panel — chained, with the create deferred behind BOTH answers (`docs/SESSIONLIST.md` §13a supersedes §13) | *this pass* |
+| ✅ | Pick the agent when starting a session from the panel — chained, with the create deferred behind BOTH answers (`docs/SESSIONLIST.md` §13a supersedes §13) | `169cf60` |
 | ✅ | A search box in the folder browser | *this pass* |
 
 ### The folder workspace
@@ -73,10 +73,10 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Clicking outside closes it when empty | `bc86cf7` |
 | ✅ | `Ctrl+V` in the terminal routes the clipboard to it | `1d89bf4` |
 | ✅ | Text and arrows in the doodle surface | `298921a` |
-| ✅ | Annotate an image that is already attached | _pending_ |
-| ✅ | Cancelling the doodle no longer discards it silently | _pending_ |
-| ✅ | Annotation text was too small to read | _pending_ |
-| ✅ | The text tool's caret did not land where it was clicked | _pending_ |
+| ✅ | Annotate an image that is already attached | `5a2f622` |
+| ✅ | Cancelling the doodle no longer discards it silently | `06adbd7` |
+| ✅ | Annotation text was too small to read | `fa2d510` |
+| ✅ | The text tool's caret did not land where it was clicked | `fa2d510` |
 
 ### Files
 
@@ -92,11 +92,11 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Right-click → open in a new panel | `c614e7e` |
 | ✅ | Fixed-width file browser panel | `c614e7e` |
 | ✅ | Breadcrumb on one line | `2f684dd` |
-| ✅ | …but it over-corrected into `~ / … /v…previews / olya-…` | _pending_ |
+| ✅ | …but it over-corrected into `~ / … /v…previews / olya-…` | `fffc105` |
 | ✅ | Cap at 100 rows with "load more" and search | `2f684dd` |
 | ✅ | Preview HTML | `384f66a` |
 | ✅ | Serve a folder over HTTP | `8d17f90` |
-| ✅ | Markdown preview | this change |
+| ✅ | Markdown preview | `435ddcf` |
 
 ### Terminal and connection
 
@@ -119,19 +119,20 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Remove the tool chips; ask to install instead | `16413b6` |
 | ✅ | Remove the host topbar; host in the window title | `ca79ae2` |
 | ✅ | Merge the session bar into the tab row | `38bf971` |
-| ✅ | Escape should not suppress the typing intercept; the plain-terminal hatch moved to a press in the terminal (`docs/COMPOSER.md` §12.2) | *this pass* |
+| ✅ | Escape should not suppress the typing intercept; the plain-terminal hatch moved to a press in the terminal (`docs/COMPOSER.md` §12.2) | `de7a8c1` |
 | ✅ | Move Ports / Usage / Settings into the panel | `c614e7e` |
 | ✅ | A Settings screen | `176e92f` |
 | ✅ | A default host, connected at startup | `176e92f` |
 | ✅ | Font family and size | `2a52e8f`, `4c0f555` |
 | ✅ | `Ctrl+=` did not zoom in | `31019f2` |
 | ✅ | Zoom in Settings | `31019f2` |
-| ✅ | `Ctrl+W` closed the window | this change |
+| ✅ | `Ctrl+W` closed the window | `169cf60` |
 | ✅ | Light theme, then multiple palettes | `448ad7a` |
 | ✅ | Drop the "force a new session" checkbox | `cde5dd5` |
-| ✅ | See every shortcut, grouped by surface, in Settings | this change |
-| ✅ | Rebind a shortcut, with conflicts named and the shell protected | this change |
-| ✅ | CodeMirror's baked `dark: true` | this change |
+| ✅ | See every shortcut, grouped by surface, in Settings | `b36ba69` |
+| ✅ | Rebind a shortcut, with conflicts named and the shell protected | `b36ba69` |
+| ✅ | Every chord handler reads that registry, so a rebinding takes effect on the next keystroke (`docs/SHORTCUTS.md` §6) | `86bf3dc`, `836eb6b`, `aaec2cd`, `e456a08`, `549c44b` |
+| ✅ | CodeMirror's baked `dark: true` | `435ddcf` |
 
 ### Housekeeping
 
@@ -139,17 +140,17 @@ is roughly the order things were asked, and that history is useful.
 |---|---|---|
 | ✅ | Remove old code and backwards compatibility | `88cc932`, `67fdcf5` |
 | ✅ | Commit regularly, in focused commits | ongoing |
-| ✅ | CodeMirror duplicated into the installer | this change |
-| ✅ | `keytar` and `ssh2-sftp-client` shipped without a single import | this change |
+| ✅ | CodeMirror duplicated into the installer | `169cf60` |
+| ✅ | `keytar` and `ssh2-sftp-client` shipped without a single import | `169cf60` |
 
 ---
 
 ## In progress
 
-| | Item |
-|---|---|
-| 🔄 | A `+` on each root row, and one for anywhere; retire "New session" |
-| 🔄 | Point the chord handlers at the shortcut registry — they still spell chords inline (`docs/SHORTCUTS.md` §6) |
+_Nothing._ The two items that sat here moved up: the root-row `+` landed
+earlier (`4c4b9bf`) and the chord handlers now read the shortcut registry
+(`86bf3dc`, `836eb6b`, `aaec2cd`, `e456a08`, `549c44b`), which is why
+`docs/SHORTCUTS.md` §6 no longer says "Not yet wired".
 
 ---
 
@@ -182,7 +183,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | ~~`electron-builder` was never run; the asar path for lazily-loaded CodeMirror chunks is reasoned about rather than executed.~~ Run, and executed: the packaged `win-unpacked` build boots from `app.asar`, and `import('./assets/toml-*.js')` inside it resolves and returns the grammar. Same run confirmed `Menu.getApplicationMenu()` is `null`, `Ctrl+W` leaves the window open and `Ctrl+Shift+W` closes it. |
 | 🔍 | Only Python was eyeballed for syntax highlighting; the other 40 grammars are covered headlessly. |
 | 🔍 | Terminal palettes were verified as colour values, not against real `ls --color` or a tmux status line in every theme. |
-| 🔍 | **The panel→agent chain is only half-wired until `FolderWorkspaceView` collects the parked launch.** The picker, the deferred commit and the handoff slot are in and unit-tested; the ~20-line collector in `FolderWorkspaceView.vue` was written but not applied (another agent held the file). Until it lands, choosing an agent from the panel creates the session and parks a launch nobody takes — a plain shell, which is what it would have been anyway. |
+| ✅ | ~~**The panel→agent chain is only half-wired until `FolderWorkspaceView` collects the parked launch.** The picker, the deferred commit and the handoff slot are in and unit-tested; the ~20-line collector in `FolderWorkspaceView.vue` was written but not applied (another agent held the file). Until it lands, choosing an agent from the panel creates the session and parks a launch nobody takes — a plain shell, which is what it would have been anyway.~~ Landed complete in `169cf60` — verified: `takeAgentLaunch(...)` runs in `FolderWorkspaceView.vue`, covered by `tests/unit/pendingAgentLaunch.test.ts`. |
 
 ---
 

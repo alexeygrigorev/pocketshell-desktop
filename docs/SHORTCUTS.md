@@ -453,28 +453,45 @@ next keystroke rather than on the next mount. `chordsFor` falls back to the
 defaults for a handler that resolved before the store was ready, so a binding
 can never end up missing and silently stop working.
 
-**Not yet wired.** Six other agents held the call-site files when this landed,
-so the registry ships with the Settings list reading from it and the handlers
-still spelling their chords inline. Until the diffs in the handover land, the
-following still hold their own copies:
+**Wired.** Every renderer handler reads the registry instead of spelling its
+chords inline: `TerminalView.vue`, `FolderWorkspaceView.vue`,
+`HostWorkspaceView.vue`, `FilesView.vue`, `PromptComposer.vue` and
+`DoodleCanvas.vue`. `settings.shortcutBindings` is a computed, so a rebinding
+takes effect on the next keystroke rather than on the next mount, and there is
+no second copy of any chord left to drift. `chordsFor` falls back to the
+defaults for a handler that resolved before the store was ready, so a binding
+can never end up missing and silently stop working.
 
-| File | Bindings |
+The one deliberate exception — kept, not pending:
+
+| File | Why it keeps its own matcher |
 |---|---|
-| `components/TerminalView.vue` | `terminal.*`, and the declining branch for `tabs.*` |
-| `views/FolderWorkspaceView.vue` | `tabs.next`, `tabs.previous`, `tabs.stepLeftRight` |
-| `views/HostWorkspaceView.vue` | `workspaces.stepUpDown` |
-| `views/FilesView.vue` | `files.save`, `files.gotoPath`, `files.filterTree` |
-| `components/PromptComposer.vue` | `composer.*` |
-| `components/DoodleCanvas.vue` | `doodle.*` |
-| `main/index.ts`, `shared/zoomKeys.ts` | `zoom.*` (locked; main cannot read the store) |
+| `main/index.ts`, `shared/zoomKeys.ts` | `zoom.*` is recognised in the main process, before the page sees the key, and main cannot read the renderer's localStorage. Listed and locked rather than wired. |
+
+The wiring surfaced two latent defects on its way in. The arrow pairs'
+defaults were stored as `Ctrl+Left`/`Ctrl+Up` — display spellings that
+`keydown` never reports (`ArrowLeft`), so those bindings could not have fired
+from a stored override until the defaults were corrected. And the copy branch
+in `TerminalView.vue` turned out to be missing its `preventDefault()`, the
+very defect §4 documents, sitting in the function that explains it. Both fixed
+(`86bf3dc`, `836eb6b`).
 
 ---
 
 ## 7. The call-site diffs
 
-Written against the working tree at the time the registry landed. Anchored on
-surrounding text rather than on line numbers, because six other agents held
-these files.
+Written against the working tree at the time the registry landed, before the
+wiring existed — kept as the design record of how each call site was meant to
+change. **They are all applied now** (`86bf3dc` terminal, `aaec2cd` tab and
+workspace arrows, `e456a08` Files, `549c44b` composer and doodle), anchored on
+surrounding text rather than on line numbers because that is how they were
+written to be applied.
+
+Two of the diffs name bindings that no longer exist: `tabs.move`
+(Ctrl+Shift+PageUp/PageDown) and `tabs.jumpToIndex` (Ctrl+1..9) were REMOVED
+after this was written, at the user's request, in `702225e`. Those hunks are
+void — the chords went back to the pane rather than into the registry — and
+the removal is recorded beside their former registry slots.
 
 Every one of them follows the same two rules:
 
