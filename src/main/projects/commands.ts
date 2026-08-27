@@ -66,9 +66,23 @@ export function mkdirCommand(path: string): string {
  * exists answers "taken" — which would make the free-name walk skip a
  * genuinely free name. `2>/dev/null` keeps "no server running" quiet: with no
  * tmux server nothing is taken.
+ *
+ * ## The [socketPath] argument, and when it is absent
+ *
+ * A name alone no longer locates a session. The helper's ecosystem runs one
+ * tmux SERVER per session (`tmuxctl-*` sockets beside the legacy shared one),
+ * and `pocketshell sessions list` sweeps every socket — so a session the panel
+ * shows can live on a server a bare `tmux` has never heard of. The user's Stop
+ * spent days answering "already gone" for a session that was alive on its own
+ * server because both halves of this operation probed the default socket only.
+ * When the caller knows the session's server (from the enrichment probe's
+ * `socket_path` column), the command is aimed there with `-S`; when it does not
+ * — an older probe without the column, or a sweep that could not run — a null
+ * keeps the bare default-socket spelling, which is the only query available.
  */
-export function sessionExistsCommand(name: string): string {
-  return `tmux has-session -t ${shellQuote(`=${name}`)} 2>/dev/null`;
+export function sessionExistsCommand(name: string, socketPath?: string | null): string {
+  const server = socketPath ? `-S ${shellQuote(socketPath)} ` : '';
+  return `tmux ${server}has-session -t ${shellQuote(`=${name}`)} 2>/dev/null`;
 }
 
 /**
@@ -258,11 +272,12 @@ export function reposCloneCommand(options: ReposCloneOptions): string {
  * ## Why raw tmux and not the helper
  *
  * The helper has no rename verb, and it does not need one. `attachCommand.ts`
- * establishes — with the correction at the top of that file — that tmuxctl
- * shells out to a bare `tmux` on the DEFAULT socket, so a raw tmux command
- * reaches the same server the helper's sessions live on. `sessionSwitchCommand`
- * already relies on exactly that. This is the same mechanism, aimed at a name
- * instead of at a client.
+ * establishes that tmuxctl joins by name and resolves it against the tmux
+ * servers it knows. This is the same mechanism, aimed at a name instead of at
+ * a client — with the one correction the per-session-server world forces: the
+ * "same server the helper's sessions live on" is no longer always the default
+ * one, so when the caller learned [from]'s socket the rename is aimed there,
+ * exactly as the kill is. A null socket keeps the bare spelling.
  *
  * ## Why both `=` prefixes matter
  *
@@ -280,8 +295,13 @@ export function reposCloneCommand(options: ReposCloneOptions): string {
  * injection boundary and it should not depend on a caller upstream having
  * sanitised correctly.
  */
-export function renameSessionCommand(from: string, to: string): string {
-  return `tmux rename-session -t ${shellQuote(`=${from}`)} -- ${shellQuote(to)}`;
+export function renameSessionCommand(
+  from: string,
+  to: string,
+  socketPath?: string | null,
+): string {
+  const server = socketPath ? `-S ${shellQuote(socketPath)} ` : '';
+  return `tmux ${server}rename-session -t ${shellQuote(`=${from}`)} -- ${shellQuote(to)}`;
 }
 
 /**
@@ -343,10 +363,20 @@ export function renameSessionCommand(from: string, to: string): string {
  * A bare `-t` fails OPEN: it destroys the wrong session and reports success.
  * `=` fails CLOSED, with a message the caller can show. For a command with no
  * undo that is the only acceptable direction to fail in.
- * (`v0.4.44-tmux-kill-session-exact-match.txt`.)
+ * (`v0.4.44-tmux-kill-session-exact-match.txt.`)
+ *
+ * ## The [socketPath] argument
+ *
+ * Aimed exactly as {@link sessionExistsCommand} aims its probe, for the same
+ * per-session-server reason: the probe that located [name] also reported which
+ * tmux server it lives on, and killing that name through a `-S` there is the
+ * only spelling that can reach it. A null socket keeps the bare default form —
+ * both the legacy hosts that have only one server and the callers that could
+ * not learn a socket land here unchanged.
  */
-export function killSessionCommand(name: string): string {
-  return `tmux kill-session -t ${shellQuote(`=${name}`)}`;
+export function killSessionCommand(name: string, socketPath?: string | null): string {
+  const server = socketPath ? `-S ${shellQuote(socketPath)} ` : '';
+  return `tmux ${server}kill-session -t ${shellQuote(`=${name}`)}`;
 }
 
 /**

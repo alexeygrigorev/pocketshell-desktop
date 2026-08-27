@@ -106,6 +106,25 @@ describe('sessionExistsCommand', () => {
   it('quotes a hostile name', () => {
     expect(sessionExistsCommand("a'b")).toBe("tmux has-session -t '=a'\\''b' 2>/dev/null");
   });
+
+  it('aims at the session’s own server when the locator found one', () => {
+    // The per-session-server world: a bare `tmux` reaches the legacy default
+    // socket only, and a session on its own `tmuxctl-*` server is invisible to
+    // it — which is how Stop spent days answering "already gone" for a live
+    // session. `-S` is the whole difference.
+    expect(sessionExistsCommand('git-x', '/tmp/tmux-1000/tmuxctl-42')).toBe(
+      "tmux -S '/tmp/tmux-1000/tmuxctl-42' has-session -t '=git-x' 2>/dev/null",
+    );
+  });
+
+  it('keeps the bare spelling when no socket is known', () => {
+    // Both nullish forms — an old probe without the column, and a failed sweep
+    // — must land on the legacy command, not on `-S ''`.
+    expect(sessionExistsCommand('git-x', null)).toBe("tmux has-session -t '=git-x' 2>/dev/null");
+    expect(sessionExistsCommand('git-x', undefined)).toBe(
+      "tmux has-session -t '=git-x' 2>/dev/null",
+    );
+  });
 });
 
 describe('freeSessionNameCommand', () => {
@@ -342,6 +361,12 @@ describe('renameSessionCommand', () => {
     // cannot get in front of it.
     expect(renameSessionCommand(HOSTILE, HOSTILE)).toContain("-t '=wei");
   });
+
+  it('aims at the source session’s own server when the locator found one', () => {
+    expect(renameSessionCommand('api', 'api-2', '/tmp/tmux-1000/tmuxctl-9')).toBe(
+      "tmux -S '/tmp/tmux-1000/tmuxctl-9' rename-session -t '=api' -- 'api-2'",
+    );
+  });
 });
 
 /**
@@ -387,5 +412,19 @@ describe('killSessionCommand', () => {
   it('does not reach for `tmuxctl kill`, whose own kill is not exact-match', () => {
     expect(killSessionCommand('api')).not.toContain('tmuxctl');
     expect(killSessionCommand('api')).not.toContain('--yes');
+  });
+
+  it('aims at the session’s own server when the locator found one', () => {
+    // The whole of the "Stop session… does nothing" bug: the session was alive
+    // on its own per-session tmux server while both the probe and this command
+    // asked the default socket. Same exact-match target, one `-S` of aim.
+    expect(killSessionCommand('git-aplexer', '/tmp/tmux-1000/tmuxctl-42')).toBe(
+      "tmux -S '/tmp/tmux-1000/tmuxctl-42' kill-session -t '=git-aplexer'",
+    );
+    // And the hostile-name guarantees survive the extra flag: the socket is
+    // quoted on its own, the name still inside the `=`.
+    const hostile = killSessionCommand(HOSTILE, "/tmp/wi'rd");
+    expect(hostile).toContain("-S '/tmp/wi'\\''rd'");
+    expect(hostile).toContain(`-t ${shellQuote(`=${HOSTILE}`)}`);
   });
 });
