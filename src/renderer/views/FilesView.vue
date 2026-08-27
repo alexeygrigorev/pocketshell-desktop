@@ -21,6 +21,7 @@ import { useConnectionStore } from '../stores/connection';
 import { useFilesStore, formatBytes, hasPreview, isEditable } from '../stores/files';
 import { useSettingsStore } from '../stores/settings';
 import { resolveTheme } from '../themes';
+import { isShortcut } from '../../shared/shortcuts';
 import FileTree from '../components/FileTree.vue';
 
 /**
@@ -250,22 +251,30 @@ watch(
 const treeRef = ref<{ editPath: () => void; focusSearch: () => void } | null>(null);
 
 function onKeydown(e: KeyboardEvent): void {
-  if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+  const bindings = settings.shortcutBindings;
+  if (isShortcut(bindings, 'files.save', e)) {
     e.preventDefault();
     if (files.dirty) void onSave();
   }
-  // Ctrl+L is the address-bar chord everywhere else the user types a path, and
-  // nothing in this app claims it: Ctrl+S saves here, and the composer's
-  // Ctrl+` / Ctrl+Shift+K / Ctrl+Shift+Down are not live on this tab, which
-  // hides the composer entirely. The shell's own Ctrl+L (clear screen) is a
-  // TERMINAL binding and this handler only sees keys from inside the Files pane.
-  if ((e.metaKey || e.ctrlKey) && (e.key === 'l' || e.key === 'L')) {
+  // Ctrl+L is the address-bar chord everywhere else the user types a path. The
+  // shell's own Ctrl+L (clear screen) is untouched: this handler only ever sees
+  // keys from inside the Files pane.
+  //
+  // This comment used to claim the composer's chords "are not live on this tab,
+  // which hides the composer entirely". THAT IS FALSE and it was false when it
+  // was written: FolderWorkspaceView mounts the composer once, outside the tab
+  // body, behind a `v-show` — precisely so a tab switch cannot cost a draft —
+  // and its handler is on `window` with `capture: true`, registered in
+  // `onMounted`. Ctrl+backtick on this tab toggles a panel nobody can see. The
+  // registry models that overlap (`SURFACE_COLLISIONS`, composer/files) so the
+  // next chord chosen here is checked against it rather than against a comment.
+  if (isShortcut(bindings, 'files.gotoPath', e)) {
     e.preventDefault();
     treeRef.value?.editPath();
   }
   // Ctrl+F filters the TREE, not the open file: CodeEditor loads no
   // @codemirror/search extension, so nothing else in this pane claims it.
-  if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+  if (isShortcut(bindings, 'files.filterTree', e)) {
     e.preventDefault();
     treeRef.value?.focusSearch();
   }
@@ -398,9 +407,10 @@ const previewNote = computed(() => {
             <span class="dirty-dot" />
             unsaved
           </span>
-          <!-- The handler is `metaKey || ctrlKey`; the label used to read
-               `Save (⌘S)` — a macOS glyph on a Windows-first app. The chord
-               belongs in the tooltip, in this app's Ctrl+... convention. -->
+          <!-- The chord comes from the shortcut registry (`files.save`, default
+               Ctrl+S); the label used to read `Save (⌘S)` — a macOS glyph on a
+               Windows-first app. The chord belongs in the tooltip, in this
+               app's Ctrl+... convention. -->
           <button
             v-if="isEditable(files.openMode)"
             class="save-btn"
