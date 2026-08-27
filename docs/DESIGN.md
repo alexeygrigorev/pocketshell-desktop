@@ -802,6 +802,10 @@ change.
 > as its own strip control, at the user's request. The argument below is kept
 > because it still decides Ports and Usage, which stay in the menu — see §5.3d
 > for why the gear is the exception rather than a reversal.
+>
+> **Then overturned by §5.3e**, which killed the menu and made Ports and Usage
+> icons after all — kept because how that reversal was argued is part of the
+> record now.
 
 The user circled the panel's foot row — Ports, Usage, the gear — and drew an
 arrow up to the header: "we can move this things there."
@@ -840,6 +844,11 @@ independently reachable from the host PICKER, where a user looks for a
 startup-scoped setting.
 
 ### 5.3d Session creation on the rows, and the strip's final order (implemented)
+
+> **Partly revised by §5.3e.** The `⋯` row of the order below became its two
+> contents — Ports and Usage as their own icons — the strip grew to seven
+> controls, and the panel floor moved to 232px to hold them. The ordering rule
+> itself survives; read §5.3e alongside this one.
 
 Two user asks, one strip. Kept together because they land on the same six
 controls and the width budget only closes if they are read together.
@@ -913,6 +922,67 @@ There is no seventh slot. The next control added here has to displace one — th
 way the `SESSIONS` word paid for the overflow mark in §5.3c — or move the panel
 floor, which the drag clamp and `.tree`'s `min-width` both pin at 200.
 
+### 5.3e The kebab is killed — Ports and Usage become their own icons (implemented)
+
+Looking at the strip with its overflow menu open: "I think we can kill the
+kebab here and have two icons instead."
+
+§5.3c built that menu to answer ca79ae2's ruling — "two unlabelled overlay
+glyphs would be a memory test" — and this reverses it at the user's say-so.
+Recorded as an overturning rather than a discovery that the old argument was
+wrong: it wasn't, it was overruled by the person it was protecting. What makes
+the reversal livable is where the words went. They were never deleted; they
+moved onto each button, whole ("Port forwarding", "Provider usage"), as the
+tooltip and the entire accessible name — exactly what the retired `⋯` trigger
+held for both at once ("Ports, Usage"). A hover answers what a click and a
+menu row used to.
+
+**Mechanics.** `HostActionsMenu.vue` and its menu machinery are gone from both
+surfaces. The two buttons are rendered by one new component,
+`components/HostPanelButtons.vue`, fed from `HOST_PANEL_ITEMS`
+(renderer/hostPanels.ts), which now carries a `label` AND an `icon` per entry —
+the same shared-vocabulary trick the menu used, because the header and the
+collapsed rail still must not drift. `more-horizontal` leaves the `AppIcon`
+registry with its last caller; an unused mark would have kept describing a
+trigger nothing has.
+
+**The glyphs, since §5.3c's "AppIcon has no unambiguous mark for either" no
+longer holds and had to be made false rather than argued with:**
+
+| | | |
+|---|---|---|
+| `arrow-right-left` | Port forwarding | Two opposing arrows, each half Feather's own `arrow-right` construction scaled onto a baseline and mirrored. Forwarding is a symmetric MAPPING between a local port and a remote port, so an opposing pair says it better than `shuffle`'s crossing paths (which read as randomising) or a turn-and-leave arrow. |
+| `bar-chart-2` | Provider usage | Feather verbatim. The register every tool uses for a meter. |
+
+**Order.** The user's §5.3d sentence survives intact with its `⋯` expanded:
+the strip reads back, `+`, ports, usage, refresh, settings, hide.
+
+**Width, re-derived — and full again.** Seven controls cannot fit the 200px
+floor six closed exactly, so the floor moves rather than the padding trick:
+
+```
+  7 controls × --control-h (28)          = 196
++ 6 gaps     × --sp-1      (4)           =  24
+                                           ---
+                                           220
+  panel floor                             232
+- padding-left  --sp-2 (8)               =   8
+- padding-right --sp-1 (4)               =   4
+                                           ---
+  content box                             220
+```
+
+`MIN_PANEL_WIDTH` in HostWorkspaceView.vue and `.tree`'s `min-width` moved
+200 → 232 together, as they have always had to move together. The folder-row
+budget at the floor improves with it (186px of label column, up from 154);
+nothing else on the rows changes, and the <270px container query stands.
+
+**The rail mirrors, as ever.** It gets the same two buttons from the same
+component and keeps its gear: ports, usage, settings — three icons where `⋯`
+and gear stood, none of them a menu. The rail's rule (must offer nothing less
+than the expanded panel) now extends to icons promoted out of menus by hand,
+which is exactly how it got its gear in §5.3d.
+
 ### 5.3b Host workspace chrome — NO topbar (revised, implemented)
 
 The host topbar — back, collapse, `hetzner · alexey@135.181.114.209`,
@@ -927,7 +997,7 @@ redistributed, none deleted:
 | Host label (`name · user@hostname`) | **the OS window title** | The native title bar was already spending its row saying the static word "PocketShell". Built by the pure `src/shared/windowTitle.ts`, applied over `win:setTitle`; the renderer drives it because the title mirrors the *view*, not the connection (Back keeps the link alive while the picker shows). Also puts the host in the taskbar and Alt-Tab. |
 | Back arrow | leading slot of the session panel's `SESSIONS` header | An arrow beside `SESSIONS` reads as "leave this host's sessions". The header row was already paying `--topbar-h`. |
 | Collapse toggle (`panel-left`) | trailing slot of the same header, beside Refresh | The hide control sits on the thing it hides. |
-| Ports / Usage / Settings | **revised — see §5.3c, then §5.3d.** Originally a `.host-actions` row at the panel's **foot**, below "New session": host-scoped controls on the host-scoped surface, bottom-most = most global (the VS Code gear-at-the-bottom register, gear far right). Ports and Usage kept text labels because two unlabeled overlay glyphs would be a memory test. ~150px of controls, fitting the 200px floor. **Now:** Ports and Usage in the header's overflow menu, Settings as its own gear beside it. |
+| Ports / Usage / Settings | **revised — see §5.3c, §5.3d, then §5.3e.** Originally a `.host-actions` row at the panel's **foot**, below "New session": host-scoped controls on the host-scoped surface, bottom-most = most global (the VS Code gear-at-the-bottom register, gear far right). Ports and Usage kept text labels because two unlabeled overlay glyphs would be a memory test. ~150px of controls, fitting the 200px floor. **Now:** Ports and Usage as their own icons, Settings as its own gear beside them — direct triggers, words in the tooltips (§5.3e). |
 | Disconnect | the **host picker**, on the connected host's row | Every disconnect already navigated to the picker; the button now lives at its destination, labeled, beside where the connection was opened. The connected row also gets the §5.2 `--success` dot, and clicking it re-enters the workspace **without re-dialling** (a second dial would orphan the live connection). |
 | Missing-tools notice | unchanged — the workspace's top strip | Rendered only when a tool is absent, so the usual cost is zero rows. |
 
@@ -935,10 +1005,11 @@ redistributed, none deleted:
 collapse would take the expand toggle — and with it every host control — off
 screen. Collapsing now leaves a ~36px rail (`--surface`, right hairline)
 holding the expand toggle and the back arrow, so both stay one click away
-while ~90% of the panel's width still goes to the terminal. It also carries the
-header's overflow control and, since §5.3d, the header's gear — the rail's rule
-is that it must not offer less than the expanded panel, so a control promoted
-out of the overflow menu has to be added here by hand.
+while ~90% of the panel's width still goes to the terminal. It also carries
+whatever the header holds — since §5.3e, its Ports/Usage icons and gear — under
+the rail's rule that it must not offer less than the expanded panel, which is
+why a control promoted out of the menu was added here by hand in §5.3d and why
+§5.3e's icons arrived through one shared component instead.
 
 Alignment note: the `SESSIONS` header and the session bar across the splitter
 are both `--topbar-h`, so the window's top row reads as one line broken only

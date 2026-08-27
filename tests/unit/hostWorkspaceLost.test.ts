@@ -127,7 +127,6 @@ async function open(state: 'connected' | 'lost'): Promise<VueWrapper> {
       plugins: [router],
       stubs: {
         SessionTree: true,
-        HostActionsMenu: true,
         OverlayPanel: true,
         PortPanelView: true,
         SettingsView: true,

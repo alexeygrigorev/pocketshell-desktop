@@ -251,25 +251,39 @@ describe('SessionTree — the foot button is gone, and nothing went with it', ()
 });
 
 describe('SessionTree — the header strip', () => {
-  it('reads back, +, overflow, refresh, settings, hide', async () => {
+  it('reads back, +, ports, usage, refresh, settings, hide', async () => {
     // The user's own order for the last four ("here have ... then refresh then
     // settings then hide"), with the `+` leading the actions group because it
-    // is the panel's primary action and the rest is chrome.
+    // is the panel's primary action and the rest is chrome. §5.3e expanded
+    // their `⋯` into its two overlays at the same user's ask, so Ports and
+    // Usage are now two buttons between `+` and Refresh — the words in the
+    // test are their tooltips/accessible names, as they were for the kebab.
     const wrapper = await open([session('git-a', `${HOME}/git/a`)]);
     expect(headerControls(wrapper)).toEqual([
       'Back to hosts',
       'New session in any folder',
-      'Ports, Usage',
+      'Port forwarding',
+      'Provider usage',
       'Refresh',
       'Settings',
       'Hide session panel',
     ]);
   });
 
-  it('opens Settings from its own control, not only from the overflow menu', async () => {
+  it('opens Settings from its own control', async () => {
     const wrapper = await open([]);
     await wrapper.get('[title="Settings"]').trigger('click');
     expect(wrapper.emitted('panel')).toEqual([['settings']]);
+  });
+
+  it('opens each overlay straight from its icon — no intermediate menu', async () => {
+    // §5.3e's whole point: one click, not open-the-kebab-then-pick. Each
+    // button announces itself, so a regression back to an overflow trigger
+    // fails here before it fails anywhere else.
+    const wrapper = await open([]);
+    await wrapper.get('[title="Port forwarding"]').trigger('click');
+    await wrapper.get('[title="Provider usage"]').trigger('click');
+    expect(wrapper.emitted('panel')).toEqual([['ports'], ['usage']]);
   });
 });
 

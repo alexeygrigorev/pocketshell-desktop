@@ -136,7 +136,6 @@ async function open(folder?: string): Promise<VueWrapper> {
       plugins: [router],
       stubs: {
         SessionTree: true,
-        HostActionsMenu: true,
         OverlayPanel: true,
         PortPanelView: true,
         SettingsView: true,

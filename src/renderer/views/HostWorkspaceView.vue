@@ -18,9 +18,11 @@
 //     below) — the native title bar was already there, saying "PocketShell";
 //   - BACK and COLLAPSE moved into the session panel's own header row, which
 //     was already paying for its --topbar-h;
-//   - PORTS / USAGE / SETTINGS were a panel-FOOT row, and are now an overflow
-//     menu in that same header (docs/DESIGN.md §5.3c) — the user asked for
-//     them at the top. The overlays did not move; only their triggers did;
+//   - PORTS / USAGE / SETTINGS were a panel-FOOT row, and now sit as controls
+//     in that same header (docs/DESIGN.md §5.3c→e) — the user asked for them
+//     at the top, and since §5.3e each of Ports and Usage is its OWN icon
+//     there rather than a row of an overflow menu. The overlays did not move;
+//     only their triggers did;
 //   - DISCONNECT moved to the host picker's row for the connected host —
 //     every disconnect already navigated there, so the button now lives at
 //     its own destination, next to where the connection was opened.
@@ -41,11 +43,10 @@ import { isShortcut } from '../../shared/shortcuts';
 import AppIcon from '../components/AppIcon.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
-import HostActionsMenu from '../components/HostActionsMenu.vue';
+import HostPanelButtons from '../components/HostPanelButtons.vue';
 import { type HostPanel } from '../hostPanels';
 import { useFolderTree } from '../folderTree';
 import { adjacentIndex } from '../../shared/listNavigation';
-import type { Box } from '../../shared/popupPlacement';
 import PortPanelView from './PortPanelView.vue';
 import SettingsView from './SettingsView.vue';
 import UsageView from './UsageView.vue';
@@ -85,36 +86,15 @@ watch(
  */
 const panel = ref<HostPanel | null>(null);
 
-/**
- * The COLLAPSED RAIL's copy of the host-actions trigger.
- *
- * A second anchor rather than a shared one, because the two triggers are never
- * on screen together — the rail replaces the panel — and threading one piece of
- * state through both would mean the panel's header owning a control that is not
- * rendered while the rail is showing.
- */
-const railMenuAnchor = ref<Box | null>(null);
-const railMenuButton = ref<HTMLElement | null>(null);
-
-function toggleRailMenu(): void {
-  if (railMenuAnchor.value) {
-    railMenuAnchor.value = null;
-    return;
-  }
-  const box = railMenuButton.value?.getBoundingClientRect();
-  if (box) {
-    railMenuAnchor.value = { left: box.left, top: box.top, width: box.width, height: box.height };
-  }
-}
-
-function onRailPanel(name: HostPanel): void {
-  railMenuAnchor.value = null;
-  panel.value = name;
-}
-
 /** Session-panel geometry. Collapsed hides it entirely; width is drag-resized. */
 const panelCollapsed = ref(false);
-const MIN_PANEL_WIDTH = 200;
+/**
+ * Seven controls in the header strip pin this floor: 7×28px squares + 6×4px
+ * gaps = 220, plus the header's asymmetric padding of 12 — the arithmetic is
+ * written out in SessionTree's template. It was 200 until §5.3e expanded the
+ * overflow menu into its two icons; dragging below 232 would clip the strip.
+ */
+const MIN_PANEL_WIDTH = 232;
 const MAX_PANEL_WIDTH = 560;
 const DEFAULT_PANEL_WIDTH = 280;
 const PANEL_WIDTH_KEY = 'pocketshell.sessionPanelWidth';
@@ -425,49 +405,23 @@ async function onRefreshUsage(): Promise<void> {
           <AppIcon name="arrow-left" :size="14" />
         </button>
         <!-- The rail exists so host controls are not stranded when the panel is
-             hidden (ca79ae2). Now that Ports/Usage/Settings live in the panel
-             HEADER rather than its foot, the rail has to carry them too, or
-             collapsing the panel would take all three off screen.
-
-             It MIRRORS the header's arrangement rather than inventing its own:
-             the overflow control for Ports and Usage, then the gear. Not three
-             icons — a 36px rail has no room for text, and inventing a glyph
-             apiece for "ports" and "usage" is precisely the memory test
-             ca79ae2 refused, so those two keep their words inside the menu. The
-             gear is the exception for the same reason it is one in the header:
-             it is already this app's settings mark everywhere else.
-
-             The gear is here BECAUSE it left the menu. When Settings was a menu
-             row, the rail got it for free from the one overflow button; pulling
-             it out of the list would otherwise have made the collapsed panel
-             offer strictly less than the expanded one, which is the single
-             failure this rail exists to prevent.
+             hidden (ca79ae2). The header holds Ports and Usage as their own
+             icon buttons since §5.3e, so the rail carries the same pair
+             (components/HostPanelButtons.vue) plus the gear — mirroring the
+             header's arrangement rather than inventing its own. Not fewer
+             icons than the header, and no menu row between them and their
+             overlays: a 36px rail has no room for text either way, and the
+             words live in each tooltip exactly as they do in the header.
 
              There is no `+` here on purpose. The rail is an ESCAPE HATCH — show
              the panel, go back, reach the host overlays — and creating a
              session is a thing you do while looking at the list you are about
              to add to. One click on the top button brings that list back. -->
         <div class="rail-sep" />
-        <button
-          ref="railMenuButton"
-          class="icon-btn"
-          title="Ports, Usage"
-          aria-haspopup="menu"
-          :aria-expanded="railMenuAnchor !== null"
-          @click="toggleRailMenu"
-        >
-          <AppIcon name="more-horizontal" :size="14" />
-        </button>
+        <HostPanelButtons @select="panel = $event" />
         <button class="icon-btn" title="Settings" @click="panel = 'settings'">
           <AppIcon name="settings" :size="14" />
         </button>
-        <HostActionsMenu
-          v-if="railMenuAnchor"
-          :anchor="railMenuAnchor"
-          :trigger="railMenuButton"
-          @select="onRailPanel"
-          @close="railMenuAnchor = null"
-        />
       </aside>
 
       <!-- Persistent session panel: always mounted, never navigated away from.

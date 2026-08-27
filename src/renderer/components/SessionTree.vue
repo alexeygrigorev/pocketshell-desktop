@@ -59,7 +59,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
 import NewSessionDialog from './NewSessionDialog.vue';
-import HostActionsMenu from './HostActionsMenu.vue';
+import HostPanelButtons from './HostPanelButtons.vue';
 import OverlayPanel from './OverlayPanel.vue';
 import PopupMenu from './PopupMenu.vue';
 import { type HostPanel } from '../hostPanels';
@@ -137,49 +137,16 @@ const settings = useSettingsStore();
 const creating = ref<{ startIn: string | null } | null>(null);
 
 /**
- * The host-actions overflow menu — Ports and Usage (docs/DESIGN.md §5.3c,
- * revised by §5.3d).
- *
- * The user circled the panel's foot row and drew an arrow to this header:
- * "we can move this things there". Moving them is easy; fitting them is not.
- * The header already holds Back, a label, Refresh and the collapse toggle, and
- * the panel drags down to a 200px floor — seven controls in one strip at that
- * width is not a strip, it is a scramble.
- *
- * So they move as ONE control, and this is what makes the move affordable
- * rather than merely possible. It also settles the objection ca79ae2 raised
- * against putting them here in the first place: "two unlabelled overlay glyphs
- * would be a memory test". Inside a menu they keep their WORDS — `Port
- * forwarding`, `Provider usage` — so nothing is reduced to a glyph, and the
- * strip spends one 14px mark instead of ~150px of buttons.
- *
- * The `SESSIONS` label goes with them, and it is the cheapest thing in the row:
- * it labels a panel whose contents are self-evidently folders, on a window
- * whose title already carries the host. Its width pays for the new control
- * outright.
- *
- * SETTINGS is no longer one of the items. The user asked for the gear back as
- * its own control ("… then refresh then settings then hide"), and that does not
- * reopen the argument above — the objection was about glyphs nobody can read,
- * and the gear is the one mark of the three that is already icon-only across
- * this whole app. The two that need words still have them, here.
+ * The host overlays used to be an overflow menu — Ports and Usage parked behind
+ * a `⋯` because unlabelled glyphs were called a memory test (ca79ae2) and the
+ * strip had no room for their words. §5.3e reversed that at the user's ask:
+ * the kebab is gone and each overlay is its own icon, its words living in the
+ * tooltip/accessible name. The buttons themselves come from
+ * components/HostPanelButtons.vue so this header and the collapsed rail render
+ * the same pair; what is left here is only the plumbing of announcing which
+ * overlay was clicked to the workspace that owns them.
  */
-const hostMenuAnchor = ref<Box | null>(null);
-const hostMenuButton = ref<HTMLElement | null>(null);
-
-function toggleHostMenu(): void {
-  if (hostMenuAnchor.value) {
-    hostMenuAnchor.value = null;
-    return;
-  }
-  const box = hostMenuButton.value?.getBoundingClientRect();
-  if (box) {
-    hostMenuAnchor.value = { left: box.left, top: box.top, width: box.width, height: box.height };
-  }
-}
-
 function openPanel(name: HostPanel): void {
-  hostMenuAnchor.value = null;
   emit('panel', name);
 }
 
@@ -523,7 +490,7 @@ function onRowDragEnd(): void {
  *
  * A right-click rather than another revealed `+`. The row is already tight —
  * dot, label, up to two badges, a count and a timestamp, in a panel that drags
- * down to 200px, where the container query has already had to drop the
+ * down to 232px, where the container query has already had to drop the
  * timestamp — and the `+` on the root above it is the mark whose whole
  * justification (see `.root-add`) was that one per ROOT is a tolerable number
  * of identical marks to run down a scannable panel. One per FOLDER is not.
@@ -831,25 +798,27 @@ function fmtRelative(epochSeconds: number): string {
 
 <template>
   <div class="tree">
-    <!-- The `SESSIONS` word is gone, and its width is what pays for the host
-         actions arriving here. See `hostMenuAnchor` in the script. -->
+    <!-- The `SESSIONS` word is gone, and its width is what paid for the host
+         actions arriving here. See the header strip below. -->
     <div class="tree-header">
       <button class="icon-btn" title="Back to hosts" @click="emit('back')">
         <AppIcon name="arrow-left" :size="14" />
       </button>
-      <!-- ORDER: `+`, then overflow, refresh, settings, hide.
+      <!-- ORDER: `+`, ports, usage, refresh, settings, hide.
            The last four are the user's, given as "here have ... then refresh
-           then settings then hide" against a screenshot of this strip. The `+`
-           leads because it is the panel's primary action and the other four are
-           chrome; their relative order is exactly as asked.
+           then settings then hide" against a screenshot of this strip; §5.3e
+           expanded their `⋯` into its two contents at the same user's ask. The
+           `+` leads because it is the panel's primary action and the others are
+           chrome.
 
-           WIDTH, at the 200px drag floor, because this strip is now full:
-           six --control-h squares (6×28 = 168) plus five --sp-1 gaps (20) is
-           188px, in a content box of 200 − 8 − 4 = 188. It fits EXACTLY, with
+           WIDTH, at the 232px drag floor, because this strip is again full:
+           seven --control-h squares (7×28 = 196) plus six --sp-1 gaps (24) is
+           220px, in a content box of 232 − 8 − 4 = 220. It fits EXACTLY, with
            no shrink and nothing clipped, and that is why the right padding is
            --sp-1 against the left's --sp-2 (see .tree-header). There is no room
-           for a seventh: the next control added here has to displace one, the
-           way the `SESSIONS` word paid for the overflow mark in §5.3c. -->
+           for an eighth: the next control added here has to displace one or
+           move the floor again — MIN_PANEL_WIDTH in HostWorkspaceView.vue and
+           .tree's min-width below pin it together. -->
       <div class="header-actions">
         <!-- The general `+`: a session in ANY folder, nothing pre-filled. It is
              what replaced the panel's full-width foot button, and it is the
@@ -863,20 +832,10 @@ function fmtRelative(epochSeconds: number): string {
         >
           <AppIcon name="plus" :size="14" />
         </button>
-        <!-- Two items now, not three: the gear left this menu for the slot two
-             along. Ports and Usage stay, because they are the two that need
-             their WORDS (docs/DESIGN.md §5.3c). -->
-        <button
-          ref="hostMenuButton"
-          class="icon-btn"
-          :class="{ on: hostMenuAnchor !== null }"
-          title="Ports, Usage"
-          aria-haspopup="menu"
-          :aria-expanded="hostMenuAnchor !== null"
-          @click="toggleHostMenu"
-        >
-          <AppIcon name="more-horizontal" :size="14" />
-        </button>
+        <!-- Ports and Usage as their own buttons (§5.3e). Their words live in
+             the tooltips — which double as accessible names — exactly where the
+             retired `⋯` trigger kept "Ports, Usage". -->
+        <HostPanelButtons @select="openPanel" />
         <button class="icon-btn" :disabled="sessions.loading" title="Refresh" @click="onRefresh">
           <AppIcon name="refresh" :size="14" :class="{ spin: sessions.loading }" />
         </button>
@@ -894,14 +853,6 @@ function fmtRelative(epochSeconds: number): string {
           <AppIcon name="panel-left" :size="14" />
         </button>
       </div>
-
-      <HostActionsMenu
-        v-if="hostMenuAnchor"
-        :anchor="hostMenuAnchor"
-        :trigger="hostMenuButton"
-        @select="openPanel"
-        @close="hostMenuAnchor = null"
-      />
     </div>
 
     <!-- `dragend` sits on the LIST, not on the row: it fires on the source
@@ -1258,9 +1209,10 @@ function fmtRelative(epochSeconds: number): string {
      short of that row. */
   flex: 1 1 auto;
   min-height: 0;
-  /* Matches HostWorkspaceView's MIN_PANEL_WIDTH. It used to be 240px, which
-     silently contradicted the 200px drag clamp. */
-  min-width: 200px;
+  /* Matches HostWorkspaceView's MIN_PANEL_WIDTH (232px since §5.3e gave the
+     strip its seventh square; before that both were 200, and before THAT this
+     was 240, silently contradicting the drag clamp of the day). */
+  min-width: 232px;
   /* Query container for the narrow-panel rule at the bottom of this block. */
   container-type: inline-size;
 }
@@ -1273,10 +1225,10 @@ function fmtRelative(epochSeconds: number): string {
 
    The RIGHT padding is --sp-1, and the asymmetry is doing work rather than
    drifting. The left end is a single arrow whose glyph lines up with the dots
-   and labels below it; the right end is a RUN of five ghost squares, each
+   and labels below it; the right end is a RUN of seven ghost squares, each
    already carrying ~7px of its own optical inset, so a further 8px there is
    inset on top of inset. Halving it is also exactly what makes the strip fit
-   the 200px drag floor with nothing shrunk — the arithmetic is in the template,
+   the 232px drag floor with nothing shrunk — the arithmetic is in the template,
    above `.header-actions`. The alignment argument and the width arithmetic want
    the same thing, which is the only reason to spend an asymmetry on it. */
 .tree-header {
@@ -1293,12 +1245,6 @@ function fmtRelative(epochSeconds: number): string {
   align-items: center;
   gap: var(--sp-1);
   margin-left: auto;
-}
-/* Pressed state for the overflow trigger, so an open menu is legible as
-   belonging to this button. */
-.icon-btn.on {
-  color: var(--fg);
-  background: var(--state-hover);
 }
 .folder-list {
   flex: 1;
@@ -1371,7 +1317,7 @@ function fmtRelative(epochSeconds: number): string {
 
    Persistent was the alternative and it is affordable on width — the root
    labels are short words (`git`, `tmp`) and a 24px square leaves plenty at the
-   200px floor. What it is not affordable on is NOISE: one `+` per root is a
+   232px floor. What it is not affordable on is NOISE: one `+` per root is a
    column of identical marks running down a panel whose entire job is to be
    scanned, repeating an affordance that is identical on every row. VS Code's
    tree-row actions reach the same conclusion for the same reason.
@@ -1466,9 +1412,9 @@ function fmtRelative(epochSeconds: number): string {
    step stays 8px — 18px of padding plus its 2px selection rail — which is the
    whole of the nesting this panel expresses.
 
-   Dropping the chevron gives every row 18px back. At the 200px panel floor the
+   Dropping the chevron gives every row 18px back. At the 232px panel floor the
    timestamp is already gone (see the container query at the bottom of this
-   block) and a folder row has 200 - 36 - 10 = 154px for its label, badges and
+   block) and a folder row has 232 - 36 - 10 = 186px for its label, badges and
    count. Middle truncation is kept anyway: `pocketshell` and
    `pocketshell-desktop` are still one root apart. */
 /* Sits in the folder slot, but is prose rather than a row: no dot, so
@@ -1608,7 +1554,7 @@ function fmtRelative(epochSeconds: number): string {
 }
 /* Sentence over action, left on the panel's own indent rather than centred:
    the workspace's empty state centres in a whole pane, and centring in a strip
-   that drags down to 200px would just ragged-edge two short lines. */
+   that drags down to 232px would just ragged-edge two short lines. */
 .empty {
   display: flex;
   flex-direction: column;
@@ -1735,12 +1681,12 @@ function fmtRelative(epochSeconds: number): string {
    is still the least operational of them, though the ORIGINAL reason for
    picking it — "a recency-sorted list already carries most of what it says" —
    died with the recency sort (docs/SESSIONLIST.md §6). What survives the
-   revision is the comparison rather than the absolute: at 200px something has
-   to go, and every other field on the row either identifies it (label),
-   locates it (dot) or says what is running in it (badge), and an age answers
-   none of those. It is a genuine loss at that width now rather than a
+   revision is the comparison rather than the absolute: at the 232px floor
+   something has to go, and every other field on the row either identifies it
+   (label), locates it (dot) or says what is running in it (badge), and an age
+   answers none of those. It is a genuine loss at that width now rather than a
    redundancy, and it is recorded as one. Dot, label and badge survive to the
-   200px floor. The
+   232px floor. The
    rule is unscoped on purpose, so a directory header drops its aggregate age
    at the same width its children drop theirs — a header still showing a time
    above rows that had theirs removed would read as its own, separate fact.

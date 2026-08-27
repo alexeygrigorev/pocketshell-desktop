@@ -6,52 +6,46 @@
  * open/closed state lives in a third place, `HostWorkspaceView`'s `panel` ref.
  * Three files, one vocabulary.
  *
- * How they are reached differs by one control, and deliberately: Ports and
- * Usage sit inside the overflow menu (components/HostActionsMenu.vue), Settings
- * has its own gear on both surfaces. See {@link HOST_PANEL_ITEMS}.
+ * How they are reached changed with §5.3e, and by direct order: the overflow
+ * menu (components/HostActionsMenu.vue) is gone, and each of Ports and Usage
+ * is its own icon button in both surfaces. That overturns ca79ae2's "unlabelled
+ * glyphs are a memory test" ruling at the user's say-so; the words did not
+ * vanish, they moved onto each button's `title`/accessible name. The two
+ * buttons come from one component, components/HostPanelButtons.vue, so the
+ * surfaces cannot drift the way a menu trigger and its list could not.
  *
  * It is a plain module rather than a type exported from the `.vue` file for a
  * practical reason as well as a tidy one: `env.d.ts` declares every `*.vue` as
  * `DefineComponent<…, any>`, so a named type exported from a component is
  * invisible to the type-aware lint rules and collapses to `any` at the import
  * site. A `.ts` module is seen by everything.
+ *
+ * NOTE for whoever adds the next host overlay: an entry here needs a GLYPH,
+ * because there is no menu row left to hide behind — and the header strip this
+ * renders into was already re-floored once (200 → 232px, docs/DESIGN.md
+ * §5.3e) to fit seven controls. A fourth button means moving the floor again or
+ * displacing a control; check the arithmetic in SessionTree's template before
+ * adding the row. Both surfaces pick new items up for free.
  */
 
 export type HostPanel = 'ports' | 'usage' | 'settings';
 
 export interface HostPanelItem {
-  panel: HostPanel;
+  /** Settings is NOT an item: the gear predates and outlives this list. */
+  panel: Exclude<HostPanel, 'settings'>;
+  /** The full phrase — the button's tooltip and its whole accessible name. */
   label: string;
+  /**
+   * An `AppIconName`, spelled here rather than imported from AppIcon.vue for
+   * the env.d.ts reason above. The glue in HostPanelButtons.vue hands it back
+   * to `<AppIcon :name>`, whose prop is the real union — so a typo here fails
+   * the build there, and this declaration cannot drift from the registry.
+   */
+  icon: 'arrow-right-left' | 'bar-chart-2';
 }
 
-/**
- * What the OVERFLOW MENU holds: the two host overlays, and only those.
- *
- * `settings` is still a `HostPanel` — the workspace opens the same overlay —
- * but it is no longer a menu ROW. The user asked for the strip to read
- * `⋯ · refresh · settings · hide`, which pulls the gear back out as its own
- * control, and that is affordable in a way Ports and Usage are not: the gear is
- * icon-only everywhere else in this app, so it needs no label and costs one
- * 14px slot. "Ports" and "Usage" as bare glyphs is exactly the memory test
- * commit ca79ae2 refused, and they stay here where they keep their WORDS.
- *
- * Those words are the full phrases rather than the one-word captions the
- * retired foot row used. A menu row has horizontal space a 200px panel strip
- * does not, and "Port forwarding" says what the overlay contains where "Ports"
- * only hints at it.
- *
- * The `appLevel` flag went with the gear. It existed to draw a rule between the
- * host-level pair and the app-level entry, and with the app-level entry gone
- * from this list there is nothing left to separate — a rule under a two-item
- * menu would divide it from nothing.
- *
- * NOTE for whoever adds the next host overlay: both triggers of this menu are
- * still the collapsed rail's only route to what is in it, so an item added here
- * is reachable from both states for free. A control promoted OUT of here, as
- * the gear just was, has to be added to the rail by hand or the collapsed panel
- * quietly offers less than the expanded one.
- */
+/** The two overlay buttons, in strip order. */
 export const HOST_PANEL_ITEMS: readonly HostPanelItem[] = [
-  { panel: 'ports', label: 'Port forwarding' },
-  { panel: 'usage', label: 'Provider usage' },
+  { panel: 'ports', label: 'Port forwarding', icon: 'arrow-right-left' },
+  { panel: 'usage', label: 'Provider usage', icon: 'bar-chart-2' },
 ];

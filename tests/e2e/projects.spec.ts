@@ -221,10 +221,9 @@ test.describe('folder-first session creation + port panel controls', () => {
 
   test('the port panel shows discovered ports with process and folder columns', async () => {
     // Unrelated to the create flow, and repaired only so this spec can finish:
-    // the panel's foot row of labelled buttons is gone, and Ports now lives in
-    // the header's overflow menu with its full name (renderer/hostPanels.ts).
-    // The `⋯` trigger is icon-only, so its accessible name is its `title`.
-    await page.getByRole('button', { name: 'Ports, Usage' }).click();
+    // the panel's foot row of labelled buttons is gone, and Ports has its own
+    // header icon (renderer/hostPanels.ts) whose accessible name is its
+    // `title` — one click since §5.3e, no kebab to open first.
     await page.getByRole('button', { name: 'Port forwarding' }).click();
     await expect(page.getByRole('dialog', { name: 'Port forwarding' })).toBeVisible();
 

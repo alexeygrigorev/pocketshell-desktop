@@ -19,7 +19,9 @@ export type AppIconName =
   | 'alert-triangle'
   | 'arrow-left'
   | 'arrow-right'
+  | 'arrow-right-left'
   | 'arrow-up'
+  | 'bar-chart-2'
   | 'check'
   | 'chevron-down'
   | 'chevron-right'
@@ -38,7 +40,6 @@ export type AppIconName =
   | 'home'
   | 'image'
   | 'minus'
-  | 'more-horizontal'
   | 'panel-left'
   | 'paperclip'
   | 'plus'
@@ -91,10 +92,28 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   },
   'arrow-left': { paths: ['M19 12H5', 'M12 19l-7-7 7-7'] },
   'arrow-right': { paths: ['M5 12h14', 'M12 5l7 7-7 7'] },
+  // Two opposing arrows, built in Feather's own construction — each half is
+  // `arrow-right` scaled onto one baseline (line + a three-point head) and
+  // mirrored. Neither Feather 4.29 nor this registry had a mark for it, and
+  // the two halves are written to mirror each other so the pair cannot drift.
+  // The PORT FORWARDING trigger (renderer/hostPanels.ts): a local port and a
+  // remote port joined in both directions. An opposing pair rather than
+  // `shuffle`'s crossing arrows or `symlink`'s turn, because forwarding is a
+  // symmetric MAPPING between two sides, not a route that leaves from one of
+  // them.
+  'arrow-right-left': {
+    paths: ['M4 7h16', 'M16 3l4 4-4 4', 'M20 17H4', 'M8 13l-4 4 4 4'],
+  },
   // "Up one folder" in the project browser. An arrow, not a chevron: the
   // chevron is this app's disclosure/navigate-into mark and is already spoken
   // for by the folder rows underneath it.
   'arrow-up': { paths: ['M12 19V5', 'M5 12l7-7 7 7'] },
+  // Feather's `bar-chart-2`, its three <line>s run upward from the common
+  // baseline y=20 as relative paths. The PROVIDER USAGE trigger
+  // (renderer/hostPanels.ts): the one register every tool uses for a meter.
+  'bar-chart-2': {
+    paths: ['M18 20v-10', 'M12 20V4', 'M6 20v-6'],
+  },
   check: { paths: ['M20 6L9 17l-5-5'] },
   'chevron-down': { paths: ['M6 9l6 6 6-6'] },
   'chevron-right': { paths: ['M9 18l6-6-6-6'] },
@@ -162,20 +181,6 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   // Feather's `minus`, its <line x1=5 x2=19 y=12> as a path. Two jobs: the
   // straight-line tool, and the stroke-width affordance (a rule of ink).
   minus: { paths: ['M5 12h14'] },
-  // Feather's `more-horizontal`, its three <circle r=1> as arc pairs — the
-  // same conversion `dot`, `search` and `settings` use. The overflow mark: it
-  // is the one glyph that reliably reads as "there is more here" without
-  // claiming what, which is exactly what a menu of named items needs from its
-  // trigger. Filled rather than stroked, because a 1px-radius outline circle
-  // at 14px is a smudge; `dot` is filled for the same reason.
-  'more-horizontal': {
-    paths: [
-      'M5 11a1 1 0 1 0 0 2a1 1 0 1 0 0-2',
-      'M12 11a1 1 0 1 0 0 2a1 1 0 1 0 0-2',
-      'M19 11a1 1 0 1 0 0 2a1 1 0 1 0 0-2',
-    ],
-    filled: true,
-  },
   // Feather's `sidebar`, its <rect> expressed as a path so the template stays
   // a single path loop. This is VS Code's "toggle sidebar" mark.
   'panel-left': {
