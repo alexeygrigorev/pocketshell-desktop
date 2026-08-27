@@ -20,8 +20,68 @@ import { resolveTheme } from './themes';
 import { zoomFactor } from './zoom';
 import { api } from './ipc';
 import { useSettingsStore } from './stores/settings';
+import { isShortcut } from '../shared/shortcuts';
+import { deleteWordBackward } from '../shared/deleteWord';
 
 const settings = useSettingsStore();
+
+/**
+ * Readline's `Ctrl+W` (`unix-word-rubout`) in the app's own text fields.
+ *
+ * The terminal has always had this: xterm encodes ctrl-W as `\x17` and bash
+ * kills back to the previous whitespace. Everywhere ELSE the chord was
+ * Electron's default-menu Close until that menu was disarmed
+ * (src/shared/windowKeys.ts) — which made it a dead key in exactly the places
+ * the muscle memory targets. This restores the command on the surfaces whose
+ * keyboard a text field is, using the SAME semantics as the shell (see
+ * shared/deleteWord.ts): kill the selection, else back through the nearest
+ * whitespace.
+ *
+ * Three stand-downs, each load-bearing:
+ *   - `.xterm` inputs are NOT text fields here. xterm's own sink is a
+ *     `<textarea>`, and swallowing its keys would eat `\x17` out of the shell
+ *     — the one place the command genuinely lives natively.
+ *   - The code editor is CodeMirror's keymap, not ours; contentEditable is
+ *     outside `<input>`/`<textarea>` and never reaches past the first test.
+ *   - macOS is skipped entirely: darwin keeps Electron's default menu, where
+ *     Cmd+W still means Close, and a cancelled renderer keydown does not stop
+ *     a *window* role — taking the chord there would run BOTH commands.
+ *
+ * Applied through the native edit path (`execCommand('delete')`, acting on a
+ * real selection) rather than splicing `.value`, so Chromium's undo stack
+ * hears the deletion — ONE `Ctrl+Z` undoes the whole killed word — and Vue's
+ * `v-model` listeners fire as they would for any edit.
+ */
+function onDeleteWordBackward(e: KeyboardEvent): void {
+  if (!isShortcut(settings.shortcutBindings, 'text.deleteWordBackward', e)) return;
+  const target = e.target;
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
+  if (target.disabled || target.readOnly) return;
+  if (target.closest('.xterm')) return;
+  const { selectionStart, selectionEnd, value } = target;
+  if (selectionStart === null || selectionEnd === null) return;
+
+  const result = deleteWordBackward(value, selectionStart, selectionEnd);
+  const changed = result.value !== value;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!changed) return;
+
+  try {
+    target.setSelectionRange(result.caret, selectionEnd);
+    if (!document.execCommand('delete')) throw new Error('unsupported');
+  } catch {
+    // jsdom, or a Chromium someday without the editing API. setRangeText
+    // performs the same splice; it fires no input event, so one is dispatched
+    // by hand to keep every framework listener honest.
+    target.setRangeText('', result.caret, selectionEnd, 'end');
+    target.setSelectionRange(result.caret, result.caret);
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+}
+
+/** Where the platform keeps the default menu — see the stand-down above. */
+const KEEPS_DEFAULT_MENU = navigator.userAgent.includes('Mac');
 
 /**
  * The ONE place a theme becomes pixels: the chosen record's tokens are written
@@ -93,11 +153,13 @@ onMounted(() => {
     else if (command === 'out') settings.zoomOut();
     else settings.resetZoom();
   });
+  if (!KEEPS_DEFAULT_MENU) window.addEventListener('keydown', onDeleteWordBackward, true);
 });
 
 onBeforeUnmount(() => {
   stopZoomCommands?.();
   stopZoomCommands = null;
+  if (!KEEPS_DEFAULT_MENU) window.removeEventListener('keydown', onDeleteWordBackward, true);
 });
 </script>
 

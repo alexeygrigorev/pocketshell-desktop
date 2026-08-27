@@ -486,6 +486,16 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
     rebindable: false,
     note: 'Escape is a ladder, not a chord: it closes the innermost thing that is open, and each surface stops it before it reaches the next one out. Rebinding a rung would break the ordering rather than move a key.',
   },
+  {
+    id: 'text.deleteWordBackward',
+    surface: 'global',
+    label: 'Delete the word before the caret — inside a text field',
+    defaults: ['Ctrl+W'],
+    owner: 'app',
+    rebindable: false,
+    note:
+      'Readline’s unix-word-rubout (`\\x17`), made good everywhere EXCEPT the shell: Electron’s default menu held this chord for Close until `169cf60` disarmed that menu, leaving every text field with a dead key the hand still reaches for. The handler only ever fires in an `<input>` or `<textarea>` — it stands down inside `.xterm`, so the terminal keeps sending `\\x17` to the shell, and inside the code editor, whose keymap is CodeMirror’s. On macOS the default menu stays and Cmd+W still means Close there, so this does not install on darwin. Not rebindable because its TRUE reach is “plain text fields”, which no surface models: rebinding it as if it were live over the whole workspace would let conflict detection promise things about a terminal it never touches.',
+  },
 
   // --- Tabs ---------------------------------------------------------------
   {
