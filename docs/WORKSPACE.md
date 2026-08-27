@@ -911,17 +911,18 @@ resolved and why.
 
 ## 11. Tab chords
 
-> `Ctrl+Tab` / `Ctrl+Shift+Tab` to cycle, `Ctrl+←` / `Ctrl+→` to step.
+> `Ctrl+←` / `Ctrl+→` to step — and ONLY that, now.
 
-Cycling wraps, follows DISPLAYED order (so §15's manual arrangement is what it
-walks), and includes Files tabs — they are tabs, the bar shows them as tabs, and
-a chord that stopped at the last session would strand the user one press short
-of something they can see. After a chord, focus lands in the new tab's surface
-through the SAME `focusActiveTab` a click uses, so the two cannot drift.
-
-The decision is `nextWorkspaceTabId` in `src/shared/workspaceTabs.ts`, as a
-table with unit tests; the key handling is a window-level `keydown` listener in
-capture, in `FolderWorkspaceView`.
+The cycle (`Ctrl+Tab` / `Ctrl+Shift+Tab`) that once sat beside the arrows is
+GONE, released at the user's request ("remove these hotkeys let's keep only
+ctrl left and ctrl right") once §11.2's measurement showed it was never free:
+`Ctrl+Tab` is C0.HT at a shell prompt — completion, since xterm ignores Ctrl on
+Tab — and `Ctrl+Shift+Tab` is ESC [ Z, back-tab. What keyboard navigation
+remains lives entirely in the arrows below; the drag (§15) is still the way to
+reorder. After a chord, focus lands in the new tab's surface through the SAME
+`focusActiveTab` a click uses, so the two cannot drift; the key handling is a
+window-level capture listener in `FolderWorkspaceView`, reading the registry
+(`tabs.stepLeftRight`).
 
 ### 11.0a The arrows, and the pair they belong to
 
@@ -939,11 +940,13 @@ decides whether a folder is keyed `~/git/foo` or `/home/me/git/foo`, and a chord
 navigating by a second derivation would open a workspace with no tabs in it and
 highlight no row.
 
-**The arrows CLAMP where `Ctrl+Tab` wraps.** Tab is a cycle — the gesture for
-visiting each tab in turn and coming back round. An arrow is a direction, and
-being thrown from the leftmost tab to the rightmost answers a question the user
-did not ask. `adjacentIndex` in `src/shared/listNavigation.ts` is that rule,
-shared by both pairs so the two ends of one gesture cannot drift apart.
+**The arrows CLAMP.** An arrow is a direction, not a cycle: being thrown from
+the leftmost tab to the rightmost answers a question the user did not ask, and
+the position lost is the one thing an arrow preserves. `adjacentIndex` in
+`src/shared/listNavigation.ts` is that rule, shared by both pairs so the two
+ends of one gesture cannot drift apart. (It was once justified as "clamps where
+`Ctrl+Tab` wraps"; the wrap-chord it disagreed with has been released back to
+the shell.)
 
 **They stand down inside a real text field** — the composer's draft, the path
 bar, the tree filter, the editor — where `Ctrl+arrow` is word-jump, an editing
@@ -962,17 +965,19 @@ is the cheaper pair — readline leaves those unbound.
 ### 11.0b What was removed to make room
 
 > "remove ctrl 1 2 3 hotkey" — "Move the active tab left or right remove this
-> too"
+> too" — "remove these hotkeys let's keep only ctrl left and ctrl right"
 
-`Ctrl+1`..`Ctrl+9` (jump to the Nth tab) and `Ctrl+Shift+PageUp`/`PageDown`
-(move the active tab, §15.5) are both gone, along with the branches in
-TerminalView that declined them.
+`Ctrl+1`..`Ctrl+9` (jump to the Nth tab), `Ctrl+Shift+PageUp`/`PageDown` (move
+the active tab, §15.5) and the `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle are all gone,
+along with the branches in TerminalView that declined them (`nextWorkspaceTabId`
+went with the cycle).
 
-Both removals **hand keys back to the pane**, which is the part worth writing
+Every removal **hands keys back to the pane**, which is the part worth writing
 down rather than quietly deleting: `Ctrl+3`..`Ctrl+7` are the C0 controls `ESC`,
 `FS`, `GS`, `RS`, `US` and `Ctrl+8` is `DEL` — `Ctrl+3` in particular is a widely
-used stand-in for Escape — and `Ctrl+Shift+PageUp`/`PageDown` reach xterm's own
-scrollback. A chord this app no longer claims has to reach the program the user
+used stand-in for Escape — `Ctrl+Shift+PageUp`/`PageDown` reach xterm's own
+scrollback, and `Ctrl+Tab` is C0.HT (completion) while `Ctrl+Shift+Tab` is ESC [ Z
+(back-tab). A chord this app no longer claims has to reach the program the user
 is actually talking to.
 
 Moving a tab from the keyboard went with its chord. The DRAG (§15) is untouched
@@ -1055,10 +1060,8 @@ close. `tabAfterClose` in `src/shared/workspaceTabs.ts` is the decision:
 
 **Right, and why.** It keeps the selection INDEX where it was, so closing a run
 of tabs from one position walks forward through the bar rather than retreating
-to the start. That is what browsers and VS Code do, and it is the direction
-`Ctrl+Tab` travels, so the two gestures do not disagree about which way the bar
-runs. The left fallback is not a second rule — it is the same rule finding
-nothing on the right.
+to the start. That is what browsers and VS Code do. The left fallback is not a
+second rule — it is the same rule finding nothing on the right.
 
 ### 12.1 The stack may never name a dead tab
 

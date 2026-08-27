@@ -67,12 +67,13 @@ mirrors the layout.
 |---|---|---|
 | `Ctrl+←` / `Ctrl+→` | The tab to the left / right; **stops** at the ends | `FolderWorkspaceView.vue` |
 | `Ctrl+↑` / `Ctrl+↓` | The folder workspace above / below in the panel; **stops** at the ends; crosses root headers without stopping | `HostWorkspaceView.vue` |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab; **wraps**; Files tabs included | `FolderWorkspaceView.vue` |
 
-**Arrows clamp, Tab cycles**, and the difference is deliberate rather than an
-oversight: Tab is the gesture for visiting each tab in turn and coming back
-round, while an arrow is a direction — being thrown to the opposite end is not
-what "further left" asked for.
+**The arrows clamp.** An arrow is a direction — being thrown to the opposite
+end is not what "further left" asked for. A `Ctrl+Tab` cycle once lived beside
+them and was RELEASED after measurement (§1.1's table) showed it costing the
+shell real keys: Ctrl+Tab is HT (completion) and Ctrl+Shift+Tab is ESC [ Z,
+back-tab. It went the way of its digits-and-move siblings — see §7 for the
+record of what was withdrawn and why.
 
 **The vertical pair lives in `HostWorkspaceView`** because it changes WHICH
 workspace is mounted, and that view owns the route. Both read the same folder
@@ -487,11 +488,15 @@ workspace arrows, `e456a08` Files, `549c44b` composer and doodle), anchored on
 surrounding text rather than on line numbers because that is how they were
 written to be applied.
 
-Two of the diffs name bindings that no longer exist: `tabs.move`
+Three of the diffs name bindings that no longer exist: `tabs.move`
 (Ctrl+Shift+PageUp/PageDown) and `tabs.jumpToIndex` (Ctrl+1..9) were REMOVED
-after this was written, at the user's request, in `702225e`. Those hunks are
-void — the chords went back to the pane rather than into the registry — and
-the removal is recorded beside their former registry slots.
+after this was written, at the user's request, in `702225e`; then the cycle —
+`tabs.next` / `tabs.previous`, Ctrl+Tab / Ctrl+Shift+Tab — went the same way
+("remove these hotkeys let's keep only ctrl left and ctrl right"). Those hunks
+are void: the chords went back to the pane rather than into the registry, each
+release handing real keys (C0 controls, xterm scrollback, HT completion,
+back-tab) to the program the user is actually talking to. The removals are
+recorded beside their former registry slots in `src/shared/shortcuts.ts`.
 
 Every one of them follows the same two rules:
 
