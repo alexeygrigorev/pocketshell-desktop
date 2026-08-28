@@ -379,9 +379,15 @@ describe('parseUsageNdjson', () => {
     expect(codex.long_term.percent_remaining).toBe(92.0);
 
     // copilot's map carries a literal `short_term` key — it must land in the
-    // short-term slot, beside `monthly` as the long term.
+    // short-term slot, beside `monthly` as the long term. The slot-named keys
+    // carry no label of their own (null → the consumer's generic wording),
+    // so "short_term" never reaches the screen.
     const copilot = out[2]!;
-    expect(copilot.short_term.window).toBe('short_term');
+    expect(copilot.short_term).toEqual({
+      percent_remaining: 100,
+      reset_at: null,
+      window: null,
+    });
     expect(copilot.long_term.window).toBe('monthly');
 
     // grok: a lone `weekly` is a long term, leaving the short slot empty.

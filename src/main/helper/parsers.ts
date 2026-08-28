@@ -784,7 +784,10 @@ function normalizeUsageRow(row: UsageRow): UsageRow {
     const win: UsageWindow = {
       percent_remaining: typeof w.percent_remaining === 'number' ? w.percent_remaining : null,
       reset_at: typeof w.reset_at === 'string' ? w.reset_at : null,
-      window: key,
+      // The key is the human label (`5h`, `7d`) — except when it is the slot's
+      // own name, which reads as "short_term" on screen. Null sends those to
+      // the consumer's generic short-term/long-term wording instead.
+      window: key === 'short_term' || key === 'long_term' ? null : key,
     };
     if (!short_term && SHORT_TERM_WINDOW_KEYS.has(key)) short_term = win;
     else if (!long_term && LONG_TERM_WINDOW_KEYS.has(key)) long_term = win;
