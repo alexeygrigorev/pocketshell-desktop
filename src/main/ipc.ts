@@ -16,6 +16,7 @@ import { runBootstrap } from './helper/bootstrap.js';
 import { readSshConfig } from './ssh-config/SshConfigParser.js';
 import { KnownHosts } from './ssh-config/KnownHosts.js';
 import type { UsageRow } from './helper/parsers.js';
+import { log } from './log.js';
 import { SftpService, type DirEntry, type FileStat, type TransferProgress } from './sftp/SftpService.js';
 import { ForwardService } from './portfwd/ForwardService.js';
 import { ServeService, type ServedFolder } from './portfwd/ServeService.js';
@@ -846,6 +847,15 @@ export function registerIpcHandlers(deps: {
       return helper.envGet(connectionId, dir, keys);
     },
   );
+
+  // --- diag:log -------------------------------------------------------------
+  // The renderer's unhandled errors, forwarded so they land in the desktop log
+  // a packaged app leaves nothing else of. Fire-and-forget (`on`, not
+  // `handle`): a diagnostic that could block or reject in the process that
+  // reported it would be a failure with a failure of its own.
+  ipcMain.on(ipc.diag.log, (_evt, entry: { kind: string; message: string; stack?: string }) => {
+    log('renderer', `${entry.kind}: ${entry.message}`, entry.stack ? { stack: entry.stack } : undefined);
+  });
 
   // Plumbing: keep references used by the main process bookkeeping.
   void registry;

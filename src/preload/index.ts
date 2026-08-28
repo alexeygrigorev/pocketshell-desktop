@@ -742,6 +742,16 @@ const api = {
     ): Promise<Record<string, string>> =>
       ipcRenderer.invoke(ipc.agent.envGet, connectionId, dir, keys),
   },
+
+  diag: {
+    /**
+     * Forward an unhandled renderer error to the desktop log. Fire-and-forget:
+     * the reporter is already in a failed state, so this must not be able to
+     * reject or block it further.
+     */
+    log: (entry: { kind: string; message: string; stack?: string }): void =>
+      ipcRenderer.send(ipc.diag.log, entry),
+  },
 } as const;
 
 export type Api = typeof api;

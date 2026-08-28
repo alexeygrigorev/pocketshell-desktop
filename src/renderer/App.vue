@@ -22,6 +22,7 @@ import { api } from './ipc';
 import { useSettingsStore } from './stores/settings';
 import { isShortcut } from '../shared/shortcuts';
 import { deleteWordBackward } from '../shared/deleteWord';
+import DiagBanner from './components/DiagBanner.vue';
 
 const settings = useSettingsStore();
 
@@ -164,6 +165,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- The one app-wide surface: unhandled renderer errors, so a component
+       that dies mid-render reports itself instead of leaving a blank screen
+       (renderer/diag.ts). -->
+  <DiagBanner />
   <router-view />
 </template>
 

@@ -190,6 +190,17 @@ export const ipc = {
     envList: 'agent:envList', // env list --dir --json
     envGet: 'agent:envGet', // env get --dir --json
   },
+  /**
+   * Renderer diagnostics. A packaged app has no console anyone can read, so an
+   * unhandled renderer error used to vanish entirely: the component that died
+   * mid-render just left a blank panel, with no reason anywhere on disk. The
+   * renderer forwards such errors here; main writes them into the same desktop
+   * log every SSH decision lands in, and the app shows its own strip
+   * (renderer/diag.ts + DiagBanner) so the failure is visible, not swallowed.
+   */
+  diag: {
+    log: 'diag:log', // send: { kind, message, stack? }
+  },
 } as const;
 
 export type IpcChannelMap = typeof ipc;
