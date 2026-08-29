@@ -14,7 +14,7 @@ import SessionRedirectView from './views/SessionRedirectView.vue';
 //                     is part of the host shell, so this route only supplies
 //                     the right pane's empty state.
 //   folder         -> one FOLDER's workspace: a tab per tmux session in it,
-//                     plus one or more Files tabs (docs/WORKSPACE.md §10).
+//                     plus one or more Files tabs.
 //
 // `:folder` is the folder's `directoryKey` — `~/git/dtc-website`. vue-router
 // encodes route params, so the slashes and the `~` survive a round trip

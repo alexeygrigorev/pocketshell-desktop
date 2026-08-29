@@ -608,7 +608,7 @@ describe('groupSessionsIntoRoots', () => {
 
   it('orders a branch by creation too, so the panel and the tab bar agree', () => {
     // `buildWorkspaceTabs` has always sorted session tabs by `created`, oldest
-    // first (docs/WORKSPACE.md §3.2). This is the panel arriving at the same
+    // first. This is the panel arriving at the same
     // order, so a folder's tooltip and the bar it opens list its sessions the
     // same way round.
     const [git] = groupSessionsIntoRoots(

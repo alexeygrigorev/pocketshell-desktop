@@ -135,7 +135,7 @@ describe('sendRoute (TmuxSessionScreen.kt:3163)', () => {
   const base = { liveAgent: null, presumedAgent: null, withEnter: true };
 
   // The `'agent-conversation'` arm is gone with the Conversation tab
-  // (docs/WORKSPACE.md §9). Its removal is observable in exactly one place —
+  //. Its removal is observable in exactly one place —
   // a codex pane now reaches the codex arm instead of being short-circuited
   // past it, which is what gives it the longer submit delay it needs.
   it('routes Codex through the agent payload path', () => {

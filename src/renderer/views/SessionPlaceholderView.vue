@@ -4,7 +4,7 @@
 // rather than a screen of its own.
 //
 // It names folders rather than sessions because that is what the panel's rows
-// are now (docs/WORKSPACE.md §7): a session is a tab inside a folder's
+// are now: a session is a tab inside a folder's
 // workspace, so "select a session" would point at something the panel no
 // longer offers.
 </script>

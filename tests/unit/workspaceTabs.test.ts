@@ -18,7 +18,7 @@ import {
 import { sanitisePart, sessionBaseName } from '../../src/shared/sessionNameParts';
 
 /**
- * The pure half of docs/WORKSPACE.md §3. These are the rules the user
+ * The pure half of the tab model. These are the rules the user
  * described in the most detail, so they are the ones worth pinning.
  */
 
@@ -283,7 +283,7 @@ describe('tabIdAtIndex', () => {
 });
 
 /**
- * The MRU stack and what a close selects (docs/WORKSPACE.md §12).
+ * The MRU stack and what a close selects.
  *
  * The user asked for "closing a tab selects the previously active one, not the
  * first", with one condition attached that is really the whole design: the
@@ -402,7 +402,7 @@ describe('tabAfterClose', () => {
 });
 
 /**
- * Manual tab order (docs/WORKSPACE.md §15).
+ * Manual tab order.
  *
  * "I also want to be able to rearrange tabs like drag and drop them around",
  * against an earlier "the tabs are always ordered: first agent sessions, then

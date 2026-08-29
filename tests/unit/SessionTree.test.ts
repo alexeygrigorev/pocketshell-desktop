@@ -567,7 +567,7 @@ describe('SessionTree — right-clicking a folder row', () => {
 /**
  * Stopping every session in a folder.
  *
- * The tab menu can already stop ONE session (docs/WORKSPACE.md §14); what it
+ * The tab menu can already stop ONE session; what it
  * cannot do is clear a folder without opening its workspace and confirming once
  * per tab. The folder row is the only control that stands for the whole set, so
  * this is the only place the action can live.
@@ -741,7 +741,7 @@ describe('SessionTree — stopping every session in a folder', () => {
  * own tests pin that — so a row that outlives its last session is not a
  * projection bug. It is the session list never being re-read: before this, the
  * only `setInterval` in the renderer was the cosmetic clock behind the relative
- * timestamps, while docs/SESSIONLIST.md and docs/WORKSPACE.md argue a dozen
+ * timestamps, while docs/SESSIONLIST.md argues a dozen
  * decisions against "the refresh timer" that did not exist. A session killed
  * from the phone, from a terminal, or by an agent exiting stayed on screen
  * until the user pressed Refresh.

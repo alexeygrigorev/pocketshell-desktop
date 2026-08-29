@@ -757,7 +757,7 @@ export const useComposerStore = defineStore('composer', () => {
 
   /**
    * Move a session's record to a new key, because the session was RENAMED
-   * (docs/WORKSPACE.md §4, §8).
+   *
    *
    * Everything per-session in this store is keyed `"<connectionId>/<name>"`,
    * and the name is the half that just changed. Without this, renaming a tab
@@ -789,7 +789,7 @@ export const useComposerStore = defineStore('composer', () => {
 
   /**
    * Drop a session's record entirely — the session it belonged to is GONE
-   * (docs/WORKSPACE.md §14.3).
+   *
    *
    * The counterpart of {@link rekey}, and the distinction between the two is
    * the distinction between a rename and a kill: a rename moves a record to the

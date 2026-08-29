@@ -101,7 +101,7 @@ export function useFolderTree(): FolderTree {
     // STEPS is the resolution of the two halves of one request: creation order
     // is what a folder row gets until the user moves it, and a manual position
     // wins once there is one. Same shape, same order, as the workspace's tab
-    // bar (docs/WORKSPACE.md §15).
+    // bar.
     //
     // A pure projection, deliberately: the sessions store refreshes every five
     // seconds and this recomputes each time, so the arrangement has to be

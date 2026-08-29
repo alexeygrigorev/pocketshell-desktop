@@ -107,8 +107,7 @@ npm run dev
 ## Design & development docs
 
 The reasoning behind the app lives in [docs/](./docs): process model and security
-([ARCHITECTURE](./docs/ARCHITECTURE.md)), the folder workspace
-([WORKSPACE](./docs/WORKSPACE.md)), port-forwarding behaviour
+([ARCHITECTURE](./docs/ARCHITECTURE.md)), port-forwarding behaviour
 ([PORTFWD](./docs/PORTFWD.md)), every shortcut and why it exists
 ([SHORTCUTS](./docs/SHORTCUTS.md)), and the test strategy
 ([TESTING](./docs/TESTING.md)).

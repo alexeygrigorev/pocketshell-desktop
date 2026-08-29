@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // SessionRedirectView: what `/host/:name/session/:session` resolves to now that
 // a workspace is addressed by FOLDER rather than by session
-// (docs/WORKSPACE.md §10).
+//
 //
 // It is a resolver, not a view: it looks the session up, finds the folder that
 // holds it, and REPLACES the current history entry with that folder's
@@ -42,7 +42,7 @@ const settings = useSettingsStore();
  * what makes the answer agree with the panel in every case the grouping is
  * there for: the home-relative rewrite that folds tmux's two spellings of one
  * directory together, the pseudo-folder an untracked session gets, and the
- * sibling-inferred path (docs/WORKSPACE.md §6.3).
+ * sibling-inferred path.
  */
 function folderFor(name: string): string | null {
   for (const root of groupSessionsIntoRoots(sessions.sessions, projects.home, settings.sessionRoots)) {

@@ -58,7 +58,7 @@ import { log } from '../log.js';
  * So the pool keeps at most {@link MAX_LIVE_CLIENTS} clients per connection and
  * evicts the least recently used one beyond that. The budget is per CONNECTION
  * but the demand is per FOLDER WORKSPACE — only the open workspace's tabs are
- * mounted — and the measurement in docs/WORKSPACE.md §1 puts a real folder at
+ * mounted — and the measured layout puts a real folder at
  * one to four sessions, so eviction is a bound rather than a routine event.
  *
  * Eviction closes the PTY and nothing else. A tmux SESSION lives in the tmux
@@ -131,8 +131,8 @@ export interface AttachSessionResult {
  * browsing, and the failure — `Channel open failure` on an unrelated feature —
  * would point nowhere near the cause.
  *
- * Six is also comfortably above what a folder holds: docs/WORKSPACE.md §1
- * measured 11 folders holding 11 sessions on this user's host, and the busiest
+ * Six is also comfortably above what a folder holds: the measurement
+ * found 11 folders holding 11 sessions on this user's host, and the busiest
  * folder in the log has three.
  */
 export const MAX_LIVE_CLIENTS = 6;
@@ -269,7 +269,7 @@ export class TmuxClientPool {
    *
    * ## Why this exists
    *
-   * The stale-geometry failure (docs/WORKSPACE.md §14) starts on the FAR side:
+   * The stale-geometry failure starts on the FAR side:
    * under `window-size latest`, another client of the same session — the phone,
    * the user's own terminal — can become latest and shrink or grow the window
    * while nothing moves here. From this side nothing changed, so
@@ -371,7 +371,7 @@ export class TmuxClientPool {
 
   /**
    * A session this pool may hold a client for has been KILLED on the host
-   * (docs/WORKSPACE.md §14.3).
+   *
    *
    * The mirror image of {@link renamed}, and the reason both exist: this pool
    * keys clients by session NAME, so anything that changes what that name means

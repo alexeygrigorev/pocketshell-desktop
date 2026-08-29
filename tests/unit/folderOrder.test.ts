@@ -14,7 +14,7 @@ import type { SessionSummary } from '../../src/shared/types';
  * The pure half of docs/SESSIONLIST.md §14 — the panel's manual folder order.
  *
  * Modelled on workspaceTabs.test.ts, which pins the same rules one level down
- * (docs/WORKSPACE.md §15): the ranking, the group clamp, and the shape of what
+ *: the ranking, the group clamp, and the shape of what
  * a drag writes. The two features share a design, so they share a test shape.
  *
  * The fixtures are built by `groupSessionsIntoRoots` rather than hand-rolled,

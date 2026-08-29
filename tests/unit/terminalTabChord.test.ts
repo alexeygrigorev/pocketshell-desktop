@@ -4,7 +4,7 @@ import { mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 
 /**
- * The surviving tab chord must not reach the shell (docs/WORKSPACE.md §11).
+ * The surviving tab chord must not reach the shell.
  *
  * ## The premise this file once corrected, twice over
  *

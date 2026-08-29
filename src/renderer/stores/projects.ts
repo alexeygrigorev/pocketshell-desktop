@@ -244,7 +244,7 @@ export const useProjectsStore = defineStore('projects', () => {
   }
 
   /**
-   * Rename a live session (docs/WORKSPACE.md §4).
+   * Rename a live session.
    *
    * Thin on purpose. Every guard that matters — the alphabet, the
    * host-answered uniqueness check — runs in the main process, because a guard
@@ -265,7 +265,7 @@ export const useProjectsStore = defineStore('projects', () => {
 
   /**
    * Stop a live session — kill its tmux session on the host
-   * (docs/WORKSPACE.md §14).
+   *
    *
    * Thin for the same reason `renameSession` is, and the debt the caller owes is
    * LARGER here: a rename moves the three pieces of desktop state keyed by

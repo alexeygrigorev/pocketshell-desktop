@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia';
  * The agents store used to be almost entirely the Conversation tab's state,
  * and this file used to test that: `loadForSession`, the transcript `source`,
  * `fail`, and the stale-reply guard. All of it went with the feature
- * (docs/WORKSPACE.md §9).
+ *
  *
  * What is left is the usage half, and it is tested here rather than left
  * uncovered because the removal changed it: `loading` used to be written ONLY

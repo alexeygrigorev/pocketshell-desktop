@@ -696,7 +696,7 @@ describe('closing, and what the next keystroke does', () => {
 
 /**
  * `forget` — the kill's counterpart to a rename's `rekey`
- * (docs/WORKSPACE.md §14.3).
+ *
  *
  * A rename moves a record to the name its session now has; a kill leaves a
  * record no session will ever claim again. They must not be the same call, and

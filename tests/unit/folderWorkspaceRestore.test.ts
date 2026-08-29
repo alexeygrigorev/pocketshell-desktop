@@ -11,7 +11,7 @@ import {
 
 /**
  * The workspace's tab state surviving a relaunch
- * (src/renderer/workspaceState.ts, docs/WORKSPACE.md §16).
+ * (src/renderer/workspaceState.ts).
  *
  * Three properties, each mapped to the sentence the feature was asked for:
  *

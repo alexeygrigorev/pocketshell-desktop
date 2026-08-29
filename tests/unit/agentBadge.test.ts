@@ -5,7 +5,7 @@ import { agentMark } from '../../src/shared/agentBadge';
 import type { SessionAgentKind } from '../../src/shared/types';
 
 /**
- * Which mark a session tab wears (docs/WORKSPACE.md §13).
+ * Which mark a session tab wears.
  *
  * Presentation only — the classification is the host's, written by the
  * `pocketshell agent` wrapper into `@ps_agent_kind`. What is worth pinning is

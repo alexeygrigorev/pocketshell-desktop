@@ -3,7 +3,7 @@ import { parseWorktreeRoots, repoRootFromCommonDir } from '@main/projects/worktr
 import { gitRepoProbeCommand } from '@main/projects/commands';
 
 /**
- * docs/WORKSPACE.md §6.5 — a git worktree groups under the repository it is a
+ * A git worktree groups under the repository it is a
  * worktree of.
  *
  * The behaviour these pin was verified against git 2.53: at a repository ROOT

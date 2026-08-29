@@ -1,5 +1,5 @@
 /**
- * The folder workspace's tab model, as pure functions (docs/WORKSPACE.md §3).
+ * The folder workspace's tab model, as pure functions.
  *
  * Everything the tab bar decides — what a tab is called, what order the tabs
  * sit in, how two tabs that want the same name are told apart — is decided
@@ -54,7 +54,7 @@ export type WorkspaceTab =
        * The part of the label the user may edit, i.e. the remainder after the
        * folder prefix was stripped. Null when the session's name is not
        * derived from the folder at all, in which case a rename edits the whole
-       * name (docs/WORKSPACE.md §4.3).
+       * name.
        */
       remainder: string | null;
       created: number;
@@ -259,8 +259,7 @@ export function buildWorkspaceTabs(
  * the caller must treat as "refuse", not as "use the fallback". The predicate
  * is `resolveSessionName`'s: at least one letter or digit survives sanitising.
  * A name this app accepts is therefore a name this app can also derive — and,
- * more importantly, one `tmuxctl <name>` can still join (docs/WORKSPACE.md
- * §4.1).
+ * more importantly, one `tmuxctl <name>` can still join.
  */
 export function renamedSessionName(
   typed: string,
@@ -296,7 +295,7 @@ export function tabIdAtIndex(tabs: readonly WorkspaceTab[], index: number): stri
 }
 
 // ---------------------------------------------------------------------------
-// Manual tab order (docs/WORKSPACE.md §15)
+// Manual tab order
 //
 // "I also want to be able to rearrange tabs like drag and drop them around."
 //
@@ -475,7 +474,7 @@ export function nudgeTabOrder(
 }
 
 // ---------------------------------------------------------------------------
-// The MRU stack, and what closing a tab selects (docs/WORKSPACE.md §12)
+// The MRU stack, and what closing a tab selects
 // ---------------------------------------------------------------------------
 
 /**

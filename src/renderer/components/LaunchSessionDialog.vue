@@ -5,7 +5,7 @@
 //
 // NewSessionDialog answers ONE question — *which folder* — by browsing,
 // creating or cloning one. Inside a folder workspace that question is already
-// answered (docs/WORKSPACE.md §5 says so explicitly), and the question left is
+// answered, and the question left is
 // *which agent*. Merging the two would mean the `+` flow re-asks a question it
 // already knows the answer to, which is exactly the friction the `+` menu
 // existed to avoid.

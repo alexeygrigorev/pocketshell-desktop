@@ -14,7 +14,7 @@
  * ## This is `shared/workspaceTabs.ts`'s manual-order section, one level up
  *
  * The workspace's tab bar already solved exactly this problem
- * (docs/WORKSPACE.md §15), and the shape is reused rather than reinvented:
+ *, and the shape is reused rather than reinvented:
  * `applyFolderOrder` is `applyTabOrder`, `canDropFolderAt` is `canDropTabAt`,
  * `reorderFolders` is `reorderTabs`. Everything §15 argues for holds here for
  * the same reasons, so the arguments are cited rather than restated — except

@@ -1,6 +1,6 @@
 /**
  * Which repository a session's working directory belongs to
- * (docs/WORKSPACE.md §6.5).
+ *
  *
  * Pure: this parses the output of `gitRepoProbeCommand` and decides what to do
  * with it. The exec, the batching and the caching are the client's job

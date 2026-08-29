@@ -100,7 +100,7 @@ they exist for.
 `Ctrl+3`..`Ctrl+7` are `ESC`, `FS`, `GS`, `RS`, `US`, `Ctrl+8` is `DEL`
 (`Ctrl+3` is a common stand-in for Escape), and `Ctrl+Shift+PageUp`/`PageDown`
 reach xterm's own scrollback. Moving a tab from the keyboard went with its
-chord; the drag (docs/WORKSPACE.md §15) is untouched and is the way to
+chord; the drag is untouched and is the way to
 reorder.
 
 ### 1.3 The Files tab — `FilesView.vue`, `onKeydown`

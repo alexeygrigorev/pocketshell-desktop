@@ -9,7 +9,7 @@ import { nextTick } from 'vue';
  * the window is, and repairs when the answer disagrees with our grid.
  *
  * This is the failure whose first move happens where nothing local can see it
- * (docs/WORKSPACE.md §14): `window-size latest` means another client of the
+ *: `window-size latest` means another client of the
  * session — the phone, the user's own terminal — can move the window under us
  * while xterm's grid and TerminalView's `sent` both stay consistent, every
  * existing guard correctly sends nothing, and tmux draws its status line into

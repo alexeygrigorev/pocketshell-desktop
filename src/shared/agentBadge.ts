@@ -1,6 +1,6 @@
 /**
  * Which mark a session tab wears for the agent running in it
- * (docs/WORKSPACE.md §13).
+ *
  *
  * The classification itself is not decided here and is not decided anywhere in
  * this app: `@ps_agent_kind` is a per-session tmux user option written by the

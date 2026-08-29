@@ -5,7 +5,7 @@ import { mount, type VueWrapper } from '@vue/test-utils';
 import { ref } from 'vue';
 
 /**
- * The `×` on a tab (docs/WORKSPACE.md §14).
+ * The `×` on a tab.
  *
  * The user asked for "x here like in vscode", and the two rules this file pins
  * are what the ask changed and what it did NOT:

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // FolderWorkspaceView: everything scoped to ONE project FOLDER, rendered in
 // the host workspace's right pane. It replaces SessionWorkspaceView, which was
-// scoped to one session. See docs/WORKSPACE.md.
+// scoped to one session.
 //
 // The tab bar is the whole idea:
 //
@@ -10,7 +10,7 @@
 // one tab per tmux session in the folder, then one or more Files tabs, session
 // tabs first. A session tab IS a terminal — there is no sub-navigation inside
 // one, because the Conversation view that used to compete for that space has
-// been deleted (docs/WORKSPACE.md §9).
+// been deleted.
 //
 // Four structural notes, three of them inherited from the view this replaces
 // because the reasons have not changed:
@@ -42,7 +42,7 @@
 // The composer is mounted ONCE, outside `.tab-body` and never behind a `v-if`,
 // so a tab switch cannot cost a draft. It follows the ACTIVE SESSION TAB — its
 // per-session record is keyed on the session name, so switching session tabs
-// swaps the draft and switching back restores it (docs/WORKSPACE.md §8).
+// swaps the draft and switching back restores it.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { api } from '../ipc';
@@ -164,7 +164,7 @@ const selected = ref<string | null>(null);
 const mru = ref<string[]>([]);
 
 // ---------------------------------------------------------------------------
-// The manual tab order, and where it lives (docs/WORKSPACE.md §15)
+// The manual tab order, and where it lives
 // ---------------------------------------------------------------------------
 
 /**
@@ -265,7 +265,7 @@ const folderPath = computed(() => {
 });
 
 /**
- * The prefix the tab labels strip (docs/WORKSPACE.md §3.3).
+ * The prefix the tab labels strip.
  *
  * `sessionBaseName` is the SAME function the main process derives a new
  * session's name with — that is why it was moved into `shared/`. Deriving the
@@ -292,7 +292,7 @@ const tabs = computed<WorkspaceTab[]>(() =>
   // Derived first, then the user's own arrangement on top. The order of the two
   // steps IS the resolution of the two instructions: §3.2's automatic order is
   // what a tab gets until the user moves it, and a manual position wins once
-  // there is one (docs/WORKSPACE.md §15).
+  // there is one.
   applyTabOrder(
     buildWorkspaceTabs(
       (folder.value?.rows ?? []).map((row) => ({
@@ -325,7 +325,7 @@ const activeSession = computed(() =>
  * It names the session, and — when the session is not standing in the folder
  * the tab is filed under — it names where it IS. That second line exists
  * because grouping and location came apart deliberately
- * (docs/WORKSPACE.md §6.5): a git worktree files under its repository, so a tab
+ *: a git worktree files under its repository, so a tab
  * under `dtc-website` may be running in `~/git/merry-sniffing-token`. Without
  * the line the user would open Files expecting the worktree and get the main
  * checkout, with nothing on screen to explain the difference.
@@ -348,7 +348,7 @@ function sessionTabTitle(session: string): string {
 
 /**
  * The mark a session tab wears, or null for a shell and for the common,
- * legitimate `unknown` (docs/WORKSPACE.md §13).
+ * legitimate `unknown`.
  *
  * Looked up from the session store per tab rather than carried on the
  * `WorkspaceTab`. The tab model is the LAYOUT of the bar — what is called what,
@@ -535,7 +535,7 @@ watch(tabs, (list) => {
   // session killed and re-created keeps its name (`sessions create` derives it
   // from the folder), so an unpruned entry would silently re-pin a brand new
   // session to the dead one's old position. Same rule, same function, one
-  // definition of "this id has died" (docs/WORKSPACE.md §15).
+  // definition of "this id has died".
   const keptOrder = pruneTabIds(tabOrder.value, list);
   if (keptOrder.length !== tabOrder.value.length) writeTabOrder(keptOrder);
 });
@@ -711,7 +711,7 @@ function goToTab(id: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Dragging a tab to rearrange the bar (docs/WORKSPACE.md §15)
+// Dragging a tab to rearrange the bar
 // ---------------------------------------------------------------------------
 
 /**
@@ -799,13 +799,13 @@ function onTabDragEnd(): void {
 // `nudgeActiveTab` — the keyboard counterpart of the drag — is GONE with the
 // chord that called it (`Ctrl+Shift+PageUp`/`PageDown`), removed at the user's
 // request: "Move the active tab left or right remove this too". The DRAG is
-// untouched and is now the only way to reorder (docs/WORKSPACE.md §15);
+// untouched and is now the only way to reorder;
 // `nudgeTabOrder` stays in the shared module, unused here, still pinned by
 // workspaceTabs.test.ts, because the ordering rule it encodes is the drag's
 // too.
 
 // ---------------------------------------------------------------------------
-// Tab chords (docs/WORKSPACE.md §11)
+// Tab chords
 // ---------------------------------------------------------------------------
 
 /**
@@ -862,7 +862,7 @@ function onTabDragEnd(): void {
  * went with them (`nextWorkspaceTabId` went with the cycle).
  *
  * Moving a tab from the keyboard went with the chord. The drag
- * (docs/WORKSPACE.md §15) is unaffected and is still the way to reorder.
+ * is unaffected and is still the way to reorder.
  *
  * ## What it deliberately does not touch
  *
@@ -963,7 +963,7 @@ async function focusActiveTab(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Rename (docs/WORKSPACE.md §4)
+// Rename
 // ---------------------------------------------------------------------------
 /** The tab being renamed, and the text in its field. */
 const renaming = ref<{ id: string; session: string; remainder: string | null } | null>(null);
@@ -1028,7 +1028,7 @@ async function commitRename(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Creating a session in this folder (docs/WORKSPACE.md §5)
+// Creating a session in this folder
 // ---------------------------------------------------------------------------
 /**
  * True while the launch dialog is up.
@@ -1357,12 +1357,12 @@ async function createSession(choice: LaunchChoice | null): Promise<void> {
 }
 
 /**
- * Another Files tab, with its own directory memory (docs/WORKSPACE.md §3.5).
+ * Another Files tab, with its own directory memory.
  *
  * [seed] is where it opens. It defaults to the ACTIVE SESSION's own working
  * directory when there is one, falling back to the folder. That distinction is
  * not pedantry now that worktrees group under their repository
- * (docs/WORKSPACE.md §6.5): a session in `~/git/dtc-website-decisions` shows up
+ *: a session in `~/git/dtc-website-decisions` shows up
  * under the `dtc-website` folder, and "open a file browser" while looking at
  * that session must mean the worktree the session is actually standing in, not
  * the main checkout.
@@ -1408,7 +1408,7 @@ function onOpenInNewTab(path: string, kind: 'dir' | 'file'): void {
 }
 
 /**
- * A tab has gone: choose what is selected now (docs/WORKSPACE.md §12).
+ * A tab has gone: choose what is selected now.
  *
  * Written to hold for EITHER kind, because it now serves both — a Files tab
  * closed with its `×`, and a session tab whose session was just killed — and
@@ -1436,7 +1436,7 @@ function closeFilesTab(id: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// The session tab's context menu, and stopping a session (docs/WORKSPACE.md §14)
+// The session tab's context menu, and stopping a session
 // ---------------------------------------------------------------------------
 
 /**
@@ -1486,7 +1486,7 @@ function renameFromMenu(): void {
  * process tree and whatever was uncommitted in that shell all go at once.
  *
  * It has a sibling now: the session panel's folder row stops every session in a
- * folder in one confirm (docs/WORKSPACE.md §14.4, SessionTree.vue). The two ask
+ * folder in one confirm (SessionTree.vue). The two ask
  * the same question and must keep looking like one feature — same word (`Stop`,
  * never `Close`), same tinted item, same quiet-Cancel/error-fill sheet. Any
  * change to the wording here belongs there too.
@@ -2092,7 +2092,7 @@ function onFocusTerminal(): void {
 .tab:hover {
   color: var(--fg);
 }
-/* ---- dragging a tab (docs/WORKSPACE.md §15) -----------------------------
+/* ---- dragging a tab -----------------------------
  *
  * The tab being carried fades but STAYS IN PLACE, rather than being removed
  * from the flow. Removing it would reflow every tab after it the moment the

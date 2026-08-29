@@ -552,7 +552,7 @@ describe('PocketshellClient.createSession — real fixture output', () => {
 });
 
 /**
- * docs/WORKSPACE.md §4. The session name is the JOIN KEY — `sessionAttachCommand`
+ * The session name is the JOIN KEY — `sessionAttachCommand`
  * builds `tmuxctl '<name>'` with no fallback behind it — so a rename that
  * produces an unjoinable or duplicate name would strand a live session. These
  * pin the two guards that make that impossible.
@@ -620,7 +620,7 @@ describe('ProjectsService.renameSession', () => {
 });
 
 /**
- * docs/WORKSPACE.md §14. The only destructive operation in this app, and the
+ * The only destructive operation in this app, and the
  * only one with no undo — a tmux session is usually an agent mid-task.
  *
  * The lever was chosen against the pinned 0.4.44 fixture rather than picked:

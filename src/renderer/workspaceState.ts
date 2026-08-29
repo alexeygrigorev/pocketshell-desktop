@@ -22,7 +22,7 @@
  * refresh, so a session killed while the app was closed produces no tab —
  * there is nothing to remove at restore time, only stored ids pointing at
  * where it was, and those obey the same rule the MRU and the manual order
- * already apply inside a session (docs/WORKSPACE.md §12.1, §15): a dead id is
+ * already apply inside a session: a dead id is
  * inert, is pruned from the lists once the bar it describes exists again, and
  * a stored SELECTION naming one simply falls back to the first tab. A stored
  * selection is a preference, not a tab, so it is resolved at read time rather
@@ -77,7 +77,7 @@ export interface WorkspaceMemoryRecord {
   activeTab: string | null;
   /**
    * Tabs in the order they were last selected, most-recent LAST
-   * (docs/WORKSPACE.md §12). Remembered alongside the tabs rather than rebuilt
+   *. Remembered alongside the tabs rather than rebuilt
    * on entry, so the FIRST close after a relaunch still lands on the
    * previously active tab instead of falling back to adjacency.
    */

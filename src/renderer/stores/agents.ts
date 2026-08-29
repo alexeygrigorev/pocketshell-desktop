@@ -10,8 +10,8 @@ import { parseProfileRows, type AgentProfile } from '../../shared/agentLaunch';
  *
  * It used to also hold the CONVERSATION of the selected session — messages,
  * the transcript the messages came from, and a stale-reply guard keyed on the
- * session name. That whole half is gone, with the feature (docs/WORKSPACE.md
- * §9): the user asked for conversations to be dropped completely, so the tab,
+ * session name. That whole half is gone, with the feature: the user asked for
+ * conversations to be dropped completely, so the tab,
  * the transcript resolver, the `agent-log` client and the IPC behind them were
  * removed rather than left as an unused path.
  *

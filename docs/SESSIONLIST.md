@@ -1,6 +1,6 @@
 # SESSIONLIST.md — Session panel: the folder view
 
-Status: **superseded in part by docs/WORKSPACE.md — read §0 first.**
+Status: **partially superseded — read §0 first.**
 Originally written as "flatten the tree" against
 commit `b55ec9f`, implemented in `3d90f2b`, **revised once** when the user
 asked for the folder view back:
@@ -25,7 +25,7 @@ requirement out:
 
 > "git -> folder -> session"
 
-## 0. Revision 4 — the session level is gone (docs/WORKSPACE.md)
+## 0. Revision 4 — the session level is gone
 
 **What is still true:** everything this document says about a ROOT row or a
 FOLDER row. The measurement in §1, the display-label rules in §4, truncation
@@ -74,7 +74,7 @@ its shape without knowing what is running. That is the property revisions 1 and
 |---|---|
 | §2 "three levels, unconditionally" | superseded — two levels, unconditionally |
 | §3 indent budget | the third step is gone; the folder row moves into the slot the directory header had, and the panel implements the two-level table now in that block |
-| §4.6 untracked sessions | still a chevron-less row in the folder slot, but SELECTABLE — it opens a workspace holding that one session (docs/WORKSPACE.md §6.3) |
+| §4.6 untracked sessions | still a chevron-less row in the folder slot, but SELECTABLE — it opens a workspace holding that one session |
 | §6 "finding the session I was just in" | answered by the attached dot on the folder row plus the workspace's tab bar; the panel no longer names sessions at all, so the folder tooltip lists them |
 | §10.2 "spend a row only where there is fan-out" | unchanged as a principle, and it is what retired the level |
 
@@ -84,8 +84,7 @@ folder they are named after. Under revision 3 that was an untidy panel; under
 revision 4 it is a session with no workspace at all, because everything keys on
 the folder. `inferPathsFromSiblings` (src/main/helper/parsers.ts) gives such a
 session the directory of the session whose name it extends, and
-`diagnoseSessionPaths` logs why the probe failed to place it. See
-docs/WORKSPACE.md §6.
+`diagnoseSessionPaths` logs why the probe failed to place it.
 
 ---
 
@@ -652,7 +651,7 @@ Both keys the old sort used move on their own, and that is the whole complaint:
   workspace attaches a session, so the row the user had just clicked jumped to
   the top of its root. The list rearranged itself in response to being used.
 
-`Ctrl+↑` / `Ctrl+↓` (docs/WORKSPACE.md §11.0a) walk this same list, which
+`Ctrl+↑` / `Ctrl+↓` walk this same list, which
 raises the cost from untidy to hostile: a moving order means the keyboard lands
 somewhere other than where the eye aimed.
 
@@ -679,7 +678,7 @@ to the **same answer**, which is the point.
 ### 6.1 SUPERSEDED — the recency sort, and why it was right at the time
 
 *Kept verbatim. The premise it rests on — that the panel is READ rather than
-HIT — is the part that turned out to be wrong, and §15 of docs/WORKSPACE.md had
+HIT — is the part that turned out to be wrong, and the later tab work had
 already reached the opposite conclusion for the tab bar ("the panel can sort by
 recency because its rows are read; the tab bar cannot, because its rows are
 hit"). Once the panel gained arrow-key navigation and one row per folder rather
@@ -1254,7 +1253,7 @@ is what a row gets until the user moves it; a manual position wins once there is
 one. `src/renderer/folderOrder.ts` is the whole rule, with
 `tests/unit/folderOrder.test.ts` beside it.
 
-### 14.1 This is docs/WORKSPACE.md §15, one level up
+### 14.1 The tab bar's same rule, one level up
 
 The workspace's tab bar already solved this problem, and the shape is reused
 rather than reinvented: `applyFolderOrder` is `applyTabOrder`,

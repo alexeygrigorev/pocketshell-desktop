@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // SessionTree: the live tmux session list for the active connection, as a
 // FOLDER VIEW — TWO levels, root then folder, one row per folder
-// (docs/WORKSPACE.md §2, revising docs/SESSIONLIST.md revision 3):
+// (revising docs/SESSIONLIST.md revision 3):
 //
 //   git                          12
 //     dtc-website           2       21h
@@ -42,10 +42,9 @@
 //
 // An untracked session (`dir.untracked` — no reported cwd) still renders as a
 // single row in the folder slot, and it is now selectable like
-// any other folder: its workspace holds that one session. See
-// docs/WORKSPACE.md §6 for why it must stay reachable rather than merely
-// visible, and for the sibling inference that gives most of these a real
-// folder before they ever get here.
+// any other folder: its workspace holds that one session. It must stay
+// reachable rather than merely visible, and the sibling inference gives most
+// of these a real folder before they ever get here.
 //
 // What survives from the flat design, unchanged:
 //   - attached sessions pin to the top of their root with a green dot and a
@@ -200,8 +199,8 @@ let clock: ReturnType<typeof setInterval> | null = null;
  *
  * ## Why this exists at all
  *
- * Because the rest of the app already believed it did. docs/SESSIONLIST.md and
- * docs/WORKSPACE.md refer to "the refresh timer" a dozen times over — the
+ * Because the rest of the app already believed it did. docs/SESSIONLIST.md
+ * refers to "the refresh timer" a dozen times over — the
  * argument against keying a row's shape off `directories.length` (§3a), the
  * rule that expansion state must never watch the root list, the tab order
  * being stored as a RANKING because "sessions arrive on the refresh timer, and
@@ -407,7 +406,7 @@ const createRoots = computed<{ label: string; path: string }[]>(() =>
  * An untracked folder says so instead of printing a path it does not have, and
  * one whose path was adopted from a sibling says THAT, because a guess
  * presented as a reported cwd is the kind of thing that wastes an hour
- * (docs/WORKSPACE.md §6.3).
+ *
  */
 const TOOLTIP_NAME_LIMIT = 6;
 
@@ -437,8 +436,8 @@ function dirTooltip(dir: SessionDirectory): string {
 /* ── Dragging a folder row up and down (docs/SESSIONLIST.md §14) ───────────
  * > "but I can also pull them up and down to rearraange"
  *
- * The same native HTML5 drag the workspace's tab bar uses (docs/WORKSPACE.md
- * §15.4), turned ninety degrees. It is deliberately the same family and not a
+ * The same native HTML5 drag the workspace's tab bar uses, turned ninety
+ * degrees. It is deliberately the same family and not a
  * pointer-events implementation of its own: the two are one gesture in the
  * user's hands — drag a thing along the strip it lives in — and a panel that
  * felt different from the tab bar would be a second thing to learn for nothing.
@@ -654,7 +653,7 @@ function createInFolder(): void {
  * because the row knows a folder the picker would otherwise make the user
  * browse back down to, and this exists because the row stands in for a SET of
  * sessions that has no other single lever. The workspace's tab menu can stop
- * one session (docs/WORKSPACE.md §14); stopping a folder's four means opening
+ * one session; stopping a folder's four means opening
  * that workspace and confirming four times.
  *
  * It is called Stop, not Close, and that is not a synonym chosen at random.
@@ -704,7 +703,7 @@ function askStopFolder(): void {
  * but which is much easier to get wrong when the failures interleave.
  *
  * `not-found` counts as success, exactly as the single kill treats it
- * (docs/WORKSPACE.md §14.2): the panel refreshes on a timer, so a session that
+ *: the panel refreshes on a timer, so a session that
  * went away between the right-click and the confirm is the ordinary case, and
  * the state the user asked for is the state that exists.
  *
@@ -1156,7 +1155,7 @@ function fmtRelative(epochSeconds: number): string {
          sessions in that folder, which is the only lever that stops them
          together rather than one workspace tab at a time.
 
-         Separated and tinted, the tab menu's rule (docs/WORKSPACE.md §14): the
+         Separated and tinted, the tab menu's rule: the
          separator says "another group", the `--error` colour says "another KIND
          of thing", and the one item here that can lose work must not look like
          the one that cannot.
@@ -1214,7 +1213,7 @@ function fmtRelative(epochSeconds: number): string {
       </ul>
     </PopupMenu>
 
-    <!-- The confirm, the tab menu's dialog (docs/WORKSPACE.md §14.1) with the
+    <!-- The confirm, the tab menu's dialog with the
          one change the plural forces: it LISTS the sessions.
 
          A folder row shows a dot, a label and a count — never the session
@@ -1454,8 +1453,8 @@ function fmtRelative(epochSeconds: number): string {
 }
 /* ---- dragging a folder row (docs/SESSIONLIST.md §14) ---------------------
  *
- * The tab bar's three rules, turned ninety degrees (docs/WORKSPACE.md §15.4 and
- * FolderWorkspaceView's `.tab.dragging`): the carried row FADES BUT STAYS IN
+ * The tab bar's three rules, turned ninety degrees (FolderWorkspaceView's
+ * `.tab.dragging`): the carried row FADES BUT STAYS IN
  * PLACE, because removing it from the flow would shift every row below it the
  * instant the drag began and move the target the user is aiming at; the landing
  * place is a 2px accent rule in the gap, because without one a reorder is "let

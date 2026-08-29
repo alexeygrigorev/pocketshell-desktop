@@ -603,7 +603,7 @@ function onCustomKey(e: KeyboardEvent): boolean {
   if (e.type !== 'keydown') return true;
 
   // THE WORKSPACE'S TAB CHORDS. `Ctrl+[` / `Ctrl+]` step one tab left or right
-  // (docs/WORKSPACE.md §11). They are handled by a window-level capture
+  //. They are handled by a window-level capture
   // listener in FolderWorkspaceView, which stops the event before it can
   // descend this far — so in the folder workspace this branch never runs.
   //
@@ -1076,7 +1076,7 @@ let probeInFlight = false;
  * Every route above reads true from the same assumption: before sending a
  * size we compare against {@link sent}, what the far end was last TOLD. But
  * there is a failure whose first move happens where no local bookkeeping can
- * see it (docs/WORKSPACE.md §14): under tmux's `window-size latest`, another
+ * see it: under tmux's `window-size latest`, another
  * client of the same session — the phone, the user's own terminal — becomes
  * latest and RESIZES THE WINDOW while nothing here moves. xterm's grid still
  * matches `sent`, every guard correctly sends nothing, and the disagreement —

@@ -126,7 +126,7 @@ export function composerAgentKind(
  *
  * The phone's third arm, `'agent-conversation'`, is GONE rather than merely
  * unreachable. It existed for the Conversation tab, which has been deleted
- * (docs/WORKSPACE.md §9), and it never did anything the `'raw'` arm did not:
+ *, and it never did anything the `'raw'` arm did not:
  * both wrote to the pane's PTY, because there was no live transcript to echo
  * an optimistic turn into. What it DID do, unhelpfully, was short-circuit
  * ahead of the codex arm below — so a codex pane viewed from the Conversation

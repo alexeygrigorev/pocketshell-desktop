@@ -10,7 +10,7 @@ import { TEST_KEY_PATH, describeDocker } from './helpers';
  * editor reads a folder's `.env`.
  *
  * The agent-log / conversation / resumable cases that used to live here went
- * with the Conversation feature (docs/WORKSPACE.md §9).
+ * with the Conversation feature.
  *
  * Auto-skips when Docker is unavailable.
  */

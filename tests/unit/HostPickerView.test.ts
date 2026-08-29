@@ -236,7 +236,7 @@ describe('HostPickerView — cancel is always visible while dialling', () => {
 describe('HostPickerView — a relaunch lands in the folder the host was last open on', () => {
   /**
    * The workspace's tab state persists across a relaunch
-   * (docs/WORKSPACE.md §16), and this handoff is the half that makes it
+   *, and this handoff is the half that makes it
    * reachable: whatever else restores faithfully, a relaunch that stops at the
    * bare session list has not "shown the same tabs". Both entries into the
    * workspace go through `enterWorkspace` — the auto-connect below and the

@@ -16,7 +16,7 @@
  * derived the name it was testing. `sessionBaseName`, `sanitiseName` and
  * `resolveSessionName` followed it there for the same reason, one level up:
  * the folder workspace labels its tabs by stripping a folder's derived base
- * name off its sessions (docs/WORKSPACE.md §3.3), so the renderer needs the
+ * name off its sessions, so the renderer needs the
  * derivation itself and not merely the sanitiser. Two implementations of a
  * rule this exact would drift, and the symptom would be tab labels that
  * quietly stop stripping.

@@ -151,8 +151,8 @@ export interface AppSettings {
    * > "but I can also pull them up and down to rearraange"
    *
    * A RANKING of `SessionDirectory` keys, best first — not a list of the rows
-   * that exist. The whole argument is in `renderer/folderOrder.ts` and in
-   * docs/WORKSPACE.md §15.2, which the panel is reusing: the folder set changes
+   * that exist. The whole argument is in `renderer/folderOrder.ts`,
+   * which the panel is reusing: the folder set changes
    * under a five-second poll, so a stored list would need reconciling on every
    * tick and every reconciliation is a chance to invent a row or lose one.
    *
@@ -605,7 +605,7 @@ export const useSettingsStore = defineStore('settings', () => {
    * host is not arranged" and "there is no entry for this host" are one state,
    * and keeping one spelling of it means a host whose sessions all went away
    * does not leave a key behind forever. Same rule the tab order follows on the
-   * way out (docs/WORKSPACE.md §15.3) and the same one `normaliseFolderOrder`
+   * way out and the same one `normaliseFolderOrder`
    * applies on the way in, so a blob written by this app is already in the form
    * the parser would have produced.
    *

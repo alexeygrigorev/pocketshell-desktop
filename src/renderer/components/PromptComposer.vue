@@ -491,7 +491,7 @@ async function pasteFromSystemClipboard(): Promise<void> {
  * Only a drag carrying FILES may light this up.
  *
  * It used to accept any drag at all, which was harmless while nothing else in
- * the window was draggable. Tabs are now (docs/WORKSPACE.md §15), and the tab
+ * the window was draggable. Tabs are now, and the tab
  * strip sits directly above this card — so dragging a tab past the composer
  * made it announce itself as a drop target for something it cannot accept. The
  * `drop` handler already found no files and did nothing; what was wrong was the

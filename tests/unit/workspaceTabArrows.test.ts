@@ -363,7 +363,7 @@ describe('the families that were removed stay removed', () => {
 
   it('lets Ctrl+Shift+PageUp / PageDown through to xterm’s scrollback', async () => {
     // "Move the active tab left or right remove this too". The drag still
-    // reorders (docs/WORKSPACE.md §15); the keys belong to the pane again.
+    // reorders; the keys belong to the pane again.
     const wrapper = await openWorkspace();
     const before = tabLabels(wrapper);
 

@@ -37,7 +37,7 @@ export function sanitisePart(part: string): string {
  * It moved for the same reason `sanitisePart` was put here in the first place:
  * the renderer now needs the derivation, not just the sanitiser. The folder
  * workspace strips a folder's derived base name off its sessions' names to
- * label the tabs (docs/WORKSPACE.md §3.3), and that prefix has to be the exact
+ * label the tabs, and that prefix has to be the exact
  * string the main process would derive for the same folder — a second, nearly
  * identical implementation in the renderer would drift the first time either
  * side was touched, and the symptom would be tab labels that stop stripping.
@@ -75,9 +75,9 @@ export function trimTrailingSlash(value: string): string {
  *
  * The name is a pure path prefix: agent and shell sessions in one folder derive
  * the SAME base name. That is deliberate — it is what makes `sessions create`
- * idempotent per folder, and it is what makes the tab-label prefix in
- * docs/WORKSPACE.md §3.3 a property of the FOLDER rather than a coincidence of
- * spelling shared by some of its sessions.
+ * idempotent per folder, and it is what makes the tab-label prefix a property
+ * of the FOLDER rather than a coincidence of spelling shared by some of its
+ * sessions.
  *
  * @param startDirectory the folder the session will start in. May be absolute,
  *   `~`, or `~/...`; a `~` form is resolved against [homeDirectory] so the same

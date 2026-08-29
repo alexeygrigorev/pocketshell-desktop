@@ -410,7 +410,7 @@ describe('TmuxClientPool — renames', () => {
 });
 
 /**
- * A kill is the mirror image of a rename (docs/WORKSPACE.md §14.3), and the
+ * A kill is the mirror image of a rename, and the
  * pool half matters MORE: a rename leaves a live client pointing at a live
  * session under the wrong key, a kill leaves one pointing at nothing at all.
  */
@@ -490,7 +490,7 @@ describe('TmuxClientPool — kills', () => {
 /**
  * The read-only half of `redraw`: asking tmux what size IT thinks the window
  * is, so TerminalView can notice the stale-geometry failure instead of waiting
- * for a human to reach for the menu item (docs/WORKSPACE.md §14).
+ * for a human to reach for the menu item.
  *
  * The contract that matters here is what it costs: one exec for a shell the
  * pool holds, NOTHING AT ALL for a shell it does not (bare shells are normal,

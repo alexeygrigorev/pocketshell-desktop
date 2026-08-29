@@ -267,7 +267,7 @@ export function reposCloneCommand(options: ReposCloneOptions): string {
 }
 
 /**
- * Rename tmux session [from] to [to] (docs/WORKSPACE.md §4).
+ * Rename tmux session [from] to [to].
  *
  * ## Why raw tmux and not the helper
  *
@@ -305,7 +305,7 @@ export function renameSessionCommand(
 }
 
 /**
- * Kill tmux session [name] (docs/WORKSPACE.md §14).
+ * Kill tmux session [name].
  *
  * **The only destructive command in this app.** There is no undo, and the thing
  * being destroyed is usually an agent in the middle of a task, so every clause
@@ -381,7 +381,7 @@ export function killSessionCommand(name: string, socketPath?: string | null): st
 
 /**
  * Ask git, for each of [paths], which repository it belongs to
- * (docs/WORKSPACE.md §6.5).
+ *
  *
  * ## Why this exists
  *

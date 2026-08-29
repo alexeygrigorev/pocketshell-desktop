@@ -370,7 +370,7 @@ describe('renameSessionCommand', () => {
 });
 
 /**
- * docs/WORKSPACE.md §14 — the ONLY destructive command this app issues, and the
+ * Kill — the ONLY destructive command this app issues, and the
  * only one with no undo.
  *
  * The option list was captured from the pinned 0.4.44 Docker fixture the way

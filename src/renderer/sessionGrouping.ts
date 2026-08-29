@@ -323,7 +323,7 @@ function tailSegments(path: string, count: number): string {
  * the user reading it. The report was one sentence: "let's not rearrange
  * workspaces/sessions in here because it's confusing. let's use wheveer order
  * we had when creating." A list that reorders itself is one you cannot build
- * muscle memory for, and `Ctrl+↑`/`Ctrl+↓` (docs/WORKSPACE.md §11.0a) walk this
+ * muscle memory for, and `Ctrl+↑`/`Ctrl+↓` walk this
  * same list, so a moving order is not merely untidy — it makes the keyboard
  * land somewhere other than where the eye aimed.
  *
@@ -331,9 +331,9 @@ function tailSegments(path: string, count: number): string {
  * of a session, so the only thing that moves a row is creating or killing one.
  *
  * This is also the order the workspace's TAB BAR has always used, for exactly
- * the reason it now applies here too (`buildWorkspaceTabs`, docs/WORKSPACE.md
- * §3.2: "a bar that reorders under the session store's refresh timer moves the
- * target between those two moments"). The two surfaces the user hits — panel
+ * the reason it now applies here too (`buildWorkspaceTabs`: "a bar that
+ * reorders under the session store's refresh timer moves the target between
+ * those two moments"). The two surfaces the user hits — panel
  * row and tab — no longer disagree about what order a folder's sessions are in.
  *
  * The name tiebreak is what keeps the order TOTAL on a host whose table reports
@@ -415,7 +415,7 @@ function disambiguateLabels<T extends PathLabelled>(items: T[], pathOf: (item: T
  * The path a session GROUPS under, which is not always the path it runs in.
  *
  * A session in a linked git worktree groups under the repository the worktree
- * belongs to (docs/WORKSPACE.md §6.5) — the user's "this one should be in
+ * belongs to — the user's "this one should be in
  * dtc-website actually" about a session running in `~/git/merry-sniffing-token`.
  * `repoRoot` is set by the main process only for worktrees, so for every other
  * session this is just its own path.

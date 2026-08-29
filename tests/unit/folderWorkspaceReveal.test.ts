@@ -17,7 +17,7 @@ import { ref } from 'vue';
  * by absolute path over SFTP and knows nothing about a root, and `~/x` needs no
  * `$HOME` expansion because an SFTP session's relative root IS the login home.
  * What it did was reveal into the FOLDER's own Files tab, and since every Files
- * tab remembers its directory (docs/WORKSPACE.md §3.5) that tab then stayed
+ * tab remembers its directory that tab then stayed
  * parked outside the repo. So this file asserts the split: inside the folder
  * reuses the tab that is already there, outside it gets one of its own and
  * leaves the first one alone.

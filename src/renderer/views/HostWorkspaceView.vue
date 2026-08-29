@@ -28,7 +28,7 @@
 //     its own destination, next to where the connection was opened.
 //
 // Folders are the default view of a host, and tabs belong to the selected
-// FOLDER (docs/WORKSPACE.md). The two host-scoped panels — port forwarding and
+// FOLDER. The two host-scoped panels — port forwarding and
 // provider usage — open as overlays, because neither is a property of one
 // folder.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
