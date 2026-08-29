@@ -162,6 +162,5 @@ export function dumpFixtureSessionState(): string {
     probe(sweep),
     'helper sessions list:',
     probe('export PATH="$HOME/.local/bin:$PATH"; pocketshell sessions list 2>&1 | head -20'),
-  ].join('
-');
+  ].join('\n');
 }
