@@ -995,3 +995,54 @@ forwards (§7), then the reconnect rework (§8).
 9. `PortPanelView.vue` fetches `remotePorts` into the store and never renders
    them, so discovered-but-unforwarded ports are invisible
    (`forwards.ts:33`, `PortPanelView.vue:101`).
+
+---
+
+## 16. Seeing that it is on from the outside
+
+> "if auto-forward is on I want to see an indicator e.g. in the panel with
+> icons — like a border around it or something like that"
+
+The panel with icons is the session header's strip, and the glyph that stands
+for this feature is the Ports button (`arrow-right-left`). While the engine
+runs for the connected host, that button now carries the state on its face:
+the fill tints `--accent-soft`, a 1px ring in `--accent-dim` goes around it,
+the glyph recolours `--accent`, and a 5px dot with a soft glow sits in the
+corner (`HostPanelButtons.vue`). The register is not new — it is the same
+three tokens the panel's own `Auto-forward: ON` toggle words the state with
+(`.toggle.on`, PortPanelView.vue) — so "on" reads the same way in both places.
+The dot is the half the ring cannot say: a ring alone could be read as
+"selected"; a glowing dot says "running".
+
+Both surfaces that render the buttons — the session header and the collapsed
+rail — mark identically, because they always rendered from one component and
+the indicator is just one more prop. The tooltip grows a suffix while the
+indicator is up ("Port forwarding — auto-forward on"), which matters more than
+it looks: the `title` is the button's entire accessible name, so the word must
+keep travelling with the mark (§5.3e's rule, applied to state as well as
+identity). The ring is an inset box-shadow rather than a border so the glyph
+does not shift half a pixel inside the fixed square when the state flips.
+
+### Where the state lives, and why it is not the store's `autoOn`
+
+The forwards store's `autoOn` is the flag the ports panel itself renders — and
+it is only fresh while that panel is MOUNTED: `PortPanelView` subscribes on
+entry and the store `clear()`s on unmount (`stores/forwards.ts`). An indicator
+read off it would say OFF almost all of the time, which is the opposite of an
+indicator. So the workspace owns the value (`HostWorkspaceView.vue`):
+
+- whenever the connection or the ports overlay changes, it asks the engine
+  directly — `forwards.isAutoEnabled`, which answers "forwarder running, else
+  the persisted per-host flag" (`ForwardService.ts:108`) — so the mount case
+  ("relaunch on a host where I left it on, never opened the panel") is covered
+  by one IPC read;
+- while the overlay IS open, the store's live flips are mirrored straight
+  through, so the toggle inside the panel reaches the header button without
+  waiting for a reopen.
+
+A late answer for a connection that has since been replaced is dropped rather
+than written — reconnect mints a new id, and the old flag is about a dead
+link. Tested in `tests/unit/autoForwardIndicator.test.ts` (mount, plain-OFF,
+reconnect, live mirror) and `tests/unit/SessionTree.test.ts` (the relay, and
+that Usage — the sibling button — is never marked).
+
