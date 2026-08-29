@@ -153,10 +153,10 @@ four that were still open, with the deviation each one earned.
 
 | | Item | Landed in |
 |---|---|---|
-| ✅ | F18 — the window remembers its size, position and maximized state; a restore onto a machine that lost the external display opens centered instead of stranded | `aa63b2d` |
-| ✅ | F19 — PRs run the release pipeline's build matrix and the Docker-backed smoke gate (unit + integration + E2E), so a red E2E can block a merge | `c1c19fd` |
-| ✅ | F12 — automatic reconnect on transport drop: 5s→60s backoff, 10 attempts, session refresh + auto-forward re-opened against the new id, banner countdown with *Retry now*; the `flaky` fixture makes the drop deterministic | `676fc2f`, `0957d70` |
-| ✅ | F12 deviation — no 1s health poll: keepalive + error/close already detect drops, so polling was removed from the spec; the sleep/wake case it was really about is covered by a `powerMonitor` resume probe | `0957d70` |
+| ✅ | F18 — the window remembers its size, position and maximized state; a restore onto a machine that lost the external display opens centered instead of stranded | `1ad86c8` |
+| ✅ | F19 — PRs run the release pipeline's build matrix and the Docker-backed smoke gate (unit + integration + E2E), so a red E2E can block a merge | `bd322c0` |
+| ✅ | F12 — automatic reconnect on transport drop: 5s→60s backoff, 10 attempts, session refresh + auto-forward re-opened against the new id, banner countdown with *Retry now*; the `flaky` fixture makes the drop deterministic | `a9d3758`, `5b461c5` |
+| ✅ | F12 deviation — no 1s health poll: keepalive + error/close already detect drops, so polling was removed from the spec; the sleep/wake case it was really about is covered by a `powerMonitor` resume probe | `5b461c5` |
 | ✅ | F16 — the env editor: a panel on the Files tab when the browsed folder has `.env`/`.envrc`; names via `env list`, values revealed per row or all at once via `env get`, writes via `env set` with the JSON payload on STDIN (never argv); the write contract was read off the pinned helper's `--help`, which has no `--key` option | this pass |
 
 ---
