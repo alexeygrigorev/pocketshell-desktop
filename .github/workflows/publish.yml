@@ -51,39 +51,15 @@ jobs:
       # matrix job ever talks to GitHub Releases (three publishers racing on
       # one draft release is a race electron-builder loses sometimes).
       - run: npm run dist
-        if: matrix.os != 'windows-latest'
         env:
           # electron-builder 25 wants a token present even with --publish never.
           GH_TOKEN: ${{ github.token }}
-      # Windows is built as TWO passes, one per architecture: listing both
-      # arches on the nsis target makes electron-builder merge them into a
-      # single installer that carries both runtimes, and the tablet (or any
-      # x64 box) should not download the arch it will never run. Each pass
-      # rewrites release/latest.yml to point at its own installer, so the yml
-      # is renamed per arch between passes - no updater ships yet, so this is
-      # metadata hygiene rather than live plumbing, but a latest.yml naming
-      # only the arm64 installer would be a landmine with a fuse.
-      - run: npm run build
-        if: matrix.os == 'windows-latest'
-      - run: npx electron-builder --win --x64 --publish never
-        if: matrix.os == 'windows-latest'
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - run: mv release/latest.yml release/latest-x64.yml
-        if: matrix.os == 'windows-latest'
-      - run: npx electron-builder --win --arm64 --publish never
-        if: matrix.os == 'windows-latest'
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - run: mv release/latest.yml release/latest-arm64.yml
-        if: matrix.os == 'windows-latest'
       - uses: actions/upload-artifact@v7
         with:
           name: installers-${{ matrix.os }}
           if-no-files-found: error
           retention-days: 7
           path: |
-            release/*.exe
             release/*.blockmap
             release/*.AppImage
             release/*.deb

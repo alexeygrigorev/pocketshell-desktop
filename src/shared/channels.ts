@@ -217,6 +217,23 @@ export const ipc = {
   diag: {
     log: 'diag:log', // send: { kind, message, stack? }
   },
+  /**
+   * Update check — the desktop port of the phone's ReleaseChecker: main polls
+   * the repo's `releases/latest`, compares against the running version, and
+   * hands the renderer a three-way answer (available / up-to-date / failed).
+   * Nothing self-installs; `open` hands the asset URL to the system browser
+   * and unpacking or installing is the user's act, exactly like the phone.
+   */
+  update: {
+    check: 'update:check',
+    /**
+     * Open a release-asset or release-page URL in the system browser. Main
+     * validates the URL against this repo's GitHub hosts before handing it
+     * to the shell — the renderer is our code, but `shell.openExternal` is
+     * the one bridge an XSS would drive straight off the machine.
+     */
+    open: 'update:open',
+  },
 } as const;
 
 export type IpcChannelMap = typeof ipc;

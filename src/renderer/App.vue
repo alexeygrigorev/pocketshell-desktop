@@ -19,10 +19,12 @@ import { fontCssVariables } from './fonts';
 import { resolveTheme } from './themes';
 import { zoomFactor } from './zoom';
 import { api } from './ipc';
+import { useUpdateStore } from './stores/update';
 import { useSettingsStore } from './stores/settings';
 import { isShortcut } from '../shared/shortcuts';
 import { deleteWordBackward } from '../shared/deleteWord';
 import DiagBanner from './components/DiagBanner.vue';
+import UpdateBanner from './components/UpdateBanner.vue';
 
 const settings = useSettingsStore();
 
@@ -148,7 +150,10 @@ watchEffect(() => {
  */
 let stopZoomCommands: (() => void) | null = null;
 
+const updates = useUpdateStore();
+
 onMounted(() => {
+  void updates.check();
   stopZoomCommands = api.win.onZoomCommand((command) => {
     if (command === 'in') settings.zoomIn();
     else if (command === 'out') settings.zoomOut();
@@ -169,6 +174,7 @@ onBeforeUnmount(() => {
        that dies mid-render reports itself instead of leaving a blank screen
        (renderer/diag.ts). -->
   <DiagBanner />
+  <UpdateBanner />
   <router-view />
 </template>
 

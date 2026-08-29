@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, type IpcRendererEvent } from 'electron';
 import { ipc } from '../shared/channels.js';
+import type { UpdateCheckResult } from '../shared/types';
 import type { ZoomCommand } from '../shared/zoomKeys.js';
 import type {
   AttachmentSource,
@@ -774,6 +775,15 @@ const api = {
      */
     log: (entry: { kind: string; message: string; stack?: string }): void =>
       ipcRenderer.send(ipc.diag.log, entry),
+  },
+  update: {
+    /** One poll of the repo releases; resolves to the three-way answer. */
+    check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(ipc.update.check),
+    /**
+     * Open a validated release URL in the system browser. Main refuses
+     * anything that is not this repo, see ipc.ts.
+     */
+    open: (url: string): Promise<void> => ipcRenderer.invoke(ipc.update.open, url),
   },
 } as const;
 

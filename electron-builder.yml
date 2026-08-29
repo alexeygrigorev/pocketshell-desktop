@@ -47,16 +47,16 @@ mac:
         - arm64
         - x64
 win:
-  # One installer PER ARCHITECTURE, deliberately: listing both arches here
-  # makes electron-builder fold them into a single NSIS installer (~170 MB,
-  # both runtimes inside), which is twice the download for everyone when one
-  # arch is all a machine needs. The split is done by the CI job running
-  # electron-builder once per arch - an arch list HERE would override those
-  # flags and re-merge. `${arch}` is what keeps the two installers from
-  # colliding on one filename.
-  artifactName: "${productName} Setup ${version} ${arch}.${ext}"
+  # A ZIP, not an installer. The user runs the app unpacked, the way the
+  # phone sideloads: download, unpack, run — and the update banner's download
+  # link replaces this copy by hand. NSIS also cannot merge into the zip
+  # pipeline (an arch list on nsis folds both runtimes into one ~170 MB
+  # installer), while zip is naturally per-arch: one pass, two files, no
+  # collision thanks to `${arch}`. The update check on the phone and here is
+  # a browser download, so nothing about updating needs an installer.
+  artifactName: "${productName}-${version}-win-${arch}.${ext}"
   target:
-    - nsis
+    - zip
 linux:
   category: Development
   target:

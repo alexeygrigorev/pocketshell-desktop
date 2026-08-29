@@ -229,3 +229,27 @@ export type ConnectionState =
   | 'connected'
   | 'reconnecting'
   | 'lost';
+
+/**
+ * One answer to "is there a newer release?" — the desktop port of the
+ * phone's ReleaseChecker result, with the same three-way contract: a failure
+ * is an ANSWER (with a reason), never a silent null that a network blip and a
+ * genuinely-current install both collapse into.
+ *
+ * Nothing here self-installs. `available` carries the browser download URL
+ * of the asset that matches THIS platform/arch, and opening it is the user's
+ * act.
+ */
+export interface ReleaseAssetInfo {
+  /** Direct download URL (the browser asset, not the API URL). */
+  downloadUrl: string;
+  /** The GitHub release page — the "release notes" link. */
+  notesUrl: string;
+  /** The upstream tag, shown verbatim (e.g. `v0.1.3`). */
+  tagName: string;
+}
+
+export type UpdateCheckResult =
+  | ({ status: 'available'; currentVersion: string } & ReleaseAssetInfo)
+  | { status: 'up-to-date'; currentVersion: string }
+  | { status: 'failed'; reason: string; currentVersion: string };

@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog } from 'electron';
+import { ipcMain, BrowserWindow, app, dialog, shell } from 'electron';
 import { ipc } from '../shared/channels.js';
 import { APP_TITLE } from '../shared/windowTitle.js';
 import type {
@@ -13,6 +13,7 @@ import { ConnectionRegistry } from './ssh/ConnectionRegistry.js';
 import { TmuxClientPool } from './ssh/TmuxClientPool.js';
 import { PocketshellClient } from './helper/PocketshellClient.js';
 import { runBootstrap } from './helper/bootstrap.js';
+import { checkForUpdate } from './release/ReleaseChecker.js';
 import { readSshConfig } from './ssh-config/SshConfigParser.js';
 import { KnownHosts } from './ssh-config/KnownHosts.js';
 import type { UsageRow } from './helper/parsers.js';
@@ -871,6 +872,32 @@ export function registerIpcHandlers(deps: {
   // reported it would be a failure with a failure of its own.
   ipcMain.on(ipc.diag.log, (_evt, entry: { kind: string; message: string; stack?: string }) => {
     log('renderer', `${entry.kind}: ${entry.message}`, entry.stack ? { stack: entry.stack } : undefined);
+  });
+
+  // --- update:check / update:open -------------------------------------------
+  // The phone's ReleaseChecker, ported: one GitHub Releases poll per check,
+  // answered as available / up-to-date / failed — never a thrown error,
+  // because the caller is a banner. The download itself stays the user's
+  // act: `open` sends the URL to the system browser, nothing self-installs.
+  ipcMain.handle(ipc.update.check, () =>
+    checkForUpdate({
+      currentVersion: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      fetcher: fetch,
+    }),
+  );
+  ipcMain.handle(ipc.update.open, (_evt, url: string) => {
+    // openExternal is the one call that leaves the app with a URL, so it
+    // only ever fires for THIS repo's release assets and pages. Anything
+    // else is logged and refused, not opened.
+    const allowed =
+      /^https:\/\/github\.com\/alexeygrigorev\/pocketshell-desktop\/(releases|releases\/download)\//;
+    if (typeof url !== 'string' || !allowed.test(url)) {
+      log('update', `refused to open non-release URL: ${String(url).slice(0, 120)}`);
+      return;
+    }
+    return shell.openExternal(url);
   });
 
   // Plumbing: keep references used by the main process bookkeeping.

@@ -27,6 +27,7 @@ import { useConnectionStore } from '../stores/connection';
 import { useProjectsStore } from '../stores/projects';
 import { useSessionsStore } from '../stores/sessions';
 import { useSettingsStore } from '../stores/settings';
+import { useUpdateStore } from '../stores/update';
 import { defaultHostStatus } from '../autoConnect';
 import {
   canonicalisePath,
@@ -69,6 +70,7 @@ const connection = useConnectionStore();
 const projects = useProjectsStore();
 const sessions = useSessionsStore();
 const settings = useSettingsStore();
+const updates = useUpdateStore();
 
 onMounted(async () => {
   // The picker loads hosts on its own mount, but the workspace does not
@@ -864,6 +866,41 @@ function shellCostNote(spec: ShortcutSpec): { text: string; safe: boolean } | nu
           terminal can be behind, because <kbd>Alt</kbd> is Meta there and programs read
           it.
         </p>
+      </div>
+    </section>
+
+    <section class="group">
+      <h3 class="group-title">Updates</h3>
+
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label">Updates</label>
+          <p class="row-hint">
+            The app checks this project's GitHub releases once per launch. Nothing
+            installs itself: when a newer version exists you get a banner with a
+            download link, and updating means replacing this copy the way you first
+            put it here. The check runs at launch; this button runs it again now.
+          </p>
+        </div>
+        <div class="control">
+          <button class="btn-ghost" :disabled="updates.status === 'checking'" @click="updates.check()">
+            {{ updates.status === 'checking' ? 'Checking…' : 'Check now' }}
+          </button>
+          <p class="row-hint">
+            <template v-if="updates.status === 'up-to-date'">
+              Up to date ({{ updates.currentVersion }}).
+            </template>
+            <template v-else-if="updates.status === 'available'">
+              {{ updates.tagName }} is available.
+            </template>
+            <template v-else-if="updates.status === 'failed'">
+              Check failed: {{ updates.reason }}
+            </template>
+            <template v-else-if="updates.status === 'idle'">
+              {{ updates.currentVersion ?? '…' }}
+            </template>
+          </p>
+        </div>
       </div>
     </section>
   </div>
