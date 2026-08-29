@@ -1,6 +1,6 @@
 {
   "name": "pocketshell-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Desktop (Electron) port of PocketShell — a tmux-native, agent-aware SSH client.",
   "license": "MIT",
   "author": "Alexey Grigorev <alexey.s.grigoriev@gmail.com>",
