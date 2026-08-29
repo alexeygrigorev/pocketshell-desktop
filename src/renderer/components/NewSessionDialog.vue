@@ -66,7 +66,7 @@
 // missing directory exits 0 and silently lands the pane in `$HOME`. Both are
 // worth a sentence, so in those cases the dialog stays put, says it, and the
 // user presses Open (or goes round again) having read it.
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import OverlayPanel from './OverlayPanel.vue';
 import LaunchSessionDialog from './LaunchSessionDialog.vue';
@@ -185,6 +185,84 @@ watch(
   },
 );
 onMounted(focusSearch);
+
+// ---------------------------------------------------------------------------
+// The keyboard flow: type, arrow, Enter
+// ---------------------------------------------------------------------------
+//
+// The `+`/`Ctrl+Shift+N` ask was "my hands don't leave the keyboard": open the
+// picker, type a few letters, press Enter, and a session exists in that
+// folder. The filter alone only ever narrowed a list whose rows were
+// click-only — the keyboard could search but not ANSWER.
+
+/**
+ * The highlighted row of {@link folderView}, or null when none is.
+ *
+ * Null is also the "let Enter mean the first match" state: after typing, the
+ * palette contract is that Enter acts on the top hit without a preliminary
+ * ArrowDown. With a BLANK query there is no such default — Enter would
+ * otherwise start a session in whichever folder sorts first, which is nobody's
+ * intent — so blank-query Enter does nothing until an arrow key has spoken.
+ */
+const activeRowIndex = ref<number | null>(null);
+
+// Any of these replaces the rows the index was pointing into.
+watch(
+  [folderQuery, () => projects.dirs, () => projects.cwd, route],
+  () => {
+    activeRowIndex.value = null;
+  },
+);
+
+const folderListEl = ref<HTMLElement | null>(null);
+
+function revealActiveRow(): void {
+  void nextTick(() => {
+    folderListEl.value
+      ?.querySelector('.folder-row.active')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  });
+}
+
+/**
+ * Enter on the filter: descend into the highlighted (or first matching)
+ * folder and — on the `existing` route — start a shell in it, which is the
+ * one-action commit `Start shell` performs. Descent runs first and is
+ * verified, so the session targets the folder the row named, not whatever
+ * `cwd` was last; a failed descent (folder gone) leaves nothing created and
+ * `browseError` saying why.
+ *
+ * Ctrl+Enter descends WITHOUT starting — the keyboard's way to browse into a
+ * nested folder on the way to a deeper match. On the `new` route Enter only
+ * ever descends: that route's commit is the name field's own Enter.
+ */
+async function onFilterKeydown(e: KeyboardEvent): Promise<void> {
+  if (route.value === 'clone') return;
+  const rows = folderView.value.rows;
+  const id = connId.value;
+
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!rows.length) return;
+    e.preventDefault();
+    const down = e.key === 'ArrowDown';
+    const from = activeRowIndex.value ?? (down ? -1 : 0);
+    activeRowIndex.value = Math.min(rows.length - 1, Math.max(0, from + (down ? 1 : -1)));
+    revealActiveRow();
+    return;
+  }
+
+  if (e.key !== 'Enter' || busy.value || !id) return;
+  const index = activeRowIndex.value ?? (folderQuery.value.trim() === '' ? null : 0);
+  const row = index === null ? null : rows[index];
+  if (!row) return;
+
+  const parent = projects.cwd;
+  await projects.enter(id, row.name);
+  // A descent that did not land (the row's folder vanished under the list)
+  // must not commit in the parent by accident.
+  if (projects.cwd !== joinPosix(parent, row.name)) return;
+  if (route.value === 'existing' && !e.ctrlKey && !e.metaKey) await commit(null);
+}
 /** Rows the browser will render. Grows by {@link FILE_ROW_CAP} per "Show more". */
 const folderCap = ref(FILE_ROW_CAP);
 /** `owner/repo` typed by hand, for a repo `gh` did not list. */
@@ -860,16 +938,24 @@ function onStartAnother(): void {
               autocomplete="off"
               :placeholder="`Search ${projects.dirs.length} folders here`"
               aria-label="Search folders in this directory"
+              :aria-activedescendant="
+                activeRowIndex === null ? undefined : `folder-row-${activeRowIndex}`
+              "
               :disabled="projects.browsing"
+              @keydown="onFilterKeydown"
               @keydown.esc="onSearchEscape"
             />
           </div>
 
-          <ul class="folder-rows">
+          <ul ref="folderListEl" class="folder-rows" role="listbox" aria-label="Folders here">
             <li
-              v-for="d in folderView.rows"
+              v-for="(d, i) in folderView.rows"
               :key="d.name"
+              :id="`folder-row-${i}`"
               class="folder-row"
+              :class="{ active: i === activeRowIndex }"
+              role="option"
+              :aria-selected="i === activeRowIndex"
               @click="onEnter(d.name)"
             >
               <AppIcon name="folder" :size="14" class="folder-mark" />
@@ -1175,6 +1261,11 @@ function onStartAnother(): void {
 }
 .folder-row:hover,
 .repo-row:hover {
+  background: var(--state-hover);
+}
+/* The keyboard's hover: what ArrowUp/ArrowDown highlight is what the mouse
+   would, so Enter's target is never a guess about which row is meant. */
+.folder-row.active {
   background: var(--state-hover);
 }
 .repo-row.on {

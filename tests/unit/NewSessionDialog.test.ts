@@ -462,6 +462,73 @@ describe('NewSessionDialog folder search', () => {
   });
 });
 
+describe('NewSessionDialog keyboard flow', () => {
+  const three = [
+    { name: 'gamma', type: 'dir' },
+    { name: 'alpha', type: 'dir' },
+    { name: 'beta', type: 'dir' },
+  ];
+  const press = (wrapper: VueWrapper, key: string, opts: Record<string, unknown> = {}) =>
+    wrapper
+      .get('input[aria-label="Search folders in this directory"]')
+      .trigger('keydown', { key, ...opts });
+
+  const search = async (wrapper: VueWrapper, text: string): Promise<void> => {
+    await wrapper.get('input[aria-label="Search folders in this directory"]').setValue(text);
+    await flush(wrapper);
+  };
+
+  it('starts a session in the first match, on Enter alone', async () => {
+    // The workflow the chord exists for: Ctrl+Shift+N, type, Enter. Enter acts
+    // on the top hit without a preliminary ArrowDown.
+    const wrapper = await open(`${HOME}/git`);
+    await search(wrapper, 'dataops');
+    await press(wrapper, 'Enter');
+    await flush(wrapper);
+
+    expect(startSession).toHaveBeenCalledTimes(1);
+    // The picker opened at `~/git`, the match descended into it, and the
+    // session targets the folder the row named.
+    expect(startSession.mock.calls[0]![1]).toMatchObject({ folder: `${HOME}/git/dataops` });
+  });
+
+  it('does nothing on Enter with a blank query and no highlight', async () => {
+    // With no filter and no arrow key there is no chosen folder - Enter would
+    // otherwise start a session in whichever folder sorts first.
+    const wrapper = await open(`${HOME}/git`);
+    await press(wrapper, 'Enter');
+    await flush(wrapper);
+    expect(startSession).not.toHaveBeenCalled();
+  });
+
+  it('highlights with the arrow keys and starts the highlighted row', async () => {
+    list.mockResolvedValue(three);
+    const wrapper = await open(`${HOME}/git`);
+    // Browse sorts; the rows render alpha, beta, gamma.
+    await press(wrapper, 'ArrowDown');
+    await press(wrapper, 'ArrowDown');
+    await flush(wrapper);
+    expect(wrapper.findAll('.folder-row')[1]!.classes()).toContain('active');
+
+    await press(wrapper, 'Enter');
+    await flush(wrapper);
+    expect(startSession.mock.calls[0]![1]).toMatchObject({ folder: `${HOME}/git/beta` });
+  });
+
+  it('descends without starting on Ctrl+Enter', async () => {
+    // The keyboard's way to browse INTO a nested folder on the way to a
+    // deeper match - the plain Enter starts, so it cannot also be the descent.
+    list.mockResolvedValue(three);
+    const wrapper = await open(`${HOME}/git`);
+    await search(wrapper, 'beta');
+    await press(wrapper, 'Enter', { ctrlKey: true });
+    await flush(wrapper);
+
+    expect(useProjectsStore().cwd).toBe(`${HOME}/git/beta`);
+    expect(startSession).not.toHaveBeenCalled();
+  });
+});
+
 describe('NewSessionDialog search focus', () => {
   // jsdom focuses only elements that are in the document, and `open` mounts
   // detached, so these tests attach — and unmount, so the dialog does not
