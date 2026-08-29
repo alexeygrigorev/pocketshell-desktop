@@ -78,7 +78,7 @@ async function clearDraft(page: Page): Promise<void> {
 }
 
 async function openSession(page: Page, name: string): Promise<void> {
-  // A session is a TAB inside a folder workspace now (docs/WORKSPACE.md §3):
+  // A session is a TAB inside a folder workspace now:
   // open the folder, then select the session's tab.
   await page.locator('.dir-header').first().click();
   await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 20_000 });

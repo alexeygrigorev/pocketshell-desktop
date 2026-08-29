@@ -96,7 +96,7 @@ test.describe('core terminal flow (host -> tree -> terminal)', () => {
   test('clicking the host connects and shows the session tree', async () => {
     await page.getByText(E2E_HOST_NAME).click();
     // After connect the folder panel appears; sessions live one click deeper,
-    // inside a folder workspace (docs/WORKSPACE.md §2-3).
+    // inside a folder workspace.
     await expect(page.locator('.dir-header').first()).toBeVisible({ timeout: 15_000 });
   });
 
