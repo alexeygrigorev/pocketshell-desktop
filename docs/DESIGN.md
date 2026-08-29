@@ -9,7 +9,7 @@ Every recommendation here is grounded in one of four sources, cited inline:
 
 | Source | What it grounds |
 |---|---|
-| `docs/screenshots/*.png` (captured from the running app, see §1) | the "before" state |
+| Screenshots captured locally from the running app (see §1 — local-only reference, `docs/screenshots/` is gitignored) | the "before" state |
 | `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json` + Windows Terminal 1.24.11911.0 `defaults.json` | every terminal value in §3 |
 | The Android app at `C:\Users\alexey\git\pocketshell` (v0.4.8) — `shared/ui-kit/.../theme/{Color,Type,Shape,Spacing}.kt`, `FolderListScreen.kt`, `mockups/tree/index.html` | the token values and component geometry in §4–§5 |
 | WCAG 2.1 relative-luminance math, computed per pair | every contrast number stated |
@@ -24,26 +24,18 @@ with Playwright's `_electron.launch`, against the deterministic Docker fixture
 `test_key`). Viewport 1280×800, matching `BrowserWindow`'s default size in
 `src/main/index.ts`.
 
-| File | State |
-|---|---|
-| `docs/screenshots/01-host-picker.png` | Host picker, 3 hosts listed |
-| `docs/screenshots/02-workspace-sessions.png` | Connected host; session list as default view; right pane empty state |
-| `docs/screenshots/03-terminal-attached.png` | Session `main` attached, `tmux` status bar, real command output |
-| `docs/screenshots/04-session-conversation.png` | Conversation tab, engine/session picker, **empty** (see gap below) |
-| `docs/screenshots/05-session-files.png` | Files tab, SFTP listing of `/home/testuser`, editor empty state |
-| `docs/screenshots/06-ports-overlay.png` | Ports overlay panel over the workspace |
-| `docs/screenshots/07-usage-overlay.png` | Usage overlay, 3 provider cards (codex/claude/copilot) with meters |
-| `docs/screenshots/08-session-list-default.png` | Back on the Terminal tab |
-
-Two later passes re-captured the same states from the same harness, so the
-three sets diff against each other directly:
+**Captures are local-only reference and never committed** — `docs/screenshots/`
+is gitignored. The August 24 sets that grounded this document were deleted when
+the folder-workspace re-architectures outdated them; the capture recipe and the
+naming scheme below remain for the next recapture. The passes, diffable
+against each other by prefix:
 
 | Prefix | Pass |
 |---|---|
 | `01`…`08` | before the token/type/layout work of this document |
 | `after-01`…`after-08` | after it |
 | `composer-*` | the prompt-composer panel's own states |
-| **`polish-01`…`polish-16`** | after the POLISH.md pass (§5.8 icons, §5.1 ghost chrome, §5.9 motion) — plus the Files dirty state, four composer states, and the redesigned Usage overlay at 1 / 3 / 6+ providers including null-percentage rows |
+| **`polish-01`…`polish-16`** | after the polish pass (§5.8 icons, §5.1 ghost chrome, §5.9 motion) — plus the Files dirty state, four composer states, and the redesigned Usage overlay at 1 / 3 / 6+ providers including null-percentage rows |
 
 **Gap — not captured:** the Conversation tab is shown *empty*. The fixture's
 stub agents seed `~/.claude/projects/` but the tmux session `main` has no
@@ -542,7 +534,7 @@ commit.
   --agent-soft:    rgba(167, 139, 250, 0.14);
 
   /* ---- Motion --------------------------------------------------------- */
-  /* --dur-slow and --ease-out were added by POLISH.md §4.1: the overlay
+  /* --dur-slow and --ease-out were added for the overlay
      entrance is the one thing slow enough to want a decelerating curve.
      --ease stays the default for state changes (hover tints, rotation). */
   --dur-fast:      150ms;
@@ -649,7 +641,7 @@ The focus rule is not cosmetic — the app is keyboard-driven around a terminal,
 and right now nothing shows focus except the browser default that the custom
 `background: transparent` buttons largely suppress.
 
-**Revised (POLISH.md §5).** This rule originally also set `border-radius:
+**Revised.** This rule originally also set `border-radius:
 var(--r-md)`. That declaration is deleted: Chromium already draws the outline
 along the focused element's own corners, so it did not shape the *ring* — it
 mutated the *element*, visibly rounding the square editor textarea the moment
@@ -662,7 +654,7 @@ one set of global classes in `App.vue`'s unscoped `<style>`, then be deleted
 from the component `<style scoped>` blocks. Restyling 7 copies of `.icon-btn`
 by hand is how the current drift happened.
 
-**Revised (POLISH.md §3).** The single bordered `.icon-btn` is split in two,
+**Revised.** The single bordered `.icon-btn` is split in two,
 both *ghost*: invisible at rest, filled on hover, in the VS Code register. The
 old primitive sized itself from `padding + the glyph's advance width`, so two
 adjacent icon buttons were visibly different widths; icon-only buttons are now
@@ -721,7 +713,7 @@ actions (`Load`, `Add`, `Save`), the stateful `Auto-forward` toggle, the `Scan`
 button that sits beside it in the same form bar, and form controls. Status
 chips keep their tinted borders — they are status, not controls.
 
-**Badge metric (POLISH.md §7).** Every `--r-sm` badge-like — `.chip`, `.tag`,
+**Badge metric.** Every `--r-sm` badge-like — `.chip`, `.tag`,
 `.agent-badge`, `.kind`, `.status`, `.window-tag`, `.resume-chip`,
 `.block-toggle` — uses `padding: 0 var(--sp-1)`, `line-height: var(--lh-100)`,
 and `display: inline-flex; align-items: center; gap: var(--sp-1)`. The
@@ -779,7 +771,7 @@ The visual spec follows Android `FolderListScreen.kt`:
 | `.dot` | 8px; `--fg-muted` detached, `--success` attached (replaces the hard-coded `#a6e3a1`) |
 | `.label` (primary) | folder basename, `--font-ui`/`--fs-300`, `flex: 1 1 auto; min-width: 0`. `--fw-semibold` when attached. Middle-truncates via a `.label-head` (shrink + ellipsis) / `.label-tail` (protected, last 8 chars) span pair, so `pocketshell-desktop` degrades to `poc…-desktop` rather than to `pocketshell` |
 | `.row-name` (secondary) | session name, `--font-mono`/`--fs-100`/`--fg-secondary`, end-ellipsis. Rendered **only** when the name is not derivable from the label, or the folder holds siblings |
-| `.agent-badge` | unchanged — `--agent` on `--agent-soft`, `--r-sm`, `--fs-100`, the shared chip metric (POLISH.md §7) |
+| `.agent-badge` | unchanged — `--agent` on `--agent-soft`, `--r-sm`, `--fs-100`, the shared chip metric |
 | `.row-time` | **relative** (`now`, `12m`, `3h`, `2d`, then `Aug 12`), `--fs-100`/`--fg-secondary`/`tabular-nums`, right-aligned. Absolute form moved to the row tooltip. Hidden under `@container (width < 230px)` |
 | Row tooltip | three lines: session name, full folder path, absolute time |
 | `.session-row:hover` | `background: var(--state-hover)` |
@@ -1066,7 +1058,7 @@ Both are header buttons opening `OverlayPanel.vue`. Current backdrop is
 - **Panel-scoped controls live in the header**, via a named `actions` slot
   rendered beside the close button. A refresh control floating at the top-left
   of the body read as orphaned debris under the title.
-- **Entrance (POLISH.md §4.3).** `<Transition name="overlay" appear>`: the
+- **Entrance.** `<Transition name="overlay" appear>`: the
   backdrop fades over `--dur-normal --ease-out` while the panel rises 8px and
   scales from `0.985` over `--dur-slow --ease-out`; leaving is a plain
   `--dur-fast` fade with no scale, because dismissal should feel faster than
@@ -1136,8 +1128,8 @@ resizes it**; what follows is where it starts and what it is made of.
 | Corners / elevation | `--r-xl` and `0 8px 32px rgba(0,0,0,.5)` — §5.5's `OverlayPanel` treatment, Y offset pulled in from 16px because a card that can sit flush against the bottom of its dock would throw that shadow off the pane and leave its *top* edge, the one with terminal text behind it, unseparated |
 | Surface | `--surface`, fully opaque, `--border` hairline. Never translucent: terminal text bleeding through a prompt field is unreadable for both |
 | Header | `PROMPT` ——— maximize/restore, close. Conventional window order, dismissal last. The card's close and the pinned toggle run the same action; see COMPOSER.md §21.4 for why there are two |
-| Toggle | ONE control opens and closes it: a 28px round icon button (16px mark, POLISH.md §2.7's default size) pinned near the pane's bottom-right corner, present in both states, so the same pixel alternates down/up. It cannot live on the card — the card moves |
-| Closed | the card is removed and the toggle is all that remains. A 6px accent pip (POLISH.md §2.4) on its corner says a draft or attachment is waiting; the label and the `Ctrl+\`` hint live in its tooltip |
+| Toggle | ONE control opens and closes it: a 28px round icon button (16px mark) pinned near the pane's bottom-right corner, present in both states, so the same pixel alternates down/up. It cannot live on the card — the card moves |
+| Closed | the card is removed and the toggle is all that remains. A 6px accent pip on its corner says a draft or attachment is waiting; the label and the `Ctrl+\`` hint live in its tooltip |
 | At rest | fully opaque `--surface-2` with a `--border-strong` edge (§4.2: a control whose boundary is its only identification) and the card's elevation shadow, inset `--sp-3` inside the dock corner so it floats ON the terminal. An earlier pass had it at `opacity: 0.55` to defer to tmux's status line; it was unfindable, and this is the only way to summon the composer. Hover steps to `--surface-3` |
 | Reserved | **nothing.** The composer is a pure overlay and takes no terminal rows in any state. The row-count guarantee survives because a reserve of zero is still a constant: the terminal is sized by the pane and no composer state can change it. See COMPOSER.md §21.2 |
 
@@ -1176,7 +1168,7 @@ existing selectors and the Android `docs/mockups/conversation.html`:
 
 - `.entry` height `--row-h`, hover `--state-hover`, `.entry.active`
   `--state-selected` (currently `rgba(137,180,250,.16)`)
-- **Entry icons — revised (POLISH.md §2.5).** `.ic` is gone; the row renders
+- **Entry icons — revised.** `.ic` is gone; the row renders
   `<AppIcon :name="icon(e)" :class="icon(e)" />` and the 16px SVG box *is* the
   icon column (the old `1.1rem` width was sized for an emoji). Colours:
   directory `--warning`, file `--fg-muted`, symlink `--fg-secondary`, the `..`
@@ -1193,7 +1185,7 @@ existing selectors and the Android `docs/mockups/conversation.html`:
 - `.nm` `--font-mono`/`--fs-300`; `.sz` `--fs-100`/`--fg-secondary`/
   `tabular-nums`, right-aligned
 - `.breadcrumb` `--fs-200`, crumb links **`--fg-secondary` → `--fg` on hover**
-  (**revised**, POLISH.md §6.2), separators `--fg-muted`. The old all-`--accent`
+  (**revised**), separators `--fg-muted`. The old all-`--accent`
   crumb row was the loudest thing on the Files screen while being pure
   navigation, and it contradicted §5.2's own rule that accent is reserved for
   *selected*

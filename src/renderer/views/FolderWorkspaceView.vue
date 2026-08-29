@@ -1121,7 +1121,7 @@ function toggleAddMenu(): void {
  * A launch waiting for its session's PTY to exist.
  *
  * The desktop cannot set `@ps_agent_kind` — the helper's `pocketshell agent`
- * wrapper writes it in the process that BECOMES the agent (docs/ANALYSIS.md).
+ * wrapper writes it in the process that BECOMES the agent.
  * So choosing an engine means starting a session and then running the wrapper
  * inside it, which cannot happen until the terminal has actually attached. The
  * watch below is that wait; it is one-shot, and a session whose PTY never comes

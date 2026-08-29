@@ -23,7 +23,7 @@
  *
  * So there was nothing to port, and the one mechanism it does have cannot come
  * across: a letter standing in for a graphic affordance is exactly what
- * docs/POLISH.md §2 forbids and what `tests/unit/designGates.test.ts` executes.
+ * `tests/unit/designGates.test.ts` enforces.
  * A monogram would also inherit the UI font at the tab's own size rather than
  * the stroke weight the rest of the bar shares — the same reason `type` is a
  * drawn "T" in AppIcon.vue and not a typed one.

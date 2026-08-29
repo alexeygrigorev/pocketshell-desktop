@@ -182,8 +182,7 @@ onBeforeUnmount(() => {
 }
 
 /* Entrance decelerates in over --dur-slow; dismissal is a plain fast fade and
-   nothing scales on the way out — leaving should feel quicker than arriving.
-   docs/POLISH.md §4.3. */
+   nothing scales on the way out — leaving should feel quicker than arriving. */
 .overlay-enter-active {
   transition: opacity var(--dur-normal) var(--ease-out);
 }

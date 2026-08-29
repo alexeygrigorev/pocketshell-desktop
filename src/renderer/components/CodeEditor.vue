@@ -181,8 +181,8 @@ const baseExtensions = [
   // macOS) to tab-focus mode, after which Tab leaves the editor again.
   keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
   // No fold gutter, on purpose: CodeMirror draws its fold arrows as text
-  // glyphs, and docs/POLISH.md §2.3 (enforced by tests/unit/designGates.test.ts)
-  // says every glyph doing an icon's job in this app is a real SVG.
+  // glyphs, and tests/unit/designGates.test.ts enforces that every glyph doing
+  // an icon's job in this app is a real SVG.
   EditorView.updateListener.of((update) => {
     if (!update.docChanged || applyingExternal) return;
     emit('update:modelValue', update.state.doc.toString());

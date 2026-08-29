@@ -10,7 +10,7 @@
 //
 // ## Why the old route is not simply deleted
 //
-// docs/ANALYSIS.md D22 says hard cuts, no backwards compatibility — and it
+// Hard cuts, no backwards compatibility — and that
 // means the HOST contract: helper spellings, wire formats, fallback ladders,
 // the things where carrying two shapes means two things that can silently
 // disagree with the server. This is the app's own history stack. A deep link in

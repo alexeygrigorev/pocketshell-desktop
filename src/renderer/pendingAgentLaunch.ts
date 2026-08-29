@@ -12,7 +12,7 @@
  *   2. **type the wrapper line into it** — which needs a live PTY, because the
  *      desktop cannot set `@ps_agent_kind` itself; the helper's
  *      `pocketshell agent` wrapper writes it in the process that BECOMES the
- *      agent (docs/ANALYSIS.md).
+ *      agent.
  *
  * Inside a folder workspace those two are one click apart and
  * `FolderWorkspaceView` does both (`createSession` -> `armLaunch`). From the

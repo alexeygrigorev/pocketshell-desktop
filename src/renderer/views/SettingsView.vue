@@ -707,8 +707,8 @@ function shellCostNote(spec: ShortcutSpec): { text: string; safe: boolean } | nu
 
       Every chord is a run of <kbd> chips, one per key. Not a glyph: this is
       exactly the screen where a ⌘ or an ↑ would be pressed into service as an
-      icon, and docs/POLISH.md §2.3 — enforced by tests/unit/designGates.test.ts
-      — says every glyph doing an icon's job here is a real SVG. So the arrows
+      icon, and tests/unit/designGates.test.ts
+      — enforces that every glyph doing an icon's job here is a real SVG. So the arrows
       are the words "Up" and "Down", which also happen to be what a keycap says.
     -->
     <section class="group">

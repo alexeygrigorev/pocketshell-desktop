@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import {
-  ensureHelperUp,
+  resetWorkspaceState, ensureHelperUp,
   execInFixture,
   seedProjectFolders,
   E2E_HOST_NAME,
@@ -32,7 +32,7 @@ import {
  *     error. That is asserted rather than worked around.
  *
  * SAFETY: same guarded ~/.ssh/config seeding as core-flow.spec.ts — only runs
- * with POCKETSHELL_E2E_SEED_CONFIG=1, and restores the original on teardown.
+ * backing the file up first, and restores the original on teardown.
  */
 
 const SSH_CONFIG = resolve(homedir(), '.ssh', 'config');
@@ -88,10 +88,6 @@ async function launchApp(): Promise<ElectronApplication> {
 test.describe.configure({ mode: 'serial' });
 
 test.describe('folder-first session creation + port panel controls', () => {
-  test.skip(
-    !process.env['POCKETSHELL_E2E_SEED_CONFIG'],
-    'set POCKETSHELL_E2E_SEED_CONFIG=1 to seed ~/.ssh/config and run the UI E2E',
-  );
 
   let app: ElectronApplication;
   let page: Page;
@@ -106,6 +102,7 @@ test.describe('folder-first session creation + port panel controls', () => {
     app = await launchApp();
     page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
+    await resetWorkspaceState(page);
     await page.getByText(E2E_HOST_NAME).click();
     await expect(page.locator('.dir-header').first()).toBeVisible({ timeout: 20_000 });
   });
@@ -134,11 +131,11 @@ test.describe('folder-first session creation + port panel controls', () => {
   test('the bare "new session name" field is gone', async () => {
     // The footer is a button that opens the folder picker, not a text field.
     await expect(page.locator('.new-session input')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'New session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'New session in any folder' })).toBeVisible();
   });
 
   test('the picker offers three folder routes and previews the derived name', async () => {
-    await page.getByRole('button', { name: 'New session' }).click();
+    await page.getByRole('button', { name: 'New session in any folder' }).click();
     await expect(page.getByRole('dialog', { name: 'New session' })).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Existing folder' })).toBeVisible();
     await expect(page.getByRole('tab', { name: 'New folder' })).toBeVisible();

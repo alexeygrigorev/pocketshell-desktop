@@ -1742,8 +1742,8 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
  * edge and the card's own elevation shadow. `--border-strong` is not a taste
  * call — DESIGN.md §4.2 requires it (4.12:1) wherever a boundary is the only
  * thing identifying a control, and here it is the only thing separating a chip
- * from the terminal behind it. At 28px/16px it is on POLISH.md §2.7's default
- * scale rather than its dense one, which is right for a primary affordance.
+ * from the terminal behind it. At 28px/16px it is on the icon default scale
+ * rather than a dense one, which is right for a primary affordance.
  *
  * It is inset a further `--sp-3` from the dock's own corner, so it visibly
  * floats ON the terminal instead of hugging the pane's edge, and that offset
@@ -1788,7 +1788,7 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
 .rail.unsent {
   color: var(--fg);
 }
-/* docs/POLISH.md §2.4: a status mark is a CSS circle, not a glyph, so it stops
+/* A status mark is a CSS circle, not a glyph, so it stops
    scaling with font metrics. The ring is the chip's own surface, so the pip
    reads against the chip rather than against whatever is behind it. */
 .unsent-pip {

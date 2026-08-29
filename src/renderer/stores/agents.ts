@@ -13,7 +13,7 @@ import { parseProfileRows, type AgentProfile } from '../../shared/agentLaunch';
  * session name. That whole half is gone, with the feature (docs/WORKSPACE.md
  * §9): the user asked for conversations to be dropped completely, so the tab,
  * the transcript resolver, the `agent-log` client and the IPC behind them were
- * removed rather than left as an unused path (docs/ANALYSIS.md D22).
+ * removed rather than left as an unused path.
  *
  * `loading` survived that cut and is worth a note, because it is the one thing
  * the removal could have broken silently. It was written ONLY by the

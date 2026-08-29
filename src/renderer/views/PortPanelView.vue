@@ -838,7 +838,7 @@ function fmtScanTime(epochMs: number | null): string {
 .btn-auto:hover {
   color: var(--fg);
 }
-/* One badge metric across the app (docs/POLISH.md §7). */
+/* One badge metric across the app. */
 .kind,
 .origin {
   display: inline-flex;

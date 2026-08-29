@@ -1597,7 +1597,7 @@ function fmtRelative(epochSeconds: number): string {
   flex: none;
   white-space: nowrap;
 }
-/* Badge metric, shared by every --r-sm chip in the app (docs/POLISH.md §7):
+/* Badge metric, shared by every --r-sm chip in the app:
    inline-flex, 0 var(--sp-1) padding, --lh-100. */
 .agent-badge {
   display: inline-flex;

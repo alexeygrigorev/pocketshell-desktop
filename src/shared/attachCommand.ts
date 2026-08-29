@@ -75,8 +75,8 @@
  *
  * `pocketshell sessions <name>` is the pre-0.4.44 spelling of the same
  * operation, kept only for hosts running an older helper. Real hosts run
- * 0.4.44; the v0.4.8 contract in the docs is stale. Per docs/ANALYSIS.md D22
- * this app takes hard cuts rather than carrying legacy shims, so the old
+ * 0.4.44; the v0.4.8 contract in the docs is stale. This app takes hard cuts
+ * rather than carrying legacy shims, so the old
  * spelling goes.
  *
  * The raw-tmux branch is worse than merely redundant: it is the command that

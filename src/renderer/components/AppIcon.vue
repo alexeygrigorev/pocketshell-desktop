@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // AppIcon: the ONLY way an icon enters this UI. No character ever stands in
-// for a graphic affordance — see docs/POLISH.md §2 and docs/DESIGN.md §5.8.
+// for a graphic affordance — see docs/DESIGN.md §5.8.
 //
 // Contract (inherited verbatim from the composer's ComposerIcon, which this
 // component replaced — the two sets were specified to be pixel-identical so
@@ -269,7 +269,7 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   // the one that needs no label to be understood. Its <polyline> (4 7, 4 4,
   // 20 4, 20 7) is one relative path and its two <line>s are the others.
   //
-  // NOT a literal letter glyph: docs/POLISH.md §2 is that a character never
+  // NOT a literal letter glyph: a character never
   // stands in for a graphic affordance, and "the affordance happens to be about
   // letters" is not an exemption — a `T` typed into the template would render
   // in the UI font at the button's font size and inherit none of the stroke

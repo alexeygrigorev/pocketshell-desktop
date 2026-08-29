@@ -1,7 +1,6 @@
 # PocketShell Desktop — Testing
 
-Four tiers, bottom-up. Every phase in [PLAN.md](./PLAN.md) must pass its
-unit + integration tests before its E2E demo. The guiding rule, inherited
+Four tiers, bottom-up. The guiding rule, inherited
 from the Android project: **only deterministic Docker targets, never real
 hosts or real provider credentials.**
 

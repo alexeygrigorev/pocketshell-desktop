@@ -1181,7 +1181,7 @@ function buildDirectories(rows: SessionRow[], home: string | null): SessionDirec
   const byKey = new Map<string, SessionDirectory>();
   for (const row of rows) {
     const path = row.untracked ? UNTRACKED_PATH : directoryKey(row.folderPath, home);
-    const key = row.untracked ? `${UNTRACKED_PATH} ${row.session.name}` : path;
+    const key = row.untracked ? `${UNTRACKED_PATH}\x00${row.session.name}` : path;
     const existing = byKey.get(key);
     if (existing) {
       existing.rows.push(row);

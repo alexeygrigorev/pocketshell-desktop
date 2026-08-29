@@ -252,7 +252,7 @@ export function classifyReposFailure(
  * This also returned true for Click's exit-2 `No such command` / `No such
  * option`, on the theory that a helper too old to have the subcommand is, to
  * us, as good as no helper. That was back-compat by intent and it is now
- * removed under D22 (no backwards-compat, hard cuts only): hosts run 0.4.44,
+ * removed (no backwards-compat, hard cuts only): hosts run 0.4.44,
  * which has every subcommand and every option this app sends, so those exits
  * can no longer mean "old helper". They can only mean we built the invocation
  * wrong, or `pocketshell` on that host is not the helper we think it is.
@@ -286,9 +286,9 @@ export function isHelperMissing(exitCode: number, output: string): boolean {
  *    (a namesake on PATH, a half-installed shim), because every subcommand we
  *    call exists in the version the app targets.
  *  - `Error: No such option: --cwd` — the subcommand exists but rejected a flag
- *    we passed. That is drift between this client and the installed helper, of
- *    exactly the kind ANALYSIS.md's drift table records (`sessions resumable
- *    --json` was removed upstream while the docs still promised it).
+ *    we passed. That is drift between this client and the installed helper:
+ *    `sessions resumable --json` was removed upstream while the docs still
+ *    promised it.
  *
  * They were previously lumped together AND swallowed as `helper-missing`. They
  * are kept apart here because the fix differs — check the host's install vs.

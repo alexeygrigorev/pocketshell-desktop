@@ -28,8 +28,7 @@ import SessionRedirectView from './views/SessionRedirectView.vue';
 // `session/:session` used to BE the workspace route. It is now a resolver that
 // replaces itself with the folder holding that session — see
 // views/SessionRedirectView.vue for why the old shape is honoured rather than
-// deleted, and why that is not a backwards-compatibility shim in the sense
-// docs/ANALYSIS.md D22 forbids.
+// deleted, and why that is not a backwards-compatibility shim.
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'hosts', component: HostPickerView },
   {

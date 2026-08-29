@@ -213,11 +213,10 @@ tree: a collapsible folder header **per leaf working directory**
 
 Against the user's real dev box the distribution is **11 folders, every one
 holding exactly one session** — 22 rows for 11 sessions. The design was only
-ever exercised against the 2-folder Docker fixture
-(`docs/screenshots/polish-02-workspace-sessions.png`,
-`polish-13-session-list-default.png` — and note those screenshots are stale:
-they show the pre-`NewSessionDialog` text-input footer, so even the fixture
-imagery lags the code). Five compounding failures at the real distribution:
+ever exercised against the 2-folder Docker fixture, and even that imagery
+predated the `NewSessionDialog` footer — screenshots are local-only,
+gitignored reference (`docs/screenshots/`), and the ones this section once
+cited have been deleted. Five compounding failures at the real distribution:
 
 1. **The grouping earns nothing.** A folder header whose entire content is
    one session, labelled "· 1 session" (SessionTree.vue:81-83, 147), costs a
@@ -465,7 +464,7 @@ most, because siblings share a derived prefix by construction:
 | 1 | Left inset | 2px rail slot + 44px | 46px |
 | 2 | Status dot | 8px circle. `--success` when attached, `--fg-muted` otherwise. This plus sort position (§6) **replaces** the `attached` text tag, which stays retired | 8px + 8px gap |
 | 3 | Session name | `--font-mono` `--fs-300`; `--fw-semibold` when attached. `flex: 1 1 auto; min-width: 0` | ~208px (flex) |
-| 4 | Agent badge | Unchanged (POLISH.md §7 chip metric). `flex: none` | 0–56px |
+| 4 | Agent badge | Unchanged (shared chip metric). `flex: none` | 0–56px |
 | 5 | Relative time | `--fs-100` `--fg-secondary` `tabular-nums`, right-aligned, `flex: none` (§6) | ~36px max |
 | 6 | Right padding | `--row-pad-x` | 10px |
 
@@ -865,14 +864,10 @@ the eye lands first).
   container-query floor is 270px not 230px; and `.row-name` should be retired
   in its place. Left unedited only because the file has been dirty under
   concurrent editors across all three revisions.
-- **docs/POLISH.md** — §7's chip metric is unchanged and the `attached` chip
-  stays retired. §2.6/§4's disclosure entry (`▸` → `AppIcon
-  name="chevron-right"`, POLISH.md:239, 370) is live again and now applies at
-  two levels. The `·` separator entry (POLISH.md:269, `· 2 sessions`) is still
-  wrong: both counts are bare integers, and the phrase form lives in tooltips.
-- **docs/screenshots** — `polish-02`/`polish-13` are older still, and
-  `projects-20`…`projects-24` document a layout that no longer ships.
-  Recapture against a fixture with two or more `$HOME` roots, ≥10 one-session
+- **docs/screenshots** — the stale sets (`polish-02`/`polish-13`,
+  `projects-20`…`projects-24`, which documented layouts that no longer ship)
+  have been deleted; captures live untracked under `docs/screenshots/`.
+  When recapturing, cover a fixture with two or more `$HOME` roots, ≥10 one-session
   directories under one of them (the case all three revisions have argued
   about and none has photographed), one directory holding 2+ sessions, a
   worktree-divergent name, one out-of-`$HOME` session, and one session with no
@@ -957,7 +952,7 @@ exists (HostTreeModel.kt:268-286) and the next reconcile overwrites
 fallback for "no cwd reported" — adopting it as one is new behaviour, not a
 port. (2) It means writing on session create as well as reading, or the
 registry is empty for everything that already exists. (3) The checkout is
-v0.4.8-era while hosts run 0.4.44 (docs/ANALYSIS.md), so the command surface
+v0.4.8-era while hosts run 0.4.44, so the command surface
 is a lead to verify, not a contract.
 
 Cost estimate: one new helper command in `src/main/helper/commands.ts` plus a

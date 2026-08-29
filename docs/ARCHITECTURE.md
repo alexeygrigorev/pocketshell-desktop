@@ -1,8 +1,7 @@
 # PocketShell Desktop — Architecture
 
 How the Electron app is structured: process boundaries, module layout,
-the terminal model, state, and security. Grounded in
-[ANALYSIS.md](./ANALYSIS.md); see [PLAN.md](./PLAN.md) for delivery order.
+the terminal model, state, and security.
 
 ---
 

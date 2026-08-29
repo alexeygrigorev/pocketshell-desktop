@@ -1190,7 +1190,7 @@ defineExpose({ focus: (): void => term?.focus(), resyncDisplay });
  * looks identical. The background stays HERE so the black still reaches the
  * container edges rather than leaving an unpainted frame.
  *
- * This is the defect POLISH.md 6.5 predicted ("confirm FitAddon runs after
+ * This is the classic FitAddon slicing defect ("confirm FitAddon runs after
  * final layout so the last row lands whole") and it long predates the
  * floating composer; the composer only moved the sliced row up off the window
  * edge, where it finally became obvious.

@@ -45,9 +45,9 @@ behind it, so its toggle and remove buttons are deliberately disabled in favour
 of `stop`; and it is the first caller that starts the engine as a *side effect*
 of an action taken in another tab.
 
-`docs/ANALYSIS.md` §4 records the lineage: the Android engine came from
+The lineage: the Android engine came from
 `ssh-auto-forward-android`, **local (`-L`) forwards only**; the desktop added
-`-R` and `-D` net-new (`ANALYSIS.md:182`, `:290`). Nothing in this spec
+`-R` and `-D` net-new. Nothing in this spec
 touches `-R`/`-D` semantics — auto-forwarding is `-L`-only in Python, in
 Android, and here. `-R`/`-D` stay manual-only and keep working; they simply
 share the key, state, and persistence model defined below.
@@ -187,8 +187,7 @@ order:
    cleared in `stop_forwarding_port` (`:983`), which only runs for ports that
    are *in* `tunnels` — a port that failed never got there. So a failure is
    **permanent for the process lifetime** unless a reconnect wipes state
-   (`_clear_stale_state`, `:1106`). Android used a 60s TTL
-   (`ANALYSIS.md:209`).
+   (`_clear_stale_state`, `:1106`). Android used a 60s TTL.
 
 ### Node today
 
@@ -215,7 +214,7 @@ export interface AutoForwardConfig {
 ```
 
 - **Keep `skipPortsBelow: 1024`, do not move it to 1000.** 1024 is the real
-  privileged-port boundary, matches Android (`ANALYSIS.md:209`), and the
+  privileged-port boundary, matches Android, and the
   Python's 1000 is an arbitrary round number. This is a deliberate,
   documented divergence — the only ports affected are 1000–1023.
 - Add `skipPorts` to the union: `if (this.config.skipPorts.includes(p)) return false;`
@@ -751,7 +750,7 @@ Rules ported from `_load_port_names` / `_save_port_names`
 
 ## 10. Parsers need real captured output, not assumed formats
 
-`docs/ANALYSIS.md:73-118` records that the helper contract this project
+The helper contract this project
 assumed drifted badly from reality (`--json` flags that don't exist, envelopes
 where arrays were expected, padding rules that break naive column slicing).
 The same hazard applies here, and the Python contains a live example of it:
@@ -813,7 +812,7 @@ Before touching any of these parsers:
    enrichment. Keep it.
 2. **`-R` and `-D`.** `Forwarder.ts` implements remote forwards via
    `forwardIn` (`:137-164`) and a SOCKS5 dynamic forward (`:229-279`). Neither
-   Python nor Android has these (`ANALYSIS.md:182`, `:290`). Nothing in this
+   Python nor Android has these. Nothing in this
    spec may drop them.
 3. **Manual forwards survive a port disappearing** (`AutoForwarder.ts:138`).
    The Python kills them (§6).

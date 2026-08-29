@@ -718,7 +718,7 @@ export class PocketshellClient {
    *
    * 0.4.44 emits a `{"profiles": [...]}` ENVELOPE. The bare array the stale
    * v0.4.8 docs described is not accepted: this app targets one helper version
-   * and takes hard cuts over shims (ANALYSIS.md D22), and a second accepted
+   * and takes hard cuts over shims, and a second accepted
    * shape is a second thing that can silently return `[]` without anyone
    * noticing which branch ran.
    */

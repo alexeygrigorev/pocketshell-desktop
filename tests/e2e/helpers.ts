@@ -1,4 +1,5 @@
 import { execFileSync, execSync } from 'node:child_process';
+import type { Page } from '@playwright/test';
 import { resolve } from 'node:path';
 
 /**
@@ -100,4 +101,18 @@ export function stopHelper(): void {
   } catch {
     // best-effort
   }
+}
+
+/**
+ * Wipe the renderer's persisted workspace state and reload.
+ *
+ * The workspace remembers tabs across relaunches (workspaceState.ts), so a
+ * Files tab a previous run left behind would reappear here and tests that
+ * count tabs would be reading history, not behaviour. Every spec calls this
+ * right after opening the window.
+ */
+export async function resetWorkspaceState(page: Page): Promise<void> {
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.waitForLoadState('domcontentloaded');
 }
