@@ -47,11 +47,16 @@ mac:
         - arm64
         - x64
 win:
+  # One installer PER ARCHITECTURE, deliberately: listing both arches here
+  # makes electron-builder fold them into a single NSIS installer (~170 MB,
+  # both runtimes inside), which is twice the download for everyone when one
+  # arch is all a machine needs. The split is done by the CI job running
+  # electron-builder once per arch - an arch list HERE would override those
+  # flags and re-merge. `${arch}` is what keeps the two installers from
+  # colliding on one filename.
+  artifactName: "${productName} Setup ${version} ${arch}.${ext}"
   target:
-    - target: nsis
-      arch:
-        - x64
-        - arm64
+    - nsis
 linux:
   category: Development
   target:
