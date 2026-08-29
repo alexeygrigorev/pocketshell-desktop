@@ -33,6 +33,7 @@ import {
   renameSessionCommand,
   resolveDirectoryCommand,
   sessionExistsCommand,
+  sessionTakenAnywhereCommand,
   type ReposCloneOptions,
   type ReposListOptions,
 } from './commands.js';
@@ -509,25 +510,34 @@ export class ProjectsService {
    *
    * ## Why this is a service call and not a `send-keys`
    *
-   * The session name is the JOIN KEY. `sessionAttachCommand` builds
-   * `tmuxctl '<name>'` and there is deliberately no fallback ladder behind it,
-   * so a rename that produces a name `tmuxctl` cannot resolve makes the session
-   * unreachable from this app — a trap, not a bug, because the session is still
-   * alive on the host and the list still shows it. Two guards make that
-   * impossible, and both of them have to run somewhere the UI cannot skip:
+   * The session name is the JOIN KEY — but not the way this doc used to argue.
+   * It used to claim `sessionAttachCommand`'s `tmuxctl '<name>'` needed only a
+   * spellable name to keep the session reachable, making `sanitiseName` the
+   * whole of guard one. In the per-session-server world that was quietly
+   * false: tmuxctl's join resolves a name against the socket DERIVED from it
+   * (`tmuxctl-<name>`) plus the default socket, so the first raw rename left
+   * session `beta` on `tmuxctl-alpha` and BOTH names stopped joining — the
+   * rename committed at the tmux level and orphaned the session out of the
+   * join path. The join now locates its own server by sweeping the sockets
+   * for `has-session -t '=<name>'` (see `sessionAttachCommand`), which is what
+   * makes a rename REAL rather than a trap, and two guards remain:
    *
    *  1. **The alphabet.** `sanitiseName` is the port of tmuxctl's own
    *     normalisation, so a name this accepts is a name `tmuxctl <name>` can
-   *     still join. A name with nothing alphanumeric left is refused outright
-   *     rather than silently replaced — the caller asked for a specific name
-   *     and deserves to be told it cannot have it. (`resolveSessionName` uses
-   *     the same predicate to decide whether a typed label is usable at all.)
-   *  2. **Uniqueness is the HOST's answer.** ./sessionName.ts explains why this
-   *     module never decides it: the Kotlin removed its client-side `-2`/`-3`
-   *     walk because a stale UI cache kept requesting names that were already
-   *     taken. So the check is `tmux has-session -t '=<to>'` against the live
-   *     server, one command before the rename, not a scan of a session list the
-   *     renderer may have fetched a minute ago.
+   *     still normalise to. A name with nothing alphanumeric left is refused
+   *     outright rather than silently replaced — the caller asked for a
+   *     specific name and deserves to be told it cannot have it.
+   *     (`resolveSessionName` uses the same predicate to decide whether a
+   *     typed label is usable at all.)
+   *  2. **Uniqueness is the HOST's answer, across EVERY server.** The
+   *     namespace a rename collides in is the join's, and the join's is not
+   *     one server: tmuxctl derives a socket from the name, the enrichment
+   *     map, the tab bar and the composer records are all keyed by name
+   *     host-wide. So the check is {@link sessionTakenAnywhereCommand} — the
+   *     same sweep predicate the free-name walk uses before a create — and
+   *     not a probe of the session being renamed. A failed sweep reads as
+   *     "free", the create walk's own degrade direction: a rename that
+   *     slips past it costs a duplicate tab, never a lost session.
    *
    * A same-name rename is a SUCCESS, not an error: committing an unchanged tab
    * label is the commonest thing a rename field does, and making the user see a
@@ -536,10 +546,11 @@ export class ProjectsService {
    * What this does NOT do is move anything. tmux session options — including
    * `@ps_agent_kind`, the authoritative agent classification — are keyed to the
    * session and not to its name, so the recorded engine survives. Attached
-   * clients follow the session by id and stay attached. The caller is
-   * responsible for the two pieces of state the DESKTOP keys by name: the
-   * composer's per-session record, and TmuxClientPool's note of which session
-   * its client is showing.
+   * clients follow the session by id and stay attached (and the pool's record
+   * of the session's SERVER outlives the rename, because a rename happens ON
+   * that server). The caller is responsible for the two pieces of state the
+   * DESKTOP keys by name: the composer's per-session record, and
+   * TmuxClientPool's note of which session its client is showing.
    */
   async renameSession(
     connectionId: string,
@@ -555,23 +566,21 @@ export class ProjectsService {
         code: 'illegal-name',
       };
     }
-    // Idempotent, and deliberately BEFORE the has-session probe — otherwise
+    // Idempotent, and deliberately BEFORE the taken probe — otherwise
     // committing an unchanged label would find the session itself and report
     // its own name as taken.
     if (target === from) return { ok: true, sessionName: from, error: null, code: null };
 
-    // Locate `from` FIRST, and let its server answer both remaining questions:
-    // uniqueness and the rename itself. Names are per-SERVER in the
-    // per-session-server world, so "is `target` free" means "free on the
-    // server the rename will run on" — the same reason the kill aims with
-    // `-S`. A failed or empty sweep (`unknown`) leaves the bare default-socket
-    // spelling, which is the only query that existed before this.
+    // Locate `from` FIRST, and aim the rename at its server: a rename can only
+    // run on the server that holds the session, and the per-session-server
+    // world means that is usually not the default socket. The taken probe does
+    // NOT reuse this socket — see guard two above for why it sweeps instead.
     const located = await this.helper.locateSession(connectionId, from);
     const socketPath = located.status === 'found' ? located.socketPath : null;
 
     const taken = await this.ssh.exec(
       connectionId,
-      pathAwareCommand(sessionExistsCommand(target, socketPath)),
+      pathAwareCommand(sessionTakenAnywhereCommand(target)),
     );
     if (taken.exitCode === 0) {
       return {

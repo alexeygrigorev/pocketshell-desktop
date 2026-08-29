@@ -552,10 +552,12 @@ describe('PocketshellClient.createSession — real fixture output', () => {
 });
 
 /**
- * The session name is the JOIN KEY — `sessionAttachCommand`
- * builds `tmuxctl '<name>'` with no fallback behind it — so a rename that
- * produces an unjoinable or duplicate name would strand a live session. These
- * pin the two guards that make that impossible.
+ * The session name is the join namespace: tmuxctl derives a socket from it and
+ * every desktop-side structure is keyed by it, so a rename that produces a
+ * duplicate name mangles the tab bar, and a join that could only resolve
+ * name-derived sockets is what made the last rename strand its session. These
+ * pin the guards that keep a rename real: the host-wide taken sweep, the
+ * alphabet, and the rename landing on the session's own server.
  */
 describe('ProjectsService.renameSession', () => {
   it('renames with an exact-match target and an option terminator', async () => {
@@ -585,8 +587,9 @@ describe('ProjectsService.renameSession', () => {
     const out = await projects.renameSession(CONN, 'git-x', 'git-y');
     expect(out).toMatchObject({ ok: false, code: 'name-taken' });
     // The exact-match `=` is what stops `git-y` probing as taken because
-    // `git-y-2` exists.
-    expect(commands.map(inner)).toContain("tmux has-session -t '=git-y' 2>/dev/null");
+    // `git-y-2` exists; the sweep is what stops `git-y` probing as free
+    // because it lives on a socket other than the one being renamed.
+    expect(commands.map(inner).join('\n')).toContain("__ps_taken 'git-y'");
     expect(commands.some((c) => c.includes('rename-session'))).toBe(false);
   });
 
@@ -761,7 +764,7 @@ describe('ProjectsService.killSession — aimed by the locator', () => {
 });
 
 describe('ProjectsService.renameSession — aimed like the kill', () => {
-  it('asks the session’s own server about the target and renames there', async () => {
+  it('renames on the session’s own server, and asks the whole host about the target', async () => {
     const SOCKET = '/tmp/tmux-1000/tmuxctl-7-api';
     const { projects, commands } = service([
       (c) =>
@@ -774,9 +777,12 @@ describe('ProjectsService.renameSession — aimed like the kill', () => {
     const out = await projects.renameSession(CONN, 'api', 'api-2');
     expect(out).toEqual({ ok: true, sessionName: 'api-2', error: null, code: null });
     const innered = commands.map(inner);
-    // Uniqueness is a question about the server the rename will run on; in the
-    // per-session-server world there is no single host-wide namespace to ask.
-    expect(innered).toContain(`tmux -S '${SOCKET}' has-session -t '=api-2' 2>/dev/null`);
+    // The rename runs where the session lives — usually not the default socket.
     expect(innered).toContain(`tmux -S '${SOCKET}' rename-session -t '=api' -- 'api-2'`);
+    // Uniqueness is a question about the JOIN namespace, which is host-wide:
+    // tmuxctl derives a socket from the name, and every desktop-side structure
+    // (tabs, composer, enrichment map) is keyed by name across servers.
+    expect(innered.filter((c) => c.includes('__ps_taken'))).toHaveLength(1);
+    expect(innered.some((c) => c.includes(`-S '${SOCKET}' has-session`))).toBe(false);
   });
 });

@@ -171,6 +171,26 @@ export function freeSessionNameCommand(base: string): string {
 }
 
 /**
+ * Does a session called [name] exist ANYWHERE on this host? Exit 0 yes.
+ *
+ * The rename's uniqueness check. It uses {@link SESSION_TAKEN_ANYWHERE_FUNCTION}
+ * — the same predicate the free-name walk uses — and not
+ * {@link sessionExistsCommand} aimed at the session being renamed, because the
+ * namespace a rename collides in is the helper's JOIN namespace, and that is
+ * not one server. `tmux_api.locate_session` resolves `tmuxctl <name>` by
+ * checking the socket DERIVED from the name (`tmuxctl-<name>`) and then the
+ * default socket; the desktop's own tab bar, composer and enrichment map are
+ * likewise keyed by name across every server. A rename onto a name that lives
+ * on some third server would therefore produce two tabs with one name and a
+ * join that resolves to whichever row the sweep printed last — so "taken"
+ * means "the name exists on any socket this user has", exactly as it already
+ * does for creates.
+ */
+export function sessionTakenAnywhereCommand(name: string): string {
+  return SESSION_TAKEN_ANYWHERE_FUNCTION + `__ps_taken ${shellQuote(name)}`;
+}
+
+/**
  * `pocketshell sessions create '<name>' -c '<cwd>'`.
  *
  * `--mem` is deliberately NOT passed. Confirmed against the helper's own
