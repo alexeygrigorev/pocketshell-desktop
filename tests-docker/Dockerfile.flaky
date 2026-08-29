@@ -1,0 +1,21 @@
+# The flaky SSH test image for PocketShell Desktop (FEATURES.md F12).
+#
+# The base ssh image with a chaos entrypoint: a loop that kills the
+# per-connection sshd handlers on a timer, so a connected client sees its
+# transport drop while the listener keeps answering. What that buys: the
+# reconnect integration test can watch a REAL drop — error/close on the wire,
+# the registry record torn down, `onCloseConnection` firing with reason
+# 'lost' — on demand and on a deterministic schedule, instead of waiting for
+# a network to misbehave.
+#
+# See flaky-entrypoint.sh for why only the handlers die, and
+# tests-docker/docker-compose.yml (service `flaky`, port 3206) for how it is
+# reached.
+FROM pocketshell-test:ssh
+
+COPY flaky-entrypoint.sh /usr/local/bin/pocketshell-flaky-entrypoint
+RUN chmod +x /usr/local/bin/pocketshell-flaky-entrypoint
+
+EXPOSE 22
+
+CMD ["/usr/local/bin/pocketshell-flaky-entrypoint"]
