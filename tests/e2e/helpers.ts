@@ -127,11 +127,25 @@ export async function resetWorkspaceState(page: Page): Promise<void> {
  * Best effort by design - called from a failure path that is already throwing.
  */
 export function dumpFixtureSessionState(): string {
+  // execFileSync with an argv array: the remote command must reach sshd
+  // verbatim, and any local shell quoting (JSON.stringify included) mangles
+  // the embedded quotes - the first version of this probe exported a PATH
+  // that contained literal quote characters and then wondered why
+  // pocketshell was not found.
   const probe = (cmd: string): string => {
     try {
-      return execSync(
-        `ssh -i "${TEST_KEY}" -p ${HOST_PORT} -o BatchMode=yes -o ConnectTimeout=3 ` +
-          `-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null testuser@127.0.0.1 ${JSON.stringify(cmd)}`,
+      return execFileSync(
+        'ssh',
+        [
+          '-i', TEST_KEY,
+          '-p', String(HOST_PORT),
+          '-o', 'BatchMode=yes',
+          '-o', 'ConnectTimeout=3',
+          '-o', 'StrictHostKeyChecking=no',
+          '-o', 'UserKnownHostsFile=/dev/null',
+          'testuser@127.0.0.1',
+          cmd,
+        ],
         { stdio: ['ignore', 'pipe', 'ignore'], timeout: 8_000 },
       )
         .toString()
@@ -148,5 +162,6 @@ export function dumpFixtureSessionState(): string {
     probe(sweep),
     'helper sessions list:',
     probe('export PATH="$HOME/.local/bin:$PATH"; pocketshell sessions list 2>&1 | head -20'),
-  ].join('\n');
+  ].join('
+');
 }
