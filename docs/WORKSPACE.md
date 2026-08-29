@@ -1172,12 +1172,22 @@ reading our own capability out of the host's record.
 > Right-click a session tab -> a menu including an action that kills that tmux
 > session.
 
-**The only destructive action in this app**, reachable from two menus: this one,
-and the session panel's folder row, which stops a whole folder at once (§14.4).
-The file tree's menu (c614e7e) deliberately omitted delete as
-"destructive-adjacent with no undo"; this was asked for explicitly, so it ships
-— and it is the only thing in either menu that can lose work, so it looks like
-it: separated, tinted with `--error`, and behind a confirmation.
+**The only destructive action in this app**, reachable from three levers: this
+menu, the session tab's own `×`, and the session panel's folder row, which stops
+a whole folder at once (§14.4). The file tree's menu (c614e7e) deliberately
+omitted delete as "destructive-adjacent with no undo"; this was asked for
+explicitly, so it ships — and it is the only thing in any of them that can lose
+work, so it looks like it: separated, tinted with `--error`, and behind a
+confirmation.
+
+The tab's `×` was added at the user's request ("I want to have x here like in
+vscode") and takes VS Code's PLACEMENT, not its terminal panel's semantics: a
+click opens this section's dialog, named and confirmed, rather than killing on
+the click. Its tooltip says Stop, never Close — §14.4's one word for the kill —
+and the click `stop`s propagation, so arming it on a background tab does not
+also select that tab, the same rule the right-click obeys. The reasoning that
+kept the `×` off the tab for months is recorded, superseded, at the end of this
+document.
 
 The menu reuses `PopupMenu.vue`, which exists precisely for this shape: the tab
 strip is `overflow-x: auto`, which per CSS makes `overflow-y` compute to `auto`
@@ -1351,7 +1361,9 @@ already sets.
 
 **It is called Stop, not Close.** `Close` in this app closes a TAB and leaves
 the session running (§12). Two words for one destructive act, in two menus a
-click apart, is how a user comes to believe one of them is the safe one.
+click apart, is how a user comes to believe one of them is the safe one. The
+session tab's `×` is bound by the same rule (§14): it LOOKS like a close
+control, so its tooltip is the word Stop, and the dialog it opens is this one.
 
 **The confirm LISTS the sessions**, which is the one thing it does that §14.1's
 does not have to. The tab menu could name a single session because the tab was
@@ -1554,14 +1566,15 @@ rather than an oversight:
 
 1. **SUPERSEDED — "a session tab cannot be closed".** This said that closing a
    tab would have to mean killing a live tmux session, which is not what a tab
-   close means anywhere else. The first half of that reasoning survives and is
-   why a session tab still has no `x`: §14 puts the kill in a context menu,
-   named and confirmed, rather than under a control that means "close this
-   view" everywhere else it appears. The second half — that the app should not
-   offer a kill at all — was overtaken by the user asking for one explicitly.
-   The Files-tab rule is unchanged: a second one closes, the first does not,
-   because it is the folder's file browser and the workspace would otherwise
-   have no way to look at the folder at all.
+   close means anywhere else, and that §14 should therefore keep the kill in a
+   context menu, named and confirmed, rather than under a control that means
+   "close this view" everywhere else it appears. The confirm half of that
+   reasoning survives intact and is why the `×` the user then asked for
+   ("I want to have x here like in vscode") opens §14.1's dialog instead of
+   killing, and says Stop rather than Close. What fell was the placement: a
+   stop the user cannot see until they right-click lost to a stop that is on
+   the tab, and the dialog is what keeps it from being a mis-click away from
+   destroying an agent mid-task.
 3. **The agent launch is still fire-and-forget, but it is no longer SILENT.**
    `pocketshell agent <kind>` is written into the new session once its PTY
    exists, and nothing verifies that the wrapper then started — verifying would

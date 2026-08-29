@@ -1559,6 +1559,23 @@ function askStop(): void {
 }
 
 /**
+ * The `×` on a session tab: {@link askStop} for a tab the user is pointing at
+ * directly instead of one they right-clicked.
+ *
+ * It arms the same {@link stopping} ref, so the same named and confirmed
+ * dialog opens (§14.1) and the kill itself stays in `confirmStop` — the `×`
+ * is a handle on the destructive action, never the action. The `+` menu is
+ * dismissed here for the reason `openTabMenu` dismisses it: the strip's
+ * `click.stop` keeps the event from reaching the menu's own outside-click
+ * close, so a menu left standing would outlive the click that should have
+ * dismissed it.
+ */
+function askStopTab(tab: Extract<WorkspaceTab, { kind: 'session' }>): void {
+  addAnchor.value = null;
+  stopping.value = tab.session;
+}
+
+/**
  * Kill the session, then take down everything the DESKTOP keeps under its name.
  *
  * Three pieces, and they are the same three a rename has to move (61753d7);
@@ -1823,18 +1840,29 @@ function onFocusTerminal(): void {
               class="tab-agent"
             />
             {{ tab.label }}
-            <!-- Only a SECOND Files tab is closable. The first is the folder's
-                 file browser and closing it would leave a workspace with no way
-                 to look at the folder at all.
-
-                 A SESSION tab still has no `×`, even now that a session can be
-                 stopped: a `×` on a tab means "close this view" everywhere it
-                 appears, and the thing behind this one is a live process on
-                 another machine. Destroying it is in the context menu, where it
-                 is named, confirmed, and cannot be reached by a mis-aimed
-                 click at the edge of a tab (§14). -->
+            <!-- A `×` on a SESSION tab: the context menu's Stop, one click
+                 closer. It opens the SAME named, confirmed dialog the menu
+                 does rather than killing on the click, because §14's argument
+                 survives the affordance: the thing behind the tab is a live
+                 process on another machine, and the control that can destroy
+                 it must say so and ask. The tooltip says Stop, never Close —
+                 the one word this app reserves for the kill (§14.4) — and the
+                 click stops here, so a background tab's `×` does not also
+                 move the user to it, the same rule the right-click obeys. -->
             <span
-              v-if="tab.kind === 'files' && filesTabs.length > 1"
+              v-if="tab.kind === 'session'"
+              class="tab-close"
+              title="Stop this session"
+              @click.stop="askStopTab(tab)"
+            >
+              <AppIcon name="close" :size="12" />
+            </span>
+            <!-- A FILES tab's `×` closes the view and nothing else (§12).
+                 Only a SECOND one has it: the first is the folder's file
+                 browser and closing it would leave a workspace with no way to
+                 look at the folder at all. -->
+            <span
+              v-else-if="tab.kind === 'files' && filesTabs.length > 1"
               class="tab-close"
               title="Close this Files tab"
               @click.stop="closeFilesTab(tab.id)"
@@ -2186,6 +2214,10 @@ function onFocusTerminal(): void {
   align-items: center;
   color: var(--fg-muted);
   border-radius: var(--r-sm);
+  /* A 12px glyph is under the fair-hit-target floor, and one of these buttons
+     now fronts the stop confirmation — the padding buys the hover square some
+     aim without widening the tab's own label row. */
+  padding: 2px;
 }
 .tab-close:hover {
   color: var(--fg);
