@@ -22,6 +22,7 @@ import {
   parseSessionEnrichment,
   diagnoseSessionPaths,
   mergeSessionEnrichment,
+  restoreUnlistedSessions,
   findEnrichment,
   SESSION_ENRICHMENT_COMMAND,
   SESSION_SOCKET_DIAGNOSTIC_COMMAND,
@@ -315,7 +316,7 @@ export class PocketshellClient {
       if (parsed.length > 0 || /IDX\s+SESSION/.test(helper.stdout)) {
         const merged = await this.withDerivedPaths(
           connectionId,
-          mergeSessionEnrichment(parsed, enrichment),
+          restoreUnlistedSessions(mergeSessionEnrichment(parsed, enrichment), enrichment),
           { enrichment, probe, helper },
         );
         return this.withRepoRoots(connectionId, merged);
@@ -333,7 +334,7 @@ export class PocketshellClient {
       // and the probe's active-pane cwd is the better answer when both exist.
       const merged = await this.withDerivedPaths(
         connectionId,
-        mergeSessionEnrichment(parseTmuxListSessionsFallback(tmux.stdout), enrichment),
+        restoreUnlistedSessions(mergeSessionEnrichment(parseTmuxListSessionsFallback(tmux.stdout), enrichment), enrichment),
         { enrichment, probe, helper: tmux },
       );
       return this.withRepoRoots(connectionId, merged);

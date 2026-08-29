@@ -395,6 +395,50 @@ function splitPathPair(middle: string[]): [string, string] {
  * degrading (no tmux, non-zero exit, a tmux too old for `#{@…}`) must never
  * cost us the list itself, only the grouping metadata.
  */
+/**
+ * Put back the sessions the helper's table omitted but the enrichment probe
+ * SAW.
+ *
+ * ## Why this exists
+ *
+ * The table and the probe travel in the same round-trip but are independent
+ * reads: the table is one CLI pass over every socket, the probe its own
+ * sweep. On a loaded host the table can come back TRUNCATED — one socket's
+ * rows missing while the probe saw them fine — and a table that merely
+ * forgot a live session was being accepted as the whole truth, which pruned
+ * the session's tab, closed its pane, and made a running session
+ * un-openable until a luckier poll (measured on CI: tab bar held
+ * `build` while the host sweep answered `main attached=1` and the
+ * helper's own list named both).
+ *
+ * A session the probe saw is live — the same evidence the Stop locator
+ * trusts — so the omission is repaired from the probe's rows. Timestamps
+ * are the one thing the probe does not carry, so a restored row reports 0
+ * for created/activity (it sorts last, it does not lie) and the next
+ * complete poll replaces it wholesale.
+ */
+export function restoreUnlistedSessions(
+  sessions: SessionSummary[],
+  enrichment: Map<string, SessionEnrichment>,
+): SessionSummary[] {
+  if (enrichment.size === 0) return sessions;
+  const listed = new Set(sessions.map((session) => session.name));
+  const restored: SessionSummary[] = [];
+  for (const [name, extra] of enrichment) {
+    if (listed.has(name)) continue;
+    restored.push({
+      name,
+      created: 0,
+      activity: 0,
+      attached: extra.attached,
+      path: extra.path ?? null,
+      agentKind: extra.agentKind,
+    });
+  }
+  if (restored.length === 0) return sessions;
+  return [...sessions, ...restored];
+}
+
 export function mergeSessionEnrichment(
   sessions: SessionSummary[],
   enrichment: Map<string, SessionEnrichment>,

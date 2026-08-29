@@ -13,6 +13,7 @@ import {
   parseCommandV,
   parseSessionEnrichment,
   mergeSessionEnrichment,
+  restoreUnlistedSessions,
   agentKindFromTmuxOption,
   inferPathsFromSiblings,
   diagnoseSessionPaths,
@@ -758,5 +759,65 @@ describe('tree registry parsing (pocketshell tree)', () => {
     ).toEqual({ alive: ['a'], gone: ['b'], added: ['c'] });
     expect(parseTreeReconcile(JSON.stringify({ alive: ['a'], gone: ['b'] }))).toBeNull();
     expect(parseTreeReconcile('')).toBeNull();
+  });
+});
+
+
+describe('restoreUnlistedSessions', () => {
+  // The CI measurement this pins: the tab bar held only 'build' while the
+  // host sweep answered 'main attached=1' and the helper's own list named
+  // both - a truncated helper table accepted as the whole truth, which
+  // pruned a live session's tab. The probe saw what the table forgot.
+
+  const build = {
+    name: 'build',
+    created: 100,
+    activity: 200,
+    attached: false,
+    path: '/home/testuser',
+  };
+  const enrichment = new Map([
+    [
+      'build',
+      {
+        path: '/home/testuser',
+        attached: false,
+        agentKind: null,
+        socketPath: '/tmp/tmux-1000/default',
+      },
+    ],
+    [
+      'main',
+      {
+        path: '/home/testuser',
+        attached: true,
+        agentKind: null,
+        socketPath: '/tmp/tmux-1000/default',
+      },
+    ],
+  ]);
+
+  it('restores a session the probe saw and the table omitted', () => {
+    const out = restoreUnlistedSessions([build], enrichment);
+    expect(out.map((session) => session.name)).toEqual(['build', 'main']);
+    const main = out[1]!;
+    expect(main.attached).toBe(true);
+    expect(main.path).toBe('/home/testuser');
+    // Timestamps are the one thing the probe does not carry: report 0 rather
+    // than inventing a number, and let the next complete poll replace the row.
+    expect(main.created).toBe(0);
+    expect(main.activity).toBe(0);
+  });
+
+  it('changes nothing when the table listed everything the probe saw', () => {
+    const listed = [{ ...build }];
+    expect(restoreUnlistedSessions(listed, new Map([['build', enrichment.get('build')!]]))).toBe(
+      listed,
+    );
+  });
+
+  it('changes nothing on an empty probe - no evidence, no invention', () => {
+    const listed = [{ ...build }];
+    expect(restoreUnlistedSessions(listed, new Map())).toBe(listed);
   });
 });
