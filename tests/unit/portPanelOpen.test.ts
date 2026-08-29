@@ -267,4 +267,26 @@ describe('PortPanelView — the panel is arranged live-first (docs/PORTFWD.md §
     await flush(wrapper);
     expect(folded(wrapper.find('.add-form'))).toBe(true);
   });
+
+  it('spares keyed rows the redundant remove and the local badge', async () => {
+    // On a keyed row remove was the same verb as toggle-off (engine remove =
+    // stop + force-off), so the toggle is the one mark — and `local` is the
+    // table's whole furniture, a badge naming the default.
+    const wrapper = await open({ states: [fwd()], disco: [disco({ forwarded: true })] });
+    expect(wrapper.find('button[title="Remove forward"]').exists()).toBe(false);
+    expect(wrapper.find('.kind.local').exists()).toBe(false);
+    // The toggle itself stays, of course.
+    expect(wrapper.find('.actions .icon-btn.on').exists()).toBe(true);
+  });
+
+  it('keeps remove — and the remote badge — on a -R row, whose toggle cannot act', async () => {
+    // A `-R` forward has no remote port: the toggle is disabled, so remove is
+    // not redundant there but the only action. Its badge is information, not
+    // furniture, and stays.
+    const wrapper = await open({
+      states: [fwd({ key: 'remote:6080->127.0.0.1:6080', kind: 'remote', listenPort: 6080, destPort: 6080 })],
+    });
+    expect(wrapper.find('button[title="Remove forward"]').exists()).toBe(true);
+    expect(wrapper.get('.kind.remote').text()).toBe('remote');
+  });
 });

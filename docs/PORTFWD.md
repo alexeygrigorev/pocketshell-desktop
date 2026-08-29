@@ -1163,3 +1163,28 @@ crossed-out rows in the ask were read as "not at rest", not "not at all".
 Tests: `tests/unit/portPanelOpen.test.ts`, describe "arranged live-first" —
 forwarded lead and the tail's fold count, no Scan button in the body with the
 add form closed by default, and the form folding away after a made forward.
+
+---
+
+## 19. The actions column: one mark per verb
+
+> "the x are kind of redundant so let's remove them. the badge 'local' also
+> isn't needed"
+
+Right on both counts, and for the same reason: the × named an operation the
+toggle beside it already performs. Engine-side, `remove` is `stop` + a
+`force-off` intent (`AutoForwarder.ts`) — exactly what toggle-off does — so
+on every row the toggle can act on (anything with a remote port), the two
+marks were two spellings of one verb. The × now survives only on `-R`/`-D`
+rows, whose listener is on the host and which have no remote port for the
+toggle to key on: there it is not redundant but the ONLY action. (Served
+rows lost nothing — their × was already disabled in favour of `stop`.)
+
+The `local` badge fell for the adjacent reason: with the auto policy opening
+nothing but `-L` tunnels, the chip labelled the default on every row and
+read as noise. `-R` and `-D` keep theirs — rare shapes, real information,
+and the one place the mark now appears is the place it says something.
+
+Tests: `tests/unit/portPanelOpen.test.ts` — no remove and no `local` badge
+on a keyed row with the toggle intact; remove and the `remote` badge present
+on a `-R` row.

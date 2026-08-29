@@ -11,10 +11,13 @@
 //     therefore unreachable.
 //
 // Per row the panel can now do everything the engine can: rename the port,
-// pin it to a chosen local port (or drop the pin), force it on or off, put it
-// back on the automatic policy, and remove it. `Process` and `Folder` come
-// from the scan's PID attribution, which is best-effort on a shared box — a
-// dash there is normal, not a bug.
+// pin it to a chosen local port (or drop the pin), force it on or off, and
+// put it back on the automatic policy. Remove is not per row any more — for
+// keyed rows it was the same verb as toggle-off (engine remove = stop +
+// force-off), so the toggle is the one mark; `-R`/`-D` rows, which have no
+// remote port for any of the above, keep remove as their only action.
+// `Process` and `Folder` come from the scan's PID attribution, which is
+// best-effort on a shared box — a dash there is normal, not a bug.
 //
 // Two things NOT to re-litigate in here:
 //   - Removal uses `ForwardState.key`. The engine now issues that string and
@@ -445,7 +448,15 @@ function fmtScanTime(epochMs: number | null): string {
           >
             <td class="c-port">
               <span class="port-num">{{ row.remotePort ?? '—' }}</span>
-              <span v-if="row.fwd" :class="['kind', row.fwd.kind]">{{ row.fwd.kind }}</span>
+              <!-- `local` is the table's whole furniture — the badge named the
+                   default and read as noise (§19). `-R`/`-D` are the rare
+                   shapes and keep their word. -->
+              <span
+                v-if="row.fwd && row.fwd.kind !== 'local'"
+                :class="['kind', row.fwd.kind]"
+              >
+                {{ row.fwd.kind }}
+              </span>
               <span v-if="originLabel(row)" class="origin">{{ originLabel(row) }}</span>
               <span v-if="row.disco?.intent === 'force-on'" class="origin forced">forced on</span>
               <!-- The one place a served folder is visible as such. Without it
@@ -588,15 +599,20 @@ function fmtScanTime(epochMs: number | null): string {
                 >
                   auto
                 </button>
+                <!-- The remove mark survives ONLY where the toggle cannot act:
+                     a `-R`/`-D` row has no remote port, so the toggle is
+                     disabled and this is the one way to take it down. On
+                     keyed rows remove was the same verb as toggle-off (the
+                     engine's remove = stop + force-off), two marks for one
+                     operation, and the toggle won (§19). -->
                 <button
+                  v-if="row.remotePort === null"
                   class="icon-btn sm"
                   :disabled="!row.fwd || row.fwd.origin === 'ssh-config' || servedOf(row) !== null"
                   :title="
-                    servedOf(row)
-                      ? 'This port is a served folder — use stop'
-                      : row.fwd?.origin === 'ssh-config'
-                        ? 'Defined by ~/.ssh/config — remove it there'
-                        : 'Remove forward'
+                    row.fwd?.origin === 'ssh-config'
+                      ? 'Defined by ~/.ssh/config — remove it there'
+                      : 'Remove forward'
                   "
                   @click="row.fwd && forwards.remove(connId!, row.fwd.key)"
                 >
@@ -950,9 +966,6 @@ function fmtScanTime(epochMs: number | null): string {
   padding: 0 var(--sp-1);
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
-}
-.kind.local {
-  color: var(--accent);
 }
 .kind.remote {
   color: var(--warning);
