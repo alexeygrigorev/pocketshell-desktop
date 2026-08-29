@@ -4,7 +4,7 @@ import {
   isNewerRelease,
   pickAsset,
   type CheckInput,
-} from '@main/release/ReleaseChecker';
+} from '@main/update/ReleaseChecker';
 
 /**
  * The release checker decides whether the user gets nagged, so its edges are

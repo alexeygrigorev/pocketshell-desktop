@@ -13,7 +13,7 @@ import { ConnectionRegistry } from './ssh/ConnectionRegistry.js';
 import { TmuxClientPool } from './ssh/TmuxClientPool.js';
 import { PocketshellClient } from './helper/PocketshellClient.js';
 import { runBootstrap } from './helper/bootstrap.js';
-import { checkForUpdate } from './release/ReleaseChecker.js';
+import { checkForUpdate } from './update/ReleaseChecker.js';
 import { readSshConfig } from './ssh-config/SshConfigParser.js';
 import { KnownHosts } from './ssh-config/KnownHosts.js';
 import type { UsageRow } from './helper/parsers.js';
