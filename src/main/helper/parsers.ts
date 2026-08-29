@@ -768,7 +768,7 @@ const EMPTY_WINDOW: UsageWindow = { percent_remaining: null, reset_at: null, win
 /**
  * Rebuild `short_term`/`long_term` from a `windows` map. The helper still
  * self-reports 0.4.44 while quse's record underneath it moved from the
- * top-level pair to a keyed map (see docs/ANALYSIS.md's drift table), and a
+ * top-level pair to a keyed map, and a
  * row consumed raw has no `short_term` at all — a consumer that indexes it
  * throws. Rows already carrying the pair pass through untouched; a slot the
  * map says nothing about becomes the explicit-nulls EMPTY_WINDOW.

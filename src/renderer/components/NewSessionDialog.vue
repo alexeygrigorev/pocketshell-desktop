@@ -1314,7 +1314,7 @@ function onStartAnother(): void {
   background: var(--state-hover);
 }
 
-/* One badge metric across the app (docs/POLISH.md §7). */
+/* One badge metric across the app. */
 .tag {
   display: inline-flex;
   align-items: center;

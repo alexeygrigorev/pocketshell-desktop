@@ -1120,8 +1120,8 @@ Sources: `{ kind: 'file', path }` for the picker and drag-and-drop;
 
 ## 19. Snippets — deferred
 
-The desktop has no snippet storage at all (`grep -ri snippet src/` returns only
-`docs/ANALYSIS.md:44`). Ship the composer without the `{}` button. When snippets
+The desktop has no snippet storage at all (`grep -ri snippet src/` returns
+nothing). Ship the composer without the `{}` button. When snippets
 land, the rule to implement is §8: a pick **appends to the draft, never sends**,
 with the `""`/`" "` separator rule from `PromptComposerSheet.kt:466-472`.
 
@@ -1296,7 +1296,7 @@ I just click on the same thing."*
 |---|---|
 | Position | pinned `right: 0; bottom: 0` of the dock. Identical in every state — open, closed, card dragged elsewhere, card maximized |
 | Both states | open — chevron **down**, the direction the panel will travel. Closed — chevron **up** |
-| Size | a 28px (`--control-h`) round button around a **16px** mark — docs/POLISH.md §2.7's DEFAULT scale, not its dense one, which is right for a primary affordance |
+| Size | a 28px (`--control-h`) round button around a **16px** mark — the icon default scale, not a dense one, which is right for a primary affordance |
 | Surface | opaque `--surface-2`, a `--border-strong` edge and the card's elevation shadow. Not a taste call: DESIGN.md §4.2 requires `--border-strong` (4.12:1) wherever a boundary is the only thing identifying a control, and here it is the only thing separating the chip from the terminal behind it |
 | Inset | a further `--sp-3` inside the dock's own corner, so it visibly floats ON the terminal rather than hugging the pane's edge — and clears almost the whole tmux status row instead of sitting in it |
 | Never covered | `PaneBox.keepOut` (§21.1) is the toggle's measured box; `clampGeometry` lifts any card that would span it. A **corner hole in the card's placement**, not a band carved out of the pane |
@@ -1322,7 +1322,7 @@ Nothing the rail answered was simply deleted:
 | draft's first line, attachment count | a 6px accent **pip** on the button's corner, plus `— unsent draft` in the tooltip. `railToggle(open, unsent)` owns that copy |
 | the `Compose prompt…` placeholder | **deleted.** It was never an answer to anything — a label for a button that already has a chevron and a tooltip |
 
-The pip follows docs/POLISH.md §2.4: a CSS circle, not a glyph, so it does not
+The pip is a CSS circle, not a glyph, so it does not
 scale with font metrics, ringed in the panel surface so it reads against
 whatever terminal output is behind it.
 

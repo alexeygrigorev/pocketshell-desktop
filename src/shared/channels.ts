@@ -26,6 +26,18 @@ export const ipc = {
      */
     zoomCommand: 'win:event:zoomCommand',
   },
+  app: {
+    /**
+     * Main -> renderer: the OS just resumed from sleep (Electron
+     * `powerMonitor` 'resume'). Main cannot drive the reconnect itself — the
+     * dialling lives in the renderer's connection store — so it only announces
+     * the fact. The store answers with a liveness probe: a laptop that slept
+     * is the classic silent-drop (the NAT/firewall table entry expired
+     * overnight and the TCP link looks healthy until someone writes to it),
+     * and ssh2's keepalive will not notice for up to ~45s of silence.
+     */
+    resumed: 'app:event:resumed',
+  },
   ssh: {
     listConfigHosts: 'ssh:listConfigHosts',
     connect: 'ssh:connect',

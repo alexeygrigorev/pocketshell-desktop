@@ -6,13 +6,7 @@ Android app. Pick a machine you develop on, see every tmux session running on
 it, work in real terminals, edit files, forward ports, and keep an eye on your
 AI agent usage — all in one window.
 
-<p align="center">
-  <img src="docs/screenshots/polish-01-host-picker.png" width="49%" alt="Host picker">
-  <img src="docs/screenshots/projects-20-flat-list-280.png" width="49%" alt="Session panel">
-</p>
-
-> **Status:** under active development. Phases 0–5 of the
-> [roadmap](./docs/PLAN.md) are done.
+> **Status:** under active development.
 
 ## How it works
 
@@ -112,14 +106,12 @@ npm run dev
 
 ## Design & development docs
 
-The reasoning behind the app lives in [docs/](./docs): the helper contract
-([ANALYSIS](./docs/ANALYSIS.md)), process model and security
+The reasoning behind the app lives in [docs/](./docs): process model and security
 ([ARCHITECTURE](./docs/ARCHITECTURE.md)), the folder workspace
 ([WORKSPACE](./docs/WORKSPACE.md)), port-forwarding behaviour
 ([PORTFWD](./docs/PORTFWD.md)), every shortcut and why it exists
-([SHORTCUTS](./docs/SHORTCUTS.md)), plus the roadmap, feature backlog and
-test strategy ([PLAN](./docs/PLAN.md), [FEATURES](./docs/FEATURES.md),
-[TESTING](./docs/TESTING.md)).
+([SHORTCUTS](./docs/SHORTCUTS.md)), and the test strategy
+([TESTING](./docs/TESTING.md)).
 
 Development at a glance: `npm run dev` (app with HMR) · `npm run dist`
 (installers) · `npm run test:unit` / `test:integration` / `test:e2e` (the

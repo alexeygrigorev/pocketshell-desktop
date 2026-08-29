@@ -1,14 +1,17 @@
 /**
- * Reconnect backoff timing for the port-forward panel.
+ * Reconnect backoff timing, shared by main and renderer.
  *
- * This file previously held an `AutoForwarderSupervisor` that called
- * `ssh.connect()` itself. That contradicted the single-connection decision
- * this app is built on — one auth, one keepalive, one TOFU prompt, one
- * reconnect FSM per host — and it was never wired to anything. Connection
- * lifecycle belongs to `SshService`; `ForwardService` subscribes to its
- * `onCloseConnection` and suspends/evicts the forwarder from there.
+ * This module previously lived in `main/portfwd/AutoForwarderSupervisor.ts`,
+ * which itself previously held a supervisor that called `ssh.connect()` on a
+ * second connection of its own. That contradicted the single-connection
+ * decision this app is built on — one auth, one keepalive, one TOFU prompt,
+ * one reconnect FSM per host — and it was never wired to anything, so the
+ * supervisor was cut and the schedule survived. The schedule now lives here
+ * because its real consumer is the RENDERER's connection store, whose
+ * automatic reconnect loop (stores/connection.ts) ticks this curve after a
+ * transport drop; main-process code importing a `shared/` module is free, and
+ * the port panel's status row reads the same constants.
  *
- * What remains is the part that was genuinely worth keeping: the schedule.
  * The Python has two contradictory implementations of it — the CLI does
  * 5 -> 10 -> 20 -> 40 -> 60s exponential and retries forever
  * (`forwarder.py:1141`), while the TUI does a flat 5s countdown with no
@@ -20,9 +23,6 @@
  * itself belongs in the renderer, which is handed `retryAtEpochMs` and ticks
  * the number down.
  */
-
-/** Connection states the port panel can render. */
-export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'lost';
 
 export const INITIAL_DELAY_MS = 5_000;
 export const MAX_DELAY_MS = 60_000;

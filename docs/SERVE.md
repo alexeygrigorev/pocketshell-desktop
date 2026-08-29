@@ -215,7 +215,7 @@ The cost is everything around it:
   so a subcommand means an Android release-tagged version bump and a PyPI
   publish;
 * every host has to upgrade before the desktop feature works at all;
-* `docs/ANALYSIS.md` **D22** is "no backwards-compat, hard cuts only" — this
+* no backwards-compat, hard cuts only — this
   app does not sniff helper versions and deliberately deleted the machinery
   that used to. So a desktop feature gated on `pocketshell serve` cannot fall
   back; it would simply be broken on every host until each one upgraded.

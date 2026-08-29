@@ -24,7 +24,7 @@ import {
  *
  * The FIRST reads the committed `--help` capture and asserts that every flag
  * this module emits is spelled the way the helper the user actually runs
- * spells it. That is the guard docs/ANALYSIS.md asks for: this repo has been
+ * spells it. That is the guard this repo needs: it has been
  * burned four times by trusting a documented contract over a captured one, and
  * the `--dir` bug was a fifth. If a helper bump renames `--skip-permissions`,
  * re-capturing the fixture fails these tests rather than shipping a session

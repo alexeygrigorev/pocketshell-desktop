@@ -2,7 +2,7 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import { appendFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from './helpers';
+import { resetWorkspaceState, ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from './helpers';
 
 /**
  * End-to-end coverage for the prompt composer panel.
@@ -26,7 +26,7 @@ import { ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from '
  *  - Escape never destroys the draft.
  *
  * SAFETY: same guarded ~/.ssh/config seeding as the other UI specs — only runs
- * with POCKETSHELL_E2E_SEED_CONFIG=1, and restores the original on teardown.
+ * backing the file up first, and restores the original on teardown.
  */
 
 const SSH_CONFIG = resolve(homedir(), '.ssh', 'config');
@@ -66,7 +66,7 @@ async function launchApp(): Promise<ElectronApplication> {
 }
 
 async function terminalText(page: Page): Promise<string> {
-  return page.locator('.terminal-area .xterm-rows').first().innerText();
+  return page.locator('.terminal-area .terminal-slot:visible .xterm-rows').first().innerText();
 }
 
 /** Empty the draft field in place. Ctrl+A/Backspace inside a textarea. */
@@ -83,17 +83,21 @@ async function openSession(page: Page, name: string): Promise<void> {
   await page.locator('.dir-header').first().click();
   await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 20_000 });
   await page.getByRole('button', { name, exact: true }).click();
+  // The composer is hidden until summoned - typing opens it, and so does
+  // the toggle chord. The chord is a TOGGLE, so only summon when the card
+  // is actually away: earlier tests in this serial suite may leave it up,
+  // and pressing blindly would put it away. Either way the draft is left
+  // exactly as the helper found it.
+  if ((await page.locator('.composer').count()) === 0) {
+    await page.keyboard.press('Control+`');
+  }
   await expect(page.locator('.composer')).toBeVisible({ timeout: 15_000 });
-  await expect(page.locator('.terminal-area > .terminal-slot > .terminal')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.terminal-area > .terminal-slot:visible > .terminal')).toBeVisible({ timeout: 15_000 });
 }
 
 test.describe.configure({ mode: 'serial' });
 
 test.describe('prompt composer panel', () => {
-  test.skip(
-    !process.env['POCKETSHELL_E2E_SEED_CONFIG'],
-    'set POCKETSHELL_E2E_SEED_CONFIG=1 to seed ~/.ssh/config and run the UI E2E',
-  );
 
   let app: ElectronApplication;
   let page: Page;
@@ -105,6 +109,7 @@ test.describe('prompt composer panel', () => {
     app = await launchApp();
     page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
+    await resetWorkspaceState(page);
     await page.getByText(E2E_HOST_NAME).click();
     await expect(page.locator('.dir-header').first()).toBeVisible({ timeout: 20_000 });
     await openSession(page, 'main');
@@ -126,9 +131,9 @@ test.describe('prompt composer panel', () => {
     await expect(page.locator('.composer .send')).toBeVisible();
     await expect(page.locator('.composer .sash')).toBeVisible();
 
-    const term = await page.locator('.terminal-area > .terminal-slot > .terminal').boundingBox();
+    const term = await page.locator('.terminal-area > .terminal-slot:visible > .terminal').boundingBox();
     const panel = await page.locator('.composer').boundingBox();
-    const body = await page.locator('.session-body').boundingBox();
+    const body = await page.locator('.terminal-area').boundingBox();
     expect(term).not.toBeNull();
     expect(panel).not.toBeNull();
     expect(term!.height).toBeGreaterThan(100);
@@ -147,7 +152,7 @@ test.describe('prompt composer panel', () => {
     // exact same size, so the remote tmux is never asked to reflow.
     await page.locator('.rail').click();
     await expect(page.locator('.composer')).toHaveCount(0);
-    const closed = await page.locator('.terminal-area > .terminal-slot > .terminal').boundingBox();
+    const closed = await page.locator('.terminal-area > .terminal-slot:visible > .terminal').boundingBox();
     expect(closed!.height).toBe(term!.height);
     expect(closed!.width).toBe(term!.width);
 
@@ -172,11 +177,16 @@ test.describe('prompt composer panel', () => {
     await expect(page.locator('.composer .send')).toBeEnabled();
   });
 
-  test('Escape blurs the draft but never clears it', async () => {
+  test('Escape closes the composer and never clears the draft', async () => {
     await page.locator('.composer .draft').click();
     await page.keyboard.press('Escape');
+    // The plain meaning of the key: the composer goes away. The draft does
+    // not - Discard (Ctrl+Shift+Backspace) is the only thing that clears it,
+    // so the waiting pip shows and the rail hands the text back.
+    await expect(page.locator('.composer')).toHaveCount(0);
+    await expect(page.locator('.rail .unsent-pip')).toBeVisible();
+    await page.locator('.rail').click();
     await expect(page.locator('.composer .draft')).toHaveValue('hello there');
-    await expect(page.locator('.composer')).toBeVisible();
   });
 
   test('the closed toggle still says a draft is waiting, and reopens it', async () => {
@@ -315,7 +325,15 @@ test.describe('prompt composer panel', () => {
   });
 
   test('Ctrl+` toggles the panel from the terminal', async () => {
-    await page.locator('.terminal-area > .terminal-slot > .terminal').first().click();
+    // Seed the draft first: an outside press dismisses an EMPTY composer,
+    // so without text the terminal click would put the card away and the
+    // first chord would OPEN it. With a draft waiting, the click leaves
+    // the card up and the chord is a close-then-open round trip that must
+    // not cost the text.
+    await clearDraft(page);
+    await page.locator('.composer .draft').click();
+    await page.keyboard.type('hello there');
+    await page.locator('.terminal-area > .terminal-slot:visible > .terminal').first().click();
     await page.keyboard.press('Control+`');
     await expect(page.locator('.composer')).toHaveCount(0);
     await page.keyboard.press('Control+`');
@@ -329,13 +347,13 @@ test.describe('prompt composer panel', () => {
     const restored = await page.locator('.composer').boundingBox();
     expect(maximized!.height).toBeGreaterThan(restored!.height);
     await expect(page.locator('.composer .draft')).toHaveValue('hello there');
-    await expect(page.locator('.terminal-area > .terminal-slot > .terminal')).toBeVisible();
+    await expect(page.locator('.terminal-area > .terminal-slot:visible > .terminal')).toBeVisible();
   });
 
   test('the card can be dragged around the pane by its header', async () => {
     const composer = page.locator('.composer');
     const before = await composer.boundingBox();
-    const body = await page.locator('.session-body').boundingBox();
+    const body = await page.locator('.terminal-area').boundingBox();
 
     // Grab the title bar well clear of the maximize/close buttons.
     const header = await page.locator('.composer .panel-header').boundingBox();
@@ -358,6 +376,20 @@ test.describe('prompt composer panel', () => {
 
   test('the card resizes in BOTH axes from its edges', async () => {
     const composer = page.locator('.composer');
+    // The drag test parked the card wherever it ended - top-left, clamped
+    // against the pane. Park it bottom-right first so BOTH edges have room
+    // to grow: a north or west drag from the corner has no room to give.
+    const pane = await page.locator('.terminal-area').boundingBox();
+    const parked = await composer.boundingBox();
+    const grab = await page.locator('.composer .panel-header').boundingBox();
+    await page.mouse.move(grab!.x + 40, grab!.y + grab!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      pane!.x + pane!.width - parked!.width / 2,
+      pane!.y + pane!.height - parked!.height / 2,
+      { steps: 8 },
+    );
+    await page.mouse.up();
     const before = await composer.boundingBox();
 
     // West edge: drag it left, and only the width changes.
@@ -432,7 +464,11 @@ test.describe('prompt composer panel', () => {
     // INCLUDES the container's padding, and then subtracts only the padding of
     // its own element. Assert the drawn screen fits the box that clips it.
     const fit = await page.evaluate(() => {
-      const host = document.querySelector('.terminal-area > .terminal-slot > .terminal');
+      // `:visible` is a Playwright pseudo-class, not CSS - pick the slot
+      // the slow way here: the one the v-show is currently showing.
+      const host = [...document.querySelectorAll('.terminal-area > .terminal-slot > .terminal')].find(
+        (el) => el.getClientRects().length > 0,
+      );
       const screen = host?.querySelector('.xterm-screen');
       if (!host || !screen) return null;
       const cs = getComputedStyle(host);
@@ -478,9 +514,10 @@ test.describe('prompt composer panel', () => {
 
     await page.keyboard.press('Enter');
 
-    // Delivered -> the draft clears and the panel STAYS OPEN (COMPOSER.md §12.3).
-    await expect(page.locator('.composer .draft')).toHaveValue('', { timeout: 15_000 });
-    await expect(page.locator('.composer .draft')).toBeVisible();
+    // Delivered -> with close-on-send the panel goes away with the send
+    // (the test above owns that contract); what this test owns is that
+    // EVERY line of the prompt reached the pane, in order.
+    await expect(page.locator('.composer')).toHaveCount(0, { timeout: 15_000 });
 
     await expect
       .poll(() => terminalText(page), { timeout: 15_000 })

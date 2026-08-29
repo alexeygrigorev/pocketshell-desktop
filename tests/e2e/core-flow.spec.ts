@@ -2,7 +2,7 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import { appendFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from './helpers';
+import { resetWorkspaceState, ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from './helpers';
 
 /**
  * End-to-end test: launch the real packaged Electron app against the
@@ -13,9 +13,8 @@ import { ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from '
  * attaches via `tmux attach` -> type a command -> assert visible output.
  *
  * SAFETY: this spec appends a guarded, marker-delimited block to the user's
- * real ~/.ssh/config and restores the original on teardown. It only runs when
- * POCKETSHELL_E2E_SEED_CONFIG=1 is set, so it never touches the user's config
- * without explicit opt-in. Without the flag the spec is skipped.
+ * real ~/.ssh/config and restores the original on teardown. It backs the file up first and restores
+ * the original on teardown - the seed is part of the test, never an opt-in.
  */
 
 const SSH_CONFIG = resolve(homedir(), '.ssh', 'config');
@@ -61,10 +60,6 @@ async function launchApp(): Promise<ElectronApplication> {
 }
 
 test.describe('core terminal flow (host -> tree -> terminal)', () => {
-  test.skip(
-    !process.env['POCKETSHELL_E2E_SEED_CONFIG'],
-    'set POCKETSHELL_E2E_SEED_CONFIG=1 to seed ~/.ssh/config and run the UI E2E',
-  );
 
   let app: ElectronApplication;
   let page: Page;
@@ -77,6 +72,7 @@ test.describe('core terminal flow (host -> tree -> terminal)', () => {
     app = await launchApp();
     page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
+    await resetWorkspaceState(page);
   });
 
   test.afterAll(async () => {
@@ -99,28 +95,26 @@ test.describe('core terminal flow (host -> tree -> terminal)', () => {
 
   test('clicking the host connects and shows the session tree', async () => {
     await page.getByText(E2E_HOST_NAME).click();
-    // After connect, the workspace's session tree appears with the seeded
-    // "main" session from the helper entrypoint.
-    await expect(page.getByText('sessions').first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('main')).toBeVisible({ timeout: 10_000 });
+    // After connect the folder panel appears; sessions live one click deeper,
+    // inside a folder workspace (docs/WORKSPACE.md §2-3).
+    await expect(page.locator('.dir-header').first()).toBeVisible({ timeout: 15_000 });
   });
 
-  test('clicking a session opens the terminal and renders input', async () => {
-    await page.getByText('main').click();
-    // The xterm canvas takes focus; type a command. xterm renders to a
-    // canvas, so we assert on the terminal container being live and then
-    // drive input + wait briefly for it to be processed.
-    const term = page.locator('.terminal').first();
-    await expect(term).toBeVisible({ timeout: 10_000 });
-    // Give the attach a moment, then type. We can't easily read canvas
-    // pixels, so this is a smoke assertion: the terminal pane exists and
-    // accepts focus after attach.
+  test('clicking a session opens the terminal and typing reaches the composer', async () => {
+    // Sessions are tabs INSIDE a folder workspace now: open the folder, then
+    // the session's tab.
+    await page.locator('.dir-header').first().click();
+    await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 20_000 });
+    await page.getByRole('button', { name: 'main', exact: true }).click();
+    const term = page.locator('.terminal-area > .terminal-slot:visible > .terminal');
+    await expect(term).toBeVisible({ timeout: 15_000 });
+    // Typing is the composer's door: printable keys open it and land in the
+    // draft instead of the shell. Spaces are deliberately NOT typing keys —
+    // they fall through to the pane — so the sentinel avoids them.
     await term.click();
-    await page.keyboard.type('echo e2e_sentinel', { delay: 5 });
-    await page.keyboard.press('Enter');
-    // Allow the round-trip; no assertion on canvas text (see TESTING.md note
-    // on terminal E2E — the integration test covers the rendered bytes).
-    await page.waitForTimeout(1500);
+    await page.keyboard.type('echo_e2e_sentinel', { delay: 5 });
+    await expect(page.locator('.composer')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.composer .draft')).toHaveValue('echo_e2e_sentinel');
     await expect(term).toBeVisible();
   });
 });

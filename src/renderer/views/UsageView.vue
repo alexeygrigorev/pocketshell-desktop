@@ -311,7 +311,7 @@ h2 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* One badge metric across the app (docs/POLISH.md §7). */
+/* One badge metric across the app. */
 .status {
   display: inline-flex;
   align-items: center;

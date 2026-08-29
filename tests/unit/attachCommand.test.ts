@@ -71,7 +71,7 @@ describe('sessionAttachCommand', () => {
     expect(command).not.toContain('-t ');
   });
 
-  it('carries no pre-0.4.44 helper spelling (D22: hard cuts, no shims)', () => {
+  it('carries no pre-0.4.44 helper spelling (hard cuts, no shims)', () => {
     expect(command).not.toContain('pocketshell sessions');
   });
 

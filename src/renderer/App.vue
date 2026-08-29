@@ -400,7 +400,7 @@ body {
    Deliberately NO border-radius here: Chromium already draws the outline
    along the element's own corners, so setting one would *mutate the focused
    element's geometry* — square things (the editor textarea) visibly rounded
-   themselves on focus. See docs/POLISH.md §5. */
+   themselves on focus. */
 :where(button, a, input, select, textarea, [tabindex]):focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
@@ -447,7 +447,7 @@ body {
    VS Code register: invisible at rest, filled on hover. Square by
    construction, so the icon is optically centred and adjacent buttons are
    identical widths (the old `padding + glyph advance` sizing made `<-` and
-   the hamburger visibly different boxes). See docs/POLISH.md §3. */
+   the hamburger visibly different boxes). */
 .icon-btn {
   width: var(--control-h);
   height: var(--control-h);

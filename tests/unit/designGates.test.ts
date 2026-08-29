@@ -3,8 +3,8 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 
 /**
- * The two definition-of-done greps from docs/DESIGN.md §6 and docs/POLISH.md
- * §9, executed rather than remembered.
+ * The two definition-of-done greps from docs/DESIGN.md §6, executed rather
+ * than remembered.
  *
  * They are the kind of rule that decays the moment it lives only in a doc: the
  * emoji this app spent a pass removing were added one at a time, each of them
@@ -48,7 +48,7 @@ function codeLines(source: string): { line: number; text: string }[] {
   return stripped.split('\n').map((text, i) => ({ line: i + 1, text }));
 }
 
-describe('design gates (docs/DESIGN.md §6, docs/POLISH.md §9)', () => {
+describe('design gates (docs/DESIGN.md §6)', () => {
   /**
    * Gate 1 — colour tokens. Raw six-digit hex belongs to the token block in
    * App.vue and to TerminalView's Campbell theme, which is a terminal palette
@@ -85,7 +85,7 @@ describe('design gates (docs/DESIGN.md §6, docs/POLISH.md §9)', () => {
    * Gate 2 — no character-as-icon. Every glyph doing an icon's job is a real
    * inline SVG via AppIcon, inheriting currentColor.
    *
-   * Exempt, deliberately (docs/POLISH.md §2.3):
+   * Exempt, deliberately:
    *   - code comments, which is why comment bodies are blanked first;
    *   - `TerminalView.vue`, whose glyphs come from the remote program;
    *   - `↑` / `↓` inside the composer's keyboard-shortcut tooltip copy, the

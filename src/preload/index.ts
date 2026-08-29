@@ -89,6 +89,19 @@ const api = {
     },
   },
 
+  app: {
+    /**
+     * The OS resumed from sleep (main's `powerMonitor` 'resume', wired in
+     * main/index.ts). Payload-free — the fact itself is the message. Returns
+     * an unsubscribe fn.
+     */
+    onResumed: (handler: () => void): Unsubscribe => {
+      const listener = (): void => handler();
+      ipcRenderer.on(ipc.app.resumed, listener);
+      return () => ipcRenderer.removeListener(ipc.app.resumed, listener);
+    },
+  },
+
   ssh: {
     /** Read ~/.ssh/config into HostEntry rows. Empty if no config. */
     listConfigHosts: (): Promise<HostEntry[]> => ipcRenderer.invoke(ipc.ssh.listConfigHosts),

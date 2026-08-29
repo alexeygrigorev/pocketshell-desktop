@@ -52,8 +52,8 @@ import { LISTENER_SCAN_COMMAND, mergeScanSections } from './scanRemotePorts.js';
  * A `pocketshell serve` subcommand — the shape the user actually asked for —
  * is the right long-term home and is written up in `docs/SERVE.md` as a
  * follow-up. It is not the thing to build first because the helper is a
- * SEPARATELY released Python project: hosts run 0.4.44, `docs/ANALYSIS.md`
- * D22 is "hard cuts only, no shims", so the day this shipped against a
+ * SEPARATELY released Python project: hosts run 0.4.44 and this project
+ * takes "hard cuts only, no shims", so the day this shipped against a
  * subcommand it would work on exactly zero hosts until every one of them
  * upgraded. The stdlib path ships today and costs nothing to retire later:
  * only {@link serveCommand} would change.

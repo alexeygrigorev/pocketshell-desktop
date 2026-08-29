@@ -7,9 +7,11 @@ import { describe } from 'vitest';
  * Shared helpers for integration tests.
  *
  * Integration tests use `testcontainers` to build the Dockerfiles under
- * tests-docker/ on an ephemeral host port. Every suite auto-skips when
- * Docker is unavailable (matching the Android project's `assumeTrue`),
- * so the unit suite stays green on machines without Docker.
+ * tests-docker/ on an ephemeral host port. Every suite REFUSES to collect
+ * when Docker is unavailable rather than skipping - a suite that cannot run
+ * must be a red file, never a green tick nobody earned - so Docker must be
+ * up for `npm run test:integration` (scripts/smoke.sh owns that for the
+ * full gate).
  */
 
 const DOCKER_DIR = resolve(__dirname, '..', '..', 'tests-docker');
@@ -53,11 +55,24 @@ export const LIST_SESSIONS_ANY_SOCKET =
   'done';
 
 /**
- * `describe` wrapper that skips the whole suite when Docker is unavailable.
- * Use as the top-level describe in an integration test file:
+ * `describe` wrapper that REFUSES to collect the suite when Docker is
+ * unavailable. Use as the top-level describe in an integration test file:
  *
  *   describeDocker('SshService integration', () => { it(...) })
+ *
+ * It used to `describe.skip` instead, and a skip is a green tick the gate
+ * never earned: a machine with Docker down reported a passing suite that ran
+ * nothing. Throwing during collection turns the same state into a loud red
+ * file - start Docker or run scripts/smoke.sh, which owns the whole gate.
  */
-export const describeDocker = isDockerAvailable() ? describe : describe.skip;
+export function describeDocker(name: string, fn: () => void): void {
+  if (!isDockerAvailable()) {
+    throw new Error(
+      `${name}: Docker is not reachable, so this integration suite cannot run. ` +
+        'Start Docker (docker info must answer) rather than letting the suite skip.',
+    );
+  }
+  describe(name, fn);
+}
 
 export { DOCKER_DIR };

@@ -274,7 +274,7 @@ async function onCrumb(path: string): Promise<void> {
 }
 
 /**
- * The row's icon NAME (docs/POLISH.md §2.5). It doubles as the row icon's CSS
+ * The row's icon NAME. It doubles as the row icon's CSS
  * class, which is how the three entry types get their three token colours —
  * something the colour emoji this replaced could never do, because emoji
  * rasterisation ignores `color` entirely.
@@ -871,7 +871,7 @@ defineExpose({ editPath: startEditing, focusSearch });
   background: var(--state-selected);
   border-left-color: var(--accent);
 }
-/* Entry icons (docs/POLISH.md §2.5). The folder carries the most weight so
+/* Entry icons. The folder carries the most weight so
    the dir/file hierarchy reads at a glance; files sit quietest (decorative —
    the filename beside them carries the information); symlinks sit one step up
    because "this is not a real file" is worth a glance.
