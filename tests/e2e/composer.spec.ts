@@ -2,7 +2,15 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { resetWorkspaceState, ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from './helpers';
+import {
+  dumpFixtureSessionState,
+  ensureHelperUp,
+  E2E_HOST_NAME,
+  HOST_PORT,
+  resetWorkspaceState,
+  stopHelper,
+  TEST_KEY,
+} from './helpers';
 
 /**
  * End-to-end coverage for the prompt composer panel.
