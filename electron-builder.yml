@@ -30,16 +30,36 @@ files:
   - '!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}'
   - '!**/*.{md,markdown}'
   - '!**/.{idea,git,cache,vscode,DS_Store}'
+# Every platform ships BOTH arches deliberately: x64 because it is still the
+# default everywhere, arm64 because that is where the fleet is heading (and
+# where one of the user's machines already is - a Windows-on-ARM tablet).
+# Cross-building each arch costs only a second Electron download per target;
+# the matrix stays one job per OS.
 mac:
   category: public.app-category.developer-tools
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
 win:
   target:
-    - nsis
+    - target: nsis
+      arch:
+        - x64
+        - arm64
 linux:
   category: Development
   target:
-    - AppImage
-    - deb
+    - target: AppImage
+      arch:
+        - x64
+        - arm64
+    - target: deb
+      arch:
+        - x64
+        - arm64
