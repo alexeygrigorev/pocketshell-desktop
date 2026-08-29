@@ -2,6 +2,8 @@ import { beforeAll, afterAll, expect, it } from 'vitest';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { SshService } from '@main/ssh/SshService';
 import { MAX_LIVE_CLIENTS, TmuxClientPool } from '@main/ssh/TmuxClientPool';
+import { PocketshellClient } from '@main/helper/PocketshellClient';
+import { pathAwareCommand } from '@main/helper/bootstrap';
 import type { ShellId } from '../../src/shared/types';
 import { TEST_KEY_PATH, describeDocker } from './helpers';
 
@@ -65,7 +67,10 @@ describeDocker('a tmux client per session tab', () => {
     });
     if (!result.ok || !result.connectionId) throw new Error('connect failed');
     connectionId = result.connectionId;
-    pool = new TmuxClientPool(ssh);
+    // The real helper rides along, exactly as it does in production: it is
+    // what lets the pool locate the tmux server a session lives on, and this
+    // file is the only place that can prove the aiming works on the thing.
+    pool = new TmuxClientPool(ssh, new PocketshellClient(ssh));
 
     // `send-keys` rather than a start command so the marker sits in the pane's
     // visible screen, which is what an attach draws.
@@ -188,6 +193,49 @@ describeDocker('a tmux client per session tab', () => {
 
     // The property that actually matters: the other tab did not move.
     expect(await size(TABS[1]!)).toBe(bBefore);
+  }, 120_000);
+
+  it('aims redraw and the geometry probe at a session living on its own tmux server', async () => {
+    // The precondition that makes this test mean something: a session created
+    // the way the app creates them — through the helper, which since tmuxctl
+    // 0.3.5 puts each one on its OWN server — is invisible to a bare tmux.
+    // Every aimed command the pool runs therefore has to name that server,
+    // or it silently reaches a server that has never heard of our client.
+    const created = await ssh.exec(
+      connectionId,
+      pathAwareCommand(`pocketshell sessions create 'sock-tab' -c "$HOME"`),
+    );
+    expect(created.exitCode).toBe(0);
+    const bare = await ssh.exec(connectionId, `tmux has-session -t '=sock-tab' 2>/dev/null`);
+    expect(bare.exitCode).not.toBe(0);
+
+    const joined = await pool.attach(connectionId, 'sock-tab', { cols: 80, rows: 24, ...sink });
+    expect(joined.switched).toBe(false);
+
+    // The join resolves when the PTY opens, which can beat tmuxctl finishing
+    // the attach. The geometry probe doubles as the readiness signal: a
+    // non-null answer means our client is attached, tmux can name it, and —
+    // under `window-size latest` with it as the only client — the window has
+    // taken the size we attached with.
+    let size: { cols: number; rows: number } | null = null;
+    for (let i = 0; i < 100 && !size; i++) {
+      size = await pool.windowSize(joined.shellId);
+      if (!size) await new Promise((r) => setTimeout(r, 200));
+    }
+    // The window is one row SHORTER than the client we attached: the status
+    // line takes that row. Same reasoning the sizing test above gives for
+    // pinning the width exactly and being careful about the height.
+    expect(size).toEqual({ cols: 80, rows: 23 });
+
+    // The regression itself: refresh-client reaches the client through its
+    // own server. With the default-socket spelling this answered `can't find
+    // client` on exactly this fixture — the Redraw button that did nothing.
+    await expect(pool.redraw(joined.shellId)).resolves.toBe(true);
+
+    await ssh.exec(
+      connectionId,
+      `tmux -S /tmp/tmux-$(id -u)/tmuxctl-sock-tab kill-session -t '=sock-tab' 2>/dev/null || true`,
+    );
   }, 120_000);
 
   it('stays under the SSH channel ceiling, evicting rather than failing', async () => {

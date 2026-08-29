@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_LIVE_CLIENTS, TmuxClientPool } from '../../src/main/ssh/TmuxClientPool';
 import type { SshService } from '../../src/main/ssh/SshService';
+import type { PocketshellClient } from '../../src/main/helper/PocketshellClient';
 import type { ExecResult, ShellId } from '../../src/shared/types';
 
 /**
@@ -553,5 +554,134 @@ describe('TmuxClientPool — the geometry probe', () => {
     harness.answerExecWith({ stdout: 'not-a-number\n', stderr: '', exitCode: 0 });
 
     await expect(pool.windowSize(joined.shellId)).resolves.toBeNull();
+  });
+});
+
+/**
+ * Aiming at the session's own tmux server.
+ *
+ * tmuxctl 0.3.5 puts every session it creates on a per-session server
+ * (`tmuxctl-<name>` beside the legacy default socket), so the tty handshake —
+ * which lands on the DEFAULT socket by design — answers WHO to repaint while
+ * the locator (the enrichment probe, the same one that aims Stop and rename)
+ * answers WHERE. Miss that split and every aimed command runs against a
+ * server that has never heard of our client: `can't find client`, swallowed,
+ * and Redraw becomes the button that does nothing — which is the reported bug
+ * these tests exist for. The bare-`tmux` spelling is not dead code: it is the
+ * correct aiming for a session on the default socket, and the only spelling
+ * available when the locator cannot place the session at all.
+ */
+describe('TmuxClientPool — aiming at the session’s own tmux server', () => {
+  const SOCKET = '/tmp/tmux-1000/tmuxctl-alpha';
+
+  /** Stand-in for the locator seam: a one-line answer, no probe machinery. */
+  const makeHelper = (
+    socketPath: string | null,
+    status: 'found' | 'absent' | 'unknown' = 'found',
+  ): PocketshellClient =>
+    ({
+      locateSession: async () =>
+        status === 'found' ? { status, socketPath } : { status },
+    }) as unknown as PocketshellClient;
+
+  /** Undo pathAwareCommand's `'\''` layer so command fragments read plainly. */
+  const plain = (command: string): string => command.replace(/'\\''/g, "'");
+
+  it('aims refresh-client at the socket the locator found for this session', async () => {
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh, makeHelper(SOCKET));
+    const joined = await pool.attach('c1', 'alpha', sink);
+    harness.answerExecWith({ stdout: '', stderr: '', exitCode: 0 });
+
+    await expect(pool.redraw(joined.shellId)).resolves.toBe(true);
+
+    const command = plain(harness.execCalls[0]!);
+    expect(command).toContain(`-S '${SOCKET}' refresh-client -t "$tty"`);
+    // The WHO half still rides the tty handshake the join published.
+    expect(command).toMatch(/PS_DESKTOP_TTY_[A-Za-z0-9_]+/);
+  });
+
+  it('aims the geometry probe the same way', async () => {
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh, makeHelper(SOCKET));
+    const joined = await pool.attach('c1', 'alpha', sink);
+    harness.answerExecWith({ stdout: '132 41\n', stderr: '', exitCode: 0 });
+
+    await expect(pool.windowSize(joined.shellId)).resolves.toEqual({ cols: 132, rows: 41 });
+
+    const command = plain(harness.execCalls[0]!);
+    expect(command).toContain(
+      `-S '${SOCKET}' display-message -p -t "$tty" '#{window_width} #{window_height}'`,
+    );
+  });
+
+  it('keeps the bare spelling when the locator cannot place the session', async () => {
+    // `absent` and `unknown` both land here as null: a session on the default
+    // socket is reached by the bare command, and an unplaced one has nothing
+    // better to be aimed at.
+    for (const status of ['absent', 'unknown'] as const) {
+      const harness = makeSsh();
+      const pool = new TmuxClientPool(harness.ssh, makeHelper(null, status));
+      const joined = await pool.attach('c1', 'alpha', sink);
+      harness.answerExecWith({ stdout: '132 41\n', stderr: '', exitCode: 0 });
+
+      await expect(pool.windowSize(joined.shellId)).resolves.toEqual({ cols: 132, rows: 41 });
+      const command = plain(harness.execCalls[0]!);
+      expect(command).toContain('&& tmux display-message');
+      expect(command).not.toContain('-S ');
+    }
+  });
+
+  it('survives a locator that throws, and still joins', async () => {
+    const harness = makeSsh();
+    const failing = {
+      locateSession: async (): Promise<never> => {
+        throw new Error('probe died');
+      },
+    } as unknown as PocketshellClient;
+    const pool = new TmuxClientPool(harness.ssh, failing);
+
+    // The join must not inherit the probe's failure — discovery is an
+    // optimisation's setup, exactly like the tty handshake it accompanies.
+    const joined = await pool.attach('c1', 'alpha', sink);
+    expect(joined.switched).toBe(false);
+
+    harness.answerExecWith({ stdout: '', stderr: '', exitCode: 0 });
+    await expect(pool.redraw(joined.shellId)).resolves.toBe(true);
+    expect(plain(harness.execCalls[0]!)).not.toContain('-S ');
+  });
+
+  it('keeps the discovered socket across a rename — the server does not move', async () => {
+    // `renamed` re-keys the record by the new name; the tmux server a session
+    // lives on is unchanged by a rename, so the aiming must survive the move.
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh, makeHelper(SOCKET));
+    const joined = await pool.attach('c1', 'alpha', sink);
+
+    pool.renamed('c1', 'alpha', 'beta');
+    harness.answerExecWith({ stdout: '', stderr: '', exitCode: 0 });
+
+    await expect(pool.redraw(joined.shellId)).resolves.toBe(true);
+    expect(plain(harness.execCalls[0]!)).toContain(`-S '${SOCKET}'`);
+  });
+
+  it('returns false — without spending an exec — for a shell the pool does not hold', async () => {
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh, makeHelper(SOCKET));
+    await pool.attach('c1', 'alpha', sink);
+
+    await expect(pool.redraw('shell-not-ours')).resolves.toBe(false);
+    expect(harness.execCalls).toHaveLength(0);
+  });
+
+  it('returns false when the refresh could not be issued', async () => {
+    // `can't find client`, a dead server — whatever tmux's reason, the caller
+    // gets false and the log now carries the stderr instead of silence.
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh, makeHelper(SOCKET));
+    const joined = await pool.attach('c1', 'alpha', sink);
+    harness.answerExecWith({ stdout: '', stderr: "can't find client: /dev/pts/5\n", exitCode: 1 });
+
+    await expect(pool.redraw(joined.shellId)).resolves.toBe(false);
   });
 });

@@ -88,8 +88,11 @@ export function registerIpcHandlers(deps: {
   const localFiles = new LocalFileReader();
 
   // One attached tmux client per connection, so switching sessions is a tmux
-  // operation rather than a fresh SSH channel + login shell + join.
-  const tmuxClients = new TmuxClientPool(ssh);
+  // operation rather than a fresh SSH channel + login shell + join. The helper
+  // rides along so the pool can locate each session's tmux server at join
+  // time — the aiming its redraw and geometry probe need on hosts where
+  // tmuxctl puts every session on its own server.
+  const tmuxClients = new TmuxClientPool(ssh, helper);
 
   // Subscribe to forward-state changes and broadcast them to the renderer.
   forwards.onStates((connectionId, states) => {

@@ -159,32 +159,37 @@ export function sessionAttachCommand(sessionName: string, ttyVar?: string): stri
  * those resolve `tmux` differently simply finds nothing rather than acting on
  * the wrong server.
  *
- * The per-session-server world quietly demoted this write. `tmux
- * set-environment -g` is a bare command: it reaches the DEFAULT socket, while
- * a helper-created session lives on its own `tmuxctl-<name>` server — so the
- * variable lands on a server the join never touched, and the rendezvous no
- * longer proves anything for exactly the sessions the helper makes. Nothing
- * functional reads it back (see below), so the cost is diagnostic only: the
- * one claim it could settle in a bug report — "this stray client was ours" —
- * is now settled only for sessions a raw `tmux` created. Aiming the write at
- * the joined session's server would need the socket path inside the join
- * command, which the documented `tmuxctl <name>` join deliberately does not
- * carry.
+   * The per-session-server world quietly demoted this write. `tmux
+   * set-environment -g` is a bare command: it reaches the DEFAULT socket, while
+   * a helper-created session lives on its own `tmuxctl-<name>` server — so the
+   * variable is NOT readable from the server the client actually belongs to.
+   * That no longer matters, because the value is a plain string (a tty path)
+   * and the readers (`TmuxClientPool.redraw` / `windowSize`) read it back from
+   * the default socket, where this write lands, while aiming the command
+   * itself at the session's own server via the socket path the pool learns
+   * from the enrichment probe at join time (`locateSession` — the same
+   * locator Stop and rename use). Before that aiming existed, the readers
+   * ran bare `tmux` against the default socket and answered `can't find
+   * client` for every session the helper makes, which is how Redraw became a
+   * silent no-op; see TmuxClientPool.redraw for the fix.
  *
- * ## What used to read it back, and why nothing does now
- *
- * This variable was built for `tmux switch-client -c <tty>`: one attached
- * client per connection, moved between sessions instead of being rebuilt, which
- * turned a ~250 ms re-join into a ~10 ms exec on a loopback fixture. Measured
- * on a real host it did not hold up — a switch that worked cost p50 210 ms
- * because an exec channel is round trips and a repaint is 10.7 KB, and most
- * switches did not work at all. The pool now keeps a client per session tab and
- * never moves one, so switching tabs costs nothing and there is no switch
- * command left to read this. See the header of TmuxClientPool for the numbers.
- *
- * The handshake is kept because the diagnostic value was always separate from
- * the optimisation: it is still the only way a bug report about a stray tmux
- * client can say whether the client was ours.
+   * ## What reads it back now
+   *
+   * This variable was built for `tmux switch-client -c <tty>`: one attached
+   * client per connection, moved between sessions instead of being rebuilt, which
+   * turned a ~250 ms re-join into a ~10 ms exec on a loopback fixture. Measured
+   * on a real host it did not hold up — a switch that worked cost p50 210 ms
+   * because an exec channel is round trips and a repaint is 10.7 KB, and most
+   * switches did not work at all. The pool now keeps a client per session tab and
+   * never moves one, so switching tabs costs nothing and there is no switch
+   * command left to read this. See the header of TmuxClientPool for the numbers.
+   *
+   * The handshake is kept because two readers grew on it: `TmuxClientPool.redraw`
+   * and the geometry probe `windowSize` recover our client's tty from it, so
+   * their commands are about OUR client and never about whoever else is
+   * attached. Both aim their tmux invocation at the session's own server —
+   * the socket is the one fact this write cannot carry, and the pool learns it
+   * elsewhere for exactly that reason.
  */
 
 /**

@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { ShellId } from '../../shared/types.js';
 import { clientTtyVar, sessionAttachCommand } from '../../shared/attachCommand.js';
+import { shellQuote } from '../../shared/shellQuote.js';
+import type { PocketshellClient } from '../helper/PocketshellClient.js';
 import type { SshService } from './SshService.js';
 import { pathAwareCommand } from '../helper/bootstrap.js';
 import { log } from '../log.js';
@@ -82,11 +84,36 @@ import { log } from '../log.js';
  * on the tmux server when the app goes away — the same leak the shared client
  * had, bounded by distinct sessions opened rather than by joins, because the
  * token is stable per session so a re-join overwrites its own entry. The
- * variable is now only a diagnostic rendezvous: nothing reads it back since the
- * pool stopped moving clients between sessions. It is kept because it is the
- * one way to tell OUR client from the user's own terminal in `list-clients`,
- * which is what makes a bug report about a stray client readable.
+ * variable carries the client's TTY, which {@link redraw} and
+ * {@link windowSize} read back so their commands are about OUR client and
+ * never about whoever else is attached; the SERVER those commands are aimed
+ * at comes from the locator recorded alongside it.
  */
+
+/**
+ * A shell snippet reading one variable out of the tmux server's GLOBAL
+ * environment, empty when it was never published. The join publishes the
+ * client's tty before attaching (see {@link sessionAttachCommand}); a bare
+ * `tmux` reaches the default socket from the exec channel, which is exactly
+ * where that publish lands.
+ */
+function readTmuxGlobalVar(v: string): string {
+  return `$(tmux show-environment -g ${v} 2>/dev/null | sed -n 's/^${v}=//p')`;
+}
+
+/**
+ * A `tmux` invocation aimed at the server [socketPath] names, or the bare
+ * default-socket spelling when it is null.
+ *
+ * This is the pool's copy of the convention `sessionExistsCommand` established
+ * for Stop and rename: the per-session-server world (tmuxctl 0.3.5+) means the
+ * session a tab shows can live on a server a bare `tmux` has never heard of,
+ * and every command meant to reach OUR client has to say which server to ask.
+ */
+function aimedTmux(socketPath: string | null, args: string): string {
+  const server = socketPath ? `-S ${shellQuote(socketPath)} ` : '';
+  return `tmux ${server}${args}`;
+}
 
 /** Callbacks for a shell this pool opens. Both carry the id they belong to. */
 export interface AttachSessionOptions {
@@ -145,6 +172,18 @@ interface SessionClient {
   /** tmux global-environment variable holding this client's tty. */
   ttyVar: string;
   /**
+   * The tmux server this session lives on, discovered at join time via the
+   * same enrichment probe that aims Stop and rename — or null when it could
+   * not be learned (probe failed, tmux predates the `socket_path` column, no
+   * helper injected). Null degrades {@link redraw}/{@link windowSize} to the
+   * legacy bare-`tmux` spelling, which is the only aiming available and is
+   * correct for sessions on the default socket.
+   *
+   * A rename does not touch this: `tmuxctl` renames within the session's own
+   * server, so the socket outlives every name the session carries.
+   */
+  socketPath: string | null;
+  /**
    * Eviction order: a monotonic counter, NOT a timestamp.
    *
    * `Date.now()` has millisecond resolution and a user clicking through tabs
@@ -172,7 +211,18 @@ export class TmuxClientPool {
   /** Ever-increasing stamp handed to a client each time it is used. */
   private useClock = 0;
 
-  constructor(private readonly ssh: SshService) {}
+  constructor(
+    private readonly ssh: SshService,
+    /**
+     * The helper client, used for one thing: locating the tmux server a
+     * session lives on at join time ({@link PocketshellClient.locateSession}
+     * — the same probe that aims Stop and rename). Optional only so existing
+     * constructions keep compiling; without it every aimed command degrades
+     * to the legacy bare-`tmux` spelling, which is precisely the behaviour
+     * that made Redraw a silent no-op on per-session-server hosts.
+     */
+    private readonly helper?: PocketshellClient,
+  ) {}
 
   /**
    * Display [sessionName] on [connectionId].
@@ -231,18 +281,33 @@ export class TmuxClientPool {
    *
    * By the tty the joining PTY published into the tmux server's global
    * environment (see {@link sessionAttachCommand}). That handshake was built
-   * for `switch-client` and kept afterwards purely as a diagnostic; this is
-   * its second real use, and it is the only way to say "this client" from an
-   * exec channel that is not itself a tmux client.
+   * for `switch-client` and kept afterwards purely as a diagnostic.
    *
-   * ## Failure is silent, deliberately
+   * ## Why the command is aimed at a socket, not run bare
+   *
+   * The tty variable answers WHO to repaint; the enrichment probe
+   * ({@link PocketshellClient.locateSession}, run once at join time and kept
+   * on the record) answers WHERE. tmuxctl 0.3.5 puts every session it creates
+   * on its own server (`tmuxctl-<name>` beside the legacy default socket), so
+   * a bare `tmux refresh-client -t $tty` runs against a server that has never
+   * heard of our client and answers `can't find client` — which this method
+   * swallowed as a silent false. That was the user's bug report: Redraw
+   * clicked on a garbled pane changed nothing, for every session the app
+   * creates. `-S <socket>` (the same aiming `sessionExistsCommand` introduced
+   * for Stop and rename) reaches the server the client actually belongs to;
+   * a null socket keeps the bare spelling, which is correct for sessions on
+   * the default socket and the only spelling available without the probe.
+   *
+   * ## Failure is logged, not thrown
    *
    * Every arm degrades to a no-op: no record for the shell, the variable never
    * published (the join raced, or tmux was too old for `set-environment`), the
    * client since detached. A redraw that does not happen costs a stale band on
    * screen until the next one; a redraw that throws would break a tab switch.
-   * Returns whether the refresh was actually issued, for the tests and for the
-   * log.
+   * The failure used to be silent, which is how a systematically broken Redraw
+   * shipped; a non-zero exit is now logged with tmux's stderr so the next
+   * report of "Redraw does nothing" has a trace to read. Returns whether the
+   * refresh was actually issued, for the tests and for the log.
    */
   async redraw(shellId: ShellId): Promise<boolean> {
     const held = this.clientForShell(shellId);
@@ -252,14 +317,26 @@ export class TmuxClientPool {
     // One exec, one round trip: read the tty back out of the tmux global
     // environment and refresh that client in the same shell. Splitting it in
     // two would double the latency of every tab switch for no gain.
-    const command =
-      `tty=$(tmux show-environment -g ${held.ttyVar} 2>/dev/null | ` +
-      `sed -n 's/^${held.ttyVar}=//p'); ` +
-      `[ -n "$tty" ] && tmux refresh-client -t "$tty"`;
+    const command = `tty=${readTmuxGlobalVar(held.ttyVar)}; ` +
+      `[ -n "$tty" ] && ${aimedTmux(held.socketPath, 'refresh-client -t "$tty"')}`;
     try {
       const res = await this.ssh.exec(connectionId, pathAwareCommand(command));
+      if (res.exitCode !== 0) {
+        log('tmux', 'redraw could not reach our client', {
+          shellId,
+          session: held.session,
+          socketPath: held.socketPath,
+          exitCode: res.exitCode,
+          stderr: res.stderr.slice(0, 200),
+        });
+      }
       return res.exitCode === 0;
-    } catch {
+    } catch (e) {
+      log('tmux', 'redraw exec failed', {
+        shellId,
+        session: held.session,
+        error: String(e).slice(0, 200),
+      });
       return false;
     }
   }
@@ -305,12 +382,12 @@ export class TmuxClientPool {
     const connectionId = this.connectionForShell(shellId);
     if (!connectionId) return null;
     // Same shape as {@link redraw}: recover our client's tty from the global
-    // environment and name it in the same shell, so the handshake costs one
-    // round trip instead of two.
-    const command =
-      `tty=$(tmux show-environment -g ${held.ttyVar} 2>/dev/null | ` +
-      `sed -n 's/^${held.ttyVar}=//p'); ` +
-      `[ -n "$tty" ] && tmux display-message -p -t "$tty" '#{window_width} #{window_height}'`;
+    // environment, aim at the session's own tmux server (see the redraw note
+    // for why bare `tmux` cannot reach a helper-created client), and name our
+    // client by its tty, so the answer is about our view and the command
+    // costs one round trip.
+    const command = `tty=${readTmuxGlobalVar(held.ttyVar)}; ` +
+      `[ -n "$tty" ] && ${aimedTmux(held.socketPath, `display-message -p -t "$tty" '#{window_width} #{window_height}'`)}`;
     try {
       const res = await this.ssh.exec(connectionId, pathAwareCommand(command));
       // An empty stdout means either the variable never published (the join
@@ -575,6 +652,20 @@ export class TmuxClientPool {
     opts: AttachSessionOptions,
   ): Promise<AttachSessionResult> {
     const ttyVar = clientTtyVar(this.tokenFor(connectionId, sessionName));
+    // Where is this session's tmux server? The enrichment probe — the same
+    // locator Stop and rename aim with — runs CONCURRENTLY with the join
+    // rather than before it: both are SSH channels against a host the user is
+    // already waiting on for a 1.5-2 s join, and the answer is not needed
+    // until the first redraw or geometry probe, long after either resolves.
+    // Null on ANY failure (probe failed, no helper, tmux predates the
+    // `socket_path` column): the aimed commands degrade to the bare
+    // default-socket spelling, which never made a join worse.
+    const socketLocated = this.helper
+      ? this.helper
+          .locateSession(connectionId, sessionName)
+          .then((located) => (located.status === 'found' ? located.socketPath : null))
+          .catch(() => null)
+      : Promise.resolve(null);
     // The callbacks need the id of the shell they belong to, and the id only
     // exists once `openTrackedShell` resolves. A `const` captured from the
     // enclosing scope would be in its temporal dead zone for any byte that
@@ -585,23 +676,26 @@ export class TmuxClientPool {
     // loop can deliver the next I/O callback. They are there so the types say
     // so rather than so bytes get dropped.
     let id: ShellId | null = null;
-    const shellId = await this.ssh.openTrackedShell(connectionId, {
-      command: sessionAttachCommand(sessionName, ttyVar),
-      cols: opts.cols,
-      rows: opts.rows,
-      onData: (data) => {
-        if (id) opts.onData(id, data);
-      },
-      onExit: (exitCode) => {
-        if (!id) return;
-        // The PTY died — the user typed `exit`, the session was killed, the
-        // channel dropped, or this pool evicted it. Drop the record so the
-        // next attach joins rather than handing back a dead client.
-        const byName = this.clients.get(connectionId);
-        if (byName?.get(sessionName)?.shellId === id) byName.delete(sessionName);
-        opts.onExit(id, exitCode);
-      },
-    });
+    const [shellId, socketPath] = await Promise.all([
+      this.ssh.openTrackedShell(connectionId, {
+        command: sessionAttachCommand(sessionName, ttyVar),
+        cols: opts.cols,
+        rows: opts.rows,
+        onData: (data) => {
+          if (id) opts.onData(id, data);
+        },
+        onExit: (exitCode) => {
+          if (!id) return;
+          // The PTY died — the user typed `exit`, the session was killed, the
+          // channel dropped, or this pool evicted it. Drop the record so the
+          // next attach joins rather than handing back a dead client.
+          const byName = this.clients.get(connectionId);
+          if (byName?.get(sessionName)?.shellId === id) byName.delete(sessionName);
+          opts.onExit(id, exitCode);
+        },
+      }),
+      socketLocated,
+    ]);
     id = shellId;
     let byName = this.clients.get(connectionId);
     if (!byName) {
@@ -612,6 +706,7 @@ export class TmuxClientPool {
       shellId,
       session: sessionName,
       ttyVar,
+      socketPath,
       useOrder: ++this.useClock,
       lastUsedAt: Date.now(),
     });
