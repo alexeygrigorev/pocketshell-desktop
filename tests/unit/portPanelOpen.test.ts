@@ -1,0 +1,212 @@
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { mount, type VueWrapper } from '@vue/test-utils';
+import type { HostEntry } from '../../src/shared/types';
+import type { ForwardState } from '../../src/main/portfwd/Forwarder';
+import type { DiscoveredPort } from '../../src/main/portfwd/AutoForwarder';
+import type { ServedFolder } from '../../src/main/portfwd/ServeService';
+
+/**
+ * The Ports panel's one-click open (docs/PORTFWD.md §17).
+ *
+ * The ask: "for port forwarding I want to open the port in the browser with
+ * one click — like I do it with ssh-auto-forward or in the Android app". The
+ * click is trivial (`window.open`, which main allow-lists into
+ * `shell.openExternal`); what is worth pinning is WHERE the button appears and
+ * where it must NOT, because a forwarded port is a URL only when a LOCAL
+ * tunnel for it exists:
+ *
+ *   1. **A live local forward gets the button, at its own URL** — the tunnel's
+ *      listen port, not the remote port (they differ whenever a pin or an
+ *      allocation moved it).
+ *   2. **A `-R` forward does not.** Its listener is on the HOST; a browser on
+ *      this machine reaches nothing.
+ *   3. **A discovered-but-not-forwarded port does not.** There is no tunnel;
+ *      the button would open an error page and teach the user it lies.
+ *   4. **A wide listen host still opens.** `0.0.0.0` in an address bar is not
+ *      a URL anyone can reason about; the loopback is what the tunnel binds.
+ *   5. **The served row's own open stays, and is the only one there.** It was
+ *      already this feature for one special kind of row; its mark now matches
+ *      the general one, so the column says "open" one way.
+ */
+
+vi.mock('../../src/renderer/ipc', () => ({
+  api: {
+    // Present because constructing the connection store subscribes to it.
+    ssh: { onState: vi.fn(), listConfigHosts: vi.fn().mockResolvedValue([]) },
+    // Everything the store's mount-time `init`/`sync` touches. The tests seed
+    // the store's refs directly afterwards, so the answers can all be empty.
+    forwards: {
+      onStates: vi.fn(() => vi.fn()),
+      list: vi.fn().mockResolvedValue([]),
+      discovered: vi.fn().mockResolvedValue([]),
+      status: vi.fn().mockResolvedValue(null),
+      isAutoEnabled: vi.fn().mockResolvedValue(false),
+      startAuto: vi.fn(),
+      stopAuto: vi.fn(),
+      refresh: vi.fn(),
+      scan: vi.fn().mockResolvedValue([]),
+    },
+    serve: {
+      onChanged: vi.fn(() => vi.fn()),
+      list: vi.fn().mockResolvedValue([]),
+      stop: vi.fn(),
+    },
+  },
+}));
+
+const PortPanelView = (await import('../../src/renderer/views/PortPanelView.vue')).default;
+const { useConnectionStore } = await import('../../src/renderer/stores/connection');
+const { useForwardsStore } = await import('../../src/renderer/stores/forwards');
+
+/** A live local forward, 8080 here -> 3000 on the host, overridable. */
+function fwd(over: Partial<ForwardState> = {}): ForwardState {
+  return {
+    key: 'local:8080->127.0.0.1:3000',
+    kind: 'local',
+    listenHost: '127.0.0.1',
+    listenPort: 8080,
+    destHost: '127.0.0.1',
+    destPort: 3000,
+    origin: 'auto',
+    active: true,
+    bytesIn: 0,
+    bytesOut: 0,
+    rateIn: 0,
+    rateOut: 0,
+    name: null,
+    process: null,
+    cwd: null,
+    remapped: false,
+    ...over,
+  };
+}
+
+function disco(over: Partial<DiscoveredPort> = {}): DiscoveredPort {
+  return {
+    port: 3000,
+    process: 'node',
+    pid: 42,
+    cwd: '/srv/app',
+    forwarded: false,
+    localPort: null,
+    intent: null,
+    name: null,
+    eligible: true,
+    lastError: null,
+    ...over,
+  };
+}
+
+function served(over: Partial<ServedFolder> = {}): ServedFolder {
+  return {
+    connectionId: 'conn-1',
+    dir: '/srv/app/dist',
+    remotePort: 8123,
+    localPort: 8123,
+    url: 'http://127.0.0.1:8123/',
+    startedAt: 0,
+    state: 'running',
+    error: null,
+    ...over,
+  };
+}
+
+async function flush(wrapper: VueWrapper): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
+  await wrapper.vm.$nextTick();
+}
+
+/** Mount the panel (store empty — the mount-time sync reads the mocks), then seed it. */
+async function open(seed: { states?: ForwardState[]; disco?: DiscoveredPort[]; served?: ServedFolder[] } = {}): Promise<VueWrapper> {
+  const connection = useConnectionStore();
+  connection.connectionId = 'conn-1';
+  connection.activeHost = { name: 'hetzner' } as HostEntry;
+  connection.state = 'connected';
+
+  const wrapper = mount(PortPanelView);
+  await flush(wrapper);
+
+  const forwards = useForwardsStore();
+  forwards.states = seed.states ?? [];
+  forwards.discovered = seed.disco ?? [];
+  forwards.served = seed.served ?? [];
+  await wrapper.vm.$nextTick();
+  return wrapper;
+}
+
+/** The one-click open button, if the row has one. */
+function openButton(wrapper: VueWrapper) {
+  return wrapper.find('button[title^="Open http"]');
+}
+
+/** `window.open`, watched through a local mock — asserting on the method
+ * itself trips the unbound-method rule, and the indirection costs nothing. */
+const windowOpen = vi.fn();
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  window.localStorage.clear();
+  vi.clearAllMocks();
+  window.open = windowOpen;
+});
+
+describe('PortPanelView — one-click open in the browser', () => {
+  it('offers the open on a live local forward, at the tunnel’s own URL', async () => {
+    // Listen 8080, remote 3000: the URL must name the LOCAL end — that is
+    // what the browser on this machine can reach.
+    const wrapper = await open({ states: [fwd()] });
+    const button = openButton(wrapper);
+    expect(button.exists()).toBe(true);
+    expect(button.attributes('title')).toBe('Open http://127.0.0.1:8080/ in your browser');
+
+    await button.trigger('click');
+    expect(windowOpen).toHaveBeenCalledWith('http://127.0.0.1:8080/', '_blank', 'noopener,noreferrer');
+  });
+
+  it('passes a specific non-loopback listen host through verbatim', async () => {
+    // An ssh-config forward may bind one interface on purpose; the URL then
+    // names what the forward actually bound, not an assumption.
+    const wrapper = await open({ states: [fwd({ listenHost: '192.168.1.10' })] });
+    expect(openButton(wrapper).attributes('title')).toBe('Open http://192.168.1.10:8080/ in your browser');
+  });
+
+  it('opens the loopback when the forward bound every interface', async () => {
+    // `0.0.0.0` in an address bar is noise; the loopback is included in
+    // "every interface" and is what a reader can reason about.
+    const wrapper = await open({ states: [fwd({ listenHost: '0.0.0.0' })] });
+    expect(openButton(wrapper).attributes('title')).toBe('Open http://127.0.0.1:8080/ in your browser');
+  });
+
+  it('offers nothing on a -R forward, whose listener is on the host', async () => {
+    const wrapper = await open({
+      states: [fwd({ key: 'remote:6080->127.0.0.1:6080', kind: 'remote', listenPort: 6080, destPort: 6080 })],
+    });
+    expect(openButton(wrapper).exists()).toBe(false);
+  });
+
+  it('offers nothing on a port that is listening but not forwarded', async () => {
+    // No tunnel, no URL — a button here would open the browser at an error
+    // page and teach the user that this button lies.
+    const wrapper = await open({ disco: [disco()] });
+    expect(openButton(wrapper).exists()).toBe(false);
+  });
+
+  it('keeps the served row’s own open — the only open that row gets', async () => {
+    // The served folder was this feature before this feature existed, for one
+    // special row. Its button keeps the server's URL (trailing slash), the
+    // general one does not appear beside it, and both carry the SAME mark.
+    const wrapper = await open({
+      states: [fwd({ key: 'local:8123->127.0.0.1:8123', listenPort: 8123, destPort: 8123 })],
+      served: [served()],
+    });
+    const opens = wrapper.findAll('button[title^="Open http"], button[title^="http"]');
+    expect(opens).toHaveLength(1);
+    expect(opens[0]!.attributes('title')).toBe('http://127.0.0.1:8123/');
+    await opens[0]!.trigger('click');
+    expect(windowOpen).toHaveBeenCalledWith('http://127.0.0.1:8123/', '_blank', 'noopener,noreferrer');
+  });
+});

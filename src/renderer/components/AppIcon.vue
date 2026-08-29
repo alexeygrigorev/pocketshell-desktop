@@ -32,6 +32,7 @@ export type AppIconName =
   | 'download'
   | 'dot'
   | 'edit-2'
+  | 'external-link'
   | 'file'
   | 'folder'
   | 'folder-plus'
@@ -138,6 +139,15 @@ const GEOMETRY: Record<AppIconName, IconShape> = {
   // Feather's `edit-2` — the pen. The draw tool. Not `edit-3` (pen + underline,
   // which reads as "edit this field") and not `pen-tool` (bezier authoring).
   'edit-2': { paths: ['M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z'] },
+  // Feather's `external-link`. The "look at it in a browser" mark, shared by
+  // BOTH open buttons in the Ports panel's actions column (PortPanelView.vue):
+  // the served folder's URL and a forwarded port's. One action, one mark —
+  // served rows had `arrow-right` before this glyph existed, and the two open
+  // buttons reading differently in one column was drift, not variety.
+  // Feather's polyline `15 3 21 3 21 9` is written as one h/v path.
+  'external-link': {
+    paths: ['M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6', 'M15 3h6v6', 'M10 14L21 3'],
+  },
   file: { paths: ['M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z', 'M13 2v7h7'] },
   folder: { paths: ['M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z'] },
   // Feather's `folder-plus` — the "new empty folder" route.

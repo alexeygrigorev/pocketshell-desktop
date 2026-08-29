@@ -168,6 +168,39 @@ function openServed(row: PortRow): void {
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+/**
+ * The browser URL of a row's live local tunnel, null when there is nothing to
+ * open — a row the engine is not forwarding, or a `-R`/`-D` forward (a `-R`
+ * listens on the HOST, a `-D` is a SOCKS end; neither is a page a local
+ * browser can reach).
+ *
+ * Same sentence `serveUrl` words for served folders (serveCommand.ts): the
+ * tunnel binds the local loopback — the auto path and the add-form both bind
+ * `127.0.0.1` — so the URL is that, with the forward's own listen host passed
+ * through when it names a specific interface. A listen host of "any"
+ * (`0.0.0.0`, `::`, empty) still reaches the loopback, so it maps there too
+ * rather than putting `0.0.0.0` in an address bar.
+ */
+function localUrlOf(row: PortRow): string | null {
+  const fwd = row.fwd;
+  if (!fwd || fwd.kind !== 'local' || fwd.listenPort <= 0) return null;
+  const anyHost = fwd.listenHost === '' || fwd.listenHost === '0.0.0.0' || fwd.listenHost === '::';
+  const host = anyHost ? '127.0.0.1' : fwd.listenHost;
+  return `http://${host}:${fwd.listenPort}/`;
+}
+
+/**
+ * The one-click open — the action the Android app and ssh-auto-forward both
+ * taught: a forwarded port is a URL, and the commonest thing to do with a URL
+ * is look at it. `window.open` rather than an IPC verb: main's
+ * `setWindowOpenHandler` already allow-lists http(s) into `shell.openExternal`
+ * (index.ts), the same route every other in-app link takes.
+ */
+function openLocal(row: PortRow): void {
+  const url = localUrlOf(row);
+  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 async function onStopServing(row: PortRow): Promise<void> {
   if (!connId.value || row.remotePort === null) return;
   await forwards.stopServe(connId.value, row.remotePort);
@@ -459,7 +492,7 @@ function fmtScanTime(epochMs: number | null): string {
                     :title="servedOf(row)!.url ?? 'no tunnel'"
                     @click="openServed(row)"
                   >
-                    <AppIcon name="arrow-right" :size="14" />
+                    <AppIcon name="external-link" :size="14" />
                   </button>
                   <button
                     class="btn-auto stop"
@@ -467,6 +500,24 @@ function fmtScanTime(epochMs: number | null): string {
                     @click="onStopServing(row)"
                   >
                     stop
+                  </button>
+                </template>
+                <template v-else>
+                  <!-- One-click open on a live local tunnel (§17): the action
+                       the Android app and ssh-auto-forward both taught — a
+                       forwarded port is a URL, and looking at it is the
+                       commonest thing to do with one. It shares the served
+                       row's mark because it IS the served row's action: open
+                       this port's URL in the browser. The tooltip names the
+                       URL, which is the one fact the click needs to be
+                       predictable. -->
+                  <button
+                    v-if="localUrlOf(row)"
+                    class="icon-btn sm"
+                    :title="`Open ${localUrlOf(row)} in your browser`"
+                    @click="openLocal(row)"
+                  >
+                    <AppIcon name="external-link" :size="14" />
                   </button>
                 </template>
                 <!-- A real two-state mark: the knob moves, so on/off differ in
