@@ -157,6 +157,8 @@ four that were still open, with the deviation each one earned.
 | ✅ | F19 — PRs run the release pipeline's build matrix and the Docker-backed smoke gate (unit + integration + E2E), so a red E2E can block a merge | `c1c19fd` |
 | ✅ | F12 — automatic reconnect on transport drop: 5s→60s backoff, 10 attempts, session refresh + auto-forward re-opened against the new id, banner countdown with *Retry now*; the `flaky` fixture makes the drop deterministic | `676fc2f`, `0957d70` |
 | ✅ | F12 deviation — no 1s health poll: keepalive + error/close already detect drops, so polling was removed from the spec; the sleep/wake case it was really about is covered by a `powerMonitor` resume probe | `0957d70` |
+| ✅ | F18's last acceptance criterion — the FILES tree is keyboard-navigable (roving tabindex, arrows clamp, Home/End jump, Enter/Space open); the session panel already had buttons and chords | `c0b3131` |
+| ✅ | The durable session-to-folder registry: placements come from `pocketshell tree get` when the cwd probe goes quiet (recorded beats guessed), and the create path records every new session's folder via a merged `tree upsert`. Fails closed — no registry, no change | this pass |
 | ✅ | F16 — the env editor: a panel on the Files tab when the browsed folder has `.env`/`.envrc`; names via `env list`, values revealed per row or all at once via `env get`, writes via `env set` with the JSON payload on STDIN (never argv); the write contract was read off the pinned helper's `--help`, which has no `--key` option | this pass |
 
 ---
@@ -175,7 +177,6 @@ earlier (`4c4b9bf`) and the chord handlers now read the shortcut registry
 | | Item | Why it is worth doing |
 |---|---|---|
 | ⬜ | A `serve` subcommand in the pocketshell CLI | Filed as `alexeygrigorev/pocketshell#2333`. The desktop side ships on `python3 -m http.server`; retiring that costs one function. |
-| ⬜ | A durable session→folder registry | The phone has `pocketshell tree get/upsert/reconcile`. It would replace the name-and-`test -d` heuristic that currently places sessions with no reported cwd. `docs/SESSIONLIST.md` §11 has the cost estimate. |
 
 ---
 

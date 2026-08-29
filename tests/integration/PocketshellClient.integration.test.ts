@@ -128,6 +128,47 @@ describeDocker('PocketshellClient integration', () => {
     expect(values[key]).toBe('second');
   });
 
+  // The durable tree registry (SESSIONLIST.md §11) against the REAL helper:
+  // upsert is wholesale, so the merge contract ("never lose a node the phone
+  // recorded") is what these assertions protect.
+  it('tree get/upsert/reconcile round-trips and merges', async () => {
+    // The client keys records on the connection's host (no alias was used to
+    // dial this container), so the test must read the same key back.
+    const host = container!.getHost();
+    const folderA = '/home/testuser/git/tree-probe-a';
+    const folderB = '/home/testuser/git/tree-probe-b';
+
+    // Seed: a node the "phone" recorded.
+    expect(
+      await helper.treeUpsert(connectionId!, host, [
+        { session: 'ps-tree-phone', order: 1, folderPath: folderA, collapsed: false },
+      ]),
+    ).toBe(true);
+
+    // Record a desktop-created session over it — merged, not replaced.
+    await helper.treeRecordSession(connectionId!, 'ps-tree-desktop', folderB);
+
+    const nodes = await helper.treeGet(connectionId!, host);
+    expect(nodes).not.toBeNull();
+    const bySession = new Map(nodes!.map((n) => [n.session, n]));
+    expect(bySession.get('ps-tree-phone')?.folderPath).toBe(folderA);
+    expect(bySession.get('ps-tree-desktop')?.folderPath).toBe(folderB);
+    // The desktop node sorts after everything that was already there.
+    expect(bySession.get('ps-tree-desktop')!.order).toBeGreaterThan(1);
+
+    // Recording the same session again UPDATES rather than duplicates.
+    await helper.treeRecordSession(connectionId!, 'ps-tree-desktop', folderB);
+    const after = await helper.treeGet(connectionId!, host);
+    expect(after!.filter((n) => n.session === 'ps-tree-desktop')).toHaveLength(1);
+
+    // Reconcile answers with the three name lists; neither probe session is
+    // alive in tmux, so both are at least known to the diff.
+    const rec = await helper.treeReconcile(connectionId!, host);
+    expect(rec).not.toBeNull();
+    const known = [...rec!.alive, ...rec!.gone, ...rec!.added];
+    expect(known).toContain('ps-tree-phone');
+  });
+
   it('envSet can target .envrc explicitly', async () => {
     const dir = '$HOME';
     const key = 'PS_DESKTOP_ENVRC_PROBE';

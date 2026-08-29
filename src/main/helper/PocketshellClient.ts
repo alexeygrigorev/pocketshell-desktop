@@ -15,6 +15,10 @@ import {
   parseTmuxListSessionsFallback,
   parseUsageNdjson,
   parseEnvVarRow,
+  parseTreeGet,
+  parseTreeReconcile,
+  treeUpsertPayload,
+  type TreeNodeRecord,
   parseSessionEnrichment,
   diagnoseSessionPaths,
   mergeSessionEnrichment,
@@ -152,6 +156,143 @@ export class PocketshellClient {
 
   /** Remote `$HOME` per connection; null means "asked, and could not tell". */
   private readonly homes = new Map<string, string | null>();
+
+  /**
+   * The host's durable project-tree registry (`pocketshell tree get`), read
+   * ONCE per connection: the records are written by the phone and by this
+   * app's own create path, and neither rewrites history mid-connection — the
+   * placement cache below already accepts that staleness trade for a probe
+   * that runs every timer tick.
+   *
+   * null means "asked, and there was no usable registry" — a failed exec, an
+   * unparseable body, a host key that could not be resolved. Remembering the
+   * failure matters as much as remembering a success: a host without the
+   * subcommand would otherwise pay one doomed exec per refresh forever.
+   */
+  private readonly treeRegistry = new Map<string, TreeNodeRecord[] | null>();
+
+  /**
+   * The key the tree registry records this connection under.
+   *
+   * The config ALIAS when the connection has one — it is stable across a
+   * re-IP'd host, which is the whole point of a durable registry — falling
+   * back to the raw hostname for a manually-entered one. Null when the
+   * connection is gone, which the callers treat as "no registry".
+   */
+  private hostKey(connectionId: string): string | null {
+    try {
+      const rec = this.ssh.registry_.require(connectionId);
+      return rec.hostAlias ?? rec.host;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The recorded folder for session names, asked once per connection.
+   *
+   * This is the READ half of the durable registry (SESSIONLIST.md §11's
+   * "recorded folder for a session whose cwd probe has gone quiet"): a hit
+   * here beats every guess downstream, because the phone or a previous
+   * session of this app RECORDED it rather than inferred it. Fails closed —
+   * null on any failure, and the name-and-`test -d` heuristic runs exactly as
+   * before.
+   */
+  private async cachedTree(connectionId: string): Promise<TreeNodeRecord[] | null> {
+    const cached = this.treeRegistry.get(connectionId);
+    if (cached !== undefined) return cached;
+    const host = this.hostKey(connectionId);
+    if (host === null) {
+      this.treeRegistry.set(connectionId, null);
+      return null;
+    }
+    const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell tree get'), {
+      stdin: JSON.stringify({ host }),
+    });
+    const nodes = res.exitCode === 0 ? parseTreeGet(res.stdout) : null;
+    this.treeRegistry.set(connectionId, nodes);
+    return nodes;
+  }
+
+  /**
+   * The registry's read verb, public for the integration suite: what the
+   * host records for [host] right now, or null when the answer is not a
+   * tree answer.
+   */
+  async treeGet(connectionId: string, host: string): Promise<TreeNodeRecord[] | null> {
+    const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell tree get'), {
+      stdin: JSON.stringify({ host }),
+    });
+    return res.exitCode === 0 ? parseTreeGet(res.stdout) : null;
+  }
+
+  /**
+   * The registry's write verb: replace the host's node list wholesale.
+   * Callers send the FULL merged list — see {@link treeUpsertPayload}.
+   */
+  async treeUpsert(
+    connectionId: string,
+    host: string,
+    nodes: readonly TreeNodeRecord[],
+  ): Promise<boolean> {
+    const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell tree upsert'), {
+      stdin: treeUpsertPayload(host, nodes),
+    });
+    return res.exitCode === 0;
+  }
+
+  /**
+   * The registry's diff verb: the host compares its records against live
+   * tmux and prunes sessions past an optimistic grace. Returns the three
+   * name lists, or null when the answer is not a reconcile answer.
+   */
+  async treeReconcile(
+    connectionId: string,
+    host: string,
+  ): Promise<{ alive: string[]; gone: string[]; added: string[] } | null> {
+    const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell tree reconcile'), {
+      stdin: JSON.stringify({ host }),
+    });
+    return res.exitCode === 0 ? parseTreeReconcile(res.stdout) : null;
+  }
+
+  /**
+   * Record one session's folder on the create path: read the host's list,
+   * merge this session in (updating a stale record rather than duplicating),
+   * and upsert the whole thing.
+   *
+   * Best-effort by design — a registry that will not record must never make a
+   * session that DID start look like a failure. The caller wraps and logs.
+   */
+  async treeRecordSession(
+    connectionId: string,
+    session: string,
+    folderPath: string,
+  ): Promise<void> {
+    const host = this.hostKey(connectionId);
+    if (host === null) return;
+    const res = await this.ssh.exec(connectionId, pathAwareCommand('pocketshell tree get'), {
+      stdin: JSON.stringify({ host }),
+    });
+    const nodes = res.exitCode === 0 ? parseTreeGet(res.stdout) : null;
+    if (nodes === null) return;
+    const existing = nodes.find((n) => n.session === session);
+    const merged: TreeNodeRecord[] = existing
+      ? nodes.map((n) =>
+          n.session === session ? { ...n, session, folderPath, collapsed: n.collapsed } : n,
+        )
+      : [
+          ...nodes,
+          {
+            session,
+            order: nodes.reduce((max, n) => Math.max(max, n.order), 0) + 1,
+            folderPath,
+            collapsed: false,
+          },
+        ];
+    await this.treeUpsert(connectionId, host, merged);
+  }
+
 
   /**
    * List live tmux sessions. Prefers `pocketshell sessions list`, falls back
@@ -327,6 +468,20 @@ export class PocketshellClient {
     if (!known) {
       known = new Map();
       this.sessionDirs.set(connectionId, known);
+    }
+
+    // The durable registry first (SESSIONLIST.md §11): a folder the phone or
+    // a previous create RECORDED is not a guess at all, so a registry hit is
+    // adopted verbatim and spares both the host and the name heuristic its
+    // probing. Cached per connection and fails closed — no registry, no
+    // change in behaviour.
+    const registry = await this.cachedTree(connectionId);
+    if (registry !== null) {
+      const recorded = new Map(registry.map((n) => [n.session, n.folderPath] as const));
+      for (const u of report.unplaced) {
+        const path = recorded.get(u.name);
+        if (path != null && !known.has(u.name)) known.set(u.name, path);
+      }
     }
 
     const home = await this.homeDir(connectionId);

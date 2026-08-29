@@ -483,6 +483,16 @@ export class ProjectsService {
         code: 'name-unavailable',
       };
     }
+    // The durable tree registry (SESSIONLIST.md §11): record the new session's
+    // folder so a future refresh whose cwd probe has gone quiet can place it
+    // from the RECORD instead of the name heuristic. Best-effort and
+    // fire-and-forget — the session exists either way, and a slow or absent
+    // registry must not hold the create path (or fail it) hostage.
+    if (created.name) {
+      void this.helper
+        .treeRecordSession(connectionId, created.name, canonical)
+        .catch(() => undefined);
+    }
     return {
       ok: true,
       sessionName: created.name,
@@ -495,7 +505,7 @@ export class ProjectsService {
   }
 
   /**
-   * Rename a live tmux session (docs/WORKSPACE.md §4).
+   * Rename a live tmux session.
    *
    * ## Why this is a service call and not a `send-keys`
    *
@@ -592,7 +602,7 @@ export class ProjectsService {
   }
 
   /**
-   * Kill a live tmux session (docs/WORKSPACE.md §14).
+   * Kill a live tmux session.
    *
    * **The only destructive operation this app performs**, and the only one with
    * no undo: a tmux session is usually an agent in the middle of a task, and
@@ -634,7 +644,7 @@ export class ProjectsService {
    * Everything the DESKTOP keys by session name: the pool's live client and its
    * PTY, the mounted terminal pane, and the composer's per-session record. All
    * three are the caller's, exactly as they are for a rename — see the ipc
-   * handler and docs/WORKSPACE.md §14.3. The service reaches the host and stops
+   * handler. The service reaches the host and stops
    * there.
    */
   async killSession(connectionId: string, name: string): Promise<KillSessionResult> {
