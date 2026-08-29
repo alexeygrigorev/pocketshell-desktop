@@ -60,7 +60,10 @@ async function launchApp(): Promise<ElectronApplication> {
   const mainPath = resolve(__dirname, '..', '..', 'out', 'main', 'index.js');
   return electron.launch({
     executablePath: electronPath,
-    args: [mainPath],
+    // Linux CI needs --no-sandbox: the runner allows no setuid sandbox and
+// no unprivileged user namespaces, so the stock launcher dies instantly.
+// The switch is understood (and a no-op) on Windows and macOS too.
+args: ['--no-sandbox', mainPath],
     env: { ...process.env, NODE_ENV: 'production' },
   });
 }
