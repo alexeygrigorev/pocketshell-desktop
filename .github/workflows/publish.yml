@@ -122,6 +122,10 @@ jobs:
       - name: Create draft release with installers
         env:
           GH_TOKEN: ${{ github.token }}
+          # No checkout in this job, so gh cannot discover the repo from a git
+          # remote - say it outright or `gh release create` dies on "not a git
+          # repository" with every artifact already sitting in dist/.
+          GH_REPO: ${{ github.repository }}
         run: |
           ls -la dist/
           gh release create "$GITHUB_REF_NAME" \
