@@ -417,6 +417,45 @@ function splitPathPair(middle: string[]): [string, string] {
  * for created/activity (it sorts last, it does not lie) and the next
  * complete poll replaces it wholesale.
  */
+/**
+ * Reuse the last reported working directory for a session whose placement
+ * evidence dropped out of THIS poll.
+ *
+ * A session's folder placement rests entirely on the enrichment probe: the
+ * helper's table carries names and times but no paths. When that probe has a
+ * bad round trip — measured flapping on CI (`tmux -u list-panes -a` exiting 1
+ * while the session sat alive and attached on the host) — every path-bearing
+ * row vanishes at once, and a session with no path has nowhere to live: its
+ * folder's tab bar prunes it, its pane closes, and a running agent becomes
+ * un-openable until a luckier poll. The cache is the answer the same problem
+ * already got for repository roots: a directory a session was in does not
+ * stop being true because one read of it failed.
+ *
+ * Pure: [cache] maps session name to last reported path and is UPDATED in
+ * place (new evidence overwrites, absence never deletes). Returns the list
+ * with nulls filled from the cache where one exists, flagged via
+ * `pathInferred` so the UI can say the placement is remembered, not read.
+ */
+export function applyCachedSessionPaths(
+  sessions: SessionSummary[],
+  cache: Map<string, string>,
+): SessionSummary[] {
+  for (const session of sessions) {
+    if (typeof session.path === 'string' && session.path.length > 0) {
+      cache.set(session.name, session.path);
+    }
+  }
+  let changed = false;
+  const out = sessions.map((session) => {
+    if (session.path !== null) return session;
+    const cached = cache.get(session.name);
+    if (cached === undefined) return session;
+    changed = true;
+    return { ...session, path: cached, pathInferred: true };
+  });
+  return changed ? out : sessions;
+}
+
 export function restoreUnlistedSessions(
   sessions: SessionSummary[],
   enrichment: Map<string, SessionEnrichment>,

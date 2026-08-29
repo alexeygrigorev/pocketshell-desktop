@@ -14,6 +14,7 @@ import {
   parseSessionEnrichment,
   mergeSessionEnrichment,
   restoreUnlistedSessions,
+  applyCachedSessionPaths,
   agentKindFromTmuxOption,
   inferPathsFromSiblings,
   diagnoseSessionPaths,
@@ -819,5 +820,50 @@ describe('restoreUnlistedSessions', () => {
   it('changes nothing on an empty probe - no evidence, no invention', () => {
     const listed = [{ ...build }];
     expect(restoreUnlistedSessions(listed, new Map())).toBe(listed);
+  });
+});
+
+
+
+describe('applyCachedSessionPaths', () => {
+  // The CI measurement this pins: the enrichment probe flapped
+  // (list-panes exiting 1) while main sat alive and attached on the host,
+  // and a poll whose placement evidence had dropped out pruned the
+  // session's tab. A directory a session was in does not stop being true
+  // because one read of it failed.
+
+  const cache = new Map<string, string>();
+
+  it('remembers paths it has seen and reuses them on a null-path poll', () => {
+    applyCachedSessionPaths(
+      [{ name: 'main', created: 1, activity: 2, attached: true, path: '/home/testuser' }],
+      cache,
+    );
+    const out = applyCachedSessionPaths(
+      [{ name: 'main', created: 1, activity: 2, attached: true, path: null }],
+      cache,
+    );
+    const row = out[0]!;
+    expect(row.path).toBe('/home/testuser');
+    expect(row.pathInferred).toBe(true);
+  });
+
+  it('new evidence overwrites, and absence never deletes', () => {
+    cache.set('main', '/old');
+    applyCachedSessionPaths(
+      [{ name: 'main', created: 1, activity: 2, attached: true, path: '/new' }],
+      cache,
+    );
+    expect(cache.get('main')).toBe('/new');
+    applyCachedSessionPaths(
+      [{ name: 'main', created: 1, activity: 2, attached: true, path: null }],
+      cache,
+    );
+    expect(cache.get('main')).toBe('/new');
+  });
+
+  it('a session with no cached path is returned unchanged', () => {
+    const before = [{ name: 'stranger', created: 1, activity: 2, attached: false, path: null }];
+    expect(applyCachedSessionPaths(before, cache)).toBe(before);
   });
 });

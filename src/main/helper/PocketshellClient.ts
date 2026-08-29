@@ -23,6 +23,7 @@ import {
   diagnoseSessionPaths,
   mergeSessionEnrichment,
   restoreUnlistedSessions,
+  applyCachedSessionPaths,
   findEnrichment,
   SESSION_ENRICHMENT_COMMAND,
   SESSION_SOCKET_DIAGNOSTIC_COMMAND,
@@ -136,6 +137,7 @@ export class PocketshellClient {
    * of the repository it was created from. A directory that appears later is
    * simply not in the map yet and gets asked about on the next refresh.
    */
+  private readonly sessionPathCacheByConnection = new Map<string, Map<string, string>>();
   private readonly repoRoots = new Map<string, Map<string, string | null>>();
 
   /**
@@ -316,7 +318,10 @@ export class PocketshellClient {
       if (parsed.length > 0 || /IDX\s+SESSION/.test(helper.stdout)) {
         const merged = await this.withDerivedPaths(
           connectionId,
-          restoreUnlistedSessions(mergeSessionEnrichment(parsed, enrichment), enrichment),
+          applyCachedSessionPaths(
+            restoreUnlistedSessions(mergeSessionEnrichment(parsed, enrichment), enrichment),
+            this.sessionPathCache(connectionId)
+          ),
           { enrichment, probe, helper },
         );
         return this.withRepoRoots(connectionId, merged);
@@ -334,7 +339,10 @@ export class PocketshellClient {
       // and the probe's active-pane cwd is the better answer when both exist.
       const merged = await this.withDerivedPaths(
         connectionId,
-        restoreUnlistedSessions(mergeSessionEnrichment(parseTmuxListSessionsFallback(tmux.stdout), enrichment), enrichment),
+        applyCachedSessionPaths(
+          restoreUnlistedSessions(mergeSessionEnrichment(parseTmuxListSessionsFallback(tmux.stdout), enrichment), enrichment),
+          this.sessionPathCache(connectionId)
+        ),
         { enrichment, probe, helper: tmux },
       );
       return this.withRepoRoots(connectionId, merged);
@@ -457,6 +465,16 @@ export class PocketshellClient {
    * remembered - the same discipline, and the same trade, as the worktree cache
    * above.
    */
+  /** Last-known session paths for ONE connection - see applyCachedSessionPaths. */
+  private sessionPathCache(connectionId: string): Map<string, string> {
+    let known = this.sessionPathCacheByConnection.get(connectionId);
+    if (!known) {
+      known = new Map();
+      this.sessionPathCacheByConnection.set(connectionId, known);
+    }
+    return known;
+  }
+
   private async withDerivedPaths(
     connectionId: string,
     sessions: SessionSummary[],
