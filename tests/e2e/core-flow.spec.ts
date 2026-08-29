@@ -1,7 +1,7 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
-import { appendFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { resetWorkspaceState, ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from './helpers';
 
 /**
@@ -68,6 +68,7 @@ test.describe('core terminal flow (host -> tree -> terminal)', () => {
     ensureHelperUp();
     // Back up + seed the ssh config.
     originalConfig = existsSync(SSH_CONFIG) ? readFileSync(SSH_CONFIG, 'utf8') : '';
+    mkdirSync(dirname(SSH_CONFIG), { recursive: true }); // ~/.ssh may not exist yet (fresh CI runners).
     appendFileSync(SSH_CONFIG, `\n${SEED_BLOCK}\n`);
     app = await launchApp();
     page = await app.firstWindow();
