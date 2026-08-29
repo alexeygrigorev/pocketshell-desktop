@@ -112,6 +112,17 @@ jobs:
           docker compose -f tests-docker/docker-compose.yml down --volumes --remove-orphans || true
           docker ps -a || true
           xvfb-run -a bash scripts/smoke.sh
+      # Playwright retains traces (and failure screenshots) under test-results/
+      # with retain-on-failure; without uploading them a Linux-only failure is
+      # a name in a log line and nothing more.
+      - name: Upload E2E traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-traces
+          path: test-results/
+          retention-days: 3
+          if-no-files-found: ignore
       - name: Dump fixture state (diagnostics)
         if: failure()
         run: |
