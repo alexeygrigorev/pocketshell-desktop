@@ -823,7 +823,7 @@ export function registerIpcHandlers(deps: {
   // Agent-awareness: profiles and the env editor, delegated to the
   // server-side pocketshell helper. The conversation-log and resumable
   // channels that used to live here went with the Conversation feature
-  // (docs/WORKSPACE.md §9).
+  //
   // Null, not [], when the host could not be asked — the launch picker uses
   // the difference to decide whether an engine it cannot confirm should be
   // offered anyway (shared/agentLaunch.ts).
@@ -845,6 +845,22 @@ export function registerIpcHandlers(deps: {
     ipc.agent.envGet,
     async (_evt, connectionId: string, dir: string, keys?: string[]) => {
       return helper.envGet(connectionId, dir, keys);
+    },
+  );
+  // A write, so unlike the two readers it REJECTS on failure — the panel must
+  // be able to tell "the helper refused" from "done". `helper.envSet` carries
+  // the values to the command's stdin as one JSON object; they never touch
+  // argv.
+  ipcMain.handle(
+    ipc.agent.envSet,
+    async (
+      _evt,
+      connectionId: string,
+      dir: string,
+      values: Record<string, string>,
+      file?: string,
+    ) => {
+      return helper.envSet(connectionId, dir, values, file);
     },
   );
 

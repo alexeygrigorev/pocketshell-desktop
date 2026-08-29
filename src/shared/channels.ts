@@ -106,14 +106,14 @@ export const ipc = {
     reposClone: 'projects:reposClone', // clone a GitHub repo, return its path
     startSession: 'projects:startSession', // folder-first session create
     /**
-     * Rename a live tmux session (docs/WORKSPACE.md §4). It sits under
+     * Rename a live tmux session. It sits under
      * `projects:` rather than `helper:` because the name it produces has to
      * obey the SAME derivation rules a folder-derived name obeys — the
      * sanitiser and the host-side uniqueness probe both live in that service.
      */
     renameSession: 'projects:renameSession',
     /**
-     * Kill a live tmux session (docs/WORKSPACE.md §14) — the ONLY destructive
+     * Kill a live tmux session — the ONLY destructive
      * channel in this list. Beside `renameSession` for the same reason: both
      * address a session by the exact name the folder-first derivation produced,
      * and the `=`-anchored tmux target that makes that safe lives in
@@ -200,7 +200,11 @@ export const ipc = {
     kinds: 'agent:kinds', // agent --help -> the engines this host can launch
     profiles: 'agent:profiles', // profiles list --json
     envList: 'agent:envList', // env list --dir --json
-    envGet: 'agent:envGet', // env get --dir --json
+    envGet: 'agent:envGet',
+    // The VALUE travels in the invoke args and crosses to the helper on the
+    // command's stdin — never as a command-line argument (see SshService's
+    // ExecOptions.stdin for why).
+    envSet: 'agent:envSet',
   },
   /**
    * Renderer diagnostics. A packaged app has no console anyone can read, so an

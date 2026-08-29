@@ -52,6 +52,17 @@ export interface ExecOptions {
   pty?: boolean;
   /** Env to set on the channel. */
   env?: Record<string, string>;
+  /**
+   * Write this text to the command's stdin, then close it.
+   *
+   * This exists for one caller, `pocketshell env set` (FEATURES.md F16): the
+   * helper reads a secret's VALUE from stdin deliberately, so it never lands
+   * in the command line — argv is readable by any process on the host via
+   * `ps`, and a value in argv would also land in this app's own exec log in
+   * plaintext. The transport already is the trust boundary; the value crosses
+   * it either way, but only stdin keeps it out of every process list.
+   */
+  stdin?: string;
 }
 
 export interface ShellHandle {
@@ -204,10 +215,10 @@ export class SshService {
    * are asked to paste, so the prefix — enough to tell `sessions list` from
    * `sessions create` — is all it takes to read a trace.
    */
-  async exec(connectionId: string, command: string, _opts: ExecOptions = {}): Promise<ExecResult> {
+  async exec(connectionId: string, command: string, opts: ExecOptions = {}): Promise<ExecResult> {
     const rec = this.registry.require(connectionId);
     const startedAt = Date.now();
-    const res = await execOnClient(rec, command);
+    const res = await execOnClient(rec, command, opts);
     log('exec', 'ran', {
       connectionId,
       ms: Date.now() - startedAt,
@@ -441,13 +452,29 @@ export function execLogPreview(command: string, limit = 120): string {
   return meat.length <= limit ? meat : `${meat.slice(0, limit)}…`;
 }
 
-function execOnClient(rec: ConnectionRecord, command: string): Promise<ExecResult> {
+function execOnClient(
+  rec: ConnectionRecord,
+  command: string,
+  opts: ExecOptions = {},
+): Promise<ExecResult> {
   return new Promise((resolve) => {
     rec.client.exec(command, (err, stream) => {
       if (err || !stream) {
         // Translate transport errors into an ExecResult; never reject.
         resolve({ stdout: '', stderr: err?.message ?? 'exec failed', exitCode: -1 });
         return;
+      }
+      if (opts.stdin !== undefined) {
+        // `.end(data)` writes and signals EOF in one call — the reader on the
+        // far side is often a plain `read`, which terminates on the close.
+        // A throw here means the channel died mid-handshake; say so rather
+        // than resolving a result that looks like the command's own output.
+        try {
+          stream.stdin.end(opts.stdin);
+        } catch (e) {
+          resolve({ stdout: '', stderr: (e as Error).message, exitCode: -1 });
+          return;
+        }
       }
       let stdout = '';
       let stderr = '';

@@ -8,12 +8,13 @@
  */
 
 import type { SshService } from '../ssh/SshService.js';
-import type { ExecResult, SessionSummary } from '../../shared/types.js';
+import type { EnvVarRow, ExecResult, SessionSummary } from '../../shared/types.js';
 import {
   parseAgentSubcommands,
   parseSessionsList,
   parseTmuxListSessionsFallback,
   parseUsageNdjson,
+  parseEnvVarRow,
   parseSessionEnrichment,
   diagnoseSessionPaths,
   mergeSessionEnrichment,
@@ -215,7 +216,7 @@ export class PocketshellClient {
    */
   /**
    * Fill in {@link SessionSummary.repoRoot} for sessions running in a linked
-   * git worktree (docs/WORKSPACE.md §6.5).
+   * git worktree.
    *
    * Only DIRECTORIES NOT ALREADY KNOWN are asked about, and they are asked
    * about in ONE exec — the same batching discipline as the session-enrichment
@@ -742,7 +743,7 @@ export class PocketshellClient {
    * Rows are `{file, has_value, key}` — names only, never values (the
    * helper's write-only default, D24).
    */
-  async envList(connectionId: string, dir: string): Promise<unknown[]> {
+  async envList(connectionId: string, dir: string): Promise<EnvVarRow[]> {
     const res = await this.ssh.exec(
       connectionId,
       pathAwareCommand(`pocketshell env list --dir ${shellQuoteRemotePath(dir)} --json`),
@@ -752,9 +753,49 @@ export class PocketshellClient {
       // Typed `unknown`, matching listProfiles above: an untyped JSON.parse
       // leaks `any` through the return and defeats checking downstream.
       const parsed: unknown = JSON.parse(res.stdout.trim());
-      return Array.isArray(parsed) ? (parsed as unknown[]) : [];
+      return Array.isArray(parsed)
+        ? parsed.map(parseEnvVarRow).filter((row): row is EnvVarRow => row != null)
+        : [];
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Set env values for a folder (`pocketshell env set --dir D [--file F]`,
+   * a `{"KEY":"value"}` JSON object on STDIN — FEATURES.md F16).
+   *
+   * The contract was read off the pinned helper's own `env set --help`, not
+   * from the docs: there is no `--key` option and no one-key-per-call form —
+   * the command takes a JSON OBJECT and rewrites the file surgically,
+   * preserving comments, ordering and untouched keys. Values travel on stdin
+   * deliberately (ANALYSIS.md: "secrets via stdin, never argv"): a command
+   * line is readable by every process on the host through `ps`, and it would
+   * also land in this app's exec log in plaintext.
+   *
+   * `file` selects the destination when the caller cares (`.envrc` rows are
+   * written back where they came from); omitted, the helper defaults to
+   * `.env`. Throws with the host's own message on failure — a write that
+   * failed must not look like one that succeeded (same convention as
+   * `usage`).
+   */
+  async envSet(
+    connectionId: string,
+    dir: string,
+    values: Record<string, string>,
+    file?: string,
+  ): Promise<void> {
+    if (Object.keys(values).length === 0) return;
+    const fileArg = file ? ` --file ${shellQuote(file)}` : '';
+    const res = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(`pocketshell env set --dir ${shellQuoteRemotePath(dir)}${fileArg}`),
+      { stdin: JSON.stringify(values) },
+    );
+    if (res.exitCode !== 0) {
+      const hostMessage =
+        res.stderr.trim() || res.stdout.trim() || `pocketshell env set exited ${res.exitCode}`;
+      throw new Error(hostMessage);
     }
   }
 

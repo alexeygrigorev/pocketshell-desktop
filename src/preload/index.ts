@@ -6,6 +6,7 @@ import type {
   BootstrapResult,
   ConnectionState,
   ConnectResult,
+  EnvVarRow,
   ExecResult,
   HostEntry,
   SessionSummary,
@@ -361,7 +362,7 @@ const api = {
      * `code: 'kill-failed'` carries tmux's own sentence.
      *
      * The only destructive call on this surface — confirm before reaching for
-     * it (docs/WORKSPACE.md §14).
+     * it.
      */
     killSession: (connectionId: string, name: string): Promise<KillSessionResult> =>
       ipcRenderer.invoke(ipc.projects.killSession, connectionId, name),
@@ -740,7 +741,7 @@ const api = {
       ipcRenderer.invoke(ipc.agent.profiles, connectionId),
 
     /** Env keys for a folder. */
-    envList: (connectionId: string, dir: string): Promise<unknown[]> =>
+    envList: (connectionId: string, dir: string): Promise<EnvVarRow[]> =>
       ipcRenderer.invoke(ipc.agent.envList, connectionId, dir),
 
     /**
@@ -754,6 +755,15 @@ const api = {
       keys?: string[],
     ): Promise<Record<string, string>> =>
       ipcRenderer.invoke(ipc.agent.envGet, connectionId, dir, keys),
+
+    /**
+     * Set env values (a `{"KEY":"value"}` record). Rejects when the helper
+     * refuses the write. The values are invoke ARGS here, which stops at
+     * main; main hands them to `pocketshell env set` as a JSON object on the
+     * command's STDIN, so they never appear in a process list on the host.
+     */
+    envSet: (connectionId: string, dir: string, values: Record<string, string>, file?: string): Promise<void> =>
+      ipcRenderer.invoke(ipc.agent.envSet, connectionId, dir, values, file),
   },
 
   diag: {

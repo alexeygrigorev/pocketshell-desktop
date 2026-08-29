@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   parseSessionsList,
+  parseEnvVarRow,
   parseTmuxListSessionsFallback,
   parseUsageNdjson,
   parseAgentSubcommands,
@@ -496,7 +497,7 @@ describe('parseAgentSubcommands', () => {
 });
 
 /**
- * docs/WORKSPACE.md §6 — the orphan problem. Both of these exist because the
+ * The orphan problem. Both of these exist because the
  * folder workspace keys everything on the folder, so a session with a null
  * path has nowhere to live and must not silently vanish.
  */
@@ -674,5 +675,38 @@ describe('parseSessionEnrichment — the socket column', () => {
         'main::1::1::/home/u/app::/home/u::0::claude::/tmp/tmux-1000/tmuxctl-3\n',
     );
     expect(out.get('main')!.socketPath).toBe('/tmp/tmux-1000/tmuxctl-3');
+  });
+});
+
+describe('parseEnvVarRow', () => {
+  it('keeps a well-formed row, mapping has_value → hasValue', () => {
+    expect(parseEnvVarRow({ file: '.env', has_value: true, key: 'API_KEY' })).toEqual({
+      file: '.env',
+      hasValue: true,
+      key: 'API_KEY',
+    });
+    expect(parseEnvVarRow({ file: '.envrc', has_value: false, key: 'EMPTY' })).toEqual({
+      file: '.envrc',
+      hasValue: false,
+      key: 'EMPTY',
+    });
+  });
+
+  it('degrades a malformed row to nothing rather than smuggling it through', () => {
+    // The env editor renders whatever this returns, so a row without a usable
+    // key is DROPPED here, not carried into a list of names downstream.
+    expect(parseEnvVarRow(null)).toBeUndefined();
+    expect(parseEnvVarRow('API_KEY')).toBeUndefined();
+    expect(parseEnvVarRow({ file: '.env', has_value: true })).toBeUndefined();
+    expect(parseEnvVarRow({ key: '' })).toBeUndefined();
+    expect(parseEnvVarRow({ key: 42 })).toBeUndefined();
+  });
+
+  it('tolerates a missing file name — the key is the load-bearing field', () => {
+    expect(parseEnvVarRow({ has_value: true, key: 'LONE' })).toEqual({
+      file: '',
+      hasValue: true,
+      key: 'LONE',
+    });
   });
 });

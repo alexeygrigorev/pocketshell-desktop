@@ -116,9 +116,22 @@ export type SessionAgentKind =
   | 'exited'
   | 'unknown';
 
+/**
+ * One row of `pocketshell env list --json` for a folder (FEATURES.md F16):
+ * the key's NAME and which env file it was read from — never its value, which
+ * the helper's write-only default keeps off the wire until `env get` names it
+ * explicitly.
+ */
+export interface EnvVarRow {
+  /** The env file the row came from (`.env` or `.envrc`). */
+  file: string;
+  /** Whether the key currently has a value set (it can exist empty). */
+  hasValue: boolean;
+  key: string;
+}
+
 /** A tmux session row from `pocketshell sessions list`. */
-export interface SessionSummary {
-  name: string;
+export interface SessionSummary {  name: string;
   /** Epoch seconds of creation. */
   created: number;
   /** Epoch seconds of last activity. */
@@ -142,7 +155,7 @@ export interface SessionSummary {
    *
    * It exists so the guess is legible rather than silent. The folder workspace
    * keys everything on the folder, so a session with no path has nowhere to
-   * live at all (docs/WORKSPACE.md §6.3); adopting a sibling's path is what
+   * live at all; adopting a sibling's path is what
    * keeps it reachable, and this flag is what lets the UI say the placement is
    * inferred instead of implying certainty it does not have.
    */
@@ -150,7 +163,7 @@ export interface SessionSummary {
   /**
    * The repository this session's working directory belongs to, when that is
    * NOT the directory itself — i.e. when the session runs in a linked git
-   * WORKTREE (docs/WORKSPACE.md §6.5).
+   * WORKTREE.
    *
    * Set only for worktrees; absent for an ordinary checkout at any depth. It is
    * what the session panel GROUPS by, so a worktree of `~/git/dtc-website`
