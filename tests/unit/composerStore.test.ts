@@ -22,7 +22,7 @@ vi.mock('../../src/renderer/ipc', () => ({
   },
 }));
 
-const { useComposerStore } = await import('../../src/renderer/stores/composer');
+const { useComposerStore, COMPOSER_HISTORY_LIMIT } = await import('../../src/renderer/stores/composer');
 const { defaultGeometry } = await import('../../src/shared/composerGeometry');
 const { COMPOSER_STRINGS } = await import('../../src/shared/composerText');
 const { composerTiming } = await import('../../src/shared/composerSend');
@@ -731,5 +731,168 @@ describe('forget', () => {
   it('is a no-op for a key that was never touched', () => {
     expect(() => composer.forget('conn-1/never-existed')).not.toThrow();
     expect(composer.states['conn-1/never-existed']).toBeUndefined();
+  });
+});
+
+/**
+ * Sent-prompt history and the arrow-key walk through it (docs/COMPOSER.md
+ * §28). The user's report: prompts go into a tmux pane that may not be the one
+ * on screen, so a prompt that has already scrolled away can only be repeated
+ * from memory. A shell answers that with `history` and the up arrow; these
+ * tests pin the store half of the same answer, per session.
+ */
+describe('sent-prompt history (§28)', () => {
+  it('records a CONFIRMED delivery, with the attachment paths already folded in', async () => {
+    composer.setDraft(KEY, 'run the tests');
+    await attach(KEY, [A]);
+    await composer.send(KEY, async () => true);
+    expect(composer.states[KEY]?.history).toEqual([`run the tests\n\nAttached files:\n- ${A}`]);
+  });
+
+  it('does not record a send that failed or timed out', async () => {
+    composer.setDraft(KEY, 'never landed');
+    await composer.send(KEY, async () => false);
+    composer.setDraft(KEY, 'took too long');
+    composerTiming.sendTimeoutMs = 10;
+    await composer.send(KEY, () => new Promise<boolean>(() => {}));
+    expect(composer.states[KEY]?.history).toEqual([]);
+  });
+
+  it('skips a consecutive duplicate, but an older prompt resent rises to the top', async () => {
+    composer.setDraft(KEY, 'first');
+    await composer.send(KEY, async () => true);
+    composer.setDraft(KEY, 'second');
+    await composer.send(KEY, async () => true);
+    // Resending the newest entry is the feature working, not a second fact.
+    composer.setDraft(KEY, 'second');
+    await composer.send(KEY, async () => true);
+    expect(composer.states[KEY]?.history).toEqual(['first', 'second']);
+    // Resending an OLD entry erases the stale copy and puts the prompt on top,
+    // so the arrow walk never steps over the same text twice.
+    composer.setDraft(KEY, 'first');
+    await composer.send(KEY, async () => true);
+    expect(composer.states[KEY]?.history).toEqual(['second', 'first']);
+  });
+
+  it('is per session', async () => {
+    composer.setDraft(KEY, 'for main');
+    await composer.send(KEY, async () => true);
+    composer.setDraft(OTHER, 'for build');
+    await composer.send(OTHER, async () => true);
+    expect(composer.states[KEY]?.history).toEqual(['for main']);
+    expect(composer.states[OTHER]?.history).toEqual(['for build']);
+  });
+
+  it('caps the list, oldest falling off first', async () => {
+    for (let i = 0; i < COMPOSER_HISTORY_LIMIT + 10; i += 1) {
+      composer.recordSent(KEY, `prompt ${i}`);
+    }
+    const history = composer.states[KEY]?.history ?? [];
+    expect(history).toHaveLength(COMPOSER_HISTORY_LIMIT);
+    expect(history[0]).toBe(`prompt 10`);
+    expect(history.at(-1)).toBe(`prompt ${COMPOSER_HISTORY_LIMIT + 9}`);
+  });
+
+  it('a rename carries the history; a kill drops it', async () => {
+    composer.recordSent(KEY, 'mine');
+    composer.rekey(KEY, OTHER);
+    expect(composer.states[OTHER]?.history).toEqual(['mine']);
+    composer.forget(OTHER);
+    expect(composer.ensure(OTHER).history).toEqual([]);
+  });
+});
+
+describe('history recall (§28)', () => {
+  it('is a no-op with nothing sent yet', () => {
+    composer.setDraft(KEY, 'typed');
+    expect(composer.recallOlder(KEY)).toBeNull();
+    expect(composer.recallNewer(KEY)).toBeNull();
+    expect(composer.states[KEY]?.draft).toBe('typed');
+  });
+
+  it('↑ recalls the newest payload and stashes the live draft underneath', async () => {
+    composer.recordSent(KEY, 'last thing sent');
+    composer.setDraft(KEY, 'half-typed');
+    expect(composer.recallOlder(KEY)).toBe('last thing sent');
+    expect(composer.states[KEY]?.draft).toBe('last thing sent');
+    expect(composer.states[KEY]?.caret).toBe('last thing sent'.length);
+  });
+
+  it('repeated ↑ walks older entries', () => {
+    composer.recordSent(KEY, 'older');
+    composer.recordSent(KEY, 'newer');
+    expect(composer.recallOlder(KEY)).toBe('newer');
+    expect(composer.recallOlder(KEY)).toBe('older');
+    expect(composer.states[KEY]?.draft).toBe('older');
+  });
+
+  it('↑ at the oldest entry does nothing, so the keystroke stays with the textarea', () => {
+    composer.recordSent(KEY, 'only');
+    expect(composer.recallOlder(KEY)).toBe('only');
+    expect(composer.recallOlder(KEY)).toBeNull();
+    expect(composer.states[KEY]?.draft).toBe('only');
+  });
+
+  it('↓ mid-stack steps newer; ↓ past the newest hands the stashed draft back', () => {
+    composer.recordSent(KEY, 'older');
+    composer.recordSent(KEY, 'newer');
+    composer.setDraft(KEY, 'half-typed');
+
+    expect(composer.recallOlder(KEY)).toBe('newer');
+    expect(composer.recallOlder(KEY)).toBe('older');
+    // One ↓ reaches the newest entry…
+    expect(composer.recallNewer(KEY)).toBe('newer');
+    // …and one more ends the browse with the draft the walk started from.
+    expect(composer.recallNewer(KEY)).toBe('half-typed');
+    expect(composer.states[KEY]?.draft).toBe('half-typed');
+    // Not browsing any more: ↓ is an ordinary arrow again.
+    expect(composer.recallNewer(KEY)).toBeNull();
+  });
+
+  it('editing during a browse ends it, so ↓ no longer replaces the text', () => {
+    composer.recordSent(KEY, 'sent once');
+    composer.recallOlder(KEY);
+    composer.setDraft(KEY, 'sent once but edited');
+    expect(composer.recallNewer(KEY)).toBeNull();
+    expect(composer.states[KEY]?.draft).toBe('sent once but edited');
+  });
+
+  it('a delivered send ends the browse', async () => {
+    composer.recordSent(KEY, 'sent once');
+    // Browse back to it — an Enter here resends it — and let it deliver.
+    composer.recallOlder(KEY);
+    await composer.send(KEY, async () => true);
+    expect(composer.states[KEY]?.draft).toBe('');
+    // The browse is over: ↓ must not reach for a stashed draft that no longer
+    // describes anything.
+    expect(composer.recallNewer(KEY)).toBeNull();
+  });
+
+  it('discard and a failed send both end the browse', async () => {
+    composer.recordSent(KEY, 'sent once');
+    composer.recallOlder(KEY);
+    composer.discard(KEY);
+    expect(composer.recallNewer(KEY)).toBeNull();
+
+    composer.setDraft(KEY, 'try again');
+    await composer.send(KEY, async () => false);
+    expect(composer.recallNewer(KEY)).toBeNull();
+    expect(composer.states[KEY]?.draft).toBe('try again');
+  });
+
+  it('a recalled payload can be sent again, and does not double on the stack', async () => {
+    composer.recordSent(KEY, 'newer still');
+    composer.recordSent(KEY, 'repeat me');
+    composer.recallOlder(KEY); // -> the newest, 'repeat me'
+    const seen: string[] = [];
+    await composer.send(KEY, async (p) => {
+      seen.push(p);
+      return true;
+    });
+    expect(seen).toEqual(['repeat me']);
+    // Resending the top entry changes nothing — one entry per prompt.
+    expect(composer.states[KEY]?.history).toEqual(['newer still', 'repeat me']);
+    // …and the next ↑ recalls exactly what was just sent.
+    expect(composer.recallOlder(KEY)).toBe('repeat me');
   });
 });

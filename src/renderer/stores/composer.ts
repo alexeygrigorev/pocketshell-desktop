@@ -70,13 +70,42 @@ export interface ComposerSessionState {
   connectionDegraded: boolean;
   /** Caret offset, so a session switch restores where you were typing. */
   caret: number;
+  /**
+   * The payloads this session DELIVERED, oldest first, capped at
+   * {@link COMPOSER_HISTORY_LIMIT}. The composed text — attachment paths already
+   * folded in — because that is what entered the pane, and a repeat should send
+   * exactly what was sent before.
+   */
+  history: string[];
+  /**
+   * The draft as it stood when the user started walking back through history.
+   * Null when not browsing. Held here rather than in the component so a session
+   * switch mid-browse keeps BOTH texts — the recalled entry on top, the real
+   * draft underneath — with nothing lost to the detour.
+   */
+  recallSaved: string | null;
+  /** Where the browse sits: an index into `history` counted from the newest. */
+  recallIndex: number | null;
 }
+
+/** How many sent prompts a session remembers. Oldest fall off. */
+export const COMPOSER_HISTORY_LIMIT = 100;
 
 /** Per-session fields worth surviving an app restart (§23.6). */
 interface PersistedState {
   draft: string;
   attachments: Omit<StagedAttachment, 'previewDataUrl'>[];
   caret: number;
+  history: string[];
+  /**
+   * A browse interrupted by the app going away. Restored as THE draft on the
+   * next boot — the recalled entry it was shadowing has no cursor pointing at
+   * it any more, so the saved draft is the only text that can come back.
+   *
+   * Optional, matching the write side, which omits the field entirely when
+   * there is nothing parked; the read side answers null for its absence.
+   */
+  recallSaved?: string | null;
 }
 
 /** The app-level half: whether the panel is showing, and where its box is. */
@@ -110,6 +139,9 @@ function blankState(): ComposerSessionState {
     uploadingCount: 0,
     connectionDegraded: false,
     caret: 0,
+    history: [],
+    recallSaved: null,
+    recallIndex: null,
   };
 }
 
@@ -181,11 +213,18 @@ export const useComposerStore = defineStore('composer', () => {
       const parsed = JSON.parse(raw) as Record<string, PersistedState>;
       const out: Record<string, ComposerSessionState> = {};
       for (const [key, value] of Object.entries(parsed)) {
+        // A browse cannot survive the restart — its cursor is gone — so a draft
+        // parked in `recallSaved` comes back as the draft itself.
+        const saved = typeof value.recallSaved === 'string' ? value.recallSaved : null;
         out[key] = {
           ...blankState(),
-          draft: value.draft ?? '',
+          draft: saved ?? (value.draft ?? ''),
           attachments: (value.attachments ?? []).map((a) => ({ ...a })),
           caret: value.caret ?? 0,
+          history: Array.isArray(value.history)
+            ? value.history.filter((p): p is string => typeof p === 'string').slice(-COMPOSER_HISTORY_LIMIT)
+            : [],
+          recallSaved: null,
         };
       }
       return out;
@@ -239,8 +278,9 @@ export const useComposerStore = defineStore('composer', () => {
     for (const [key, s] of Object.entries(states.value)) {
       // A record that says nothing is not worth a line in the blob. `ensure()`
       // touches a key for every session merely visited, so without this the map
-      // grows one empty entry per session, forever.
-      if (s.draft === '' && s.attachments.length === 0) continue;
+      // grows one empty entry per session, forever. History counts as saying
+      // something: prompts the user may want to repeat are the whole point.
+      if (s.draft === '' && s.attachments.length === 0 && s.history.length === 0) continue;
       out[key] = {
         draft: s.draft,
         attachments: s.attachments.map(({ remotePath, displayName, mimeType }) => ({
@@ -249,6 +289,8 @@ export const useComposerStore = defineStore('composer', () => {
           ...(mimeType === undefined ? {} : { mimeType }),
         })),
         caret: s.caret,
+        history: s.history,
+        ...(s.recallSaved === null ? {} : { recallSaved: s.recallSaved }),
       };
     }
     try {
@@ -297,6 +339,10 @@ export const useComposerStore = defineStore('composer', () => {
     s.draft = text;
     s.error = null;
     if (caret !== undefined) s.caret = caret;
+    // Manual editing ends a history browse: whatever the user types now is the
+    // prompt, not a detour through an old one. The recall actions below write
+    // `draft` directly rather than through here for exactly this reason.
+    endRecall(s);
     schedulePersist();
   }
 
@@ -337,7 +383,91 @@ export const useComposerStore = defineStore('composer', () => {
     s.error = null;
     s.uploadingCount = 0;
     s.caret = 0;
+    endRecall(s);
     schedulePersist();
+  }
+
+  // -------------------------------------------------------------------------
+  // Sent-prompt history
+  //
+  // The user's report that put this here: prompts go into a tmux pane that may
+  // not be the one on screen, so what happened to a prompt is not always
+  // visible and re-running one means retyping it from memory. A shell answers
+  // the same problem with `history` and the up arrow; this is that, per session.
+  // -------------------------------------------------------------------------
+
+  /** The user's typing ended a browse — the text on screen is theirs now. */
+  function endRecall(s: ComposerSessionState): void {
+    s.recallSaved = null;
+    s.recallIndex = null;
+  }
+
+  /**
+   * Record a payload that was CONFIRMED delivered. Called only from `send`, on
+   * the success arm: a prompt that never entered the pane is not one the user
+   * can repeat, and putting failures in the list would make "up arrow" resend
+   * something that already failed once.
+   */
+  function recordSent(key: string, payload: string): void {
+    const s = ensure(key);
+    // A prompt sent again has ONE place in history — the top. Keeping the older
+    // copy where it was would make the arrow walk step over the same text
+    // twice, and a duplicate is never information here (zsh's `erasedups`
+    // rather than bash's narrower ignoredups).
+    s.history = [...s.history.filter((p) => p !== payload), payload].slice(
+      -COMPOSER_HISTORY_LIMIT,
+    );
+    schedulePersist();
+  }
+
+  /**
+   * Step one entry OLDER into the draft. Returns the text now in the draft, or
+   * null for "nothing happened" — no history, or already at the oldest entry —
+   * so the caller can leave the keystroke to the textarea.
+   *
+   * The first step stashes the live draft in `recallSaved`, shell-style, so
+   * walking back down past the newest entry hands it back untouched.
+   */
+  function recallOlder(key: string): string | null {
+    const s = ensure(key);
+    if (s.history.length === 0) return null;
+    if (s.recallIndex === null) {
+      s.recallSaved = s.draft;
+      s.recallIndex = s.history.length - 1;
+    } else if (s.recallIndex > 0) {
+      s.recallIndex -= 1;
+    } else {
+      return null; // already the oldest thing this session ever sent
+    }
+    const text = s.history[s.recallIndex] as string;
+    s.draft = text;
+    s.caret = text.length;
+    schedulePersist();
+    return text;
+  }
+
+  /**
+   * Step one entry NEWER, or — from the newest — hand back the draft the browse
+   * started from and end the browse. Null means "not browsing": the keystroke
+   * is an ordinary ArrowDown and belongs to the textarea.
+   */
+  function recallNewer(key: string): string | null {
+    const s = ensure(key);
+    if (s.recallIndex === null) return null;
+    if (s.recallIndex < s.history.length - 1) {
+      s.recallIndex += 1;
+      const text = s.history[s.recallIndex] as string;
+      s.draft = text;
+      s.caret = text.length;
+      schedulePersist();
+      return text;
+    }
+    const saved = s.recallSaved ?? '';
+    s.draft = saved;
+    s.caret = saved.length;
+    endRecall(s);
+    schedulePersist();
+    return saved;
   }
 
   // -------------------------------------------------------------------------
@@ -572,6 +702,7 @@ export const useComposerStore = defineStore('composer', () => {
     s.sendInFlight = false;
 
     if (ok) {
+      recordSent(key, payload);
       markDelivered(key);
       // Only a CONFIRMED delivery may close the panel. A failure leaves it open
       // on purpose: the payload is back in the draft, the "Not sent" banner is
@@ -599,6 +730,9 @@ export const useComposerStore = defineStore('composer', () => {
     s.error = null;
     s.uploadingCount = 0;
     s.caret = 0;
+    // A sent prompt ends a browse: the entry the arrow keys were walking just
+    // went out again, and the saved draft under it no longer describes anything.
+    endRecall(s);
     if (mode.value === 'hidden') setMode(lastOpenMode.value);
     schedulePersist();
   }
@@ -617,6 +751,7 @@ export const useComposerStore = defineStore('composer', () => {
     s.attachments = [];
     s.error = message ?? COMPOSER_STRINGS.notSent;
     s.sendInFlight = false;
+    endRecall(s);
     schedulePersist();
   }
 
@@ -772,6 +907,9 @@ export const useComposerStore = defineStore('composer', () => {
     seedPrompt,
     prefillCommand,
     discard,
+    recordSent,
+    recallOlder,
+    recallNewer,
     stage,
     seedAttachment,
     removeAttachment,
