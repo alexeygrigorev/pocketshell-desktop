@@ -35,6 +35,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAgentsStore } from '../stores/agents';
 import { useConnectionStore } from '../stores/connection';
+import { useForwardsStore } from '../stores/forwards';
 import { useSessionsStore } from '../stores/sessions';
 import { api } from '../ipc';
 import { useSettingsStore } from '../stores/settings';
@@ -58,6 +59,9 @@ const router = useRouter();
 const connection = useConnectionStore();
 const agents = useAgentsStore();
 const sessions = useSessionsStore();
+// Subscribed only while the ports overlay is open — see the autoFwd watch
+// below for why its `autoOn` is mirrored rather than rendered directly.
+const forwards = useForwardsStore();
 // Read for the chord table only; see the panel comment below for why settings
 // is otherwise not this view's business.
 const settings = useSettingsStore();
@@ -86,6 +90,42 @@ watch(
  * the header comment in views/SettingsView.vue.
  */
 const panel = ref<HostPanel | null>(null);
+
+/**
+ * Whether auto-forward is on for this host — the state behind the Ports
+ * button's ring-and-dot indicator (docs/PORTFWD.md §16).
+ *
+ * Deliberately NOT read off the forwards store's own `autoOn`: that ref is
+ * only live while the ports overlay is mounted (PortPanelView subscribes on
+ * mount and the store `clear()`s on unmount), and the indicator has to be
+ * right the rest of the time — which is most of it. So this asks the engine's
+ * own question — `isAutoEnabled`: forwarder running, else the persisted
+ * per-host flag — whenever the connection or the overlay changes, and while
+ * the overlay IS open the store's live flips are mirrored straight through, so
+ * a toggle inside the panel reaches the header button without waiting for a
+ * reopen.
+ */
+const autoFwd = ref(false);
+watch(
+  () => [connection.connectionId, panel.value] as const,
+  async ([conn]) => {
+    if (!conn) {
+      autoFwd.value = false;
+      return;
+    }
+    const on = await api.forwards.isAutoEnabled(conn);
+    // A late answer for a connection that has since been replaced must not
+    // win — reconnect mints a new id, and the old flag is about a dead link.
+    if (connection.connectionId === conn) autoFwd.value = on;
+  },
+  { immediate: true },
+);
+watch(
+  () => forwards.autoOn,
+  (on) => {
+    if (panel.value === 'ports') autoFwd.value = on;
+  },
+);
 
 /** Session-panel geometry. Collapsed hides it entirely; width is drag-resized. */
 const panelCollapsed = ref(false);
@@ -406,7 +446,7 @@ async function onRefreshUsage(): Promise<void> {
              session is a thing you do while looking at the list you are about
              to add to. One click on the top button brings that list back. -->
         <div class="rail-sep" />
-        <HostPanelButtons @select="panel = $event" />
+        <HostPanelButtons :auto-forward="autoFwd" @select="panel = $event" />
         <button class="icon-btn" title="Settings" @click="panel = 'settings'">
           <AppIcon name="settings" :size="14" />
         </button>
@@ -425,6 +465,7 @@ async function onRefreshUsage(): Promise<void> {
              still owns them. -->
         <SessionTree
           :active-folder="activeFolder"
+          :auto-forward="autoFwd"
           @select="onSelectFolder"
           @back="onBack"
           @collapse="panelCollapsed = true"

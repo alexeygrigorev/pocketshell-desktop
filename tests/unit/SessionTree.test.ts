@@ -383,6 +383,27 @@ describe('SessionTree — the header strip', () => {
   });
 });
 
+describe('SessionTree — the Ports button carries the auto-forward indicator', () => {
+  it('leaves the glyph plain while auto-forward is off', async () => {
+    const wrapper = await open([session('git-a', `${HOME}/git/a`)]);
+    expect(wrapper.get('[title="Port forwarding"]').classes()).not.toContain('auto-on');
+    expect(wrapper.find('.auto-dot').exists()).toBe(false);
+  });
+
+  it('marks the PORTS button — ring, dot, truthful title — and not its sibling', async () => {
+    const wrapper = await open([session('git-a', `${HOME}/git/a`)]);
+    await wrapper.setProps({ autoForward: true });
+
+    // The title is how the test knows which button it is holding: the marked
+    // one is Ports, its word extended, and Usage stays unmarked and plain.
+    const ports = wrapper.get('[title="Port forwarding — auto-forward on"]');
+    expect(ports.classes()).toContain('auto-on');
+    expect(ports.find('.auto-dot').exists()).toBe(true);
+    expect(wrapper.find('[title="Provider usage"].auto-on').exists()).toBe(false);
+    expect(wrapper.get('[title="Provider usage"]').find('.auto-dot').exists()).toBe(false);
+  });
+});
+
 describe('SessionTree — the per-root +', () => {
   it('puts one on every real root and none on `other`', async () => {
     const wrapper = await open([

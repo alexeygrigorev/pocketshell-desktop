@@ -55,6 +55,8 @@ vi.mock('../../src/renderer/ipc', () => ({
     projects: { home: () => projectsHome(), onCloneProgress: vi.fn() },
     agent: { profiles: vi.fn().mockResolvedValue([]) },
     win: { setTitle: vi.fn() },
+    // Asked once on mount by the Ports button's auto-forward indicator.
+    forwards: { isAutoEnabled: vi.fn().mockResolvedValue(false) },
   },
 }));
 

@@ -62,6 +62,9 @@ vi.mock('../../src/renderer/ipc', () => ({
     },
     // The workspace projects the host identity into the OS title on mount.
     win: { setTitle: vi.fn() },
+    // The Ports button's auto-forward indicator asks this on mount; the
+    // default here is the ordinary OFF, and the indicator has its own file.
+    forwards: { isAutoEnabled: vi.fn().mockResolvedValue(false) },
   },
 }));
 

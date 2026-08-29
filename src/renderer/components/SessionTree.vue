@@ -90,6 +90,14 @@ const props = defineProps<{
    * one row.
    */
   activeFolder?: string | null;
+  /**
+   * Whether auto-forward is running for this host, for the Ports button's
+   * indicator. The workspace owns the value (the forwards store is only fresh
+   * while the ports overlay is open); this tree is a relay, because the
+   * buttons must read the same in this header as they do on the collapsed
+   * rail.
+   */
+  autoForward?: boolean;
 }>();
 
 /**
@@ -903,8 +911,9 @@ function fmtRelative(epochSeconds: number): string {
         </button>
         <!-- Ports and Usage as their own buttons (§5.3e). Their words live in
              the tooltips — which double as accessible names — exactly where the
-             retired `⋯` trigger kept "Ports, Usage". -->
-        <HostPanelButtons @select="openPanel" />
+             retired `⋯` trigger kept "Ports, Usage". `auto-forward` drives the
+             Ports button's on-air indicator; the workspace owns the state. -->
+        <HostPanelButtons :auto-forward="autoForward" @select="openPanel" />
         <button class="icon-btn" :disabled="sessions.loading" title="Refresh" @click="onRefresh">
           <AppIcon name="refresh" :size="14" :class="{ spin: sessions.loading }" />
         </button>
