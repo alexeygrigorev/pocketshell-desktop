@@ -83,15 +83,16 @@ const props = withDefaults(
     /**
      * An ABSOLUTE host directory to open the browser AT, instead of `$HOME`.
      *
-     * Set by the `+` on a session-panel ROOT row (`git`, `tmp`, …), where the
-     * user has already said which root and only the folder under it is still
-     * open. Null — the general `+`, and every other caller — keeps the original
-     * behaviour: land on `$HOME`, or stay wherever the browser was left.
+     * Set by the session panel's `+` controls: the general one passes the
+     * panel's FIRST root (the user asked for the picker to open there by
+     * default), a root row's passes that root. Null is the fallback — no root
+     * resolves on this host — and keeps the original behaviour: land on
+     * `$HOME`, or stay wherever the browser was left.
      *
      * It must be absolute. The browse goes over SFTP, which runs no shell, so a
      * `~` in here would name a literal directory called `~`; the panel resolves
-     * its root keys with `rootHostPath` before passing them down and does not
-     * open this dialog at all when that resolution fails.
+     * its root keys with `rootHostPath` before passing them down and passes
+     * null instead when that resolution fails.
      */
     startIn?: string | null;
   }>(),

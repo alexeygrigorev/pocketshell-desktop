@@ -125,10 +125,13 @@ const settings = useSettingsStore();
  * opens the browser AT.
  *
  * One piece of state for TWO controls, because they are one flow entered at two
- * depths. The header's `+` is "a session anywhere" and starts at `$HOME`
- * (`startIn: null`); a root row's `+` is "a session under `git`" and starts
- * there. Neither guesses a folder — the root is known and the folder is not, so
- * the picker still opens; it just opens one level in.
+ * depths. The header's `+` is "a session in my first root" and starts where
+ * {@link defaultStartIn} points — the first root the panel draws, which is the
+ * user's own arrangement once they have dragged or registered one, and `$HOME`
+ * (`startIn: null`) only when no root can be resolved at all. A root row's `+`
+ * is "a session under `git`" and starts there. Neither guesses a folder — the
+ * root is known and the folder is not, so the picker still opens; it just opens
+ * one level in.
  *
  * A boolean plus a separate path ref would let the two disagree — dialog open,
  * path stale from the last root — which is precisely the class of bug that puts
@@ -318,6 +321,24 @@ function rootTooltip(root: SessionRootFolder): string {
 function rootAddPath(root: SessionRootFolder): string | null {
   return rootHostPath(root.key, home.value);
 }
+
+/**
+ * Where the general `+` opens the picker: the FIRST root the panel draws, as
+ * the user asked for it — "by default + creates a workspace in the first
+ * configured project root". First in the panel's order, not the registered
+ * list's, because the panel's order is the one the user arranged (a drag wins
+ * over registration order) and the one their eye is on when they reach for the
+ * button. `other` is skipped — a bucket is not a place to create in.
+ *
+ * Null, the dialog's own `$HOME` behaviour, only when no real root resolves:
+ * no sessions and nothing registered, or `$HOME` unresolved so even the
+ * derived roots have no absolute path. The picker still opens either way —
+ * the default is a starting point, never a gate.
+ */
+const defaultStartIn = computed<string | null>(() => {
+  const first = roots.value.find((root) => !root.other);
+  return first ? rootAddPath(first) : null;
+});
 
 /**
  * Folder tooltip: the full path, the session count, and the session NAMES.
@@ -820,7 +841,8 @@ function fmtRelative(epochSeconds: number): string {
            move the floor again — MIN_PANEL_WIDTH in HostWorkspaceView.vue and
            .tree's min-width below pin it together. -->
       <div class="header-actions">
-        <!-- The general `+`: a session in ANY folder, nothing pre-filled. It is
+        <!-- The general `+`: a session starting in the panel's first root
+             (defaultStartIn), still free to browse anywhere from there. It is
              what replaced the panel's full-width foot button, and it is the
              reason that removal is safe — this control is on screen whatever
              the panel holds, including when it holds nothing at all, so there
@@ -828,7 +850,7 @@ function fmtRelative(epochSeconds: number): string {
         <button
           class="icon-btn"
           title="New session in any folder"
-          @click="creating = { startIn: null }"
+          @click="creating = { startIn: defaultStartIn }"
         >
           <AppIcon name="plus" :size="14" />
         </button>
@@ -1042,17 +1064,20 @@ function fmtRelative(epochSeconds: number): string {
            the ONE creation flow, not a second flow. -->
       <div v-if="!roots.length && !sessions.loading" class="empty">
         <p class="muted">no sessions</p>
-        <button class="btn-ghost" @click="creating = { startIn: null }">New session…</button>
+        <button class="btn-ghost" @click="creating = { startIn: defaultStartIn }">
+          New session…
+        </button>
       </div>
     </div>
 
     <!-- The full-width `New session` button that used to sit here is GONE. It
          was the panel's one primary action and it spent a bordered 44px foot
          row saying so, permanently, for a flow that now has two better doors:
-         the `+` in the header (any folder) and the `+` on each root (this
-         root). Both are always on screen, so nothing was traded away — and the
-         foot row's real cost was that it answered "where?" with a browse
-         starting at `$HOME` even when the user had just pointed at `git`.
+         the `+` in the header (the first root, browsable anywhere) and the `+`
+         on each root (this root). Both are always on screen, so nothing was
+         traded away — and the foot row's real cost was that it answered
+         "where?" with a browse starting at `$HOME` even when the user had just
+         pointed at `git`.
 
          Folder-first, not name-first, still: the dialog opens a picker rather
          than a text field, because the session name is DERIVED from the folder

@@ -234,18 +234,44 @@ describe('SessionTree — the foot button is gone, and nothing went with it', ()
     expect(cta.exists()).toBe(true);
     expect(cta.text()).toBe('New session…');
     await cta.trigger('click');
-    // Null, not `$HOME`: the same contract as the header `+` — one creation
-    // flow, entered by a second door.
+    // Null: no sessions and no registered roots leaves no root to start in, so
+    // this door falls back to the dialog's own `$HOME` behaviour the same way
+    // the header `+` does.
     expect(dialogStartIn(wrapper)).toBeNull();
   });
 
-  it('opens the picker with nothing pre-selected from the general +', async () => {
+  it('opens the picker in the first root the panel draws', async () => {
     const wrapper = await open([session('git-a', `${HOME}/git/a`)]);
     expect(dialogStartIn(wrapper)).toBeUndefined();
     await generalAdd(wrapper).trigger('click');
-    // Null, not `$HOME`: "any folder" is the dialog's own default behaviour,
-    // and pinning it to home here would override a browser the user left
-    // somewhere deliberate.
+    // The user's ask: "by default + creates a workspace in the first
+    // configured project root". Derived or registered, the first root the
+    // panel draws is where the browse lands — `$HOME` is now only the
+    // fallback for a panel with no root at all.
+    expect(dialogStartIn(wrapper)).toBe(`${HOME}/git`);
+  });
+
+  it('starts the general + in the first REGISTERED root when nothing is running', async () => {
+    // The state the default is most useful for: roots registered in Settings,
+    // nothing live yet. The empty panel still names a starting point.
+    const wrapper = await open([], ['~/git', '~/work']);
+    await generalAdd(wrapper).trigger('click');
+    expect(dialogStartIn(wrapper)).toBe(`${HOME}/git`);
+  });
+
+  it('skips the other bucket when choosing the default', async () => {
+    // A session under no root renders the catch-all row, and a bucket is not
+    // a place to create in — the first REAL root is what the `+` opens.
+    const wrapper = await open([session('loose', '/srv/elsewhere')], ['~/git']);
+    await generalAdd(wrapper).trigger('click');
+    expect(dialogStartIn(wrapper)).toBe(`${HOME}/git`);
+  });
+
+  it('falls back to $HOME (null) when no root can be resolved', async () => {
+    // No sessions, nothing registered, and a host whose $HOME never answered:
+    // there is no first root, and the picker must still open.
+    const wrapper = await open([], [], null);
+    await generalAdd(wrapper).trigger('click');
     expect(dialogStartIn(wrapper)).toBeNull();
   });
 });
