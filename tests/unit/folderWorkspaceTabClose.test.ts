@@ -5,17 +5,19 @@ import { mount, type VueWrapper } from '@vue/test-utils';
 import { ref } from 'vue';
 
 /**
- * The `×` on a workspace tab (docs/WORKSPACE.md §14).
+ * The `×` on a tab (docs/WORKSPACE.md §14).
  *
- * The user asked for "x here like in vscode", and the rules this file pins are
- * what the ask changed and what it did NOT:
+ * The user asked for "x here like in vscode", and the two rules this file pins
+ * are what the ask changed and what it did NOT:
  *
- *  - the stop the tab menu owned is now reachable from the session tab itself,
- *    and every Files tab closes, the folder's first one included;
- *  - the session tab's × still cannot kill. It arms the same confirmed dialog
- *    the right-click menu does, says Stop rather than Close, and does not
- *    select the tab it sits on — the right-click rule, which a mis-aimed click
- *    on a background tab must not be able to violate.
+ *  - every tab wears the control now, first Files tab included — the old rule
+ *    spared it because closing it would strand the workspace, and that is
+ *    pinned in the reveal case at the bottom: a link clicked with no Files tab
+ *    standing opens one instead of landing nowhere;
+ *  - a session tab's `×` cannot kill. It arms the same confirmed dialog the
+ *    right-click menu does, says Stop rather than Close, and does not select
+ *    the tab it sits on — the right-click rule, which a mis-aimed click on a
+ *    background tab must not be able to violate.
  *
  * The kill ITSELF is `confirmStop` and is out of scope here: this file asserts
  * the arm and the cancel, with `projects.killSession` spied to prove the `×`
@@ -60,6 +62,7 @@ const FolderWorkspaceView = (await import('../../src/renderer/views/FolderWorksp
 const { useConnectionStore } = await import('../../src/renderer/stores/connection');
 const { useSessionsStore } = await import('../../src/renderer/stores/sessions');
 const { useProjectsStore } = await import('../../src/renderer/stores/projects');
+const { useFilesStore } = await import('../../src/renderer/stores/files');
 
 const stubs = {
   // `focus` is part of the real TerminalView's exposed surface and is what a
@@ -104,6 +107,8 @@ function closeOf(wrapper: VueWrapper, label: string): ReturnType<VueWrapper['fin
   return tab.find('.tab-close');
 }
 
+const IMAGE = '/home/me/.codex/generated_images/uuid/exec-1.png';
+
 beforeEach(() => {
   localStorage.clear();
   setActivePinia(createPinia());
@@ -124,9 +129,8 @@ describe('the close control on a workspace tab', () => {
     }
   });
 
-  it('says Stop and opens the named confirmation, killing nothing', async () => {
+  it('says Stop on a session tab and opens the named confirmation, killing nothing', async () => {
     const wrapper = await openWorkspace();
-    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
 
     expect(closeOf(wrapper, 'Terminal').attributes('title')).toBe('Stop this session');
     await closeOf(wrapper, 'Terminal').trigger('click');
@@ -171,5 +175,22 @@ describe('the close control on a workspace tab', () => {
     // `closeFilesTab`, which shares nothing with the stop path.
     expect(wrapper.find('.stub-overlay').exists()).toBe(false);
     expect(killSession).not.toHaveBeenCalled();
+  });
+
+  it('opens a Files tab for a link clicked after the last one was closed', async () => {
+    const wrapper = await openWorkspace();
+
+    await closeOf(wrapper, 'Files').trigger('click');
+    await flush();
+
+    // The old rule guaranteed a Files tab always existed to receive this; with
+    // every one of them closable, the watcher owes the click a tab instead of
+    // dropping it.
+    useFilesStore().requestReveal(IMAGE);
+    await flush();
+
+    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
+    expect(activeLabel(wrapper)).toBe('Files');
+    expect(useFilesStore().reveal).toBe(IMAGE);
   });
 });

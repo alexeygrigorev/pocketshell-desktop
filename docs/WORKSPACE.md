@@ -1578,10 +1578,13 @@ rather than an oversight:
 
    **SUPERSEDED with it — "a second Files tab closes, the first does not".**
    The first tab was spared because closing it would leave the workspace no way
-   to look at the folder, and that excuse has expired: `+` re-opens a Files tab
-   in two clicks. Every Files tab carries the `×` now. Closing the LAST one is
-   a real state, not a broken one: the workspace keeps its session tabs, and a
-   bar with nothing on it shows the folder's own empty state.
+   to look at the folder, and two things grew that make the excuse false: `+`
+   re-opens a Files tab in two clicks, and a file link clicked in the terminal
+   with none standing opens one of its own (FolderWorkspaceView's reveal
+   watcher routes through `onOpenInNewTab` when the bar has no Files tab at
+   all). Every Files tab carries the `×` now. Closing the LAST one is a real
+   state, not a broken one: the workspace keeps its session tabs, and the empty
+   bar shows the folder's own empty state.
 3. **The agent launch is still fire-and-forget, but it is no longer SILENT.**
    `pocketshell agent <kind>` is written into the new session once its PTY
    exists, and nothing verifies that the wrapper then started — verifying would

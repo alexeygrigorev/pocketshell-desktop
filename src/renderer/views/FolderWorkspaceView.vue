@@ -623,7 +623,13 @@ watch(
     if (first) {
       selected.value = first.id;
       persist();
+      return;
     }
+    // Every Files tab is closable now, so "the first one" can be NONE of
+    // them — and the click must still land somewhere. `onOpenInNewTab` is
+    // already written to open a tab and hand it the reveal, ordering and
+    // all; this branch is why that helper, not `addFilesTab`, is the call.
+    onOpenInNewTab(target, 'file');
   },
 );
 
@@ -1840,7 +1846,18 @@ function onFocusTerminal(): void {
               class="tab-agent"
             />
             {{ tab.label }}
-            <!-- A `×` on a SESSION tab: the context menu's Stop, one click
+            <!-- Every tab wears an `×`, but the two kinds do not mean the same
+                 thing by it, and neither one kills directly.
+
+                 A FILES tab's `×` closes the view and nothing else (§12), and
+                 every one of them has it — the first included. The old rule
+                 spared the first tab because closing it would leave the
+                 workspace no way to look at the folder, and that reason is
+                 gone: `+` re-opens a Files tab in two clicks, and a file link
+                 clicked in the terminal with none standing opens its own (the
+                 reveal watcher below).
+
+                 A SESSION tab's `×` is the context menu's Stop, one click
                  closer. It opens the SAME named, confirmed dialog the menu
                  does rather than killing on the click, because §14's argument
                  survives the affordance: the thing behind the tab is a live
@@ -1857,11 +1874,6 @@ function onFocusTerminal(): void {
             >
               <AppIcon name="close" :size="12" />
             </span>
-            <!-- A FILES tab's `×` closes the view and nothing else (§12), and
-                 every one of them has it — the first included. The old rule
-                 spared the first tab because closing it would leave the
-                 workspace no way to look at the folder, and that reason is
-                 gone: `+` re-opens a Files tab in two clicks. -->
             <span
               v-else
               class="tab-close"
