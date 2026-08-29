@@ -1,0 +1,100 @@
+# Release pipeline: a `v*` tag push builds installers for all three platforms,
+# runs the Docker-backed smoke gate, and attaches the installers to a DRAFT
+# GitHub release. The draft is finalized (real notes, --draft=false) by hand or
+# by the release process in ~/.agents/skills/release — CI deliberately does not
+# publish, so a bad tag is fixable before anything is public.
+#
+# Plain pushes to main run the same build matrix and smoke gate but stop there,
+# so the pipeline itself is exercised continuously and a release tag never
+# triggers it for the first time.
+name: publish
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build installers (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:unit
+      # `dist` = icon + electron-vite build + electron-builder, which reads the
+      # per-platform targets from electron-builder.yml. --publish never: the
+      # artifacts travel via workflow artifacts to the release job below, so no
+      # matrix job ever talks to GitHub Releases (three publishers racing on
+      # one draft release is a race electron-builder loses sometimes).
+      - run: npm run dist
+        env:
+          # electron-builder 25 wants a token present even with --publish never.
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/*.AppImage
+            release/*.deb
+            release/*.dmg
+            release/*.zip
+            release/latest*.yml
+
+  smoke:
+    name: Smoke gate (Docker-backed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # E2E launches Electron, which has no headless mode on Linux; Xvfb is
+      # preinstalled on the runner image. The app's own off-screen mode (set by
+      # playwright.config.ts) handles the rest.
+      - run: xvfb-run -a bash scripts/smoke.sh
+
+  release:
+    name: Draft GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: dist
+      - name: Create draft release with installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist/
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Installers built by CI from $GITHUB_SHA. Notes are finalized before publishing." \
+            dist/*
