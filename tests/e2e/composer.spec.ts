@@ -85,8 +85,19 @@ async function openSession(page: Page, name: string): Promise<void> {
   // open the folder, then select the session's tab.
   await page.locator('.dir-header').first().click();
   await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 20_000 });
-  await page.getByRole('button', { name, exact: true }).click();
-  // The composer is hidden until summoned - typing opens it, and so does
+  try {
+    await page.getByRole('button', { name, exact: true }).click();
+  } catch (err) {
+    // A tab that never appears is the suite shouting about state it cannot
+    // see. Name what IS there - on a remote runner the trace zip is not
+    // always the first thing a reader opens.
+    const bar = await page.locator('.folder-bar nav.tabs').innerText().catch(() => '(no tab bar)');
+    const rows = await page.locator('.dir-header').allInnerTexts().catch(() => []);
+    throw new Error(
+      `could not open session "${name}"; tabs: [${bar.replace(/\n/g, " | ")}] panel rows: [${rows.join(" | ")}]`,
+      { cause: err as Error },
+    );
+  }  // The composer is hidden until summoned - typing opens it, and so does
   // the toggle chord. The chord is a TOGGLE, so only summon when the card
   // is actually away: earlier tests in this serial suite may leave it up,
   // and pressing blindly would put it away. Either way the draft is left
