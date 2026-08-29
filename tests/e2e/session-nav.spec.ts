@@ -12,7 +12,7 @@ import { resetWorkspaceState, ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY
  * per tmux session in the folder — no Files tab until something asks for one —
  * while the panel stays put -> close the folder -> back to the host list. Port
  * forwarding and Provider usage are host header icons that open overlays, one
- * click each (§5.3e). See docs/WORKSPACE.md.
+ * click each (§5.3e).
  *
  * Terminal: switching between the fixture's two sessions repeatedly used to
  * stack an extra xterm `onData`/`onResize` handler per switch, so tmux's
@@ -88,7 +88,7 @@ test.describe('session-scoped navigation + terminal wiring', () => {
     await resetWorkspaceState(page);
     await page.getByText(E2E_HOST_NAME).click();
     // The host's default view is the folder panel - no tab bar at host level,
-    // and no session rows either; folders are the level (docs/WORKSPACE.md §2).
+    // and no session rows either; folders are the level.
     await expect(page.locator('.dir-header').first()).toBeVisible({ timeout: 15_000 });
   });
 
@@ -103,7 +103,7 @@ test.describe('session-scoped navigation + terminal wiring', () => {
   });
 
   test('the host shows a two-level folder panel and no host-level tabs', async () => {
-    // The panel is `root -> folder`, TWO levels, always (docs/WORKSPACE.md §2).
+    // The panel is `root -> folder`, TWO levels, always.
     // Both fixture sessions sit in $HOME ITSELF, which has no root folder to be
     // named after, so the whole fixture lands in the `other` bucket as ONE
     // folder row holding two sessions.
@@ -149,12 +149,11 @@ test.describe('session-scoped navigation + terminal wiring', () => {
     // One tab per session in the folder, and NO Files tab: one appears only
     // when something asks for it (the `+` menu, the file tree, a path clicked
     // in the terminal). Neither fixture session is named after `$HOME` (`main`,
-    // `build` vs a derived `home-testuser`), so both keep their own names —
-    // docs/WORKSPACE.md §3.3's third rule.
+    // `build` vs a derived `home-testuser`), so both keep their own names.
     await expect(page.getByRole('button', { name: 'main', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'build', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Files', exact: true })).toHaveCount(0);
-    // The Conversation tab is gone with the feature (docs/WORKSPACE.md §9).
+    // The Conversation tab is gone with the feature.
     await expect(page.getByRole('button', { name: 'Conversation' })).toHaveCount(0);
     await expect(page.locator('.terminal-area > .terminal-slot:visible > .terminal')).toBeVisible({ timeout: 15_000 });
     // The panel is persistent, and it marks the open FOLDER — one row, however
@@ -180,7 +179,7 @@ test.describe('session-scoped navigation + terminal wiring', () => {
 
   test('there is a way back to hosts', async () => {
     // The tab strip's "Close folder" `×` is gone — the user asked for that whole
-    // end of the strip to go (docs/WORKSPACE.md §3). Nothing is lost: the
+    // end of the strip to go. Nothing is lost: the
     // session panel is persistent, so another folder row switches workspace
     // directly and its back arrow leaves the host, which is what this asserts.
     // The only state no longer reachable is the placeholder pane once a folder
