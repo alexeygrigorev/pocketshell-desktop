@@ -569,6 +569,22 @@ async function onRefreshUsage(): Promise<void> {
 
     <!-- Host-level panels: overlays, never peers of the session tabs. -->
     <OverlayPanel v-if="panel === 'ports'" title="Port forwarding" @close="panel = null">
+      <!-- Scan lives HERE, in the overlay's action row beside the close
+           control — the same seat Usage's refresh occupies — rather than in
+           the panel's face (docs/PORTFWD.md §18): the engine rescans on its
+           own every few seconds, so an always-visible Scan button spent the
+           panel's best row on a thing you almost never open the panel to do.
+           One policy-applying pass is what a press means (forwards.ts). -->
+      <template #actions>
+        <button
+          class="icon-btn"
+          :disabled="forwards.loading || !connection.connectionId"
+          title="Scan the host's ports now"
+          @click="connection.connectionId && forwards.scan(connection.connectionId)"
+        >
+          <AppIcon name="refresh" :class="{ spin: forwards.loading }" />
+        </button>
+      </template>
       <PortPanelView v-if="connection.connectionId" />
     </OverlayPanel>
     <OverlayPanel v-if="panel === 'usage'" title="Provider usage" size="md" @close="panel = null">

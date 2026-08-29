@@ -1120,3 +1120,46 @@ fact the click needs to be predictable.
 Tests: `tests/unit/portPanelOpen.test.ts` — the URL at the listen port, the
 verbatim interface host, the wide-host mapping, no button on `-R`, none on
 unforwarded, and the served row keeping its single open.
+
+---
+
+## 18. Arranging the panel: the face is the live table
+
+> "let's also arrange the elements there" — with Scan and the manual-add form
+> struck out, and a brace around the not-forwarded rows: "collapse under …
+> (or 'show more')"
+
+A host with auto-forward on has a dozen passive listeners for every forward
+it actually opens, and the table sorted by port — so the ports 22, 53, 80,
+631 of a normal box led the list while the rows the user opened the panel
+for started half a screen down. The arrangement now follows the panel's
+point (`PortPanelView.vue`):
+
+- **The live table leads.** Forwarded rows first, then the tail, each group
+  in port order. The merge on remote port is unchanged; only the display
+  order moved.
+- **The tail folds under a count.** One disclosure row — "N not forwarded",
+  this app's chevron — sits at the table's foot, and the folded rows keep
+  their cells behind a `v-show`, so expanding costs no fetch and no re-render
+  of the live rows. The fold carries the auto-range story the hint used to
+  point at ("anything outside 1024–10000 waits under not forwarded and can be
+  forced on from there"), which is where a force-on is still one toggle away.
+- **Scan moved to the overlay header**, into the `#actions` seat beside the
+  close control (`HostWorkspaceView.vue`) — the same seat Usage's refresh
+  occupies, worded the same way ("Scan the host's ports now"). The engine
+  rescans on its own every few seconds, so an always-visible button spent
+  the panel's best row on a thing you almost never open the panel to do.
+  It still means one policy-APPLYING pass (`forwards.scan` → `refresh`),
+  and the spinner is still `forwards.loading`.
+- **The add form hides behind "Add forward"** — a ghost expander at the end
+  of the panel bar, accent while open. Adding a forward is a now-and-then
+  act; a form for it must not hold the top row hostage. It folds itself away
+  after a successful add (the forward is in the live table, so the form's
+  job is done) and stays open on a failure, beside the error line.
+
+Nothing was removed. Every control the panel had is one click away; the
+crossed-out rows in the ask were read as "not at rest", not "not at all".
+
+Tests: `tests/unit/portPanelOpen.test.ts`, describe "arranged live-first" —
+forwarded lead and the tail's fold count, no Scan button in the body with the
+add form closed by default, and the form folding away after a made forward.

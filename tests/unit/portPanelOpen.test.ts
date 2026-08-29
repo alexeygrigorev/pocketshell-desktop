@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { mount, type VueWrapper } from '@vue/test-utils';
+import { mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils';
 import type { HostEntry } from '../../src/shared/types';
 import type { ForwardState } from '../../src/main/portfwd/Forwarder';
 import type { DiscoveredPort } from '../../src/main/portfwd/AutoForwarder';
@@ -47,6 +47,7 @@ vi.mock('../../src/renderer/ipc', () => ({
       stopAuto: vi.fn(),
       refresh: vi.fn(),
       scan: vi.fn().mockResolvedValue([]),
+      addManual: vi.fn().mockResolvedValue(true),
     },
     serve: {
       onChanged: vi.fn(() => vi.fn()),
@@ -208,5 +209,62 @@ describe('PortPanelView — one-click open in the browser', () => {
     expect(opens[0]!.attributes('title')).toBe('http://127.0.0.1:8123/');
     await opens[0]!.trigger('click');
     expect(windowOpen).toHaveBeenCalledWith('http://127.0.0.1:8123/', '_blank', 'noopener,noreferrer');
+  });
+});
+
+/**
+ * v-show's hidden state, read off the inline style. `isVisible()` cannot be
+ * used here: jsdom's computed-style cache does not invalidate when Vue clears
+ * a display:none by REMOVING the property (the detached tree never re-resolves
+ * it), so a re-shown element would report invisible forever.
+ */
+function folded(wrapper: DOMWrapper<Element>): boolean {
+  return (wrapper.attributes('style') ?? '').includes('none');
+}
+
+describe('PortPanelView — the panel is arranged live-first (docs/PORTFWD.md §18)', () => {
+  it('leads with the forwarded rows and folds the listening tail under a count', async () => {
+    // One live forward (3000) and two bare listeners (22, 631): the forward
+    // is shown, the listeners are folded, and the fold row says how many.
+    const wrapper = await open({
+      states: [fwd()],
+      disco: [disco({ forwarded: true }), disco({ port: 22 }), disco({ port: 631 })],
+    });
+
+    const dataRows = wrapper.findAll('tbody tr:not(.more-row):not(.empty)');
+    expect(dataRows.filter((r) => !folded(r)).length).toBe(1);
+    const fold = wrapper.get('.more-btn');
+    expect(fold.text()).toContain('2 not forwarded');
+
+    // Expanding reveals the tail without changing the live rows.
+    await fold.trigger('click');
+    expect(fold.text()).toContain('2 not forwarded');
+    expect(dataRows.filter((r) => !folded(r)).length).toBe(3);
+
+    // Collapsing again folds it back.
+    await fold.trigger('click');
+    expect(dataRows.filter((r) => !folded(r)).length).toBe(1);
+  });
+
+  it('carries no Scan button and holds the add form behind its expander', async () => {
+    // Scan moved to the overlay header (HostWorkspaceView's #actions, the
+    // seat Usage's refresh occupies); the add form must not open by default.
+    const wrapper = await open();
+    expect(wrapper.find('.scan').exists()).toBe(false);
+    expect(folded(wrapper.find('.add-form'))).toBe(true);
+
+    await wrapper.get('.add-toggle').trigger('click');
+    expect(folded(wrapper.find('.add-form'))).toBe(false);
+  });
+
+  it('folds the add form away once a forward is actually made', async () => {
+    // A made forward appears in the live table, so the form's job is done.
+    // A failed add (the action answers false) would leave it open.
+    const wrapper = await open();
+    await wrapper.get('.add-toggle').trigger('click');
+    expect(folded(wrapper.find('.add-form'))).toBe(false);
+    await wrapper.get('.add-btn').trigger('click');
+    await flush(wrapper);
+    expect(folded(wrapper.find('.add-form'))).toBe(true);
   });
 });

@@ -22,6 +22,13 @@
 //     is what made auto-created forwards unremovable.
 //   - In/Out were swapped in the ENGINE and are fixed there. `bytesIn` is
 //     genuinely download. Do not "correct" them again here.
+//
+// Arrangement (docs/PORTFWD.md §18): the panel's face is the LIVE table —
+// what is forwarded now. Everything else is one quiet control away: Scan
+// moved up into the overlay header beside the close control (where Usage's
+// refresh already lives), the manual-add form hides behind an "Add forward"
+// expander, and ports that are listening but not forwarded fold under a
+// "N not forwarded" disclosure row instead of leading the table.
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import AppIcon from '../components/AppIcon.vue';
@@ -55,11 +62,16 @@ const configForwards = computed<ForwardSpec[]>(() =>
   })),
 );
 
-// Manual-add form
+// Manual-add form. Hidden behind the "Add forward" expander: a form for a
+// thing most sessions never do must not hold the panel's top row hostage.
+const showAdd = ref(false);
 const kind = ref<ForwardSpec['kind']>('local');
 const localPort = ref<number>(8080);
 const remotePort = ref<number>(8080);
 const remoteHost = ref('127.0.0.1');
+
+/** Whether the listening-but-not-forwarded rows are folded out. */
+const showUnforwarded = ref(false);
 
 /** One table row: a forward, a discovered port, or both for the same port. */
 interface PortRow {
@@ -99,6 +111,16 @@ const rows = computed<PortRow[]>(() => {
 /** True when the last scan failed — drives the banner, not a dialog. */
 const scanFailed = computed(() => forwards.status !== null && !forwards.status.lastScanOk);
 
+/**
+ * The face of the table vs the folded tail. A row with a live tunnel (or a
+ * policy verdict that one is coming) is what the panel exists to show, so
+ * those lead; the ports that are merely LISTENING follow, and `v-show` in
+ * the template folds them away unless the disclosure row is open.
+ */
+const forwardedRows = computed(() => rows.value.filter((row) => isForwarded(row)));
+const unforwardedRows = computed(() => rows.value.filter((row) => !isForwarded(row)));
+const displayRows = computed(() => [...forwardedRows.value, ...unforwardedRows.value]);
+
 onMounted(async () => {
   if (!connId.value) return;
   forwards.subscribe(connId.value);
@@ -121,7 +143,10 @@ async function onAdd(): Promise<void> {
           destHost: remoteHost.value,
           destPort: remotePort.value,
         };
-  await forwards.addManual(connId.value, spec);
+  const ok = await forwards.addManual(connId.value, spec);
+  // A made forward is visible in the live table; fold the form away so the
+  // panel returns to being a table, not a form with a table under it.
+  if (ok) showAdd.value = false;
 }
 
 /** Friendly name for a row, from whichever source carries it. */
@@ -332,12 +357,11 @@ function fmtScanTime(epochMs: number | null): string {
 <template>
   <div class="port-panel">
     <div class="panel-bar">
-      <!-- Deliberately NOT a ghost button: it sits in a form bar beside the
-           bordered Auto-forward toggle and shares its chrome. -->
-      <button class="scan" :disabled="forwards.loading" @click="forwards.scan(connId!)">
-        <AppIcon name="refresh" :size="14" :class="{ spin: forwards.loading }" />
-        Scan
-      </button>
+      <!-- Scan lives in the OVERLAY HEADER now, beside the close control
+           (HostWorkspaceView), where Usage's refresh already sits — the
+           engine rescans on its own every few seconds, so the button was
+           occupying the panel's best row for a thing that is almost never
+           the thing you opened the panel to do. -->
       <button
         :class="['toggle', { on: forwards.autoOn }]"
         @click="forwards.toggleAuto(connId!, configForwards)"
@@ -345,9 +369,16 @@ function fmtScanTime(epochMs: number | null): string {
         Auto-forward: {{ forwards.autoOn ? 'ON' : 'OFF' }}
       </button>
       <span class="muted hint">
-        auto mirrors remote ports 1024–10000; anything outside that range is still
-        listed below and can be forced on per row
+        auto mirrors remote ports 1024–10000; anything outside that range waits
+        under "not forwarded" and can be forced on from there
       </span>
+      <!-- The add form, folded. A quiet expander rather than a permanent
+           form-row: adding a forward is a now-and-then act, and the top of
+           the panel belongs to the table it serves. -->
+      <button :class="['add-toggle', { open: showAdd }]" @click="showAdd = !showAdd">
+        <AppIcon name="plus" :size="12" />
+        Add forward
+      </button>
       <span v-if="forwards.status" class="muted scan-time">
         last scan {{ fmtScanTime(forwards.status.lastScanAt) }}
       </span>
@@ -364,7 +395,7 @@ function fmtScanTime(epochMs: number | null): string {
       </span>
     </p>
 
-    <section class="add-form">
+    <section v-show="showAdd" class="add-form">
       <select v-model="kind">
         <option value="local">-L local</option>
         <option value="remote">-R remote</option>
@@ -399,9 +430,17 @@ function fmtScanTime(epochMs: number | null): string {
           </tr>
         </thead>
         <tbody>
+          <!-- The live table first: every visible row here has a tunnel or is
+               about to. Listening-but-not-forwarded ports keep their cells but
+               fold away (`v-show`, so expanding costs no fetch and no refetch
+               churn) behind the disclosure row at the table's foot — they are
+               the long tail, a dozen passive listeners for every forward, and
+               they used to push the rows the user opened the panel for off the
+               top of the list. -->
           <tr
-            v-for="row in rows"
+            v-for="row in displayRows"
             :key="row.id"
+            v-show="showUnforwarded || isForwarded(row)"
             :class="{ busy: forwards.pending !== null && forwards.pending === row.remotePort }"
           >
             <td class="c-port">
@@ -566,9 +605,29 @@ function fmtScanTime(epochMs: number | null): string {
               </div>
             </td>
           </tr>
+
+          <!-- The fold's label. One row, while there is a tail: the count is
+               the honest summary ("the scan sees more than this table
+               shows"), and the chevron is this app's disclosure mark. -->
+          <tr v-if="unforwardedRows.length" class="more-row">
+            <td colspan="9">
+              <button
+                class="more-btn"
+                :title="
+                  showUnforwarded
+                    ? 'Hide the ports that are listening but not forwarded'
+                    : 'Show the ports that are listening but not forwarded'
+                "
+                @click="showUnforwarded = !showUnforwarded"
+              >
+                <AppIcon :name="showUnforwarded ? 'chevron-down' : 'chevron-right'" :size="12" />
+                {{ unforwardedRows.length }} not forwarded
+              </button>
+            </td>
+          </tr>
           <tr v-if="!rows.length">
             <td colspan="9" class="muted empty">
-              nothing listening and nothing forwarded — add one above or enable auto-forward
+              nothing listening and nothing forwarded — enable auto-forward or add a forward
             </td>
           </tr>
         </tbody>
@@ -592,7 +651,6 @@ function fmtScanTime(epochMs: number | null): string {
   margin-bottom: var(--sp-3);
   flex-wrap: wrap;
 }
-.scan,
 .toggle,
 .add-btn {
   height: var(--control-h);
@@ -613,17 +671,29 @@ function fmtScanTime(epochMs: number | null): string {
 .toggle:hover {
   color: var(--fg);
 }
-.scan {
+/* The add-form expander is a lower tier than the bordered toggle beside it:
+   ghost, muted, accent while its form is open. */
+.add-toggle {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+  height: var(--control-h);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-md);
+  color: var(--fg-secondary);
+  padding: 0 var(--sp-2);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-300);
+  font-weight: var(--fw-medium);
+  transition: color var(--dur-fast) var(--ease);
 }
-.scan:hover:not(:disabled) {
+.add-toggle:hover {
   color: var(--fg);
 }
-.scan:disabled {
-  opacity: var(--disabled-opacity);
-  cursor: default;
+.add-toggle.open {
+  color: var(--accent);
 }
 .toggle.on {
   background: var(--accent-soft);
@@ -741,6 +811,36 @@ function fmtScanTime(epochMs: number | null): string {
    does not reflow underneath the cursor that just clicked it. */
 .fwd-table tbody tr.busy {
   opacity: var(--disabled-opacity);
+}
+/* The fold's label row: quieter than a data row in every register — no hover
+   fill, no side padding beyond the button's — so it reads as table furniture
+   rather than a ninth-column-less entry. */
+.more-row td {
+  padding: 0 var(--sp-2);
+  border-bottom: none;
+}
+/* Outweighs `.fwd-table tbody tr:hover` (three class selectors beat two). */
+.fwd-table tr.more-row:hover {
+  background: transparent;
+}
+.more-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  background: transparent;
+  border: none;
+  padding: var(--sp-1) 0;
+  color: var(--fg-muted);
+  font-family: var(--font-ui);
+  font-size: var(--fs-100);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.more-btn:hover {
+  color: var(--fg-secondary);
 }
 .c-port {
   white-space: nowrap;
