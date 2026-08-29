@@ -28,7 +28,18 @@ RUN apk add --no-cache python3 py3-pip git bash \
 # fixed-width table whose columns overflow). Bump this deliberately
 # and re-capture the fixtures under tests/unit/fixtures/ when you do.
 ARG POCKETSHELL_VERSION=0.4.44
-RUN su testuser -c "uv tool install 'pocketshell==${POCKETSHELL_VERSION}' && uv tool install tmuxctl" \
+# tmuxctl carries the same unpinned-install drift, and its drift is BEHAVIOR:
+# 0.3.5 moved `create-detached` onto a per-session server (`tmuxctl-<name>`
+# sockets beside the legacy one), so a session the helper reports as created
+# is invisible to the bare `tmux` probes this repo's integration tests and
+# reuse detection are written against. Every developer's cached layer sat at
+# 0.3.4, so only CI - which builds fresh - saw the new world, and the same
+# two ProjectsService tests failed on every run. Pin to the version this
+# fixture world is validated against; moving to the per-session-server model
+# is a deliberate port (see src/main/projects/commands.ts on socket aiming),
+# not something a cached-layer expiry gets to decide.
+ARG TMUXCTL_VERSION=0.3.4
+RUN su testuser -c "uv tool install 'pocketshell==${POCKETSHELL_VERSION}' && uv tool install 'tmuxctl==${TMUXCTL_VERSION}'" \
     && mkdir -p /home/testuser/.local/bin
 
 ENV PATH="/home/testuser/.local/bin:${PATH}"

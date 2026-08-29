@@ -81,12 +81,13 @@ jobs:
       # instead of fixing the mode in git: the key is a fixture for a
       # throwaway container, its permissions carry nothing.
       - run: chmod 600 tests-docker/test_key
-      # The first CI run lost 2 of 47 integration tests to the fixture's tmux
-      # server disappearing under runner load — a state the same suite passes
-      # on a developer machine and that one full retry distinguishes (a real
-      # regression fails twice; a load race usually passes once). Teardown and
-      # a state dump sit between the attempts so the second failure is
-      # legible instead of a repeat of the first.
+      # CI builds the fixture images fresh, so an unpinned dependency inside
+      # them reaches CI before it reaches any developer's cached layer - the
+      # gate is where drift lands first. The retry absorbs that class of
+      # load-order flake cheaply; teardown and a state dump sit between the
+      # attempts so a second failure is legible instead of a repeat of the
+      # first. A DETERMINISTIC failure failing twice here is the signal to
+      # read the logs, not to bump the retry count.
       - name: Run smoke gate (retry once)
         run: |
           if xvfb-run -a bash scripts/smoke.sh; then
