@@ -5,16 +5,17 @@ import { mount, type VueWrapper } from '@vue/test-utils';
 import { ref } from 'vue';
 
 /**
- * The `×` on a session tab (docs/WORKSPACE.md §14).
+ * The `×` on a workspace tab (docs/WORKSPACE.md §14).
  *
- * The user asked for "x here like in vscode", and the two rules this file pins
- * are what the ask changed and what it did NOT:
+ * The user asked for "x here like in vscode", and the rules this file pins are
+ * what the ask changed and what it did NOT:
  *
- *  - the stop the tab menu owned is now reachable from the tab itself;
- *  - it still cannot kill. It arms the same confirmed dialog the right-click
- *    menu does, says Stop rather than Close, and does not select the tab it
- *    sits on — the right-click rule, which a mis-aimed click on a background
- *    tab must not be able to violate.
+ *  - the stop the tab menu owned is now reachable from the session tab itself,
+ *    and every Files tab closes, the folder's first one included;
+ *  - the session tab's × still cannot kill. It arms the same confirmed dialog
+ *    the right-click menu does, says Stop rather than Close, and does not
+ *    select the tab it sits on — the right-click rule, which a mis-aimed click
+ *    on a background tab must not be able to violate.
  *
  * The kill ITSELF is `confirmStop` and is out of scope here: this file asserts
  * the arm and the cancel, with `projects.killSession` spied to prove the `×`
@@ -114,7 +115,15 @@ beforeEach(() => {
   ] as never;
 });
 
-describe('the close control on a session tab', () => {
+describe('the close control on a workspace tab', () => {
+  it('is on every tab, the first Files tab included', async () => {
+    const wrapper = await openWorkspace();
+    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
+    for (const label of ['Terminal', 'Files']) {
+      expect(closeOf(wrapper, label).exists(), label).toBe(true);
+    }
+  });
+
   it('says Stop and opens the named confirmation, killing nothing', async () => {
     const wrapper = await openWorkspace();
     expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
@@ -148,5 +157,19 @@ describe('the close control on a session tab', () => {
 
     expect(activeLabel(wrapper)).toBe('Terminal');
     expect(wrapper.find('.stub-overlay').text()).toContain('git-x-2');
+  });
+
+  it('closes a Files tab outright, touching neither the stop dialog nor the kill', async () => {
+    const wrapper = await openWorkspace();
+
+    await closeOf(wrapper, 'Files').trigger('click');
+    await flush();
+    expect(tabLabels(wrapper)).toEqual(['Terminal']);
+
+    // The session tab's × was never touched, so no stop dialog may be showing
+    // and the kill count is still zero — the Files close went through
+    // `closeFilesTab`, which shares nothing with the stop path.
+    expect(wrapper.find('.stub-overlay').exists()).toBe(false);
+    expect(killSession).not.toHaveBeenCalled();
   });
 });

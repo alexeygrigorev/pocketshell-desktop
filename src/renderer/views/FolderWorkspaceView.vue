@@ -1857,12 +1857,13 @@ function onFocusTerminal(): void {
             >
               <AppIcon name="close" :size="12" />
             </span>
-            <!-- A FILES tab's `×` closes the view and nothing else (§12).
-                 Only a SECOND one has it: the first is the folder's file
-                 browser and closing it would leave a workspace with no way to
-                 look at the folder at all. -->
+            <!-- A FILES tab's `×` closes the view and nothing else (§12), and
+                 every one of them has it — the first included. The old rule
+                 spared the first tab because closing it would leave the
+                 workspace no way to look at the folder, and that reason is
+                 gone: `+` re-opens a Files tab in two clicks. -->
             <span
-              v-else-if="tab.kind === 'files' && filesTabs.length > 1"
+              v-else
               class="tab-close"
               title="Close this Files tab"
               @click.stop="closeFilesTab(tab.id)"
