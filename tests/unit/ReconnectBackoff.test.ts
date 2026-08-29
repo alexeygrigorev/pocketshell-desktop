@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { ReconnectBackoff, MAX_ATTEMPTS } from '@main/portfwd/AutoForwarderSupervisor';
+import { ReconnectBackoff, MAX_ATTEMPTS } from '../../src/shared/reconnectBackoff';
 
 /**
- * The reconnect schedule, all that survives of the old
+ * The reconnect schedule, now in shared/ because its real consumer is the
+ * renderer's connection store. All that survives of the old
  * `AutoForwarderSupervisor` (which opened its own second SSH connection —
  * see docs/PORTFWD.md §8). The Python has two contradictory versions of this:
  * the CLI's 5->60s exponential (`forwarder.py:1141`) and the TUI's flat 5s

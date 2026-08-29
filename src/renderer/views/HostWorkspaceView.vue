@@ -36,11 +36,11 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAgentsStore } from '../stores/agents';
 import { useConnectionStore } from '../stores/connection';
 import { useForwardsStore } from '../stores/forwards';
-import { useSessionsStore } from '../stores/sessions';
 import { api } from '../ipc';
 import { useSettingsStore } from '../stores/settings';
 import { windowTitle } from '../../shared/windowTitle';
 import { isShortcut } from '../../shared/shortcuts';
+import { MAX_ATTEMPTS } from '../../shared/reconnectBackoff';
 import AppIcon from '../components/AppIcon.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
@@ -58,7 +58,6 @@ const route = useRoute();
 const router = useRouter();
 const connection = useConnectionStore();
 const agents = useAgentsStore();
-const sessions = useSessionsStore();
 // Subscribed only while the ports overlay is open — see the autoFwd watch
 // below for why its `autoOn` is mirrored rather than rendered directly.
 const forwards = useForwardsStore();
@@ -177,20 +176,43 @@ const panelWidth = ref(loadPanelWidth());
  */
 const redial = ref<'none' | 'inflight' | 'failed'>('none');
 
-/** The banner is up for the whole arc: drop, attempt, failure. */
-const linkLost = computed(() => connection.state === 'lost' || redial.value !== 'none');
+/**
+ * The banner is up for the whole arc: drop, attempt, failure.
+ *
+ * `connection.recovering` covers the AUTOMATIC half the store now drives:
+ * a scheduled retry sits at state 'connecting' while it is
+ * on the wire with `redial` still 'none', and without this the strip would
+ * blink off during every dial it did not start.
+ */
+const linkLost = computed(
+  () => connection.state === 'lost' || redial.value !== 'none' || connection.recovering,
+);
 
 /** True while the re-dial is on the wire — the button says so and disarms. */
 const reconnecting = computed(() => connection.state === 'connecting');
 
+/** True while the store's automatic retry is scheduled — the button is "Retry now". */
+const autoRetrying = computed(() => connection.autoRetry !== null);
+
 /**
- * Re-dial the host, then wake the surfaces that went stale with the old link.
- *
- * The sessions refresh is not a courtesy: a successful reconnect mints a NEW
- * connectionId, and the session panel's last poll against the dead one left a
- * raw "Unknown connection" rejection in `sessions.error`. Refreshing against
- * the new id replaces both the stale list and that message in one move — the
- * panel comes back to life at the same moment the banner drops.
+ * What the strip says while a retry is scheduled. Names the host, where in
+ * the curve the FSM is, and when the next dial goes out — the countdown the
+ * backoff's `retryAtEpochMs` was designed for.
+ */
+const autoRetryText = computed(() => {
+  const host = connection.activeHost?.name ?? 'the host';
+  return (
+    `Lost the connection to ${host}. Retrying automatically — attempt ` +
+    `${connection.autoRetry?.attempt ?? 0} of ${MAX_ATTEMPTS} starts in ` +
+    `${connection.retryIn}s.`
+  );
+});
+
+/**
+ * Re-dial the host through the store. The store's `reconnect()` wakes the
+ * surfaces that went stale with the dead id — sessions refresh, forwards
+ * re-init — so recovery is identical whether the user pressed this or the
+ * FSM dialled on its own schedule; this handler only manages the banner.
  *
  * On failure the store has already written `connection.error` (connect() sets
  * it before resolving false), so all that is left here is to keep the banner
@@ -199,15 +221,19 @@ const reconnecting = computed(() => connection.state === 'connecting');
 async function onReconnect(): Promise<void> {
   redial.value = 'inflight';
   const ok = await connection.reconnect();
-  if (ok && connection.connectionId) {
-    // Drop the banner before the refresh settles — the link is back, and
-    // holding an error-toned strip up through a listing round-trip would say
-    // otherwise.
+  if (ok) {
+    // Drop the banner — the link is back. (The store's surface recovery is
+    // awaited inside reconnect(); by the time this resolves it is done or
+    // failed soft, and neither is worth an error-toned strip.)
     redial.value = 'none';
-    await sessions.refresh(connection.connectionId);
   } else {
     redial.value = 'failed';
   }
+}
+
+/** The button during a countdown: skip the wait and dial now. */
+function onRetryNow(): void {
+  void connection.retryNow();
 }
 
 /**
@@ -401,9 +427,13 @@ async function onRefreshUsage(): Promise<void> {
          route back was guessing to navigate to hosts and reconnect by hand. -->
     <p v-if="linkLost" class="link-lost">
       <AppIcon name="alert-triangle" :size="14" />
-      <span class="link-lost-text">{{ linkLostText }}</span>
-      <button class="reconnect-btn" :disabled="reconnecting" @click="onReconnect">
-        {{ reconnecting ? 'Reconnecting…' : 'Reconnect' }}
+      <span class="link-lost-text">{{ autoRetrying ? autoRetryText : linkLostText }}</span>
+      <button
+        class="reconnect-btn"
+        :disabled="reconnecting"
+        @click="autoRetrying ? onRetryNow() : onReconnect()"
+      >
+        {{ reconnecting ? 'Reconnecting…' : autoRetrying ? 'Retry now' : 'Reconnect' }}
       </button>
     </p>
 

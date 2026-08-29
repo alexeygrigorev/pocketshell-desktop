@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell } from 'electron';
+import { app, BrowserWindow, Menu, powerMonitor, shell } from 'electron';
 import { HtmlPreviewService, registerPreviewScheme } from './preview/HtmlPreviewService.js';
 import { PREVIEW_SCHEME } from './preview/previewPaths.js';
 import { join, dirname } from 'node:path';
@@ -15,6 +15,7 @@ import { APP_TITLE } from '../shared/windowTitle.js';
 import { ipc } from '../shared/channels.js';
 import { zoomCommandForInput } from '../shared/zoomKeys.js';
 import { windowCommandForInput } from '../shared/windowKeys.js';
+import { readWindowBounds, writeWindowBounds } from './windowState.js';
 
 // Electron + ESM: __dirname is not defined for the bundled output under some
 // loaders; electron-vite emits CJS for main, so __dirname is available. We
@@ -64,9 +65,19 @@ function windowIcon(): string | undefined {
 }
 
 function createWindow(): void {
+  // Restore the last session's geometry (F18), unless this is a headless test
+  // run: the off-screen placement below would otherwise be captured on close
+  // and the next real launch would open at -32000,-32000. A headless run never
+  // writes bounds, so the user's real geometry survives the test suite.
+  const savedBounds = process.env['POCKETSHELL_HEADLESS'] === '1' ? null : readWindowBounds();
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: savedBounds?.width ?? 1280,
+    height: savedBounds?.height ?? 800,
+    // Omitted entirely when there is no usable saved position — passing
+    // `x: undefined` would still override Electron's own centering cascade.
+    ...(savedBounds?.x != null && savedBounds.y != null
+      ? { x: savedBounds.x, y: savedBounds.y }
+      : {}),
     minWidth: 800,
     minHeight: 600,
     show: false,
@@ -103,6 +114,20 @@ function createWindow(): void {
       // `contextIsolation: true` both continue to apply.
       plugins: true,
     },
+  });
+
+  // Re-maximize AFTER creation, not in the constructor options: the stored
+  // rect is the pre-maximize geometry (windowState.ts), and creating with the
+  // normal rect and then maximizing is what keeps the un-maximize target where
+  // the user left it.
+  if (savedBounds?.maximized) mainWindow.maximize();
+
+  // Persisted on close rather than on every resize/move: the close-time values
+  // are the only ones that are final (a drag writes a dozen interim rects that
+  // would each hit the disk), and a crash then costs one launch of geometry —
+  // the same trade the workspace's tab memory makes.
+  mainWindow.on('close', () => {
+    if (mainWindow && process.env['POCKETSHELL_HEADLESS'] !== '1') writeWindowBounds(mainWindow);
   });
 
   // Electron has no true headless mode. "Headless" here means the window is
@@ -267,6 +292,19 @@ if (!gotLock) {
       // After ready and before the window: the handler must be live by the
       // time anything can frame a `psview:` URL.
       preview.install();
+
+      // Sleep/wake (F12). Main is the only process that can observe the OS
+      // transition, and the renderer is the only process that may dial — so
+      // this is an announcement, not a command. The store probes the link on
+      // receipt; a socket that crossed a sleep is the classic silent drop,
+      // where the TCP peer is gone but the local stack will not admit it until
+      // a write fails or ssh2's keepalive times out (~45s of silence later).
+      powerMonitor.on('resume', () => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send(ipc.app.resumed);
+        }
+      });
+
       registerIpcHandlers({
         registry,
         ssh,
