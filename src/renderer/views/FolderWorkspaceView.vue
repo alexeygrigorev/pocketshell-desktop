@@ -81,6 +81,14 @@ import {
 import { groupSessionsIntoRoots, rootHostPath, UNTRACKED_PATH } from '../sessionGrouping';
 import { parkedAgentLaunch, takeAgentLaunch } from '../pendingAgentLaunch';
 import {
+  readWorkspaceMemory,
+  workspaceMemoryKey,
+  writeLastFolder,
+  writeWorkspaceMemory,
+  type FilesTabRecord,
+  type WorkspaceMemoryRecord,
+} from '../workspaceState';
+import {
   buildLaunchCommand,
   KIND_LABELS,
   launchBlocker,
@@ -106,54 +114,45 @@ const shells = useShellsStore();
  * thing that genuinely IS shared (each Files tab's browsing position) already
  * lives in the files store, keyed by the tab id this map hands out.
  *
- * Keyed by connection AND folder, so one host's tabs cannot appear on another.
- * It is never pruned: an entry is two small strings, and the alternative is a
- * teardown hook that has to guess when a workspace will not be revisited.
- */
-/**
- * A Files tab is an id AND the directory it was opened at.
+ * Keyed by the HOST ALIAS and the folder, so one host's tabs cannot appear on
+ * another — and so an entry outlives a reconnect, which a connection-id key
+ * cannot do: a re-dial mints a fresh connection id, but it is the same host
+ * and the same tmux sessions, so the workspace should come back as it was. The
+ * alias is also what the persisted copy in ../workspaceState keys on, which is
+ * why a relaunch can find this map's contents on disk at all. It is never
+ * pruned: an entry is two small strings, and the alternative is a teardown
+ * hook that has to guess when a workspace will not be revisited.
  *
- * The id alone was enough while every Files tab in a workspace opened at the
- * folder. It stopped being enough with "open in a new tab" from the file tree,
- * which opens one at an arbitrary path — and the seed has to outlive the tab's
- * unmount, or coming back to the tab would drop it at the folder again. (The
- * files store remembers where the user then NAVIGATED to; this is only where
- * the tab starts, which the store has no way to know.)
+ * The record's shape — what a Files tab carries, why the MRU is a stack — is
+ * documented with `WorkspaceMemoryRecord` in ../workspaceState, which is the
+ * same shape at a longer lifetime: `persist()` writes the map entry to
+ * localStorage verbatim, and `remembered()` seeds a missing entry from it.
  */
-interface FilesTabState {
-  id: string;
-  path: string | null;
-}
-
-interface WorkspaceMemory {
-  filesTabs: FilesTabState[];
-  activeTab: string | null;
-  /**
-   * Tabs in the order they were last selected, most-recent LAST
-   * (docs/WORKSPACE.md §12).
-   *
-   * Remembered alongside the tabs rather than rebuilt on entry, for the same
-   * reason `activeTab` is: leaving a workspace and coming back should find it as
-   * it was left, and an MRU that resets makes the FIRST close after every return
-   * fall back to adjacency — which is exactly the behaviour this replaces.
-   */
-  mru: string[];
-}
+type FilesTabState = FilesTabRecord;
+type WorkspaceMemory = WorkspaceMemoryRecord;
 const memory = new Map<string, WorkspaceMemory>();
 
 /** The folder key from the route — `~/git/dtc-website`. */
 const folderKey = computed(() => String(route.params['folder'] ?? ''));
 
-const memoryKey = computed(() => `${connection.connectionId ?? 'none'}/${folderKey.value}`);
+/** The host alias from the route — the stable identity the tab state keys on. */
+const hostAlias = computed(() => String(route.params['name'] ?? ''));
+
+const memoryKey = computed(() => `${hostAlias.value}/${folderKey.value}`);
 
 function remembered(): WorkspaceMemory {
   const existing = memory.get(memoryKey.value);
   if (existing) return existing;
+  // Nothing in memory for this workspace — its first visit in this window.
+  // What a previous window persisted seeds it, so a relaunch opens the folder
+  // with the tabs it closed with; a first visit ever finds nothing on disk
+  // and starts bare.
+  const restored = readWorkspaceMemory(workspaceMemoryKey(hostAlias.value, folderKey.value));
   // No Files tab to start with. A workspace opens showing its sessions, and a
   // Files tab appears only when something asks for one: "New Files tab" on the
   // `+` menu, "open in a new tab" from the file tree, or a path clicked in the
   // terminal — the reveal watcher below opens one when none is standing.
-  const fresh: WorkspaceMemory = { filesTabs: [], activeTab: null, mru: [] };
+  const fresh: WorkspaceMemory = restored ?? { filesTabs: [], activeTab: null, mru: [] };
   memory.set(memoryKey.value, fresh);
   return fresh;
 }
@@ -179,14 +178,15 @@ const mru = ref<string[]>([]);
  * arrangement you reach by dragging until it looks right is not one of those.
  * It is raw layout state, and raw layout state has been going here.
  *
- * **Keyed on the HOST ALIAS and the folder, never on the connection id.** The
- * workspace's in-memory map keys on `connectionId`, which is correct for
- * something that lives as long as the window — but a connection id is an opaque
- * handle minted per connect, so a key built from it would be a fresh key on
- * every launch and the order would never survive a restart. The route's `:name`
- * is the `~/.ssh/config` alias, which is exactly as stable as the folder path
- * beside it. Same reasoning as the port panel's preference keys, which key on
- * the alias for the same reason.
+ * **Keyed on the HOST ALIAS and the folder, never on the connection id.** A
+ * connection id is an opaque handle minted per connect, so a key built from it
+ * would be a fresh key on every launch and the order would never survive a
+ * restart — and even within one window a re-dial mints a new id, which would
+ * orphan the arrangement. The route's `:name` is the `~/.ssh/config` alias,
+ * which is exactly as stable as the folder path beside it; the workspace's own
+ * memory map and its persisted copy key on the same alias for the same reason.
+ * Same reasoning as the port panel's preference keys, which key on the alias
+ * too.
  */
 function tabOrderKey(): string {
   return `ps.tabOrder.${String(route.params['name'] ?? '')}.${folderKey.value}`;
@@ -450,13 +450,22 @@ function loadFolderState(): void {
  * on the refs. A watch would fire during a folder switch, between the key
  * changing and the refs being reloaded, and would stamp the OUTGOING folder's
  * tabs onto the incoming folder's memory entry.
+ *
+ * The record goes two places at once: the in-memory map, for the rest of this
+ * window, and `localStorage`, for the next one — the same object, so the two
+ * copies cannot disagree. `writeLastFolder` beside it is what lets a
+ * relaunched app navigate here at all: without it a workspace would restore
+ * faithfully but nothing would know to open it.
  */
 function persist(): void {
-  memory.set(memoryKey.value, {
+  const record: WorkspaceMemory = {
     filesTabs: filesTabs.value.map((tab) => ({ ...tab })),
     activeTab: selected.value,
     mru: [...mru.value],
-  });
+  };
+  memory.set(memoryKey.value, record);
+  writeWorkspaceMemory(workspaceMemoryKey(hostAlias.value, folderKey.value), record);
+  writeLastFolder(hostAlias.value, folderKey.value);
 }
 
 /**
@@ -507,6 +516,15 @@ watch(
  * covers every one of those with one rule instead of enumerating them.
  */
 watch(tabs, (list) => {
+  // Guarded on the HOST's session list having arrived, not on the bar being
+  // non-empty — and guarding BOTH stored lists now. A workspace whose sessions
+  // have not loaded yet — a deep link, a reload, and since the tabs persist, a
+  // relaunch, where the bar can hold its Files tabs alone for the first round
+  // trip — would have every session id pruned as dead before the session list
+  // that proves them alive ever landed. That was a harmless scratch when the
+  // MRU lived only in memory; persisted, it would be a wipe ON DISK. So the
+  // guard the manual order already carried now stands over the stack too.
+  if (sessions.sessions.length === 0) return;
   const pruned = pruneTabIds(mru.value, list);
   if (pruned.length !== mru.value.length) {
     mru.value = pruned;
@@ -518,12 +536,6 @@ watch(tabs, (list) => {
   // from the folder), so an unpruned entry would silently re-pin a brand new
   // session to the dead one's old position. Same rule, same function, one
   // definition of "this id has died" (docs/WORKSPACE.md §15).
-  //
-  // Guarded on the list being non-empty. A workspace whose sessions have not
-  // loaded yet — a deep link, a reload — has an empty bar for a moment, and
-  // pruning against that would throw the whole arrangement away before the
-  // tabs it describes ever appeared.
-  if (list.length === 0) return;
   const keptOrder = pruneTabIds(tabOrder.value, list);
   if (keptOrder.length !== tabOrder.value.length) writeTabOrder(keptOrder);
 });
