@@ -6,7 +6,7 @@
 #   tmux   (3204) — + tmux; attach / terminal integration
 #   helper (3205) — + real `pocketshell` helper + stub agents + fixtures
 #                   (added in Phase 1; the helper image build is defined there)
-#   flaky  (3206) — + forced disconnect; reconnect tests (Phase 3)
+#   flaky  (3206) — + forced disconnect; reconnect tests (built with F12)
 #
 # Port choice: 3202-3206 is deliberately offset from the Android project's
 # 2222-2235 so the two projects can run their Docker fleets side by side on
@@ -59,4 +59,17 @@ services:
     ports:
       - "3205:22"
     healthcheck:
+      <<: *ssh-healthcheck
+
+  flaky:
+    build:
+      context: .
+      dockerfile: Dockerfile.flaky
+    image: pocketshell-test:flaky
+    ports:
+      - "3206:22"
+    healthcheck:
+      # The chaos loop kills session HANDLERS, never the listener, so this
+      # stays green across the forced drops — `up --wait` must not consider a
+      # mid-kill container unhealthy.
       <<: *ssh-healthcheck

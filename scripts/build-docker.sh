@@ -18,5 +18,10 @@ docker build -t pocketshell-test:tmux -f "$DOCKER_DIR/Dockerfile.tmux" "$DOCKER_
 echo "==> Building pocketshell-test:helper"
 docker build -t pocketshell-test:helper -f "$DOCKER_DIR/Dockerfile.helper" "$DOCKER_DIR"
 
+# Depends on the ssh tag (FROM pocketshell-test:ssh); builds last for the same
+# reason tmux does.
+echo "==> Building pocketshell-test:flaky"
+docker build -t pocketshell-test:flaky -f "$DOCKER_DIR/Dockerfile.flaky" "$DOCKER_DIR"
+
 echo "==> Done. Images:"
 docker images --filter=reference='pocketshell-test:*' --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}'
