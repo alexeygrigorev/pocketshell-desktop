@@ -90,7 +90,6 @@ vi.mock('../../src/renderer/ipc', () => ({
 }));
 
 const TerminalView = (await import('../../src/renderer/components/TerminalView.vue')).default;
-const { useComposerStore } = await import('../../src/renderer/stores/composer');
 
 /** A keydown the way the browser makes one: cancelable, so it can be cancelled. */
 function keydown(key: string, mods: Partial<KeyboardEventInit> = {}): KeyboardEvent {
@@ -169,75 +168,5 @@ describe('typing intercept — delivery', () => {
     customKeyHandler!(new KeyboardEvent('keypress', { key: 'a', cancelable: true }));
     customKeyHandler!(new KeyboardEvent('keyup', { key: 'a', cancelable: true }));
     expect(wrapper.emitted('typed')).toHaveLength(1);
-  });
-});
-
-/**
- * The press that arms the plain-terminal hatch, and the bug of it meaning two
- * things at once (docs/COMPOSER.md §12.2).
- *
- * Reported as: *"in some cases my inpurt isn't captured i type directly into
- * teminal no promt composer"*. One `mousedown` in a pane was answering two
- * rules — the composer's click-outside dismissal of an empty card, and the
- * arming of the hatch — so a user who clicked the terminal to read something
- * lost the panel AND the next prompt they typed, with nothing on screen to say
- * why.
- *
- * The two handlers run in one dispatch and in a fixed order (the composer
- * listens on `window` in the capture phase, this pane on its own element), so
- * neither can tell from state alone whether the other has acted. The press
- * object is the only thing they share, which is why this pane now hands it over
- * — and why the assertion here is about IDENTITY. `composerStore.test.ts` pins
- * what the store then does with it.
- */
-describe('the press that arms the hatch', () => {
-  /**
-   * The pane element the mousedown listener is attached to.
-   *
-   * `wrapper.element` would do the same job and is typed `any`, because a
-   * `*.vue` module is declared as `DefineComponent<…, any>` (env.d.ts) — so
-   * every assertion made through it would be checked against nothing. Going
-   * through `find` gets a real `Element` back.
-   */
-  function paneOf(wrapper: ReturnType<typeof mountTerminal>): Element {
-    return wrapper.find('div.terminal').element;
-  }
-
-  it('reports the press ITSELF, not merely that one happened', () => {
-    const wrapper = mountTerminal(true);
-    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
-    paneOf(wrapper).dispatchEvent(press);
-
-    // Same object, not a copy and not nothing: the store recognises an answered
-    // press by identity, and an emit that dropped it would arm the hatch on
-    // every press again.
-    expect(wrapper.emitted('pressed')).toHaveLength(1);
-    expect(wrapper.emitted('pressed')![0]![0]).toBe(press);
-  });
-
-  it('is reported for every button — a right-click is shell work too', () => {
-    const wrapper = mountTerminal(true);
-    paneOf(wrapper).dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
-    expect(wrapper.emitted('pressed')).toHaveLength(1);
-  });
-
-  it('carries the press far enough that a dismissal can disown it', () => {
-    // The reported bug, from the pane's end: the composer's capture-phase
-    // handler dismisses on this press, the pane reports the same press, and the
-    // workspace hands it to the store — which declines to arm. If the emit
-    // dropped the event, the store would see `undefined` and arm, and the next
-    // keystroke would go to the shell.
-    const composer = useComposerStore();
-    const KEY = 'conn-1/main';
-    composer.setMode('docked');
-
-    const wrapper = mountTerminal(true);
-    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
-    composer.dismissOnOutsidePress(press); // window capture, first
-    paneOf(wrapper).dispatchEvent(press); // the pane's own handler, second
-
-    composer.suppressTyping(KEY, wrapper.emitted('pressed')![0]![0] as MouseEvent);
-    expect(composer.mode).toBe('hidden');
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
   });
 });

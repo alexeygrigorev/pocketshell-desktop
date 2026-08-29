@@ -628,40 +628,41 @@ describe('close on send', () => {
  * "put the panel away".
  *
  * Every closing route now behaves the same, and typing brings the panel back
- * from all of them. What suppresses is a press inside the TERMINAL, which is
- * the only gesture that is unambiguously about the shell.
+ * from all of them. Nothing else suppresses the intercept either: the
+ * plain-terminal hatch that later lived on a press in the terminal went the
+ * same way, reported as "when I start typing it stopped showing the prompt
+ * composer" — with the hatch armed, which is any click into the terminal, the
+ * composer simply never came.
  */
 describe('closing, and what the next keystroke does', () => {
-  it('a dismissal does NOT suppress typing — this is the reported bug', () => {
+  it('a dismissal does NOT speak for the next keystroke — this is the reported bug', () => {
     composer.dismiss();
+    // The regression. Escape closes; it does not also decide what typing does,
+    // so continuing to type re-opens the composer carrying the character,
+    // exactly as it does from any other closed state. The intercept's own
+    // gating (the setting, mode === 'hidden') is FolderWorkspaceView's
+    // `interceptTyping`, and there is no third condition left in the store.
     expect(composer.mode).toBe('hidden');
-    // The regression. Escape closes; it does not also speak for the next
-    // keystroke, so continuing to type re-opens the composer carrying the
-    // character, exactly as it does from any other closed state.
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
   });
 
-  it('a delivered send closes WITHOUT suppressing, so typing brings it back', async () => {
+  it('a delivered send closes the same way, so typing brings it back', async () => {
     composer.setDraft(KEY, 'ship it');
     await composer.send(KEY, async () => true, { closeOnDelivery: true });
     expect(composer.mode).toBe('hidden');
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
   });
 
   it('the two close paths agree, and are still two paths', async () => {
-    // They produce the same state, which is the point of the change — and they
-    // stay distinct actions, which is the point of NOT collapsing them into one
-    // boolean. `dismiss` still records the mode to come back to; the send path
-    // goes through `setMode` and does not.
+    // They produce the same state, which is the point — and they stay distinct
+    // actions, which is the point of NOT collapsing them into one call.
+    // `dismiss` records the mode to come back to; the send path goes through
+    // `setMode` and does not.
     composer.setMode('expanded');
     composer.dismiss();
-    const afterDismiss = composer.isTypingSuppressed(KEY);
 
     composer.setMode('expanded');
     composer.setDraft(KEY, 'ship it');
     await composer.send(KEY, async () => true, { closeOnDelivery: true });
 
-    expect(afterDismiss).toBe(composer.isTypingSuppressed(KEY));
     expect(composer.mode).toBe('hidden');
     expect(composer.lastOpenMode).toBe('expanded');
   });
@@ -671,14 +672,12 @@ describe('closing, and what the next keystroke does', () => {
     // results. All of these route through `dismiss`.
     composer.toggleHidden();
     expect(composer.mode).toBe('hidden');
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
 
     composer.setMode('expanded');
     composer.shrink();
     expect(composer.mode).toBe('docked');
     composer.shrink();
     expect(composer.mode).toBe('hidden');
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
   });
 
   it('a dismissal still remembers docked-vs-maximized for the next summons', () => {
@@ -692,179 +691,6 @@ describe('closing, and what the next keystroke does', () => {
     composer.setDraft(KEY, 'survivor');
     composer.dismiss();
     expect(composer.states[KEY]?.draft).toBe('survivor');
-  });
-});
-
-/**
- * The plain-terminal hatch, which moved off Escape and onto the pointer
- * (docs/COMPOSER.md §12.2, §26.1).
- *
- * It has to exist: with `typingOpensComposer` on and nothing suppressing, every
- * printable keystroke reaches the composer and the shell becomes untypeable
- * without a trip to Settings. The gesture is a press inside the terminal pane —
- * which is what a user does before typing at a shell anyway.
- */
-describe('the plain-terminal hatch', () => {
-  /** A press, as far as the store is concerned: an identity, nothing more. */
-  const press = (): object => ({});
-
-  it('a press in the terminal suppresses typing without touching the panel', () => {
-    composer.setMode('docked');
-    composer.suppressTyping(KEY, press());
-    expect(composer.isTypingSuppressed(KEY)).toBe(true);
-    // It says where the user is TYPING, not what the panel should do. Closing
-    // the panel is Escape's job and this is not Escape.
-    expect(composer.mode).toBe('docked');
-  });
-
-  it('any summons lifts it, whatever set it', () => {
-    composer.suppressTyping(KEY);
-    composer.setMode('docked');
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
-  });
-
-  it('allowTypingToOpen lifts it without opening — a press inside the composer', () => {
-    composer.dismiss();
-    composer.suppressTyping(KEY);
-    composer.allowTypingToOpen(KEY);
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
-    expect(composer.mode).toBe('hidden');
-  });
-
-  it('survives a close, so working at the shell is not undone by Escape', () => {
-    // The sequence that makes the hatch usable: click into the terminal, then
-    // put the panel away. Escape must not RE-ARM typing here — the user has
-    // already said where they are working.
-    composer.setMode('docked');
-    composer.suppressTyping(KEY);
-    composer.dismiss();
-    expect(composer.mode).toBe('hidden');
-    expect(composer.isTypingSuppressed(KEY)).toBe(true);
-  });
-
-  // -------------------------------------------------------------------------
-  // ONE PRESS, ONE MEANING — the reported bug.
-  //
-  // "in some cases my inpurt isn't captured i type directly into teminal no
-  // promt composer". A single `mousedown` in a terminal pane was doing two
-  // jobs: the composer's click-outside rule dismissed the empty card, and the
-  // SAME press armed the plain-terminal hatch. The next prompt went to the
-  // shell from a screen with no composer on it.
-  //
-  // The order below is the order the browser produces, and it is why nothing
-  // either handler could read told them apart: the composer listens on
-  // `window` in the CAPTURE phase, TerminalView on its own element, and window
-  // capture always precedes an element handler. So the dismissal has already
-  // run — the card is hidden and looks as though it always was — by the time
-  // the arming asks.
-  // -------------------------------------------------------------------------
-
-  it('the press that dismissed an empty composer does NOT also arm the hatch', () => {
-    composer.setMode('docked');
-    const p = press();
-
-    // The composer's window-capture handler, first.
-    composer.dismissOnOutsidePress(p);
-    // TerminalView's own handler, on the same press, second.
-    composer.suppressTyping(KEY, p);
-
-    expect(composer.mode).toBe('hidden');
-    // The whole regression: typing now re-opens the composer carrying the
-    // character, which is what §12.2 says a click-outside dismissal leaves
-    // behind ("nothing was lost; typing afterwards almost certainly means they
-    // want it back").
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
-  });
-
-  it('a press that dismissed nothing still arms it — the hatch itself', () => {
-    // The composer is already away, so this press dismisses nothing and means
-    // only what it looks like: "I am typing here". Without this the hatch would
-    // not exist and the shell would be untypeable with the setting on.
-    composer.dismiss();
-    composer.suppressTyping(KEY, press());
-    expect(composer.isTypingSuppressed(KEY)).toBe(true);
-  });
-
-  it('a press over a NON-empty composer arms it, because it dismissed nothing', () => {
-    // The card stays on screen (there is a draft in it), so the press was not
-    // answered by anything and is a plain statement about where the user types.
-    // This is §12.2's documented composition — click into the terminal, then
-    // Escape, and typing still goes to the shell.
-    composer.setDraft(KEY, 'half a prompt');
-    composer.setMode('docked');
-    composer.suppressTyping(KEY, press());
-    expect(composer.isTypingSuppressed(KEY)).toBe(true);
-    expect(composer.mode).toBe('docked');
-  });
-
-  it('answers ONE press, so the next one still arms the hatch', () => {
-    // The dismissing press landed on the tab strip, not in a terminal — so it
-    // is never asked about and must not be left lying around to swallow the
-    // next terminal press. Identity is the event object, which is why there is
-    // nothing to reset.
-    composer.setMode('docked');
-    composer.dismissOnOutsidePress(press());
-    composer.suppressTyping(KEY, press());
-    expect(composer.isTypingSuppressed(KEY)).toBe(true);
-  });
-
-  it('still dismisses — it is a close first and a marker second', () => {
-    composer.setMode('expanded');
-    composer.dismissOnOutsidePress(press());
-    expect(composer.mode).toBe('hidden');
-    // It goes through `setMode`, so the mode to come back to is remembered.
-    expect(composer.lastOpenMode).toBe('expanded');
-  });
-
-  // -------------------------------------------------------------------------
-  // ONE ENTRY PER PANE. "I am typing at the shell" is a fact about the pane the
-  // user pressed in, and it used to be one boolean for the whole app.
-  // -------------------------------------------------------------------------
-
-  it('a press in one pane says nothing about another', () => {
-    composer.suppressTyping(KEY, press());
-    expect(composer.isTypingSuppressed(OTHER)).toBe(false);
-  });
-
-  it('a summons lifts it in EVERY pane — the panel is app-level', () => {
-    composer.suppressTyping(KEY);
-    composer.suppressTyping(OTHER);
-    composer.setMode('docked');
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
-    expect(composer.isTypingSuppressed(OTHER)).toBe(false);
-  });
-
-  it('allowTypingToOpen with no key lifts every pane — arriving at a workspace', () => {
-    composer.suppressTyping(KEY);
-    composer.suppressTyping(OTHER);
-    composer.allowTypingToOpen();
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
-    expect(composer.isTypingSuppressed(OTHER)).toBe(false);
-  });
-
-  it('allowTypingToOpen with a key leaves the other pane alone', () => {
-    composer.suppressTyping(KEY);
-    composer.suppressTyping(OTHER);
-    composer.allowTypingToOpen(KEY);
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
-    expect(composer.isTypingSuppressed(OTHER)).toBe(true);
-  });
-
-  it('travels with a rename, even for a pane that never had a draft', () => {
-    // `ensure()` is never called for a pane the user has only typed at the
-    // shell in, so the suppression has to move on its own — otherwise the
-    // renamed pane starts answering to the intercept mid-keystroke.
-    composer.suppressTyping(KEY);
-    composer.rekey(KEY, OTHER);
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
-    expect(composer.isTypingSuppressed(OTHER)).toBe(true);
-  });
-
-  it('dies with the session, so the next session of that name is not born mute', () => {
-    // `sessions create` derives the name from the folder, so a name comes back.
-    composer.suppressTyping(KEY);
-    composer.forget(KEY);
-    expect(composer.isTypingSuppressed(KEY)).toBe(false);
   });
 });
 

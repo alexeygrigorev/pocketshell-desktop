@@ -439,15 +439,6 @@ function loadFolderState(): void {
   // assignments above, so the computed answers with this folder's state.
   const active = activeTab.value?.id ?? null;
   if (active !== null) mru.value = pushMru(mru.value, active);
-  // ARRIVING at a workspace is not a continuation of shell typing. This runs on
-  // mount — app start, a reload, coming back from Settings or the host picker —
-  // and on a folder-to-folder navigation, and every one of those replaces the
-  // panes below. A suppression is a statement about a pane (§12.2); the store
-  // is app-level and would otherwise outlive the pane that made it, which is
-  // one of the ways the hatch used to stay armed with nothing on screen saying
-  // so. Deliberately all panes, not this folder's: the ones being left are
-  // exactly the ones with no pane left to speak for them.
-  composer.allowTypingToOpen();
   persist();
 }
 
@@ -703,20 +694,6 @@ function goToTab(id: string): void {
   if (id === activeTab.value?.id) return;
   selected.value = id;
   persist();
-  const target = tabs.value.find((tab) => tab.id === id);
-  if (target?.kind === 'session') {
-    // A suppression means "I am typing at the shell", and that was said about
-    // the shell in ANOTHER pane — a different session, very often a different
-    // job. Deliberately NOT done for a Files tab: the composer is not showing
-    // there, so there is nothing to reconsider.
-    //
-    // The DESTINATION's key, now that suppressions are per pane: arriving at a
-    // session is the fresh intent, and clearing the pane being left would say
-    // the opposite of what this rule means. Coming back to a pane you were
-    // working at the shell in therefore starts unsuppressed too, which is the
-    // behaviour this had when it was one app-wide flag.
-    composer.allowTypingToOpen(composer.targetKey(connection.connectionId, target.session));
-  }
   void focusActiveTab();
 }
 
@@ -1673,23 +1650,6 @@ const composerRef = ref<{
 const filesRef = ref<{ focus?: () => void } | null>(null);
 
 /**
- * The composer record the ACTIVE session's typing belongs to, or null when no
- * session tab is showing.
- *
- * Built the same way PromptComposer builds its own — `targetKey` of the
- * connection and the session it is pointed at — so the pane, the intercept and
- * the draft cannot end up talking about different sessions. It is `activeSession`
- * rather than `terminalSession` for exactly that reason: `terminalSession`
- * remembers the last pane SHOWN and outlives a switch to a Files tab, which is
- * a pane the composer is not mounted over.
- */
-const activeComposerKey = computed(() =>
-  activeSession.value === null
-    ? null
-    : composer.targetKey(connection.connectionId, activeSession.value),
-);
-
-/**
  * Whether the terminal should withhold printable keystrokes instead of sending
  * them to the shell (docs/COMPOSER.md §26). The two halves of the condition
  * live here rather than in either component: the SETTING is app-level, and
@@ -1699,39 +1659,8 @@ const interceptTyping = computed(
   () =>
     settings.typingOpensComposer &&
     composer.mode === 'hidden' &&
-    // A user who dismissed the composer asked for a plain terminal, and this is
-    // the only way to have one while the setting is on (§12.2).
-    // The user pressed inside THIS pane's terminal, which says they are typing
-    // at its shell. This is the plain-terminal hatch, and it is now the ONLY
-    // thing that arms it — Escape used to, and no longer does
-    // (docs/COMPOSER.md §12.2). Asked per session: a press in one pane never
-    // spoke for another.
-    activeComposerKey.value !== null &&
-    !composer.isTypingSuppressed(activeComposerKey.value) &&
     activeTab.value?.kind === 'session',
 );
-
-/**
- * A press landed inside a terminal pane.
- *
- * Reported by the pane as a fact and turned into meaning here, which is the
- * same division `typed` and `paste-into-composer` already use: TerminalView
- * knows nothing about the composer, and the workspace is where the two are both
- * in scope. Pressing in the terminal is the user saying they are working at the
- * shell, so the typing intercept stands down until they point somewhere else.
- *
- * The press travels with it. A press in a terminal that is ALSO the press
- * dismissing an empty composer (§12.2's click-outside rule) has already said
- * what it came to say — the store declines it, and the reported bug it caused
- * is written up on `answeredPresses`. Nothing here can tell the two apart on
- * its own: the composer's capture-phase handler has already run by now, so the
- * card is hidden either way.
- */
-function onTerminalPressed(press: MouseEvent): void {
-  const key = activeComposerKey.value;
-  if (key === null) return;
-  composer.suppressTyping(key, press);
-}
 
 /** A keystroke the terminal withheld: it belongs in the draft, not the shell. */
 function onTyped(text: string): void {
@@ -2010,7 +1939,6 @@ function onFocusTerminal(): void {
               :intercept-typing="interceptTyping && tab.session === terminalSession"
               @typed="onTyped"
               @paste-into-composer="onPasteIntoComposer"
-              @pressed="onTerminalPressed"
             />
           </div>
         </div>

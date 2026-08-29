@@ -62,43 +62,14 @@ describe('click outside an empty composer', () => {
   });
 
   it('does NOT suppress typing: a click dismisses the view, not the intent', () => {
-    // Escape and the chord mean "leave me alone" and do suppress (§12.2); a
-    // click elsewhere is incidental, and typing afterwards means they want it.
+    // Closing is all this press does, and there is no second, invisible state
+    // it touches — the plain-terminal hatch that used to be armed by a press
+    // in the terminal is gone (the user reported it as "when I start typing it
+    // stopped showing the prompt composer"). Typing afterwards means the same
+    // thing it means from any other closed state, which is the intercept's
+    // business (FolderWorkspaceView's `interceptTyping`), not this handler's.
     pressOn(outsideElement());
-    expect(composer.isTypingSuppressed(key)).toBe(false);
-  });
-
-  it('DISOWNS the press, so the terminal cannot read a second meaning into it', () => {
-    // The reported bug: *"in some cases my inpurt isn't captured i type
-    // directly into teminal no promt composer"*. The commonest outside press
-    // there is lands in a terminal pane — which is also the gesture that arms
-    // the plain-terminal hatch — so one `mousedown` closed the card here and
-    // then silenced the next keystroke over there, and the user's next prompt
-    // went into the shell with nothing on screen to explain it.
-    //
-    // This handler runs first (window, capture phase) and the pane's runs
-    // second, so no state either could read told them apart. The press object
-    // does: dismissing marks it, and the arming declines a press that has
-    // already spoken. This asserts the marking end; TerminalView carries the
-    // same object across (terminalTypingIntercept.test.ts) and the store
-    // enforces it (composerStore.test.ts).
-    const terminal = outsideElement();
-    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
-    terminal.dispatchEvent(press);
     expect(composer.mode).toBe('hidden');
-
-    // TerminalView's own handler, on the very same press.
-    composer.suppressTyping(key, press);
-    expect(composer.isTypingSuppressed(key)).toBe(false);
-  });
-
-  it('leaves a LATER press free to arm the hatch — this is the plain terminal', () => {
-    // Only the press that was answered is disowned. The next one means what it
-    // looks like, or the hatch would not exist and a shell would be untypeable
-    // with `typingOpensComposer` on.
-    pressOn(outsideElement());
-    composer.suppressTyping(key, new MouseEvent('mousedown'));
-    expect(composer.isTypingSuppressed(key)).toBe(true);
   });
 });
 
@@ -179,9 +150,7 @@ describe('what must NOT dismiss it', () => {
 
   it('a press while it is already closed', () => {
     composer.setMode('hidden');
-    composer.allowTypingToOpen(key);
     pressOn(outsideElement());
     expect(composer.mode).toBe('hidden');
-    expect(composer.isTypingSuppressed(key)).toBe(false);
   });
 });

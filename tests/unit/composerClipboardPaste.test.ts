@@ -90,15 +90,10 @@ beforeEach(async () => {
     props: { connectionId: 'conn-1' as never, sessionName: 'main' },
   });
   key = composer.targetKey('conn-1', 'main');
-  // Start from the hard case: the panel is away AND typing is suppressed. An
-  // explicit Ctrl+V has to get through both.
-  //
-  // Two calls rather than one, since Escape stopped suppressing: `dismiss` is
-  // the panel going away, `suppressTyping` is the user having pressed inside
-  // the terminal (docs/COMPOSER.md §12.2). This is exactly the state a user is
-  // in when they click into the shell, work there, and then hit Ctrl+V.
+  // Start from the hard case: the panel is away. An explicit Ctrl+V has to get
+  // through — and the intercept is only ever a fact about the panel's mode, so
+  // hidden is the whole of "away".
   composer.dismiss();
-  composer.suppressTyping(key);
   await nextTick();
 });
 
@@ -121,14 +116,11 @@ describe('an image on the clipboard', () => {
     expect(Array.from(call.sources[0]!.data ?? [])).toEqual([137, 80, 78, 71]);
   });
 
-  it('opens the composer and lifts the dismissal suppression', async () => {
+  it('opens the composer', async () => {
     setClipboard({ items: [clipboardItem(['image/png'])], text: null });
     await pasteFromSystemClipboard();
 
     expect(composer.mode).not.toBe('hidden');
-    // Through `setMode`, which clears it for every summons — not a second
-    // unsuppression route bolted on for this chord.
-    expect(composer.isTypingSuppressed(key)).toBe(false);
   });
 
   it('shows the tile it just uploaded', async () => {
@@ -160,7 +152,6 @@ describe('text on the clipboard', () => {
 
     expect(composer.states[key]!.draft).toBe('deploy the thing');
     expect(composer.mode).not.toBe('hidden');
-    expect(composer.isTypingSuppressed(key)).toBe(false);
     expect(stage).not.toHaveBeenCalled();
   });
 
@@ -185,10 +176,9 @@ describe('text on the clipboard', () => {
 });
 
 describe('nothing usable — nothing visible', () => {
-  /** The composer must be exactly as it was: away, and still suppressed. */
+  /** The composer must be exactly as it was: away, untouched. */
   function expectUntouched(): void {
     expect(composer.mode).toBe('hidden');
-    expect(composer.isTypingSuppressed(key)).toBe(true);
     expect(composer.states[key]?.draft ?? '').toBe('');
     expect(stage).not.toHaveBeenCalled();
   }

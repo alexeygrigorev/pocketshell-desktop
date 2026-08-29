@@ -276,30 +276,3 @@ describe('what the chords deliberately leave alone', () => {
     wrapper.unmount();
   });
 });
-
-/**
- * A press in the pane is the plain-terminal hatch (docs/COMPOSER.md §12.2).
- *
- * Escape used to suppress the typing intercept; the user reported that as a bug
- * and it moved to the one gesture that unambiguously means "I am typing at the
- * shell". This component only reports the press — what it MEANS is the
- * workspace's decision — so what there is to assert here is that it reports it
- * at all, and for every button.
- */
-describe('a press in the pane is announced', () => {
-  it('emits on a left press', () => {
-    const wrapper = mountTerminal();
-    const target = wrapper.element as HTMLElement;
-    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
-    expect(wrapper.emitted('pressed')).toHaveLength(1);
-    wrapper.unmount();
-  });
-
-  it('emits on a RIGHT press too — that one pastes into the shell', () => {
-    const wrapper = mountTerminal();
-    const target = wrapper.element as HTMLElement;
-    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2 }));
-    expect(wrapper.emitted('pressed')).toHaveLength(1);
-    wrapper.unmount();
-  });
-});
