@@ -324,6 +324,7 @@ export class PocketshellClient {
           ),
           { enrichment, probe, helper },
         );
+        log('sessions', `listed: [${merged.map((session) => session.name).join(", ")}]`);
         return this.withRepoRoots(connectionId, merged);
       }
     }
