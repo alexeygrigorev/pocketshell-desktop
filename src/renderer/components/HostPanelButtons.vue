@@ -18,13 +18,19 @@
 //
 // The Ports button additionally carries the auto-forward indicator: a tinted
 // ring + a small dot while the engine is running for this host (§16 of
-// docs/PORTFWD.md). The workspace owns the value and hands it down so the two
-// surfaces stay identical; the state has to live THERE because the forwards
-// store is only fresh while the ports overlay is open.
+// docs/PORTFWD.md), and — once ports are actually live — the dot becomes a
+// count pill, so the button answers "on, and how many" without the overlay.
+// The workspace owns both values and hands them down so the two surfaces stay
+// identical; the state has to live THERE because the forwards store is only
+// fresh while the ports overlay is open.
+import { computed } from 'vue';
 import AppIcon from './AppIcon.vue';
 import { HOST_PANEL_ITEMS, type HostPanel, type HostPanelItem } from '../hostPanels';
 
-const props = withDefaults(defineProps<{ autoForward?: boolean }>(), { autoForward: false });
+const props = withDefaults(
+  defineProps<{ autoForward?: boolean; forwardCount?: number }>(),
+  { autoForward: false, forwardCount: 0 },
+);
 
 const emit = defineEmits<{ select: [panel: HostPanel] }>();
 
@@ -33,13 +39,23 @@ const emit = defineEmits<{ select: [panel: HostPanel] }>();
  * alone stops being the whole truth when the glyph also claims the engine is
  * running — and the tooltip is still the button's entire accessible name, so
  * the suffix is what keeps §5.3e's rule (the word travels with the mark)
- * honest rather than merely styled.
+ * honest rather than merely styled. Each mark the glyph carries gets its
+ * word: the engine ("auto-forward on") and, when ports are live, the count.
  */
 function title(item: HostPanelItem): string {
-  return item.panel === 'ports' && props.autoForward
-    ? `${item.label} — auto-forward on`
-    : item.label;
+  if (item.panel !== 'ports') return item.label;
+  const marks: string[] = [];
+  if (props.autoForward) marks.push('auto-forward on');
+  if (props.forwardCount > 0) {
+    marks.push(`${props.forwardCount} ${props.forwardCount === 1 ? 'port' : 'ports'}`);
+  }
+  return marks.length > 0 ? `${item.label} — ${marks.join(', ')}` : item.label;
 }
+
+/** Three digits do not fit a 10px pill; the cap keeps the mark a mark. */
+const countLabel = computed(() =>
+  props.forwardCount > 99 ? '99+' : String(props.forwardCount),
+);
 </script>
 
 <template>
@@ -56,7 +72,13 @@ function title(item: HostPanelItem): string {
     @click="emit('select', item.panel)"
   >
     <AppIcon :name="item.icon" :size="14" />
-    <span v-if="item.panel === 'ports' && autoForward" class="auto-dot" />
+    <!-- Live ports outrank the bare "engine on" dot: the pill IS the dot's
+         corner, with the number in it, so one mark carries both halves of the
+         message and the button never shows dot and pill at once. -->
+    <span v-if="item.panel === 'ports' && forwardCount > 0" class="auto-count">
+      {{ countLabel }}
+    </span>
+    <span v-else-if="item.panel === 'ports' && autoForward" class="auto-dot" />
   </button>
 </template>
 
@@ -94,5 +116,26 @@ function title(item: HostPanelItem): string {
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 5px 0 var(--accent);
+}
+/* The count pill: the dot's corner grown just enough to hold the number of
+   live forwards. Solid --accent with --on-accent digits reads as the dot's
+   "running" said more loudly, not as a new register — it is still the accent
+   family on the accent-tinted button, and the tooltip carries its word
+   ("…, 2 ports") exactly as the ring's does. 99+ keeps a three-digit count
+   from turning the mark into a label. */
+.auto-count {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 10px;
+  height: 10px;
+  padding: 0 2px;
+  border-radius: 5px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 10px;
+  text-align: center;
 }
 </style>

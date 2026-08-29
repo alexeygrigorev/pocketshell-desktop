@@ -126,6 +126,51 @@ watch(
   },
 );
 
+/**
+ * How many forwards are live for this host — the Ports button's count pill
+ * (docs/PORTFWD.md §16). Same home as `autoFwd` for the same reason: the
+ * forwards store is only fresh while the ports overlay is mounted, and the
+ * badge has to be right the rest of the time.
+ *
+ * The engine already BROADCASTS every state change — `forwards:states` goes
+ * out on each scan pass and, importantly, an empty array on engine stop and
+ * on a dropped link — so this is one subscription and one initial snapshot
+ * (`list`, a main-process map read), not a poll and not a new IPC verb. The
+ * empty-array push is what empties the badge in every teardown transition
+ * without a line of code here.
+ *
+ * A push for a connection other than the active one is dropped: reconnect
+ * mints a new id, and the dead link's last count is not the new host's.
+ */
+const fwdCount = ref(0);
+let unwatchStates: (() => void) | null = null;
+watch(
+  () => connection.connectionId,
+  (conn) => {
+    unwatchStates?.();
+    unwatchStates = null;
+    if (!conn) {
+      fwdCount.value = 0;
+      return;
+    }
+    // Covers the gap before the engine's next push: an engine already running
+    // (panel opened and closed, manual forward added) has states right now.
+    void api.forwards.list(conn).then((s) => {
+      if (connection.connectionId === conn) fwdCount.value = s.length;
+    });
+    unwatchStates = api.forwards.onStates(({ connectionId: id, states }) => {
+      if (id !== conn) return;
+      fwdCount.value = states.length;
+      // A lazy start outside the panel (a manual add, a port forced on) runs
+      // the engine without the mount-time `isAutoEnabled` ask ever being
+      // repeated; live forwards ARE the engine running, so the ring follows.
+      if (states.length > 0) autoFwd.value = true;
+    });
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => unwatchStates?.());
+
 /** Session-panel geometry. Collapsed hides it entirely; width is drag-resized. */
 const panelCollapsed = ref(false);
 /**
@@ -476,7 +521,11 @@ async function onRefreshUsage(): Promise<void> {
              session is a thing you do while looking at the list you are about
              to add to. One click on the top button brings that list back. -->
         <div class="rail-sep" />
-        <HostPanelButtons :auto-forward="autoFwd" @select="panel = $event" />
+        <HostPanelButtons
+          :auto-forward="autoFwd"
+          :forward-count="fwdCount"
+          @select="panel = $event"
+        />
         <button class="icon-btn" title="Settings" @click="panel = 'settings'">
           <AppIcon name="settings" :size="14" />
         </button>
@@ -496,6 +545,7 @@ async function onRefreshUsage(): Promise<void> {
         <SessionTree
           :active-folder="activeFolder"
           :auto-forward="autoFwd"
+          :forward-count="fwdCount"
           @select="onSelectFolder"
           @back="onBack"
           @collapse="panelCollapsed = true"

@@ -25,10 +25,22 @@ import type { HostEntry } from '../../src/shared/types';
  *      answer, and the late answer for the dead link must not win.
  *   4. **A toggle inside the ports panel reaches the header live**, through
  *      the store mirror, without closing and reopening anything.
+ *
+ * The second half pins the live COUNT (the button's pill): it rides the
+ * engine's own states broadcast, so it is right with the panel closed, empties
+ * when the engine reports none, and a dead connection's push does not win.
  */
 
 const sessionsList = vi.fn<(id: string, sort: string) => Promise<never[]>>();
 const isAutoEnabled = vi.fn<(connectionId: string) => Promise<boolean>>();
+const listForwards = vi.fn<(connectionId: string) => Promise<unknown[]>>();
+/**
+ * The engine's states push, captured so a test can fire it the way a scan
+ * pass, an engine stop, or a dropped link would.
+ */
+const statesPush: {
+  cb: null | ((p: { connectionId: string; states: unknown[] }) => void);
+} = { cb: null };
 
 vi.mock('../../src/renderer/ipc', () => ({
   api: {
@@ -45,7 +57,16 @@ vi.mock('../../src/renderer/ipc', () => ({
     projects: { home: vi.fn().mockResolvedValue({ ok: false }), onCloneProgress: vi.fn() },
     agent: { profiles: vi.fn().mockResolvedValue([]) },
     win: { setTitle: vi.fn() },
-    forwards: { isAutoEnabled: (id: string) => isAutoEnabled(id) },
+    forwards: {
+      isAutoEnabled: (id: string) => isAutoEnabled(id),
+      list: (id: string) => listForwards(id),
+      onStates: (cb: (p: { connectionId: string; states: unknown[] }) => void) => {
+        statesPush.cb = cb;
+        return () => {
+          statesPush.cb = null;
+        };
+      },
+    },
   },
 }));
 
@@ -129,6 +150,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
   vi.clearAllMocks();
+  listForwards.mockResolvedValue([]);
 });
 
 describe('the Ports button carries the auto-forward state', () => {
@@ -176,5 +198,67 @@ describe('the Ports button carries the auto-forward state', () => {
     await flush(wrapper);
 
     expect(wrapper.find('[title="Port forwarding — auto-forward on"]').exists()).toBe(true);
+  });
+});
+
+describe('the Ports button carries the live forward count', () => {
+  it('counts what the engine pushed, and the ring follows the lazy start', async () => {
+    // Auto never persisted, but forwards appeared — a manual add or a forced
+    // port started the engine outside the panel. The badge counts, and since
+    // live forwards ARE the engine running, the ring lights with it.
+    const wrapper = await open(false);
+    statesPush.cb?.({ connectionId: 'conn-1', states: [{}, {}] });
+    await flush(wrapper);
+
+    const marked = wrapper.find('[title="Port forwarding — auto-forward on, 2 ports"]');
+    expect(marked.exists()).toBe(true);
+    expect(marked.classes()).toContain('auto-on');
+    expect(marked.get('.auto-count').text().trim()).toBe('2');
+    expect(marked.find('.auto-dot').exists()).toBe(false);
+  });
+
+  it('counts from the engine snapshot without waiting for a push', async () => {
+    // The relaunch case for the count: the engine is already running from a
+    // previous visit; the first push only arrives on the next scan beat.
+    listForwards.mockResolvedValue([{}, {}, {}]);
+    const wrapper = await open(true);
+
+    expect(listForwards).toHaveBeenCalledWith('conn-1');
+    const marked = wrapper.find('[title="Port forwarding — auto-forward on, 3 ports"]');
+    expect(marked.exists()).toBe(true);
+    expect(marked.get('.auto-count').text().trim()).toBe('3');
+  });
+
+  it('empties back to the dot when the engine reports nothing live', async () => {
+    // stopAuto and a dropped link both push an empty array — the badge must
+    // empty itself on the same beat, back to the plain on-register.
+    const wrapper = await open(true);
+    statesPush.cb?.({ connectionId: 'conn-1', states: [{}] });
+    await flush(wrapper);
+    expect(wrapper.find('.auto-count').exists()).toBe(true);
+
+    statesPush.cb?.({ connectionId: 'conn-1', states: [] });
+    await flush(wrapper);
+    const marked = wrapper.find('[title="Port forwarding — auto-forward on"]');
+    expect(marked.exists()).toBe(true);
+    expect(marked.find('.auto-dot').exists()).toBe(true);
+    expect(wrapper.find('.auto-count').exists()).toBe(false);
+  });
+
+  it('drops a dead connection’s push and counts the live one', async () => {
+    const wrapper = await open(false);
+    const connection = useConnectionStore();
+    connection.connectionId = 'conn-2';
+    await flush(wrapper);
+
+    statesPush.cb?.({ connectionId: 'conn-1', states: [{}, {}] });
+    await flush(wrapper);
+    expect(wrapper.find('.auto-count').exists()).toBe(false);
+
+    statesPush.cb?.({ connectionId: 'conn-2', states: [{}] });
+    await flush(wrapper);
+    expect(
+      wrapper.find('[title="Port forwarding — auto-forward on, 1 port"]').exists(),
+    ).toBe(true);
   });
 });

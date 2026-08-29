@@ -1022,6 +1022,23 @@ keep travelling with the mark (§5.3e's rule, applied to state as well as
 identity). The ring is an inset box-shadow rather than a border so the glyph
 does not shift half a pixel inside the fixed square when the state flips.
 
+> "when I enable port forwarding I want some indicator that it's enabled and
+> also show how many ports"
+
+The dot answers the second half the moment ports are live: it grows into a
+count pill — the same corner, the same accent, now solid `--accent` with
+`--on-accent` digits (`HostPanelButtons.vue`'s `.auto-count`) — so the button
+says "on, and how many" in one mark and never shows dot and pill at once.
+Live ports outrank the bare engine flag, which is why the stronger register
+wins: the pill means forwards exist to click through to, while the dot stays
+the "running, nothing caught yet" state between enabling the engine and the
+first scan beat that opens something. The tooltip's suffix carries the count's
+word too ("Port forwarding — auto-forward on, 2 ports", pluralised, capped at
+"99+" so a three-digit count cannot turn the mark into a label). The count is
+of LIVE forwards — auto, manual, and ssh-config alike, exactly what the
+panel's table renders — not of discovered ports, most of which are
+deliberately not forwarded (§2).
+
 ### Where the state lives, and why it is not the store's `autoOn`
 
 The forwards store's `autoOn` is the flag the ports panel itself renders — and
@@ -1039,11 +1056,22 @@ indicator. So the workspace owns the value (`HostWorkspaceView.vue`):
   through, so the toggle inside the panel reaches the header button without
   waiting for a reopen.
 
+The count lives in the same place for the same reason, and it needs no new
+verb: the engine already BROADCASTS every state change (`forwards:states`,
+`ipc.ts`), and that broadcast includes an empty array on engine stop and on a
+dropped link — the two transitions that must empty the badge. So the
+workspace subscribes once per connection, filters by connection id, and takes
+one initial snapshot (`forwards.list`, a main-process map read) to cover the
+gap before the engine's next scan beat. A push with live forwards also raises
+the ring's flag: a manual add or a forced port starts the engine outside the
+panel, and the button must not say "off" while its badge counts forwards.
+
 A late answer for a connection that has since been replaced is dropped rather
 than written — reconnect mints a new id, and the old flag is about a dead
 link. Tested in `tests/unit/autoForwardIndicator.test.ts` (mount, plain-OFF,
-reconnect, live mirror) and `tests/unit/SessionTree.test.ts` (the relay, and
-that Usage — the sibling button — is never marked).
+reconnect, live mirror; pushed count, snapshot count, empty push, dead
+connection's push) and `tests/unit/SessionTree.test.ts` (the relay of both
+props, and that Usage — the sibling button — is never marked).
 
 ---
 

@@ -402,6 +402,17 @@ describe('SessionTree — the Ports button carries the auto-forward indicator', 
     expect(wrapper.find('[title="Provider usage"].auto-on').exists()).toBe(false);
     expect(wrapper.get('[title="Provider usage"]').find('.auto-dot').exists()).toBe(false);
   });
+
+  it('relays the live forward count into the pill', async () => {
+    // The count is the workspace's value like auto-forward is; the tree only
+    // carries it through, and this header must read like the collapsed rail.
+    const wrapper = await open([session('git-a', `${HOME}/git/a`)]);
+    await wrapper.setProps({ autoForward: true, forwardCount: 2 });
+
+    const ports = wrapper.get('[title="Port forwarding — auto-forward on, 2 ports"]');
+    expect(ports.get('.auto-count').text().trim()).toBe('2');
+    expect(wrapper.find('[title="Provider usage"].auto-on').exists()).toBe(false);
+  });
 });
 
 describe('SessionTree — the per-root +', () => {

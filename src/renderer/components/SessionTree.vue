@@ -97,6 +97,13 @@ const props = defineProps<{
    * rail.
    */
   autoForward?: boolean;
+  /**
+   * How many forwards are live for this host, for the Ports button's count
+   * pill. Relayed for the same reason `autoForward` is: the workspace owns
+   * the value (the forwards store is only fresh while the ports overlay is
+   * open) and this header's buttons must read exactly like the rail's.
+   */
+  forwardCount?: number;
 }>();
 
 /**
@@ -911,8 +918,13 @@ function fmtRelative(epochSeconds: number): string {
         <!-- Ports and Usage as their own buttons (§5.3e). Their words live in
              the tooltips — which double as accessible names — exactly where the
              retired `⋯` trigger kept "Ports, Usage". `auto-forward` drives the
-             Ports button's on-air indicator; the workspace owns the state. -->
-        <HostPanelButtons :auto-forward="autoForward" @select="openPanel" />
+             Ports button's on-air indicator and `forward-count` its live-ports
+             pill (docs/PORTFWD.md §16); the workspace owns both states. -->
+        <HostPanelButtons
+          :auto-forward="autoForward"
+          :forward-count="forwardCount"
+          @select="openPanel"
+        />
         <button class="icon-btn" :disabled="sessions.loading" title="Refresh" @click="onRefresh">
           <AppIcon name="refresh" :size="14" :class="{ spin: sessions.loading }" />
         </button>
