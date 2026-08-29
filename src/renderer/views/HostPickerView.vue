@@ -43,6 +43,7 @@ import {
 import AppIcon from '../components/AppIcon.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import SettingsView from './SettingsView.vue';
+import { readLastFolder } from '../workspaceState';
 import type { HostEntry } from '../../shared/types';
 
 const router = useRouter();
@@ -190,6 +191,16 @@ async function dial(host: HostEntry): Promise<boolean> {
 }
 
 function enterWorkspace(host: HostEntry): void {
+  // Land in the folder this host was last open on, when there is one — the
+  // whole point of relaunching into the same tabs. The workspace restores the
+  // rest of its own state (Files tabs, selection) from the same store, so the
+  // folder route alone is the entire handoff. A host never opened, or a
+  // record that names nothing, keeps the old landing below.
+  const folder = readLastFolder(host.name);
+  if (folder) {
+    void router.push({ name: 'folder', params: { name: host.name, folder } });
+    return;
+  }
   // Land on the host's default view: the session list. `void`: vue-router
   // rejects on aborted/redirected navigation, neither of which is an error.
   void router.push({ name: 'host-sessions', params: { name: host.name } });

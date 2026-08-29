@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import type { HostEntry } from '../../src/shared/types';
+import { lastFolderKey } from '../../src/renderer/workspaceState';
 
 /**
  * The picker's cancel affordance, tested for the promise its own header makes:
@@ -229,5 +230,43 @@ describe('HostPickerView — cancel is always visible while dialling', () => {
     await flush(wrapper);
     expect(routerPush).not.toHaveBeenCalled();
     expect(sshClose).toHaveBeenCalledWith('c1');
+  });
+});
+
+describe('HostPickerView — a relaunch lands in the folder the host was last open on', () => {
+  /**
+   * The workspace's tab state persists across a relaunch
+   * (docs/WORKSPACE.md §16), and this handoff is the half that makes it
+   * reachable: whatever else restores faithfully, a relaunch that stops at the
+   * bare session list has not "shown the same tabs". Both entries into the
+   * workspace go through `enterWorkspace` — the auto-connect below and the
+   * clicked dial — so one assertion covers the pair; the memory of WHICH
+   * folder belongs to the workspace's own `persist()`, pinned in
+   * folderWorkspaceRestore.test.ts.
+   */
+  it('enters the remembered folder instead of the bare session list', async () => {
+    localStorage.setItem(lastFolderKey('hetzner'), '~/git/dtc-website');
+    const wrapper = await openPicker([host('hetzner')]);
+    const dial = pendingConnect();
+    await wrapper.get('.host-row').trigger('click');
+    dial.resolve({ ok: true, connectionId: 'c1' });
+    await flush(wrapper);
+
+    expect(routerPush).toHaveBeenCalledWith({
+      name: 'folder',
+      params: { name: 'hetzner', folder: '~/git/dtc-website' },
+    });
+  });
+
+  it('a host with no remembered folder keeps the session-list landing', async () => {
+    // Another host's folder must not leak onto this one: the memory is per host.
+    localStorage.setItem(lastFolderKey('other'), '~/git/x');
+    const wrapper = await openPicker([host('hetzner')]);
+    const dial = pendingConnect();
+    await wrapper.get('.host-row').trigger('click');
+    dial.resolve({ ok: true, connectionId: 'c1' });
+    await flush(wrapper);
+
+    expect(routerPush).toHaveBeenCalledWith({ name: 'host-sessions', params: { name: 'hetzner' } });
   });
 });
