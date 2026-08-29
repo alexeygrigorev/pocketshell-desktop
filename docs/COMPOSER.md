@@ -1155,6 +1155,7 @@ terminal keys and must keep reaching the pane.
 | `Escape` | The ladder in §12.2 — never destroys the draft |
 | `/` as the first character | Opens the slash dropdown (via `slashQueryFor`, not a keybinding) |
 | `↑`/`↓`, `Enter`/`Tab` | Navigate / accept in the slash dropdown when open |
+| `Ctrl/Cmd+↑` / `Ctrl/Cmd+↓` | Sent-prompt history: older / newer (§28); plain `↑`/`↓` stay caret keys |
 | `Ctrl/Cmd+V` | Paste; non-text clipboard items become attachments (§23) |
 | `Ctrl/Cmd+Shift+Backspace` | Discard draft (the Discard button remains the primary affordance) |
 
@@ -1854,22 +1855,21 @@ It is keyed like every other per-session fact (`"$connectionId/$name"`), so
 
 ### 28.2 The arrow walk
 
-↑ steps older into the draft, ↓ steps newer, and one ↓ past the newest hands
-back the draft the walk started from — held in `recallSaved` for exactly that,
-so browsing never destroys work. Enter on a recalled entry resends it; the
-resend is the dedupe above keeping the list honest. Any manual edit ends the
-browse (the text on screen is the user's from then on), as do Discard, a
-delivered send and a failed send's restore.
+Ctrl/Cmd+↑ steps older into the draft, Ctrl/Cmd+↓ steps newer, and one ↓ past
+the newest hands back the draft the walk started from — held in `recallSaved`
+for exactly that, so browsing never destroys work. Enter on a recalled entry
+resends it; the resend is the dedupe above keeping the list honest. Any manual
+edit ends the browse (the text on screen is the user's from then on), as do
+Discard, a delivered send and a failed send's restore.
 
-The keystrokes are intercepted in `PromptComposer.onDraftKeydown`, gated so
-they only fire when the arrows have nothing better to do:
+The chord, not the bare arrows, is a deliberate change (2026-08-29): plain ↑/↓
+must stay caret keys for editing a draft — a multi-line compose is unreadable
+if ↑ yanks the draft out from under the cursor. Because the chord is an
+explicit history request, the old caret-position gates (first line to recall
+older, last line to recall newer, no selection) went with it. The keystrokes
+are intercepted in `PromptComposer.onDraftKeydown`:
 
-- the slash dropdown owns the arrows while it is open (§18);
-- a selection means the arrows are about to collapse it, not browse;
-- the caret must sit on the FIRST line to recall older and the LAST line to
-  recall newer, so a multi-line draft keeps working as a textarea. A recalled
-  entry lands with the caret at its end — on its last line — which is exactly
-  where ↓ needs to be to undo the recall;
+- the slash dropdown owns the arrows while it is open (§18) — chord or not;
 - not while an IME composition is in flight.
 
 Recalling a prompt that happens to start with `/` dismisses the command

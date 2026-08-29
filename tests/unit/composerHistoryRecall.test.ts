@@ -5,15 +5,14 @@ import { createPinia, setActivePinia } from 'pinia';
 import { nextTick } from 'vue';
 
 /**
- * The arrow-key half of sent-prompt history (docs/COMPOSER.md §28): ↑ walks
- * back through what THIS session delivered, ↓ walks forward, and one ↓ past
- * the newest hands back the draft the walk started from.
+ * The chord half of sent-prompt history (docs/COMPOSER.md §28): Ctrl+↑ walks
+ * back through what THIS session delivered, Ctrl+↓ walks forward, and one ↓
+ * past the newest hands back the draft the walk started from.
  *
  * The store rules are pinned in composerStore.test.ts. What only a rendered
  * component can pin is where the keystrokes are intercepted and what they are
- * NOT: the arrows must keep working as caret keys inside a multi-line draft,
- * which is why every recall is gated on the caret sitting on the first (↑) or
- * last (↓) line.
+ * NOT: plain ↑/↓ must keep working as caret keys for editing the draft, so
+ * recall only ever fires with Ctrl/Cmd held — no matter where the caret sits.
  */
 
 vi.mock('../../src/renderer/ipc', () => ({
@@ -46,9 +45,9 @@ async function caretAt(offset: number): Promise<void> {
   ta.setSelectionRange(offset, offset);
 }
 
-function pressArrow(keyName: 'ArrowUp' | 'ArrowDown'): void {
+function pressArrow(keyName: 'ArrowUp' | 'ArrowDown', ctrl = true): void {
   ta.dispatchEvent(
-    new KeyboardEvent('keydown', { key: keyName, bubbles: true, cancelable: true }),
+    new KeyboardEvent('keydown', { key: keyName, ctrlKey: ctrl, bubbles: true, cancelable: true }),
   );
 }
 
@@ -71,8 +70,8 @@ beforeEach(async () => {
   ta = wrapper.find('textarea.draft').element as HTMLTextAreaElement;
 });
 
-describe('arrow-key recall in the draft', () => {
-  it('↑ in an empty draft recalls the newest payload', async () => {
+describe('Ctrl+arrow recall in the draft', () => {
+  it('Ctrl+↑ in an empty draft recalls the newest payload', async () => {
     await caretAt(0);
     pressArrow('ArrowUp');
     await nextTick();
@@ -80,7 +79,7 @@ describe('arrow-key recall in the draft', () => {
     expect(ta.value).toBe('the newer prompt');
   });
 
-  it('↑↑ walks older; ↓↓ comes back through it and restores the draft', async () => {
+  it('Ctrl+↑↑ walks older; Ctrl+↓↓ comes back through it and restores the draft', async () => {
     composer.setDraft(key, 'half-typed');
     await caretAt('half-typed'.length);
 
@@ -115,20 +114,22 @@ describe('arrow-key recall in the draft', () => {
     expect(composer.states[key]?.history).toEqual(['the older prompt', 'the newer prompt']);
   });
 
-  it('↑ only hijacks from the FIRST line, so a multi-line draft keeps its caret keys', async () => {
+  it('Ctrl+↑ recalls from ANY line — the chord, not the caret, decides', async () => {
     composer.setDraft(key, 'line one\nline two');
     await caretAt('line one\nline two'.length); // end: on the LAST line
-    pressArrow('ArrowUp');
-    await nextTick();
-    expect(composer.states[key]?.draft).toBe('line one\nline two');
-
-    await caretAt(0); // first line: this one recalls
     pressArrow('ArrowUp');
     await nextTick();
     expect(composer.states[key]?.draft).toBe('the newer prompt');
   });
 
-  it('↓ does nothing when not browsing, even on the last line', async () => {
+  it('a plain ↑ never recalls — it stays a caret key for editing', async () => {
+    await caretAt(0); // first line, empty otherwise: the old gate would recall here
+    pressArrow('ArrowUp', false);
+    await nextTick();
+    expect(composer.states[key]?.draft).toBe('');
+  });
+
+  it('Ctrl+↓ does nothing when not browsing', async () => {
     composer.setDraft(key, 'just typing');
     await caretAt('just typing'.length);
     pressArrow('ArrowDown');
@@ -147,13 +148,13 @@ describe('arrow-key recall in the draft', () => {
     expect(composer.states[key]?.draft).toBe('the newer prompt, edited');
   });
 
-  it('with a selection the arrows stay caret keys', async () => {
+  it('with a selection the chord still recalls — it is an explicit request', async () => {
     composer.setDraft(key, 'select me');
     await nextTick(); // the draft patch lands, then the selection is ours
     ta.focus();
     ta.setSelectionRange(0, 6);
     pressArrow('ArrowUp');
     await nextTick();
-    expect(composer.states[key]?.draft).toBe('select me');
+    expect(composer.states[key]?.draft).toBe('the newer prompt');
   });
 });

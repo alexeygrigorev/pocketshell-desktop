@@ -1132,49 +1132,30 @@ function onDraftKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // Sent-prompt history, shell-style (§28): ↑ walks back through what this
-  // session delivered, ↓ walks forward, and one ↓ past the newest hands the
-  // draft back that the walk started from. Gated three ways so it can only
-  // fire when the arrows have nothing better to do:
-  //   - the slash dropdown owns the arrows while it is open;
-  //   - a selection means the arrows are about to collapse it, not browse;
-  //   - the caret must sit on the FIRST line to recall older and the LAST line
-  //     to recall newer, so a multi-line draft can still be moved through with
-  //     the arrows. A recalled entry lands with the caret at its end — on its
-  //     last line — which is exactly where ↓ needs to be to undo the recall.
-  if (
-    !e.isComposing &&
-    !mod &&
-    !e.altKey &&
-    !e.shiftKey &&
-    (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
-    !slashOpen.value
-  ) {
-    const el = draftEl.value;
-    if (el && el.selectionStart === el.selectionEnd) {
-      const before = el.value.slice(0, el.selectionStart);
-      const after = el.value.slice(el.selectionEnd);
-      const onFirstLine = !before.includes('\n');
-      const onLastLine = !after.includes('\n');
-      const text =
-        e.key === 'ArrowUp' && onFirstLine
-          ? composer.recallOlder(key.value)
-          : e.key === 'ArrowDown' && onLastLine
-            ? composer.recallNewer(key.value)
-            : null;
-      if (text !== null) {
-        e.preventDefault();
-        caret.value = text.length;
-        // A recalled prompt may start with `/`, which would otherwise pop the
-        // command dropdown over text the user did not just type. Typing after
-        // this re-arms it (onInput), as with Escape's dismissal.
-        slashDismissed.value = true;
-        void nextTick(() => {
-          const ta = draftEl.value;
-          if (!ta) return;
-          ta.setSelectionRange(text.length, text.length);
-        });
-      }
+  // Sent-prompt history, shell-style (§28): Ctrl/Cmd+↑ walks back through what
+  // this session delivered, Ctrl/Cmd+↓ walks forward, and one ↓ past the newest
+  // hands the draft back that the walk started from. The chord, not the bare
+  // arrows — plain ↑/↓ must stay caret keys for editing a draft, which retires
+  // the old first-line/last-line and selection gates along with it: a chord is
+  // an explicit history request no matter where the caret sits. A recalled
+  // entry lands with the caret at its end — on its last line.
+  if (!e.isComposing && mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    const text =
+      e.key === 'ArrowUp'
+        ? composer.recallOlder(key.value)
+        : composer.recallNewer(key.value);
+    if (text !== null) {
+      e.preventDefault();
+      caret.value = text.length;
+      // A recalled prompt may start with `/`, which would otherwise pop the
+      // command dropdown over text the user did not just type. Typing after
+      // this re-arms it (onInput), as with Escape's dismissal.
+      slashDismissed.value = true;
+      void nextTick(() => {
+        const ta = draftEl.value;
+        if (!ta) return;
+        ta.setSelectionRange(text.length, text.length);
+      });
     }
   }
 
@@ -1553,7 +1534,7 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
           </button>
         </div>
         <span class="spacer"></span>
-        <span class="kbd-hint muted">Enter send &middot; Shift+Enter newline &middot; &uarr;&darr; history</span>
+        <span class="kbd-hint muted">Enter send &middot; Shift+Enter newline &middot; Ctrl+&uarr;&darr; history</span>
         <button
           class="send"
           type="button"

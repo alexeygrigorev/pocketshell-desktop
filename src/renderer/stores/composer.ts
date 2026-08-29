@@ -449,7 +449,7 @@ export const useComposerStore = defineStore('composer', () => {
   /**
    * Step one entry NEWER, or — from the newest — hand back the draft the browse
    * started from and end the browse. Null means "not browsing": the keystroke
-   * is an ordinary ArrowDown and belongs to the textarea.
+   * is an ordinary Ctrl+ArrowDown and belongs to the textarea.
    */
   function recallNewer(key: string): string | null {
     const s = ensure(key);
