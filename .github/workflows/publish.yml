@@ -7,12 +7,20 @@
 # Plain pushes to main run the same build matrix and smoke gate but stop there,
 # so the pipeline itself is exercised continuously and a release tag never
 # triggers it for the first time.
+#
+# PRs run both jobs too: typecheck/lint/unit on the build
+# matrix, and the smoke gate's full unit + integration + E2E pass against the
+# Docker fixtures — so a PR cannot merge with a red E2E (pair this with
+# branch protection requiring the checks). The release job is gated on the tag
+# ref and never fires for a PR.
 name: publish
 
 on:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
