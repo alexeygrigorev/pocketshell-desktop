@@ -120,6 +120,11 @@ export const useProjectsStore = defineStore('projects', () => {
    * they are not offered either: `startSession` canonicalises with `pwd -P`,
    * and a link whose target is elsewhere would derive a name from a folder the
    * user never saw.
+   *
+   * Dot-prefixed directories STAY. The desktop convention that a leading dot
+   * means "hidden" belongs to local file managers; the picker browses a remote
+   * host, where `.agents` is an ordinary repo folder, and filtering it made
+   * the search box swear nothing matched a folder the host demonstrably has.
    */
   async function browse(connectionId: ConnectionId, path: string): Promise<void> {
     browsing.value = true;
@@ -129,7 +134,7 @@ export const useProjectsStore = defineStore('projects', () => {
       const entries = await api.sftp.list(connectionId, resolved);
       cwd.value = resolved;
       dirs.value = entries
-        .filter((e) => e.type === 'dir' && !e.name.startsWith('.'))
+        .filter((e) => e.type === 'dir')
         .sort((a, b) => a.name.localeCompare(b.name));
     } catch (e) {
       browseError.value = (e as Error).message;

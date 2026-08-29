@@ -442,6 +442,24 @@ describe('NewSessionDialog folder search', () => {
     await flush(wrapper);
     expect(rows(wrapper)).toHaveLength(140);
   });
+
+  it('lists dot-prefixed directories like any other folder', async () => {
+    // The user's report: their `.agents` repo was invisible to this picker —
+    // a desktop "hidden file" convention applied to a remote host where a
+    // leading dot is an ordinary name — and the search box swore nothing
+    // matched a folder the host demonstrably has.
+    list.mockResolvedValue([
+      { name: 'dataops', type: 'dir' },
+      { name: '.agents', type: 'dir' },
+      { name: '.cache', type: 'dir' },
+      { name: 'notes.txt', type: 'file' },
+    ]);
+    const wrapper = await open(`${HOME}/git`);
+    // Sorted with the rest; the file row is still not offered.
+    expect(rows(wrapper)).toEqual(['.agents', '.cache', 'dataops']);
+    await search(wrapper, 'agents');
+    expect(rows(wrapper)).toEqual(['.agents']);
+  });
 });
 
 describe('NewSessionDialog search focus', () => {
