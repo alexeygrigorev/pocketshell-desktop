@@ -341,6 +341,21 @@ const defaultStartIn = computed<string | null>(() => {
 });
 
 /**
+ * The roots the creation picker's dropdown offers, resolved to absolute paths
+ * and stripped of anything that did not resolve — `other` because a bucket is
+ * not a place to create in, null paths because a menu item that cannot be
+ * followed is a broken promise on screen. The LABEL stays the panel's
+ * home-relative key (`~/git`), which is the spelling every root row above the
+ * dialog already teaches the user to recognise.
+ */
+const createRoots = computed<{ label: string; path: string }[]>(() =>
+  roots.value
+    .filter((root) => !root.other)
+    .map((root) => ({ label: root.key, path: rootAddPath(root) }))
+    .filter((r): r is { label: string; path: string } => r.path !== null),
+);
+
+/**
  * Folder tooltip: the full path, the session count, and the session NAMES.
  *
  * The names are here because they are no longer on screen — the workspace's
@@ -1217,6 +1232,7 @@ function fmtRelative(epochSeconds: number): string {
     <NewSessionDialog
       v-if="creating"
       :start-in="creating.startIn"
+      :roots="createRoots"
       @started="onSessionStarted"
       @close="creating = null"
     />

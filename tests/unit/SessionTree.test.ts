@@ -80,7 +80,10 @@ const HOME = '/home/alexey';
  * `startIn` is what the tests read off it, and it is the whole contract here.
  */
 const DialogStub = defineComponent({
-  props: { startIn: { type: String as PropType<string | null>, default: undefined } },
+  props: {
+    startIn: { type: String as PropType<string | null>, default: undefined },
+    roots: { type: Array as PropType<{ label: string; path: string }[]>, default: undefined },
+  },
   template: '<div class="dialog-stub" />',
 });
 
@@ -203,6 +206,12 @@ function dialogStartIn(wrapper: VueWrapper): string | null | undefined {
   return stub.exists() ? stub.props('startIn') : undefined;
 }
 
+/** The stubbed dialog's `roots` menu list, or `undefined` when it is shut. */
+function dialogRoots(wrapper: VueWrapper): { label: string; path: string }[] | undefined {
+  const stub = wrapper.findComponent(DialogStub);
+  return stub.exists() ? stub.props('roots') : undefined;
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
@@ -273,6 +282,27 @@ describe('SessionTree — the foot button is gone, and nothing went with it', ()
     const wrapper = await open([], [], null);
     await generalAdd(wrapper).trigger('click');
     expect(dialogStartIn(wrapper)).toBeNull();
+  });
+
+  it('hands the picker the resolved roots for its dropdown', async () => {
+    // The picker's crumb bar offers the roots as a menu — the "select a
+    // different one" half of the general + default. Labels stay the panel's
+    // home-relative keys; paths arrive absolute, ready to browse.
+    const wrapper = await open([session('git-a', `${HOME}/git/a`)], ['~/git', '~/work']);
+    await generalAdd(wrapper).trigger('click');
+    expect(dialogRoots(wrapper)).toEqual([
+      { label: '~/git', path: `${HOME}/git` },
+      { label: '~/work', path: `${HOME}/work` },
+    ]);
+  });
+
+  it('leaves the bucket and unresolvable roots out of that list', async () => {
+    // A session under no root makes the `other` row, and a `~`-keyed root on a
+    // host with no $HOME has no absolute path — neither is a menu item that
+    // can be followed, so neither is offered.
+    const wrapper = await open([session('loose', '/srv/elsewhere')], ['~/git'], null);
+    await generalAdd(wrapper).trigger('click');
+    expect(dialogRoots(wrapper)).toEqual([]);
   });
 });
 

@@ -70,6 +70,8 @@ import { computed, onMounted, ref, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import OverlayPanel from './OverlayPanel.vue';
 import LaunchSessionDialog from './LaunchSessionDialog.vue';
+import PopupMenu from './PopupMenu.vue';
+import { type Box } from '../../shared/popupPlacement';
 import { useConnectionStore } from '../stores/connection';
 import { displayPath, joinPosix, useProjectsStore } from '../stores/projects';
 import { FILE_ROW_CAP, matchesQuery, viewFileRows } from '../fileListView';
@@ -95,8 +97,20 @@ const props = withDefaults(
      * null instead when that resolution fails.
      */
     startIn?: string | null;
+    /**
+     * The project roots the panel knows, each as a display label (`~/git`) and
+     * an ABSOLUTE path. They are the crumb bar's dropdown: the `+` lands the
+     * browser in the first root by default, and this menu is how the user
+     * selects a different one without walking up and down the crumbs.
+     *
+     * A prop rather than a store read so this dialog stays dumb about HOW roots
+     * are derived — that is the panel's tree, with its drag order — and so a
+     * root whose path failed to resolve is simply absent, decided once by the
+     * caller instead of re-decided here.
+     */
+    roots?: { label: string; path: string }[];
   }>(),
-  { startIn: null },
+  { startIn: null, roots: () => [] },
 );
 
 const emit = defineEmits<{
@@ -450,6 +464,36 @@ async function onHome(): Promise<void> {
   if (connId.value && projects.home) await projects.browse(connId.value, projects.home);
 }
 
+// ---------------------------------------------------------------------------
+// The roots dropdown
+// ---------------------------------------------------------------------------
+//
+// The crumb bar's home / up / crumb trail answers "where am I relative to this
+// directory"; the roots menu answers "which of my roots am I in" — a jump one
+// level above the crumbs, from `~/git/proj` to `~/work` in one click instead
+// of walking up past `$HOME` and back down. The `+` already lands the browser
+// in the panel's first root; this menu is the "but select a different one"
+// half of that ask.
+
+/** Viewport box of the dropdown trigger, when the menu is open. */
+const rootsAnchor = ref<Box | null>(null);
+const rootsBtnEl = ref<HTMLElement | null>(null);
+
+function toggleRootsMenu(): void {
+  if (rootsAnchor.value) {
+    rootsAnchor.value = null;
+    return;
+  }
+  const box = rootsBtnEl.value?.getBoundingClientRect();
+  if (box) rootsAnchor.value = { left: box.left, top: box.top, width: box.width, height: box.height };
+}
+
+/** Jump the browser to a root, and close the menu that offered it. */
+async function onRoot(path: string): Promise<void> {
+  rootsAnchor.value = null;
+  if (connId.value) await projects.browse(connId.value, path);
+}
+
 /**
  * Raise the agent step, having created NOTHING.
  *
@@ -766,6 +810,37 @@ function onStartAnother(): void {
                 <button class="crumb" @click="onCrumb(c.path)">{{ c.label }}</button>
               </template>
             </span>
+            <!-- The roots dropdown, parked at the far end of the crumb bar:
+                 navigation, like everything else on this row, so it sits with
+                 the home/up controls rather than in the filtered list below.
+                 Only when the panel knows a root — with none, the crumbs and
+                 home are the whole story. -->
+            <button
+              v-if="roots.length > 0"
+              ref="rootsBtnEl"
+              class="icon-btn sm roots-btn"
+              title="Project roots"
+              aria-haspopup="menu"
+              :aria-expanded="rootsAnchor !== null"
+              @click="toggleRootsMenu"
+            >
+              <AppIcon name="chevron-down" :size="14" />
+            </button>
+            <PopupMenu
+              v-if="rootsAnchor"
+              :anchor="rootsAnchor"
+              :ignore="[rootsBtnEl]"
+              label="Project roots"
+              @close="rootsAnchor = null"
+            >
+              <ul>
+                <li v-for="r in roots" :key="r.path">
+                  <button class="menu-item" :title="r.path" @click="onRoot(r.path)">
+                    {{ r.label }}
+                  </button>
+                </li>
+              </ul>
+            </PopupMenu>
           </div>
 
           <!-- Permanently on screen, unlike the Files tab's summoned box —
@@ -1035,6 +1110,13 @@ function onStartAnother(): void {
   align-items: center;
   gap: var(--sp-1);
   min-height: var(--tabbar-h);
+}
+/* The roots dropdown sits at the end of the row, past wherever the crumb
+   trail stops — auto-margin, the same pattern the root header's `+` uses to
+   hold the right edge of its row. */
+.roots-btn {
+  margin-left: auto;
+  flex: none;
 }
 .crumbs {
   display: flex;

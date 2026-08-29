@@ -486,3 +486,74 @@ describe('NewSessionDialog search focus', () => {
     wrapper.unmount();
   });
 });
+
+describe('NewSessionDialog roots menu', () => {
+  // The real PopupMenu teleports to <body>, which is right in the app and
+  // invisible to `wrapper.find` here — flattened, the menu is what these tests
+  // read, and its teleport is PopupMenu's own to prove.
+  const MenuStub = {
+    props: ['anchor', 'label'],
+    template: '<div class="menu-stub" :aria-label="label"><slot /></div>',
+  };
+
+  const ROOTS = [
+    { label: '~/git', path: '/home/alexey/git' },
+    { label: '~/work', path: '/home/alexey/work' },
+  ];
+
+  async function openWithRoots(): Promise<VueWrapper> {
+    useConnectionStore().connectionId = 'conn-1';
+    const wrapper = mount(NewSessionDialog, {
+      props: { startIn: null, roots: ROOTS },
+      attachTo: document.body,
+      global: {
+        stubs: {
+          OverlayPanel: { template: '<div><slot /></div>' },
+          PopupMenu: MenuStub,
+        },
+      },
+    });
+    await flush(wrapper);
+    return wrapper;
+  }
+
+  it('offers the roots as a dropdown off the crumb bar', async () => {
+    const wrapper = await openWithRoots();
+    const trigger = wrapper.find('button[title="Project roots"]');
+    expect(trigger.exists()).toBe(true);
+    expect(wrapper.find('.menu-stub').exists()).toBe(false);
+
+    await trigger.trigger('click');
+    const items = wrapper.findAll('.menu-stub .menu-item');
+    expect(items.map((i) => i.text().trim())).toEqual(['~/git', '~/work']);
+    wrapper.unmount();
+  });
+
+  it('jumps the browser to the chosen root and closes', async () => {
+    const wrapper = await openWithRoots();
+    await wrapper.find('button[title="Project roots"]').trigger('click');
+    await wrapper.findAll('.menu-stub .menu-item')[1]!.trigger('click');
+    await flush(wrapper);
+
+    expect(useProjectsStore().cwd).toBe('/home/alexey/work');
+    expect(wrapper.find('.menu-stub').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('renders no trigger when the panel knows no root', async () => {
+    useConnectionStore().connectionId = 'conn-1';
+    const wrapper = mount(NewSessionDialog, {
+      props: { startIn: null, roots: [] },
+      attachTo: document.body,
+      global: {
+        stubs: {
+          OverlayPanel: { template: '<div><slot /></div>' },
+          PopupMenu: MenuStub,
+        },
+      },
+    });
+    await flush(wrapper);
+    expect(wrapper.find('button[title="Project roots"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+});
