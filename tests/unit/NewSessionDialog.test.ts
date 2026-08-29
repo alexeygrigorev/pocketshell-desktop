@@ -443,3 +443,46 @@ describe('NewSessionDialog folder search', () => {
     expect(rows(wrapper)).toHaveLength(140);
   });
 });
+
+describe('NewSessionDialog search focus', () => {
+  // jsdom focuses only elements that are in the document, and `open` mounts
+  // detached, so these tests attach — and unmount, so the dialog does not
+  // outlive the test holding the focus it just claimed.
+  async function openAttached(startIn: string | null): Promise<VueWrapper> {
+    useConnectionStore().connectionId = 'conn-1';
+    const wrapper = mount(NewSessionDialog, {
+      props: { startIn },
+      attachTo: document.body,
+      global: { stubs: { OverlayPanel: { template: '<div><slot /></div>' } } },
+    });
+    await flush(wrapper);
+    return wrapper;
+  }
+
+  const searchInput = (wrapper: VueWrapper) =>
+    wrapper.get('input[aria-label="Search folders in this directory"]').element as HTMLInputElement;
+
+  it('opens with the caret in the filter, ready to type', async () => {
+    const wrapper = await openAttached(null);
+    expect(document.activeElement).toBe(searchInput(wrapper));
+    wrapper.unmount();
+  });
+
+  it('still lands there when the open browse disabled the input first', async () => {
+    // The `startIn` landing disables the filter while it lists the directory,
+    // and a disabled element cannot take focus — the mount-time attempt is
+    // swallowed. Focus arrives with the listing instead, so the flow the `+`
+    // begins (click, type, click) does not depend on which open path ran.
+    const wrapper = await openAttached(`${HOME}/git`);
+    expect(document.activeElement).toBe(searchInput(wrapper));
+    wrapper.unmount();
+  });
+
+  it('keeps the caret in the filter after descending a folder', async () => {
+    const wrapper = await openAttached(null);
+    await wrapper.get('.folder-row').trigger('click');
+    await flush(wrapper);
+    expect(document.activeElement).toBe(searchInput(wrapper));
+    wrapper.unmount();
+  });
+});

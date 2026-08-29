@@ -141,6 +141,34 @@ const repoFilter = ref('');
 // docs/SHORTCUTS.md), and a search you cannot see is a search nobody uses.
 /** Filter over the browsed directory. Blank means "no filter". */
 const folderQuery = ref('');
+/** The filter input — where this dialog points the keyboard on open. */
+const searchEl = ref<HTMLInputElement | null>(null);
+
+/**
+ * The caret starts IN the filter, because typing is the flow the `+` begins:
+ * click `+`, type a few letters, click the row. Focusing the dialog's shell or
+ * the first tab button instead would spend the first typed characters moving
+ * focus that was never where the user's words were going.
+ *
+ * The input is disabled while a browse is in flight and a disabled element
+ * cannot take focus, so the open browse (the `startIn` landings) swallows the
+ * mount-time attempt; when the listing arrives and the input re-enables, focus
+ * goes there after all. Landing it after every browse — entering a folder, up,
+ * a crumb — keeps that same flow intact one level deeper: filter, descend,
+ * filter again, with the caret never dropped on the floor.
+ */
+function focusSearch(): void {
+  if (projects.browsing) return;
+  searchEl.value?.focus();
+}
+
+watch(
+  () => projects.browsing,
+  (browsing, was) => {
+    if (was && !browsing) focusSearch();
+  },
+);
+onMounted(focusSearch);
 /** Rows the browser will render. Grows by {@link FILE_ROW_CAP} per "Show more". */
 const folderCap = ref(FILE_ROW_CAP);
 /** `owner/repo` typed by hand, for a repo `gh` did not list. */
@@ -748,6 +776,7 @@ function onStartAnother(): void {
           <div class="filter">
             <AppIcon name="search" :size="14" class="filter-mark" />
             <input
+              ref="searchEl"
               v-model="folderQuery"
               class="text-input"
               spellcheck="false"
