@@ -1825,3 +1825,63 @@ Discarding takes a deliberate click on a button labelled Discard.
 This is fixed for every doodle source, not just the new one. `OverlayPanel` was
 not changed; it still emits `close` for Escape and for a backdrop click, and the
 composer decides what that means.
+
+---
+
+## 28. Sent-prompt history — repeat what you already sent
+
+Added 2026-08-29, from the user's report: prompts go into a tmux pane that may
+not be the one on screen, so what a prompt did is not always visible and
+re-running it means retyping it from memory. A shell answers the same problem
+with `history` and the up arrow; the composer now has both, per session.
+
+### 28.1 What is recorded
+
+Every CONFIRMED delivery lands in the session's `history`
+(`ComposerSessionState.history`), as the COMPOSED payload — attachment paths
+already folded in — because that is the text that entered the pane, and a
+repeat should resend exactly what was sent. Failed and timed-out sends are
+never recorded: a prompt that did not land is not one the user can repeat, and
+"up arrow" must not re-offer something that already failed once.
+
+A prompt sent again has ONE place in the list — the top (zsh's `erasedups`,
+not bash's narrower ignoredups). Keeping a stale copy mid-list would make the
+arrow walk step over the same text twice. The list is capped at
+`COMPOSER_HISTORY_LIMIT` (100), oldest falling off.
+
+It is keyed like every other per-session fact (`"$connectionId/$name"`), so
+`rekey` carries it across a rename and `forget` drops it with the session.
+
+### 28.2 The arrow walk
+
+↑ steps older into the draft, ↓ steps newer, and one ↓ past the newest hands
+back the draft the walk started from — held in `recallSaved` for exactly that,
+so browsing never destroys work. Enter on a recalled entry resends it; the
+resend is the dedupe above keeping the list honest. Any manual edit ends the
+browse (the text on screen is the user's from then on), as do Discard, a
+delivered send and a failed send's restore.
+
+The keystrokes are intercepted in `PromptComposer.onDraftKeydown`, gated so
+they only fire when the arrows have nothing better to do:
+
+- the slash dropdown owns the arrows while it is open (§18);
+- a selection means the arrows are about to collapse it, not browse;
+- the caret must sit on the FIRST line to recall older and the LAST line to
+  recall newer, so a multi-line draft keeps working as a textarea. A recalled
+  entry lands with the caret at its end — on its last line — which is exactly
+  where ↓ needs to be to undo the recall;
+- not while an IME composition is in flight.
+
+Recalling a prompt that happens to start with `/` dismisses the command
+dropdown rather than opening it: the text was not typed, so it is not a query.
+
+### 28.3 Persistence
+
+`history` and `recallSaved` join the per-session blob under
+`pocketshell.composer.v1` (§23.6). The browse cursor itself does not survive a
+restart — it is a gesture, like the slash dropdown's dismissal — so a draft
+parked in `recallSaved` when the app went away is restored as THE draft: the
+saved text is the only one that can come back.
+
+Tests: `tests/unit/composerStore.test.ts` (the state rules) and
+`tests/unit/composerHistoryRecall.test.ts` (the keystrokes, mounted).
