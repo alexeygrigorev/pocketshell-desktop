@@ -36,3 +36,37 @@ export function adjacentIndex(count: number, from: number, direction: 1 | -1): n
   if (next < 0 || next >= count) return null;
   return next;
 }
+
+/**
+ * The directional keys a flat list answers, named so callers can map key
+ * events through the shortcut registry without spelling strings here.
+ */
+export type ListStepKey = 'up' | 'down' | 'home' | 'end';
+
+/**
+ * The index a directional KEY lands on in a flat list, or null when it lands
+ * nowhere: an empty list, or an arrow stepping off the end it points at.
+ *
+ * Arrows delegate to {@link adjacentIndex} and CLAMP the same way — direction,
+ * not cycle. Home and End are different in kind: they are DESTINATIONS, not
+ * directions, so they land on an end from anywhere, including from "nothing
+ * focused" (`from: -1`).
+ *
+ * Written for the Files tree's roving-tabindex navigation (FEATURES.md F18 —
+ * "the tree is fully keyboard-navigable"), which is the same gesture the tab
+ * bar and the folder rows already answer, one more surface that should not
+ * grow its own arithmetic.
+ */
+export function listStep(count: number, from: number, key: ListStepKey): number | null {
+  if (count <= 0) return null;
+  switch (key) {
+    case 'home':
+      return 0;
+    case 'end':
+      return count - 1;
+    case 'up':
+      return adjacentIndex(count, from, -1);
+    case 'down':
+      return adjacentIndex(count, from, 1);
+  }
+}

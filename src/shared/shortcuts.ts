@@ -413,7 +413,7 @@ export interface ShortcutSpec {
    * express. Naming the ladder here is what stops the next reader "fixing" the
    * duplicate.
    */
-  ladders?: readonly ('escape' | 'enter')[];
+  ladders?: readonly ('escape' | 'enter' | 'listStep')[];
 }
 
 /**
@@ -533,7 +533,7 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
   // on Tab) while Ctrl+Shift+Tab is ESC [ Z, back-tab.
   //
   // Moving a tab from the keyboard went with its chord. The DRAG
-  // (docs/WORKSPACE.md §15) is untouched and is the way to reorder.
+  // is untouched and is the way to reorder.
 
   // --- Session creation ---------------------------------------------------
   {
@@ -679,6 +679,7 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
   {
     id: 'composer.slashNext',
     surface: 'composer',
+    ladders: ['listStep'],
     label: 'Move through the slash-command list',
     defaults: ['ArrowDown', 'ArrowUp'],
     owner: 'app',
@@ -696,6 +697,16 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
   },
 
   // --- Files --------------------------------------------------------------
+  {
+    id: 'files.treeStep',
+    surface: 'files',
+    ladders: ['listStep'],
+    label: 'Move through the file list',
+    defaults: ['ArrowDown', 'ArrowUp', 'Home', 'End'],
+    owner: 'app',
+    rebindable: false,
+    note: 'Bare keys, live only while a file-list ROW has focus — Tab reaches the list like any other control, arrows walk it with a roving focus, and they must not be intercepted anywhere else. Opening the focused row is Enter or Space, which is the platform activating a focused control, not a chord this app claims — so it is deliberately absent from this registry. A QUAD of defaults, for the same reason the tab arrows are a pair: an override replaces all four chords outright.',
+  },
   {
     id: 'files.save',
     surface: 'files',

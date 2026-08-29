@@ -9,8 +9,11 @@ import PopupMenu from './PopupMenu.vue';
 import { api } from '../ipc';
 import { useConnectionStore } from '../stores/connection';
 import { useFilesStore, formatBytes, normaliseTypedPath } from '../stores/files';
+import { useSettingsStore } from '../stores/settings';
 import { splitLabel } from '../sessionGrouping';
 import { buildCrumbs, FILE_ROW_CAP, viewFileRows, type Crumb } from '../fileListView';
+import { listStep, type ListStepKey } from '../../shared/listNavigation';
+import { isShortcut } from '../../shared/shortcuts';
 import { pointAnchor, type Box } from '../../shared/popupPlacement';
 import type { DirEntry } from '../../main/sftp/SftpService';
 
@@ -283,6 +286,94 @@ async function onEntry(entry: DirEntry): Promise<void> {
     emit('openFile', entry.name);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Keyboard navigation over the entry list (FEATURES.md F18 — "the tree is
+// fully keyboard-navigable")
+// ---------------------------------------------------------------------------
+//
+// The session panel's folder rows are <button>s — Tab reaches them, Enter
+// opens them, and Ctrl+↑/↓ walks workspaces — so the file list was the one
+// tree a keyboard could not reach. This is the standard roving-tabindex fix:
+// exactly one row is a Tab stop at a time, arrows move the focus, Enter or
+// Space activates (the platform's own behaviour for a focused control, not a
+// registered chord), Home and End jump to the ends. The arithmetic lives in
+// shared/listNavigation.ts beside its two siblings.
+//
+// `kbIndex` of -1 means "nothing focused yet"; row 0 is then the sole Tab
+// stop, so Tab always has a way in. A directory change resets it: the rows
+// the index named are gone, and a fresh listing should not start mid-way.
+
+const settings = useSettingsStore();
+const entryListEl = ref<HTMLElement | null>(null);
+const kbIndex = ref(-1);
+
+/** How many rows precede the entry list proper (the `..` row, when present). */
+const upRow = computed(() => (files.cwd !== '/' ? 1 : 0));
+const rowCount = computed(() => upRow.value + view.value.rows.length);
+
+function rowTabIndex(i: number): 0 | -1 {
+  return kbIndex.value === i || (kbIndex.value === -1 && i === 0) ? 0 : -1;
+}
+
+function onRowFocus(i: number): void {
+  kbIndex.value = i;
+}
+
+function focusRow(i: number): void {
+  if (!rowCount.value) return;
+  const target = Math.max(0, Math.min(rowCount.value - 1, i));
+  kbIndex.value = target;
+  void nextTick(() => {
+    entryListEl.value?.querySelector<HTMLElement>(`[data-idx="${target}"]`)?.focus();
+  });
+}
+
+function activateRow(i: number): void {
+  if (!connId.value) return;
+  if (i < upRow.value) {
+    void files.cd(connId.value, '..');
+    return;
+  }
+  const entry = view.value.rows[i - upRow.value];
+  if (entry) void onEntry(entry);
+}
+
+function onListKeydown(e: KeyboardEvent): void {
+  // Only when a ROW holds focus — the search box and the path field keep
+  // their own arrows, and nothing here may steal them.
+  const row = (e.target as HTMLElement | null)?.closest?.('[data-idx]');
+  if (!row) return;
+  if (isShortcut(settings.shortcutBindings, 'files.treeStep', e)) {
+    const key: ListStepKey | null =
+      e.key === 'ArrowDown'
+        ? 'down'
+        : e.key === 'ArrowUp'
+          ? 'up'
+          : e.key === 'Home'
+            ? 'home'
+            : e.key === 'End'
+              ? 'end'
+              : null;
+    if (!key) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const next = listStep(rowCount.value, kbIndex.value, key);
+    if (next != null) focusRow(next);
+    return;
+  }
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    activateRow(Number((row as HTMLElement).dataset['idx']));
+  }
+}
+
+watch(
+  () => files.cwd,
+  () => {
+    kbIndex.value = -1;
+  },
+);
 
 async function onCrumb(path: string): Promise<void> {
   if (!connId.value) return;
@@ -569,19 +660,39 @@ defineExpose({ editPath: startEditing, focusSearch });
       </button>
     </div>
 
-    <ul class="entries">
+    <ul
+      ref="entryListEl"
+      class="entries"
+      role="listbox"
+      aria-label="Files in this folder"
+      @keydown="onListKeydown"
+    >
       <!-- `..` sits OUTSIDE the v-for on purpose: it is navigation, not
            content, so neither the cap nor the filter may take it away. -->
-      <li v-if="files.cwd !== '/'" class="entry up" @click="files.cd(connId!, '..')">
+      <li
+        v-if="files.cwd !== '/'"
+        class="entry up"
+        role="option"
+        :aria-selected="false"
+        :tabindex="rowTabIndex(0)"
+        data-idx="0"
+        @click="files.cd(connId!, '..')"
+        @focusin="onRowFocus(0)"
+      >
         <AppIcon name="folder" />
         <span class="nm muted">..</span>
       </li>
       <li
-        v-for="e in view.rows"
+        v-for="(e, i) in view.rows"
         :key="e.name"
         class="entry"
+        role="option"
+        :aria-selected="Boolean(files.openPath && files.openPath.endsWith('/' + e.name))"
         :class="{ active: files.openPath && files.openPath.endsWith('/' + e.name) }"
+        :tabindex="rowTabIndex(upRow + i)"
+        :data-idx="upRow + i"
         @click="onEntry(e)"
+        @focusin="onRowFocus(upRow + i)"
         @contextmenu.prevent="onRowContextMenu($event, e)"
       >
         <AppIcon :name="icon(e)" :class="icon(e)" />

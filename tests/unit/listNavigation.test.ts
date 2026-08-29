@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adjacentIndex } from '../../src/shared/listNavigation';
+import { adjacentIndex, listStep } from '../../src/shared/listNavigation';
 
 /**
  * Where a directional key lands.
@@ -62,5 +62,30 @@ describe('adjacentIndex', () => {
       seen.push(next);
     }
     expect(seen).toEqual([1, 2, 3]);
+  });
+});
+
+describe('listStep — the directional keys of the Files tree', () => {
+  it('steps arrows through adjacentIndex and clamps at both ends', () => {
+    expect(listStep(3, 0, 'down')).toBe(1);
+    expect(listStep(3, 2, 'down')).toBeNull();
+    expect(listStep(3, 2, 'up')).toBe(1);
+    expect(listStep(3, 0, 'up')).toBeNull();
+  });
+
+  it('arrows from "nothing focused" land on the first row', () => {
+    expect(listStep(3, -1, 'down')).toBe(0);
+    expect(listStep(3, -1, 'up')).toBe(0);
+  });
+
+  it('Home and End are destinations from anywhere', () => {
+    expect(listStep(5, 3, 'home')).toBe(0);
+    expect(listStep(5, 0, 'end')).toBe(4);
+    expect(listStep(5, -1, 'end')).toBe(4);
+  });
+
+  it('an empty list has nowhere to land', () => {
+    expect(listStep(0, 0, 'down')).toBeNull();
+    expect(listStep(0, -1, 'home')).toBeNull();
   });
 });
