@@ -1,7 +1,7 @@
 # WORKSPACE.md — the folder workspace
 
 Status: **specified and implemented in the same pass.** Everything in this
-document is in `src/`; §16 lists what is deliberately still thin.
+document is in `src/`; §17 lists what is deliberately still thin.
 
 Written against commit `bfbc98b`, from a dictated brief. The user's words, in
 full, because every decision below is a reading of them and a reader should be
@@ -1557,7 +1557,72 @@ written on top of `reorderTabs` so the group clamp is decided in one place.
 
 ---
 
-## 16. What is built, and what is deliberately thin
+## 16. The tabs survive a relaunch
+
+> "I want to save the state of the app so if I close it and open again, it
+> should show the same tabs. if some sessions are not longer present, just
+> remove them."
+
+The workspace's tab state used to live only in a module-scoped `Map`, so a
+relaunch landed on the host picker and then the bare session list — the tabs
+were all still on the host (tmux kept them), but the app no longer knew which
+folder held them, which of them had been in front, or that a Files tab was open
+at all.
+
+### 16.1 Two records, both `localStorage`, both keyed on the host alias
+
+`src/renderer/workspaceState.ts` holds them, and the workspace's existing
+`persist()` writes both on every change it already ran for:
+
+- **the tab state per host AND folder** (`ps.workspace.<host>.<folder>`): the
+  open Files tabs with their seed paths, the selected tab id, and the MRU
+  stack — exactly the shape the in-memory map holds, written verbatim, so the
+  two copies cannot disagree. On a workspace's first visit in a window the
+  stored record seeds the map, so a relaunch opens the folder with the tabs it
+  closed with, in §15's manual arrangement, with the same tab in front;
+- **the folder each host was last open on** (`ps.lastFolder.<host>`): what
+  lets a relaunched app navigate into the workspace at all. The picker's
+  `enterWorkspace` consults it — for the auto-connect and a clicked row alike —
+  and lands on the folder route when there is one, keeping the bare session
+  list for a host never opened. No folder is remembered GLOBALLY: each host
+  recalls its own, so "the default host's last folder" is the right answer even
+  when a different host was the last one touched.
+
+`localStorage`, not the settings store, and the alias, not the connection id —
+both decisions are §15's `ps.tabOrder` reasoning applied once more: raw layout
+state goes to `localStorage`, and a key built from a per-connect handle would
+be a fresh key on every launch, which is the one thing this feature cannot be.
+Re-keying the in-memory map from connection id to alias followed for the same
+reason, and as a side effect a workspace now also survives a RECONNECT, which
+a connection-id key silently reset.
+
+### 16.2 What is deliberately NOT persisted: the sessions themselves
+
+The host is authoritative. The bar is re-derived from the live tmux list on
+every refresh, so a session killed while the app was closed produces no tab —
+there is nothing to remove at restore time, only stored ids pointing at where
+it was, and those obey the rules §12.1 and §15 already had:
+
+- the MRU and the manual order are pruned against the live bar the moment the
+  session list arrives (`pruneTabIds`), so a session re-created under a
+  recycled name cannot inherit the dead one's rank or place in the close stack;
+- the stored SELECTION is resolved at read time — an id naming no live tab
+  falls back to the first tab — and is deliberately NOT eagerly nulled,
+  because the create flow legitimately points `selected` at a session half a
+  second before the list carrying it arrives. Nulling it in a watch would turn
+  every cold create into "new session appears, but not selected".
+
+The one guard this feature had to STRENGTHEN: the watch that prunes those two
+lists used to stand down only on an empty bar, which a relaunch with restored
+Files tabs never has — its bar holds Files tabs alone until the first listing
+lands, and pruning against that would have wiped the session half of the MRU
+from DISK before the list proving it alive arrived. The guard is now "the
+host's session list has arrived", which covers the empty bar and the
+Files-tabs-only bar with one rule.
+
+---
+
+## 17. What is built, and what is deliberately thin
 
 Everything above is implemented. `npm run test:unit`, `npm run lint` and
 `npm run typecheck` are green, and `npm run build` packages.
@@ -1577,6 +1642,7 @@ Everything above is implemented. `npm run test:unit`, `npm run lint` and
 | popup menus (`+`, file tree, host actions) | `src/shared/popupPlacement.ts` + `tests/unit/popupPlacement.test.ts`, `components/PopupMenu.vue`, `components/HostActionsMenu.vue` |
 | worktree grouping | `gitRepoProbeCommand` -> `parseWorktreeRoots` + `tests/unit/worktrees.test.ts`; cached in `PocketshellClient.withRepoRoots` |
 | file tree width + context menu | `views/FilesView.vue`, `components/FileTree.vue` |
+| the tabs across a relaunch (§16) | `src/renderer/workspaceState.ts` + `tests/unit/workspaceState.test.ts`, `tests/unit/folderWorkspaceRestore.test.ts`; the picker's handoff in `views/HostPickerView.vue` + `tests/unit/HostPickerView.test.ts` |
 
 Two things are thinner than they could be, and each is a deliberate stop
 rather than an oversight:
