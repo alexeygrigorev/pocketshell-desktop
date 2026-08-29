@@ -90,11 +90,51 @@ describeDocker('PocketshellClient integration', () => {
     expect(remote.state).toBe('gh-missing');
     expect(remote.repos).toEqual([]);
   });
-
   it('usage returns the seeded provider rows', async () => {
     const rows = await helper.usage(connectionId!);
     expect(rows.length).toBeGreaterThanOrEqual(1);
     const providers = rows.map((r) => r.provider);
     expect(providers).toEqual(expect.arrayContaining(['codex', 'claude', 'copilot']));
+  });
+
+  // The env editor's write path (FEATURES.md F16), against the real helper:
+  // set → the key exists with a value → get reads the same value back. The
+  // value deliberately contains characters that are metacharacters both in
+  // shell (quotes, dollar, space) and in dotenv files (`=`), so a leak through
+  // argv quoting or a botched dotenv write cannot pass by luck.
+  it('envSet writes a value that envList and envGet read back', async () => {
+    const dir = '$HOME';
+    const key = 'PS_DESKTOP_ENV_SET_PROBE';
+    const value = 's3cr3t "quoted" ' + '$dollar=kept ' + String(Date.now());
+
+    await helper.envSet(connectionId!, dir, { [key]: value });
+
+    const keys = await helper.envList(connectionId!, dir);
+    const row = keys.find((k) => k.key === key);
+    expect(row?.hasValue).toBe(true);
+
+    const values = await helper.envGet(connectionId!, dir, [key]);
+    expect(values[key]).toBe(value);
+  });
+
+  it('envSet overwrites an existing key, and envSet of a NEW key lists it', async () => {
+    const dir = '$HOME';
+    const key = 'PS_DESKTOP_ENV_OVERWRITE_PROBE';
+
+    await helper.envSet(connectionId!, dir, { [key]: 'first' });
+    await helper.envSet(connectionId!, dir, { [key]: 'second' });
+
+    const values = await helper.envGet(connectionId!, dir, [key]);
+    expect(values[key]).toBe('second');
+  });
+
+  it('envSet can target .envrc explicitly', async () => {
+    const dir = '$HOME';
+    const key = 'PS_DESKTOP_ENVRC_PROBE';
+
+    await helper.envSet(connectionId!, dir, { [key]: 'in-envrc' }, '.envrc');
+
+    const keys = await helper.envList(connectionId!, dir);
+    expect(keys.find((k) => k.key === key)).toMatchObject({ file: '.envrc', hasValue: true });
   });
 });

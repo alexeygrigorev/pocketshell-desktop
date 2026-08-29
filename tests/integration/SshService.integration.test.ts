@@ -85,6 +85,14 @@ describeDocker('SshService integration', () => {
     expect(text).toContain('hello_from_shell');
   });
 
+  it('pipes ExecOptions.stdin to the command and closes the pipe', async () => {
+    // `cat` echoes whatever reaches stdin and exits on EOF — the exact
+    // contract `pocketshell env set` relies on for secret values (F16).
+    const res = await ssh.exec(connectionId!, 'cat', { stdin: 'through the pipe' });
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toBe('through the pipe');
+  });
+
   it('reports connect failure with a clear error for a closed port', async () => {
     const bad = new SshService();
     const result = await bad.connect({

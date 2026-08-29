@@ -25,11 +25,29 @@ const emit = defineEmits<{
    * for a file versus a directory — see the menu below.
    */
   openInNewTab: [path: string, kind: 'dir' | 'file'];
+  /**
+   * The folder has an env file and the user asked for the env editor
+   * (FEATURES.md F16). Emitted for the same reason as `openInNewTab`: the
+   * overlay lives above the whole Files tab, which is FilesView's to mount.
+   */
+  openEnv: [];
 }>();
 
 const connection = useConnectionStore();
 const files = useFilesStore();
 const connId = computed(() => connection.connectionId);
+
+/**
+ * The current folder holds an env file the server-side editor can open.
+ *
+ * Read straight off the listing — `sftp.readdir` returns dot entries and the
+ * store filters nothing — so the button's visibility costs no extra round
+ * trip. Neither file is REQUIRED: the helper's `env list` merges both, and a
+ * folder with only `.envrc` (direnv layouts) is exactly as editable.
+ */
+const envAvailable = computed(() =>
+  files.entries.some((e) => e.name === '.env' || e.name === '.envrc'),
+);
 
 /**
  * The path as cells, on ONE line, always — as many whole segments as the
@@ -497,6 +515,17 @@ defineExpose({ editPath: startEditing, focusSearch });
           </span>
         </span>
         <span class="strip-actions">
+          <!-- Conditional, not summonable like search: a folder without env
+               files has no editor to offer, and an always-present control
+               would spend the strip's scarce width on a permanent no. -->
+          <button
+            v-if="envAvailable"
+            class="icon-btn sm"
+            title="Edit env for this folder"
+            @click="emit('openEnv')"
+          >
+            <AppIcon name="type" :size="14" />
+          </button>
           <button
             class="icon-btn sm"
             :class="{ on: searchOpen }"

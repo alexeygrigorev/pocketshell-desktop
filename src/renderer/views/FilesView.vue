@@ -23,6 +23,8 @@ import { useSettingsStore } from '../stores/settings';
 import { resolveTheme } from '../themes';
 import { isShortcut } from '../../shared/shortcuts';
 import FileTree from '../components/FileTree.vue';
+import OverlayPanel from '../components/OverlayPanel.vue';
+import EnvPanelView from './EnvPanelView.vue';
 
 /**
  * Loaded on demand. CodeMirror is ~680 KB of the renderer, and a workspace
@@ -60,7 +62,7 @@ const settings = useSettingsStore();
 const connId = computed(() => connection.connectionId);
 
 // ---------------------------------------------------------------------------
-// Tree pane width (docs/WORKSPACE.md §3.7)
+// Tree pane width
 // ---------------------------------------------------------------------------
 /**
  * The file tree used to be CONTENT-sized — `min-width: 260px` over an `auto`
@@ -196,6 +198,19 @@ watch(
 // made the user lose their place every time they looked at the terminal. The
 // guarantee `clear()` exists for (one connection's listing must never be
 // shown for another) is kept by clearing on DISCONNECT instead.
+
+// ---------------------------------------------------------------------------
+// The env editor (FEATURES.md F16)
+// ---------------------------------------------------------------------------
+/**
+ * The server-side env panel for the folder being browsed. The TREE decides
+ * when to offer it (it sees the listing, so `.env` / `.envrc` visibility is
+ * free there) and this view owns the overlay — same division as `openInNewTab`,
+ * where the tree says "somewhere else" and the parent builds it. The panel
+ * edits `files.cwd`'s env: whichever directory this tab is standing in, which
+ * is exactly "the folder being browsed" that F16 names.
+ */
+const envOpen = ref(false);
 
 async function onOpenFile(name: string): Promise<void> {
   if (!connId.value) return;
@@ -388,6 +403,7 @@ const previewNote = computed(() => {
       :style="treeStyle"
       @open-file="onOpenFile"
       @open-in-new-tab="(path, kind) => emit('openInNewTab', path, kind)"
+      @open-env="envOpen = true"
     />
     <!-- Same sash treatment as the session panel's: transparent at rest,
          because the tree draws its own right hairline, and highlighted only
@@ -628,6 +644,14 @@ const previewNote = computed(() => {
         <p class="muted small">changes save back over SFTP</p>
       </div>
     </div>
+
+    <!-- The folder's env editor. `files.cwd`, not the tab's seed path: the
+         panel edits the folder the user is STANDING in when they press the
+         button, and the overlay's modal grab means the directory cannot move
+         underneath it while it is open. -->
+    <OverlayPanel v-if="envOpen && connId" title="Env" size="md" @close="envOpen = false">
+      <EnvPanelView :connection-id="connId" :dir="files.cwd" />
+    </OverlayPanel>
   </div>
 </template>
 

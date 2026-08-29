@@ -43,14 +43,14 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | `main` should read `Terminal`, so `Terminal 2` follows | `1d89bf4` |
 | ✅ | The `+` menu did nothing (clipped by the tab strip) | `c614e7e` |
 | ✅ | Clicking a tab should focus the terminal | `1d89bf4` |
-| ✅ | Tab-cycling hotkeys (`Ctrl+Tab`, `Ctrl+1`..`9`) — and the discovery that xterm DOES encode them (`docs/WORKSPACE.md` §11.2) | *this pass* |
+| ✅ | Tab-cycling hotkeys (`Ctrl+Tab`, `Ctrl+1`..`9`) — and the discovery that xterm DOES encode them | *this pass* |
 | ✅ | Agent marks per tab, from `@ps_agent_kind`; nothing at all for `unknown` | *this pass* |
 | ✅ | Closing a tab selects the previously active one, via a pruned MRU stack | *this pass* |
 | ✅ | Stop a session from a tab context menu — the only destructive action, confirmed | *this pass* |
 | ✅ | Drag tabs to rearrange them, plus `Ctrl+Shift+PageUp`/`PageDown` | *this pass* |
 | ✅ | Drop the folder name and its `×` from the tab strip ("no need for this part") | *this pass* |
 | ❌ | The folder's path in the workspace header | superseded — the user deleted the element it would have lived in |
-| ✅ | `docs/WORKSPACE.md` named the `main` tab label in eight places; it is `Terminal` | *this pass* |
+| ✅ | The design record named the `main` tab label in eight places; it is `Terminal` | *this pass* |
 | ✅ | Ask for harness, permissions and profile before launching | `00eb3e7` |
 | ✅ | `pocketshell agent` was missing its required `--dir` | `00eb3e7` |
 
@@ -131,7 +131,7 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Drop the "force a new session" checkbox | `cde5dd5` |
 | ✅ | See every shortcut, grouped by surface, in Settings | `b36ba69` |
 | ✅ | Rebind a shortcut, with conflicts named and the shell protected | `b36ba69` |
-| ✅ | Drop the Ctrl+Tab / Ctrl+Shift+Tab tab cycle; keep only `Ctrl+←`/`Ctrl+→`, handing completion and back-tab back to the shell (`docs/WORKSPACE.md` §11.0b) | `7447cc4` |
+| ✅ | Drop the Ctrl+Tab / Ctrl+Shift+Tab tab cycle; keep only `Ctrl+←`/`Ctrl+→`, handing completion and back-tab back to the shell | `7447cc4` |
 | ✅ | Move that step onto `Ctrl+[`/`Ctrl+]` — "ctrl+left and right conflicts with jumping over words" — at the price of ESC/GS bytes at a prompt, stated in the registry note (`docs/SHORTCUTS.md` §1.2) | `c655bad`, this change |
 | ✅ | Every chord handler reads that registry, so a rebinding takes effect on the next keystroke (`docs/SHORTCUTS.md` §6) | `86bf3dc`, `836eb6b`, `aaec2cd`, `e456a08`, `549c44b` |
 | ✅ | A readline habit restored: delete-word-backward on `Ctrl+W` in text fields, with bash's semantics and the terminal's `\x17` untouched (`docs/SHORTCUTS.md`, `text.deleteWordBackward`) | `10276a3` |
@@ -145,6 +145,19 @@ is roughly the order things were asked, and that history is useful.
 | ✅ | Commit regularly, in focused commits | ongoing |
 | ✅ | CodeMirror duplicated into the installer | `169cf60` |
 | ✅ | `keytar` and `ssh2-sftp-client` shipped without a single import | `169cf60` |
+
+### The FEATURES.md remainder (F12 / F16 / F18 / F19)
+
+The feature backlog said what "done" meant for each entry; these are the
+four that were still open, with the deviation each one earned.
+
+| | Item | Landed in |
+|---|---|---|
+| ✅ | F18 — the window remembers its size, position and maximized state; a restore onto a machine that lost the external display opens centered instead of stranded | `aa63b2d` |
+| ✅ | F19 — PRs run the release pipeline's build matrix and the Docker-backed smoke gate (unit + integration + E2E), so a red E2E can block a merge | `c1c19fd` |
+| ✅ | F12 — automatic reconnect on transport drop: 5s→60s backoff, 10 attempts, session refresh + auto-forward re-opened against the new id, banner countdown with *Retry now*; the `flaky` fixture makes the drop deterministic | `676fc2f`, `0957d70` |
+| ✅ | F12 deviation — no 1s health poll: keepalive + error/close already detect drops, so polling was removed from the spec; the sleep/wake case it was really about is covered by a `powerMonitor` resume probe | `0957d70` |
+| ✅ | F16 — the env editor: a panel on the Files tab when the browsed folder has `.env`/`.envrc`; names via `env list`, values revealed per row or all at once via `env get`, writes via `env set` with the JSON payload on STDIN (never argv); the write contract was read off the pinned helper's `--help`, which has no `--key` option | this pass |
 
 ---
 

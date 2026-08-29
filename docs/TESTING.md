@@ -63,9 +63,20 @@ Examples:
   1 MiB download whose sampled `rateIn` must land near 512 KiB/s.
   **Rebuild the images after changing it** —
   `scripts/build-docker.sh`; the tests use the prebuilt tags.
+- `Reconnect.integration`: against the `flaky` image, watch a REAL
+  transport drop arrive as close-reason `lost` on a deterministic schedule,
+  confirm the dead id is a hard unknown-id error, then re-dial the same
+  sshd and round-trip `whoami`. Main's half of reconnect; the renderer FSM
+  that decides WHEN to redial is unit-tested under fake timers
+  (`connectionAutoReconnect.test.ts`).
 - `HelperIntegration`: against the `helper` image, `pocketshell sessions
   list`, `usage --json` parse cleanly; `sessions
-  create` then `sessions list` shows it.
+  create` then `sessions list` shows it. The env-editor round trip
+  (FEATURES.md F16) rides here too: `env set` (a `{"KEY":"value"}` JSON
+  object on the command's STDIN — never argv) writes a value containing
+  quotes, dollars and `=`; `env list` shows the key `hasValue`;
+  `env get` reads the exact value back; an explicit `--file .envrc` write
+  lands where it was aimed.
 
 ### E2E
 
@@ -105,9 +116,13 @@ test runner.
   paths). Plus `/bin/sh` stub binaries for `claude`/`codex`/`opencode`/
   `quse` (deterministic, no API keys) and seeded agent logs under
   `~/.claude/projects/`, `~/.codex/sessions/`, `~/.local/share/opencode/`.
-- **`Dockerfile.flaky`** — `helper` + a `ForceCommand` watcher that kills
-  the ssh child after `FLAKY_DISCONNECT_AFTER_SEC` (default 8) to exercise
-  reconnect.
+- **`Dockerfile.flaky`** — `FROM pocketshell-test:ssh` + a chaos
+  entrypoint (`flaky-entrypoint.sh`): every
+  `PS_FLAKY_INTERVAL_SEC` (default 45) it kills the PER-CONNECTION sshd
+  handlers — the processes OpenSSH re-titles `sshd: testuser@pts/0` — and
+  only those. The listener survives, so a connected client sees a real
+  transport drop while the next dial still succeeds. Consumed by
+  `Reconnect.integration.test.ts` (interval tuned to 5s per run).
 
 ### Compose (`docker-compose.yml`)
 
