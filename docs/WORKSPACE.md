@@ -765,14 +765,31 @@ Three of them, and they are different questions:
 
 A folder row with no sessions is not reachable from the panel, because folder
 nodes are derived from sessions. But the workspace can still end up with no
-session tabs, in two ways: the last session in the folder was killed while the
-workspace was open, or the user deep-linked to a folder whose sessions have
-since gone.
+tabs at all, in three ways: the folder simply has nothing in it — which, since
+the seeded Files tab went away (below), is the ordinary way a workspace OPENS —
+or the last session in the folder was killed while the workspace was open, or
+the user deep-linked to a folder whose sessions have since gone.
 
 In that state the workspace shows the folder's path, one line of prose, and the
 same `+` the tab bar carries — the empty state IS the create affordance, because
 there is exactly one useful thing to do. A Files tab is still offered, since
 browsing a folder with nothing running in it is perfectly reasonable.
+
+**No Files tab is seeded any more.**
+
+> "let's not show the files tab by default - only when we need it"
+
+The bar a fresh workspace opened with used to carry one Files tab beside the
+session tabs, a leftover of the original ask ("a tab for inspecting files, and
+we can also have multiple tabs"). With every Files tab closable (§12) that seed
+was the one tab the user had not asked for: it was there on every entry, wanted
+or not. Now the workspace opens showing only its sessions, and a Files tab
+appears when something asks for one — "New Files tab" on the `+` menu, "open in
+a new tab" from the file tree, or a path clicked in the terminal, which the
+reveal watcher serves by opening a tab when none is standing. The empty state
+gained a loading guard in the same change: with no seed, a deep link's session
+refresh would otherwise announce "nothing is running" for the moment before the
+tabs arrive.
 
 `SessionPlaceholderView` (the right pane before any folder is picked) stays as
 it is, with its wording changed from "select a session to attach" to name

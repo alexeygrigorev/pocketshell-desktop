@@ -148,14 +148,11 @@ const memoryKey = computed(() => `${connection.connectionId ?? 'none'}/${folderK
 function remembered(): WorkspaceMemory {
   const existing = memory.get(memoryKey.value);
   if (existing) return existing;
-  // Exactly one Files tab to start with. The user asked for "a tab for
-  // inspecting files, and we can also have multiple tabs" — one is the tab,
-  // the rest are opened on purpose.
-  const fresh: WorkspaceMemory = {
-    filesTabs: [{ id: `${folderKey.value}::files:1`, path: null }],
-    activeTab: null,
-    mru: [],
-  };
+  // No Files tab to start with. A workspace opens showing its sessions, and a
+  // Files tab appears only when something asks for one: "New Files tab" on the
+  // `+` menu, "open in a new tab" from the file tree, or a path clicked in the
+  // terminal — the reveal watcher below opens one when none is standing.
+  const fresh: WorkspaceMemory = { filesTabs: [], activeTab: null, mru: [] };
   memory.set(memoryKey.value, fresh);
   return fresh;
 }
@@ -302,8 +299,8 @@ const tabs = computed<WorkspaceTab[]>(() =>
         created: row.session.created,
       })),
       prefix.value,
-      // `path: null` means "this tab was never given a seed", which resolves to
-      // the folder — the first Files tab of every workspace.
+      // `path: null` means "this tab was never given a seed", which resolves
+      // to the folder.
       filesTabs.value.map((tab) => ({ id: tab.id, path: tab.path ?? folderPath.value })),
     ),
     tabOrder.value,
@@ -2027,13 +2024,18 @@ function onFocusTerminal(): void {
           @open-in-new-tab="onOpenInNewTab"
         />
 
-        <!-- No tabs at all: the folder's sessions were killed while this was
-             open, or a deep link outlived them. There is exactly one useful
-             thing to do here, so the empty state IS the create affordance.
-             It opens the same dialog the `+` does rather than starting a bare
-             shell, so there is ONE way to create a session in a folder and it
-             is the one that can also start an agent. -->
-        <div v-if="!tabs.length" class="empty">
+        <!-- No tabs at all. Most often this is just a folder with nothing in
+             it — the ordinary entry state now that no Files tab is seeded —
+             and it is also where a killed-off session list or an outlived deep
+             link lands. There is exactly one useful thing to do here, so the
+             empty state IS the create affordance. It opens the same dialog the
+             `+` does rather than starting a bare shell, so there is ONE way to
+             create a session in a folder and it is the one that can also start
+             an agent; browsing files without a session stays on the `+` menu.
+             Held off while the session list is still loading, so a deep link
+             does not announce "nothing is running" a beat before the tabs
+             arrive. -->
+        <div v-if="!tabs.length && !sessions.loading" class="empty">
           <p class="muted">{{ folderPath ?? folderKey }}</p>
           <p class="muted">nothing is running in this folder</p>
           <button class="btn-ghost" @click="openLaunchDialog">Start a session here</button>

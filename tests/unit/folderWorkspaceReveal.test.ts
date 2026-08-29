@@ -22,6 +22,11 @@ import { ref } from 'vue';
  * reuses the tab that is already there, outside it gets one of its own and
  * leaves the first one alone.
  *
+ * The workspace no longer SEEDS a Files tab (the user asked to see Files only
+ * when it is needed), so most cases here start from a bar with no Files tab at
+ * all — and the watcher's answer either way is that the click lands somewhere:
+ * a tab is opened for it rather than dropped.
+ *
  * FilesView is stubbed. What is under test is the TAB decision, which is the
  * workspace's; the reveal's own consumption is pinned in filesStore.test.ts and
  * the SFTP round trips would need a host.
@@ -102,6 +107,15 @@ function activeLabel(wrapper: VueWrapper): string {
   return wrapper.find('nav.tabs button.active').text().trim();
 }
 
+/** Open a Files tab the way the user does, through the `+` menu. */
+async function openFilesTab(wrapper: VueWrapper): Promise<void> {
+  await wrapper.find('.tab.add').trigger('click');
+  const item = wrapper.findAll('.menu-item').find((b) => b.text() === 'New Files tab');
+  if (!item) throw new Error('no "New Files tab" item on the + menu');
+  await item.trigger('click');
+  await flush();
+}
+
 const IMAGE = '/home/me/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-1.png';
 
 beforeEach(() => {
@@ -118,14 +132,15 @@ beforeEach(() => {
 describe('a terminal path revealed from the folder workspace', () => {
   it('opens a path outside the folder in a Files tab of its own', async () => {
     const wrapper = await openWorkspace();
-    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
+    // No Files tab is seeded: the bar starts with the session tab only.
+    expect(tabLabels(wrapper)).toEqual(['Terminal']);
 
     useFilesStore().requestReveal(IMAGE);
     await flush();
 
-    // A second Files tab, and it is the one in front.
-    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files', 'Files 2']);
-    expect(activeLabel(wrapper)).toBe('Files 2');
+    // One Files tab, opened for the click, and it is the one in front.
+    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
+    expect(activeLabel(wrapper)).toBe('Files');
   });
 
   it('leaves the request parked for the new tab to take', async () => {
@@ -150,7 +165,7 @@ describe('a terminal path revealed from the folder workspace', () => {
 
     // "a separate new tab", not one tab per image: the tab standing over that
     // directory serves the next click in it too.
-    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files', 'Files 2']);
+    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
   });
 
   it('expands a home-relative target before deciding it is outside', async () => {
@@ -161,11 +176,12 @@ describe('a terminal path revealed from the folder workspace', () => {
     await flush();
 
     expect(useFilesStore().reveal).toBe('.codex/generated_images/uuid/exec-3.png');
-    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files', 'Files 2']);
+    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
   });
 
   it('keeps a path INSIDE the folder in the Files tab that is already there', async () => {
     const wrapper = await openWorkspace();
+    await openFilesTab(wrapper);
 
     useFilesStore().requestReveal('/home/me/git/x/src/main.ts');
     await flush();
@@ -174,17 +190,33 @@ describe('a terminal path revealed from the folder workspace', () => {
     expect(activeLabel(wrapper)).toBe('Files');
   });
 
-  it('falls back to the existing tab when the host never reported a $HOME', async () => {
+  it('opens a Files tab for an inside path too, when none is standing', async () => {
+    const wrapper = await openWorkspace();
+
+    // The reuse rule above needs a tab to reuse. With none standing — the
+    // ordinary state of a fresh workspace now — the click still lands: the
+    // watcher opens one at the path's parent and hands it the reveal.
+    useFilesStore().requestReveal('/home/me/git/x/src/main.ts');
+    await flush();
+
+    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
+    expect(activeLabel(wrapper)).toBe('Files');
+    expect(useFilesStore().reveal).toBe('/home/me/git/x/src/main.ts');
+  });
+
+  it('falls back to opening a tab when the host never reported a $HOME', async () => {
     homeResult = { ok: false, home: null, error: 'no $HOME' };
     useProjectsStore().home = null;
     const wrapper = await openWorkspace();
 
     // Without the home there is no absolute root to compare against, and not
-    // knowing is not evidence that the two are apart. Doing what it did before
-    // beats spraying tabs at every click.
+    // knowing is not evidence that the two are apart. What "what it did before"
+    // now means is opening: the seeded tab this fallback used to land in is
+    // gone, and dropping the click would be the only worse answer.
     useFilesStore().requestReveal(IMAGE);
     await flush();
 
     expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
+    expect(activeLabel(wrapper)).toBe('Files');
   });
 });

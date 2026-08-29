@@ -10,10 +10,13 @@ import { ref } from 'vue';
  * The user asked for "x here like in vscode", and the two rules this file pins
  * are what the ask changed and what it did NOT:
  *
- *  - every tab wears the control now, first Files tab included — the old rule
- *    spared it because closing it would strand the workspace, and that is
- *    pinned in the reveal case at the bottom: a link clicked with no Files tab
- *    standing opens one instead of landing nowhere;
+ *  - every tab wears the control now — the old rule spared the first Files
+ *    tab because closing it would strand the workspace, and what replaced that
+ *    guarantee is pinned at the bottom: a link clicked with no Files tab
+ *    standing opens one instead of landing nowhere. The workspace no longer
+ *    SEEDS one either (the user asked to see Files only when it is needed), so
+ *    where a test here needs a Files tab to act on, it opens one through the
+ *    `+` menu;
  *  - a session tab's `×` cannot kill. It arms the same confirmed dialog the
  *    right-click menu does, says Stop rather than Close, and does not select
  *    the tab it sits on — the right-click rule, which a mis-aimed click on a
@@ -97,6 +100,20 @@ function activeLabel(wrapper: VueWrapper): string {
   return wrapper.find('nav.tabs button.active').text().trim();
 }
 
+/**
+ * Open a Files tab the way the user does, through the `+` menu.
+ *
+ * No test here may assume a seeded Files tab — there is none — so this is the
+ * one setup step every Files-tab case starts from.
+ */
+async function openFilesTab(wrapper: VueWrapper): Promise<void> {
+  await wrapper.find('.tab.add').trigger('click');
+  const item = wrapper.findAll('.menu-item').find((b) => b.text() === 'New Files tab');
+  if (!item) throw new Error('no "New Files tab" item on the + menu');
+  await item.trigger('click');
+  await flush();
+}
+
 /** The `×` of the tab whose label is [label]. */
 function closeOf(wrapper: VueWrapper, label: string): ReturnType<VueWrapper['find']> {
   const tab = wrapper
@@ -121,12 +138,15 @@ beforeEach(() => {
 });
 
 describe('the close control on a workspace tab', () => {
-  it('is on every tab, the first Files tab included', async () => {
+  it('is on every tab, however the tab came to exist', async () => {
     const wrapper = await openWorkspace();
+    // No Files tab is seeded: a workspace opens with its session tabs only.
+    expect(tabLabels(wrapper)).toEqual(['Terminal']);
+    expect(closeOf(wrapper, 'Terminal').exists(), 'Terminal').toBe(true);
+
+    await openFilesTab(wrapper);
     expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
-    for (const label of ['Terminal', 'Files']) {
-      expect(closeOf(wrapper, label).exists(), label).toBe(true);
-    }
+    expect(closeOf(wrapper, 'Files').exists(), 'Files').toBe(true);
   });
 
   it('says Stop on a session tab and opens the named confirmation, killing nothing', async () => {
@@ -165,6 +185,7 @@ describe('the close control on a workspace tab', () => {
 
   it('closes a Files tab outright, touching neither the stop dialog nor the kill', async () => {
     const wrapper = await openWorkspace();
+    await openFilesTab(wrapper);
 
     await closeOf(wrapper, 'Files').trigger('click');
     await flush();
@@ -177,15 +198,12 @@ describe('the close control on a workspace tab', () => {
     expect(killSession).not.toHaveBeenCalled();
   });
 
-  it('opens a Files tab for a link clicked after the last one was closed', async () => {
+  it('opens a Files tab for a link clicked when none is standing', async () => {
     const wrapper = await openWorkspace();
 
-    await closeOf(wrapper, 'Files').trigger('click');
-    await flush();
-
-    // The old rule guaranteed a Files tab always existed to receive this; with
-    // every one of them closable, the watcher owes the click a tab instead of
-    // dropping it.
+    // A fresh workspace ships no Files tab to close any more, so this is the
+    // plain entry state, not a post-close one: the watcher still owes the click
+    // a tab instead of dropping it.
     useFilesStore().requestReveal(IMAGE);
     await flush();
 

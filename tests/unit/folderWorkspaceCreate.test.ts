@@ -193,7 +193,7 @@ describe('the folder workspace + menu creates a session', () => {
     startSession.mockResolvedValue(started('git-x-2'));
 
     const wrapper = await openWorkspace();
-    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
+    expect(tabLabels(wrapper)).toEqual(['Terminal']);
 
     await createVia(wrapper, 'shell');
 
@@ -201,7 +201,7 @@ describe('the folder workspace + menu creates a session', () => {
       folder: '~/git/x',
       namePolicy: 'unique',
     });
-    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Terminal 2', 'Files']);
+    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Terminal 2']);
     expect(wrapper.find('nav.tabs button.active').text().trim()).toBe('Terminal 2');
     expect(barError(wrapper)).toBeNull();
   });
@@ -251,7 +251,7 @@ describe('the folder workspace + menu creates a session', () => {
     expect(shellInput).not.toHaveBeenCalled();
     expect(barError(wrapper)).toContain('git-x');
     expect(barError(wrapper)).toContain('already open');
-    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
+    expect(tabLabels(wrapper)).toEqual(['Terminal']);
   });
 
   it('says so when the host answers `reused`, even under a fresh name', async () => {
@@ -294,6 +294,6 @@ describe('the folder workspace + menu creates a session', () => {
 
     expect(shellInput).not.toHaveBeenCalled();
     expect(barError(wrapper)).toContain('git-elsewhere');
-    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Files']);
+    expect(tabLabels(wrapper)).toEqual(['Terminal']);
   });
 });

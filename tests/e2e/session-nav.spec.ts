@@ -9,10 +9,10 @@ import { ensureHelperUp, E2E_HOST_NAME, HOST_PORT, TEST_KEY, stopHelper } from '
  *
  * Nav: host picker -> host (persistent folder panel on the left, no host-level
  * tab bar) -> click a FOLDER -> its workspace fills the right pane with one tab
- * per tmux session in the folder plus a Files tab, while the panel stays put ->
- * close the folder -> back to the host list. Port forwarding and Provider
- * usage are host header icons that open overlays, one click each (§5.3e).
- * See docs/WORKSPACE.md.
+ * per tmux session in the folder — no Files tab until something asks for one —
+ * while the panel stays put -> close the folder -> back to the host list. Port
+ * forwarding and Provider usage are host header icons that open overlays, one
+ * click each (§5.3e). See docs/WORKSPACE.md.
  *
  * Terminal: switching between the fixture's two sessions repeatedly used to
  * stack an extra xterm `onData`/`onResize` handler per switch, so tmux's
@@ -148,12 +148,14 @@ test.describe('session-scoped navigation + terminal wiring', () => {
   test('selecting a folder fills the right pane and keeps the panel visible', async () => {
     await page.locator('.dir-header').first().click();
     await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 15_000 });
-    // One tab per session in the folder, then Files. Neither fixture session is
-    // named after `$HOME` (`main`, `build` vs a derived `home-testuser`), so
-    // both keep their own names — docs/WORKSPACE.md §3.3's third rule.
+    // One tab per session in the folder, and NO Files tab: one appears only
+    // when something asks for it (the `+` menu, the file tree, a path clicked
+    // in the terminal). Neither fixture session is named after `$HOME` (`main`,
+    // `build` vs a derived `home-testuser`), so both keep their own names —
+    // docs/WORKSPACE.md §3.3's third rule.
     await expect(page.getByRole('button', { name: 'main', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'build', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Files', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Files', exact: true })).toHaveCount(0);
     // The Conversation tab is gone with the feature (docs/WORKSPACE.md §9).
     await expect(page.getByRole('button', { name: 'Conversation' })).toHaveCount(0);
     await expect(page.locator('.terminal-area > .terminal-slot > .terminal')).toBeVisible({ timeout: 15_000 });
@@ -164,6 +166,11 @@ test.describe('session-scoped navigation + terminal wiring', () => {
   });
 
   test('the Files tab is per-folder and the terminal survives switching to it', async () => {
+    // No Files tab is standing, so this opens one the way the user does: the
+    // tab bar's `+`, then "New Files tab".
+    await page.getByTitle('New session or Files tab').click();
+    await page.getByRole('button', { name: 'New Files tab' }).click();
+    await expect(page.getByRole('button', { name: 'Files', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Files', exact: true }).click();
     await expect(page.locator('.files')).toBeVisible({ timeout: 15_000 });
     // v-show, not v-if: unmounting the terminal would close the SSH shell and
