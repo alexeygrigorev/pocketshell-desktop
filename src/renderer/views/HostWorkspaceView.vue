@@ -47,6 +47,7 @@ import HostPanelButtons from '../components/HostPanelButtons.vue';
 import { type HostPanel } from '../hostPanels';
 import { useFolderTree } from '../folderTree';
 import { adjacentIndex } from '../../shared/listNavigation';
+import { editingTarget } from '../editingTarget';
 import PortPanelView from './PortPanelView.vue';
 import SettingsView from './SettingsView.vue';
 import UsageView from './UsageView.vue';
@@ -296,22 +297,9 @@ function stepWorkspace(direction: 1 | -1): void {
 }
 
 /**
- * A field the user is editing keeps its own arrow keys.
- *
- * The terminal is deliberately not one, and that exception is the load-bearing
- * half: xterm's input sink IS a `<textarea>` (`.xterm-helper-textarea`) and is
- * focused whenever the pane has the keyboard, so a plain editable test would
- * exempt the one surface these chords exist for. Same rule, same reason, as
- * FolderWorkspaceView's `editingTarget` — the two must not drift, because they
- * are two axes of one gesture.
+ * A field the user is editing keeps its own arrow keys — see
+ * `editingTarget.ts`, where the rule lives now that a third chord needs it.
  */
-function editingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.closest('.xterm')) return false;
-  if (target.isContentEditable) return true;
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
-}
-
 function onWindowKeydown(e: KeyboardEvent): void {
   if (!e.ctrlKey && !e.metaKey) return;
   if (e.altKey) return;

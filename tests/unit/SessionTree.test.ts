@@ -306,6 +306,46 @@ describe('SessionTree — the foot button is gone, and nothing went with it', ()
   });
 });
 
+describe('SessionTree — the creation chord (sessions.new)', () => {
+  function pressChord(target: EventTarget = window): void {
+    target.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, shiftKey: true, bubbles: true }),
+    );
+  }
+
+  it('opens the picker in the first root, from wherever focus sits', async () => {
+    const wrapper = await open([session('git-a', `${HOME}/git/a`)]);
+    pressChord();
+    await flush(wrapper);
+    // The same door as the header `+`: same default root, one object of state.
+    expect(dialogStartIn(wrapper)).toBe(`${HOME}/git`);
+  });
+
+  it('stands down while the user is typing in a field', async () => {
+    const wrapper = await open([session('git-a', `${HOME}/git/a`)]);
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    pressChord(input);
+    await flush(wrapper);
+    expect(dialogStartIn(wrapper)).toBeUndefined();
+    input.remove();
+  });
+
+  it('does not reset a picker that is already open', async () => {
+    const wrapper = await open([session('git-a', `${HOME}/git/a`)]);
+    await generalAdd(wrapper).trigger('click');
+    expect(dialogStartIn(wrapper)).toBe(`${HOME}/git`);
+    pressChord();
+    await flush(wrapper);
+    // A second press must not rebuild the dialog's `creating` state mid-browse;
+    // Escape is how the picker closes.
+    const stub = wrapper.findComponent(DialogStub);
+    expect(stub.exists()).toBe(true);
+    expect(wrapper.findAllComponents(DialogStub)).toHaveLength(1);
+  });
+});
+
 describe('SessionTree — the header strip', () => {
   it('reads back, +, ports, usage, refresh, settings, hide', async () => {
     // The user's own order for the last four ("here have ... then refresh then

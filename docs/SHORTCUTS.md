@@ -225,6 +225,32 @@ draft, the Files path box, the tree filter, the code editor, Settings. So the
 tempting fix ("swallow `Ctrl+W` while the terminal has focus") would have
 changed nothing at all.
 
+### 1.8 Session creation — `SessionTree.vue`, `onWindowKeydown`
+
+| Chord | Does | Owner |
+|---|---|---|
+| `Ctrl+Shift+N` | Opens the session panel's creation picker — in the panel's first root, caret in its filter | `SessionTree.vue` |
+
+The picker had no keyboard door: the `+` is a mouse affordance, and the flow it
+begins is a TYPING flow — type a few letters, click the row.
+
+**Why `Ctrl+Shift+N`**: N for new, in the Ctrl+N family, and the shifted letter
+encodes nothing at the terminal — xterm produces no control for it, so no shell
+behavior is taken. The palette-shaped chords were checked and refused, not
+skipped: plain `Ctrl+P` is readline previous-history, and `Ctrl+Shift+P` is a
+live rebind target the settings persistence guard already defends (an override
+colliding with another binding's default is refused at load, so claiming it as
+a default would silently invalidate users who chose it). The chord that ships
+is one nothing else wanted and the terminal cannot feel.
+
+**Where it stands down:** inside a text field (`editingTarget`, now
+`renderer/editingTarget.ts` — the third chord to need that answer is what
+merged the two private copies into one module), and while the picker is already
+open, where a second press must not reset a browse in progress; Escape closes.
+Live whenever the session panel is mounted, collapsed included — the panel is
+`v-show`'d, not unmounted, and a collapsed panel does not mean "no longer
+wants sessions".
+
 ---
 
 ## 2. The registry
@@ -456,8 +482,8 @@ can never end up missing and silently stop working.
 
 **Wired.** Every renderer handler reads the registry instead of spelling its
 chords inline: `TerminalView.vue`, `FolderWorkspaceView.vue`,
-`HostWorkspaceView.vue`, `FilesView.vue`, `PromptComposer.vue` and
-`DoodleCanvas.vue`. `settings.shortcutBindings` is a computed, so a rebinding
+`HostWorkspaceView.vue`, `SessionTree.vue`, `FilesView.vue`,
+`PromptComposer.vue` and `DoodleCanvas.vue`. `settings.shortcutBindings` is a computed, so a rebinding
 takes effect on the next keystroke rather than on the next mount, and there is
 no second copy of any chord left to drift. `chordsFor` falls back to the
 defaults for a handler that resolved before the store was ready, so a binding

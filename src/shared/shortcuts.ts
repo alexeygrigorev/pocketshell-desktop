@@ -535,6 +535,17 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
   // Moving a tab from the keyboard went with its chord. The DRAG
   // (docs/WORKSPACE.md §15) is untouched and is the way to reorder.
 
+  // --- Session creation ---------------------------------------------------
+  {
+    id: 'sessions.new',
+    surface: 'workspace',
+    label: 'New session — open the folder picker',
+    defaults: ['Ctrl+Shift+N'],
+    owner: 'app',
+    rebindable: true,
+    note: 'The session panel\'s `+`, on the keyboard: it opens the same picker the + opens, in the panel\'s first root, with the caret already in its filter - a palette in the VS Code shape. Ctrl+Shift+N for NEW, in the Ctrl+N family the app can actually take: bare Ctrl+N is readline next-history, and the shifted letter encodes nothing at the terminal, so no shell behavior is taken. Stands down inside a text field, and while the picker is already open; live whenever the panel is mounted, collapsed included - the panel is v-show\'d, not unmounted.',
+  },
+
   // --- Terminal -----------------------------------------------------------
   {
     id: 'terminal.pasteIntoShell',

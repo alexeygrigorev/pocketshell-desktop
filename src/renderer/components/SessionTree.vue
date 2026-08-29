@@ -68,6 +68,9 @@ import { useComposerStore } from '../stores/composer';
 import { useConnectionStore } from '../stores/connection';
 import { useProjectsStore } from '../stores/projects';
 import { useSessionsStore } from '../stores/sessions';
+import { useSettingsStore } from '../stores/settings';
+import { isShortcut } from '../../shared/shortcuts';
+import { editingTarget } from '../editingTarget';
 import { useFolderTree } from '../folderTree';
 import { canDropFolderAt, reorderFolders } from '../folderOrder';
 import {
@@ -76,7 +79,6 @@ import {
   type SessionDirectory,
   type SessionRootFolder,
 } from '../sessionGrouping';
-import { useSettingsStore } from '../stores/settings';
 import type { SessionAgentKind } from '../../shared/types';
 
 const props = defineProps<{
@@ -339,6 +341,36 @@ const defaultStartIn = computed<string | null>(() => {
   const first = roots.value.find((root) => !root.other);
   return first ? rootAddPath(first) : null;
 });
+
+// ---------------------------------------------------------------------------
+// The keyboard door to the same flow: `sessions.new` (Ctrl+Shift+N)
+// ---------------------------------------------------------------------------
+//
+// The chord is the header `+`'s, on the keyboard — the registry carries the
+// reasoning and Settings renders it. Like the tab arrows this runs on `window`
+// in CAPTURE, because the picker must open with focus wherever it happens to
+// be: the pane, the tree, a tab strip. The panel is `v-show`'d rather than
+// unmounted when collapsed, so the listener stays live with the panel hidden —
+// right, since the `+` is also on screen only as a matter of layout, and a
+// collapsed panel does not mean "no longer wants sessions".
+
+function onWindowKeydown(e: KeyboardEvent): void {
+  if (!e.ctrlKey && !e.metaKey) return;
+  if (e.altKey) return;
+  if (!isShortcut(settings.shortcutBindings, 'sessions.new', e)) return;
+  // Not while prose is being typed — the picker's own filter included, where
+  // Ctrl+Shift+P would otherwise close nothing and re-open the caret elsewhere.
+  if (editingTarget(e.target)) return;
+  // Already open: the dialog is the palette, and the second press must not
+  // reset the browse the user is mid-way through. Escape closes it.
+  if (creating.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  creating.value = { startIn: defaultStartIn.value };
+}
+
+onMounted(() => window.addEventListener('keydown', onWindowKeydown, { capture: true }));
+onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown, { capture: true }));
 
 /**
  * The roots the creation picker's dropdown offers, resolved to absolute paths

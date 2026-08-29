@@ -152,8 +152,9 @@ const repoFilter = ref('');
 // carries three controls, so a fourth permanent one would take back the line
 // the breadcrumb had just won. This is a fixed-width modal whose ONLY job is
 // picking a folder out of that list — there is no competing content to crowd,
-// no keyboard chord to discover the box with (the dialog claims none, see
-// docs/SHORTCUTS.md), and a search you cannot see is a search nobody uses.
+// and between `sessions.new` (Ctrl+Shift+N) and the caret this filter starts
+// with, a search you cannot see would still be a search nobody uses.
+// docs/SHORTCUTS.md §1.8 carries the chord's reasoning.
 /** Filter over the browsed directory. Blank means "no filter". */
 const folderQuery = ref('');
 /** The filter input — where this dialog points the keyboard on open. */

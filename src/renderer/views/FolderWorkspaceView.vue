@@ -66,6 +66,7 @@ import { agentMark } from '../../shared/agentBadge';
 import { isShortcut } from '../../shared/shortcuts';
 import { sanitisePart, sessionBaseName } from '../../shared/sessionNameParts';
 import { adjacentIndex } from '../../shared/listNavigation';
+import { editingTarget } from '../editingTarget';
 import {
   buildWorkspaceTabs,
   applyTabOrder,
@@ -911,28 +912,6 @@ function onWindowKeydown(e: KeyboardEvent): void {
   }
 }
 
-/**
- * Is this keystroke aimed at something the user is EDITING?
- *
- * Kept from the chord's arrow days, whose word-jump collision motivated this
- * very move onto brackets. Brackets have no native editing role in a field,
- * but the rule stays: while the user is typing prose — the composer's draft,
- * the Files path box, the tree filter, the code editor — navigation chords do
- * not interrupt.
- *
- * The terminal is deliberately NOT in that set, and it is the reason this is a
- * function rather than an `instanceof HTMLTextAreaElement` test: xterm's own
- * input sink IS a `<textarea>` (`.xterm-helper-textarea`), always focused while
- * the pane has the keyboard. A naive editable check would exempt the terminal —
- * the one surface the whole feature is for — and the chord would appear to do
- * nothing at all. So an editable inside `.xterm` is not an editable.
- */
-function editingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.closest('.xterm')) return false;
-  if (target.isContentEditable) return true;
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
-}
 
 onMounted(() => window.addEventListener('keydown', onWindowKeydown, { capture: true }));
 onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown, { capture: true }));
