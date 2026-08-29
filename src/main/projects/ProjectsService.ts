@@ -427,11 +427,26 @@ export class ProjectsService {
       }
       name = free;
     } else {
-      const has = await this.ssh.exec(
-        connectionId,
-        pathAwareCommand(sessionExistsCommand(base)),
-      );
-      reused = has.exitCode === 0;
+      // The per-session-server world: the helper's tmuxctl puts each create on
+      // its own `tmuxctl-<name>` server, so a bare `has-session` on the default
+      // socket answers "no" for a session that is alive and open on screen —
+      // the exact premise the kill path's locator was built on (Stop spent
+      // days answering "already gone" that way). Ask the locator instead:
+      // `found` is reused wherever the session lives. `unknown` — the sweep
+      // itself died — degrades to the bare default-socket probe, which was the
+      // whole answer before this existed and is still the best one available.
+      const located = await this.helper.locateSession(connectionId, base);
+      if (located.status === 'found') {
+        reused = true;
+      } else if (located.status === 'unknown') {
+        const has = await this.ssh.exec(
+          connectionId,
+          pathAwareCommand(sessionExistsCommand(base)),
+        );
+        reused = has.exitCode === 0;
+      } else {
+        reused = false;
+      }
     }
 
     const created = await this.helper.createSession(connectionId, { name, cwd: canonical });

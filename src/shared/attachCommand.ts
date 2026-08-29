@@ -13,18 +13,30 @@
  * That failure was originally written up here as "the helper does not keep its
  * sessions on the default tmux socket". That explanation is WRONG, and it is
  * corrected rather than deleted because the rest of this file was reasoned
- * from it. tmuxctl 0.4.x shells out to a bare `tmux` with no `-L`/`-S` and no
+ * from it. tmuxctl 0.3.4 shells out to a bare `tmux` with no `-L`/`-S` and no
  * TMUX_TMPDIR of its own (`tmuxctl/tmux_api.py::_run_tmux`), and a session it
- * created reports `#{socket_path}` = `/tmp/tmux-<uid>/default`. There is one
- * socket, and it is the default one. Whatever broke the raw attach on that
- * host — most likely `tmux` resolving differently, or the name having been
- * normalised by tmuxctl's `_resolve_session_name` — it was not the socket.
+ * created reports `#{socket_path}` = `/tmp/tmux-<uid>/default`. Whatever broke
+ * the raw attach on that host — most likely `tmux` resolving differently, or
+ * the name having been normalised by tmuxctl's `_resolve_session_name` — it
+ * was not the socket.
+ *
+ * BUT the next correction is this one, and it reverses the conclusion the
+ * first correction drew: tmuxctl 0.3.5 moved `create-detached` onto a
+ * PER-SESSION server — a session it creates now lives on
+ * `/tmp/tmux-<uid>/tmuxctl-<name>`, measured directly against the fixture
+ * when CI's fresh image build surfaced the change (see
+ * tests-docker/Dockerfile.helper for why the pin records it). A bare `tmux`
+ * command addresses the default socket and is blind to every session the
+ * helper makes. Which is, finally, the strongest reason for the conclusion
+ * below: `tmuxctl <name>` stays the ONE join, because it is now the only
+ * spelling that can find the session at all — it resolves the name against
+ * the servers tmuxctl knows, wherever it put them.
  *
  * The conclusion below is unchanged: `tmuxctl <name>` stays the ONE join. It
  * resolves ids and normalised names, it checks the session exists before
- * attaching, and it is what the helper documents. Because the socket is shared,
- * a raw `tmux` command CAN address the same server, which is how
- * {@link publishClientTty} reaches the tmux tmuxctl is about to attach to.
+ * attaching, and it is what the helper documents. It is also, in the
+ * per-session-server world, the only spelling that can find the session at
+ * all — see the second correction above.
  *
  * ## What a raw attach would save, and why it is still not taken
  *
@@ -146,6 +158,18 @@ export function sessionAttachCommand(sessionName: string, ttyVar?: string): stri
  * it back does so from a separate, non-login exec channel, so a host where
  * those resolve `tmux` differently simply finds nothing rather than acting on
  * the wrong server.
+ *
+ * The per-session-server world quietly demoted this write. `tmux
+ * set-environment -g` is a bare command: it reaches the DEFAULT socket, while
+ * a helper-created session lives on its own `tmuxctl-<name>` server — so the
+ * variable lands on a server the join never touched, and the rendezvous no
+ * longer proves anything for exactly the sessions the helper makes. Nothing
+ * functional reads it back (see below), so the cost is diagnostic only: the
+ * one claim it could settle in a bug report — "this stray client was ours" —
+ * is now settled only for sessions a raw `tmux` created. Aiming the write at
+ * the joined session's server would need the socket path inside the join
+ * command, which the documented `tmuxctl <name>` join deliberately does not
+ * carry.
  *
  * ## What used to read it back, and why nothing does now
  *

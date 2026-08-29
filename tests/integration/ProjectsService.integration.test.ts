@@ -4,7 +4,7 @@ import { SshService } from '@main/ssh/SshService';
 import { PocketshellClient } from '@main/helper/PocketshellClient';
 import { ProjectsService } from '@main/projects/ProjectsService';
 import { pathAwareCommand } from '@main/helper/bootstrap';
-import { TEST_KEY_PATH, describeDocker } from './helpers';
+import { TEST_KEY_PATH, describeDocker, LIST_SESSIONS_ANY_SOCKET } from './helpers';
 
 /**
  * The folder-first session flow against the real helper.
@@ -77,26 +77,45 @@ describeDocker('ProjectsService integration', () => {
     expect(started.sessionName).toBe('git-new-empty');
     expect(started.folder).toBe('/home/testuser/git/new-empty');
 
-    // tmux really has it, and really has it THERE.
+    // tmux really has it, and really has it THERE — wherever "there" is. The
+    // helper's tmuxctl (0.3.5+) puts each create on its OWN `tmuxctl-<name>`
+    // server, so the probe sweeps every socket this user has instead of
+    // asking the default one, which is exactly the ask a bare `tmux` cannot
+    // answer (the same premise Stop's locator was built on).
     const listed = await ssh.exec(
       connectionId!,
-      pathAwareCommand(
-        "tmux list-sessions -F '#{session_name}::#{session_path}' | grep '^git-new-empty::'",
-      ),
+      pathAwareCommand(LIST_SESSIONS_ANY_SOCKET + " | grep '^git-new-empty::'"),
     );
     expect(listed.exitCode).toBe(0);
     expect(listed.stdout.trim()).toBe('git-new-empty::/home/testuser/git/new-empty');
+
+    // And the premise pins the world this app is ported to: the default
+    // socket is BLIND to the session. If tmuxctl ever moves creates back to
+    // the shared server, this is the assertion that says the world changed
+    // again and these tests get to simplify.
+    const defaultOnly = await ssh.exec(
+      connectionId!,
+      pathAwareCommand("tmux list-sessions -F '#{session_name}::#{session_path}' | grep '^git-new-empty::'"),
+    );
+    expect(defaultOnly.exitCode).not.toBe(0);
   });
 
   it('is idempotent: starting again in the same folder reuses the session', async () => {
     const first = await projects.startSession(connectionId!, { folder: '~/git/new-empty' });
     expect(first.ok).toBe(true);
+    // Reuse is an ANY-SOCKET answer: the session from the test above lives on
+    // its own `tmuxctl-*` server, and a default-socket probe would call it
+    // absent and report a re-open as a fresh create. This assertion is the
+    // app-side port; LIST_SESSIONS_ANY_SOCKET pins the fixture side.
     expect(first.reused).toBe(true);
     expect(first.sessionName).toBe('git-new-empty');
 
+    // The sweep prints `<name>::<path>` lines; the `::` after the name makes
+    // the prefix match exact (tmux names cannot contain `:`), so
+    // `git-new-empty-2` on another server is not miscounted.
     const count = await ssh.exec(
       connectionId!,
-      pathAwareCommand("tmux list-sessions -F '#{session_name}' | grep -c '^git-new-empty$'"),
+      pathAwareCommand(LIST_SESSIONS_ANY_SOCKET + " | grep -c '^git-new-empty::'"),
     );
     expect(count.stdout.trim()).toBe('1');
   });
@@ -160,7 +179,7 @@ describeDocker('ProjectsService integration', () => {
     // The helper would have exited 0 and put the pane in $HOME; nothing was created.
     const listed = await ssh.exec(
       connectionId!,
-      pathAwareCommand("tmux list-sessions -F '#{session_name}' | grep -c 'definitely-not-here'"),
+      pathAwareCommand(LIST_SESSIONS_ANY_SOCKET + " | grep -c 'definitely-not-here'"),
     );
     expect(listed.stdout.trim()).toBe('0');
   });

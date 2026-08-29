@@ -36,6 +36,23 @@ export function isDockerAvailable(): boolean {
 }
 
 /**
+ * List every session on every tmux server this user has, as
+ * `<name>::<path>` lines — the default socket AND the per-session
+ * `tmuxctl-<name>` servers the helper's tmuxctl puts its creates on
+ * (0.3.5+). The glob alone reaches the default socket: `default` is a
+ * file in the same `tmux-<uid>/` directory as the per-session ones.
+ *
+ * Wrap in `pathAwareCommand`. Dead sockets print nothing (stderr is
+ * dropped per iteration), which is the sweep's degrade direction
+ * everywhere else in the app too — see SESSION_ENRICHMENT_COMMAND.
+ */
+export const LIST_SESSIONS_ANY_SOCKET =
+  'for __ps_s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*; do ' +
+  '[ -S "$__ps_s" ] || continue; ' +
+  "tmux -S \"$__ps_s\" list-sessions -F '#{session_name}::#{session_path}' 2>/dev/null; " +
+  'done';
+
+/**
  * `describe` wrapper that skips the whole suite when Docker is unavailable.
  * Use as the top-level describe in an integration test file:
  *
