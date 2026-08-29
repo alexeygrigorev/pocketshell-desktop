@@ -28,8 +28,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -46,7 +46,7 @@ jobs:
         env:
           # electron-builder 25 wants a token present even with --publish never.
           GH_TOKEN: ${{ github.token }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: installers-${{ matrix.os }}
           if-no-files-found: error
@@ -65,8 +65,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -74,7 +74,37 @@ jobs:
       # E2E launches Electron, which has no headless mode on Linux; Xvfb is
       # preinstalled on the runner image. The app's own off-screen mode (set by
       # playwright.config.ts) handles the rest.
-      - run: xvfb-run -a bash scripts/smoke.sh
+      #
+      # git records tests-docker/test_key as 644; Linux ssh refuses a
+      # world-readable private key, which failed the gate's own sanity check on
+      # the first CI run (the local Windows checkout never noticed). chmod
+      # instead of fixing the mode in git: the key is a fixture for a
+      # throwaway container, its permissions carry nothing.
+      - run: chmod 600 tests-docker/test_key
+      # The first CI run lost 2 of 47 integration tests to the fixture's tmux
+      # server disappearing under runner load — a state the same suite passes
+      # on a developer machine and that one full retry distinguishes (a real
+      # regression fails twice; a load race usually passes once). Teardown and
+      # a state dump sit between the attempts so the second failure is
+      # legible instead of a repeat of the first.
+      - name: Run smoke gate (retry once)
+        run: |
+          if xvfb-run -a bash scripts/smoke.sh; then
+            exit 0
+          fi
+          echo "::warning::smoke gate failed once - retrying"
+          docker compose -f tests-docker/docker-compose.yml logs --tail=100 || true
+          docker compose -f tests-docker/docker-compose.yml down --volumes --remove-orphans || true
+          docker ps -a || true
+          xvfb-run -a bash scripts/smoke.sh
+      - name: Dump fixture state (diagnostics)
+        if: failure()
+        run: |
+          docker ps -a || true
+          docker compose -f tests-docker/docker-compose.yml logs --tail=200 || true
+          for c in $(docker ps -q); do
+            docker logs --tail=100 "$c" 2>&1 | head -100 || true
+          done
 
   release:
     name: Draft GitHub release
@@ -83,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: installers-*
           merge-multiple: true

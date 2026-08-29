@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Desktop (Electron) port of PocketShell — a tmux-native, agent-aware SSH client.",
   "license": "MIT",
-  "author": "Alexey Grigorev",
+  "author": "Alexey Grigorev <alexey.s.grigoriev@gmail.com>",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "npm run icon && electron-vite dev",
