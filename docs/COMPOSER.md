@@ -604,11 +604,12 @@ cost no new chord and fell out of the ladder for free. It was a nice piece of
 design and it is why Escape did not close.
 
 It was also, from the user's side, Escape not doing what Escape does. So the
-hatch became **explicit** instead of emergent: a dismissal now suppresses the
-typing intercept (below), which is the same guarantee stated out loud, and the
-rungs standing between Escape and closing went with it. Restoring from maximized
-is still `Ctrl+Shift+↓` and the header button, and a dismissal remembers the
-mode, so re-opening a maximized composer gets it back maximized.
+hatch became **explicit** instead of emergent — first as a suppression armed by
+a dismissal, then by a press in the terminal, and finally (§12.2, §26.1) it was
+removed outright at the user's report. The rungs standing between Escape and
+closing went with it either way. Restoring from maximized is still
+`Ctrl+Shift+↓` and the header button, and a dismissal remembers the mode, so
+re-opening a maximized composer gets it back maximized.
 
 #### Clicking outside closes it — but only when it is empty
 
@@ -631,52 +632,51 @@ three guards, each of which is the whole safety of the feature:
   would close on its press and let its own click re-open, which reads as
   nothing happening.
 
-It does **not** suppress the typing intercept, unlike Escape. A click elsewhere
-is incidental — the user reached for the terminal, not against the composer —
-and the composer was empty, so nothing was lost; typing afterwards almost
-certainly means they want it back. The rule that falls out, and the one to keep
-in mind when adding any future dismissal:
+It does **not** suppress the typing intercept — nothing does, any more (§26.1).
+A click elsewhere is incidental — the user reached for the terminal, not against
+the composer — and the composer was empty, so nothing was lost; typing
+afterwards almost certainly means they want it back. The rule that falls out,
+and the one to keep in mind when adding any future dismissal:
 
-> **A click dismisses the view. A key dismisses the intent.**
+> **A dismissal — click or key — only puts the view away. It never also speaks
+> for the next keystroke.**
 
 It does not move focus either: the click already decided where focus goes.
 
-##### The press that dismissed it does not also arm the hatch
+##### SUPERSEDED — the press that dismissed it does not also arm the hatch
 
-That paragraph was true of the handler and false of the app, and the gap was the
-bug the user reported next:
+That paragraph guarded against one `mousedown` meaning two things: the composer's
+capture-phase handler dismissed the empty card, and the same press went on to arm
+the then-existing plain-terminal hatch, so the user's next prompt went into the
+shell from a screen with no composer on it. The fix was to hand the press object
+to both handlers and let the store decline an already-answered one.
 
-> "in some cases my inpurt isn't captured i type directly into teminal no promt
-> composer"
+The guard is gone because its subject is gone: **the hatch itself was removed**
+(§12.2, §26.1). No press arms anything any more, so there is no second meaning
+for a dismissing press to collide with — a click-outside dismissal is just a
+close, and typing afterwards re-opens the composer carrying the character. The
+rule it enforced is now true by construction:
 
-The commonest press outside the composer lands in a **terminal pane**, which is
-also the gesture that arms the plain-terminal hatch (below). So one `mousedown`
-answered two rules at once: it dismissed the empty card here, and it silenced the
-intercept there. The user clicked the terminal to read some output, the composer
-got out of the way as designed, and then their next prompt went into the shell
-from a screen with no composer on it to explain why.
+> **One press, one meaning — and the only meaning is close.**
 
-Neither handler could detect the collision from state. The composer listens on
-`window` in the **capture** phase (so a press is seen wherever it lands) and
-`TerminalView` listens on its own element, so the dismissal always ran first and
-the arming always found a composer that was already hidden — indistinguishable
-from one that had been hidden all along.
+> **SUPERSEDED — the plain-terminal hatch is gone entirely.**
+>
+> What is written below is kept for the record. The user hit the hatch exactly
+> the way this section predicted nobody would: not as a considered gesture —
+> "click, therefore shell" — but as the ordinary static of working in a
+> terminal-centric app. Clicking into the terminal is how you focus the window,
+> scroll output, select a path — and every one of those clicks silently disarmed
+> `typingOpensComposer`, so the next prompt went into the shell with nothing on
+> screen saying why. Reported as: *"when I start typing it stopped showing the
+> prompt composer and instead I type directly to the terminal."*
+>
+> The report is the same rejection as the Escape one that moved the hatch here:
+> a close — of the panel, of a selection, of anything — must never carry a
+> durable instruction about the NEXT keystroke. Nothing suppresses the intercept
+> now. Its only conditions are the setting and `mode === 'hidden'`, both visible
+> on screen. See §26.1 for how a plain terminal is reached without it.
 
-The **press object** is what they share, so it is what they agree on: the
-dismissal goes through `composer.dismissOnOutsidePress(e)`, which marks the event
-as answered, and `suppressTyping(key, press)` declines a press that has already
-spoken. Exact rather than heuristic — no ordering assumption, no timer, no "was
-it hidden a moment ago" — and there is nothing to reset, because an answered
-press is remembered only as long as the event object lives.
-
-> **One press, one meaning.**
-
-What this costs, and why it is the right way round: a user who pressed in the
-terminal *intending* to type a command there gets the composer back on their
-first character instead. That is a visible, one-keystroke annoyance with nothing
-lost — the character is in the draft. The other way round loses a whole prompt
-into a shell, invisibly, which is the failure this feature exists to prevent. It
-only applies when the card was **empty**, so there was never any work at stake.
+#### The plain-terminal hatch is now a PRESS IN THE TERMINAL
 
 #### SUPERSEDED — "closed is two states, not one"
 
@@ -1559,13 +1559,13 @@ is latched on the keydown and spent on the keypress.
 **How to get a plain terminal**, which is the question this feature has to have
 an answer to:
 
-1. **Click in the terminal**, then type. A press inside a pane says you are
-   working at the shell, and the intercept stands down until you point somewhere
-   else or summon the composer (§12.2). This is the hatch, and it is the gesture
-   a user performs before typing at a shell anyway.
+1. **Open the composer, then click into the terminal and type.** The intercept
+   only runs while the composer is CLOSED — that is one of its two conditions —
+   so with the card on screen the pane behaves like any terminal. The card stays
+   out of the way as a floating panel; type into it whenever you want it back.
 2. **The setting**, for turning the behaviour off entirely.
 
-This has been in three places. First there was no explicit hatch: Escape's third
+This has been in FOUR places. First there was no explicit hatch: Escape's third
 rung blurred the draft and left the composer OPEN, and since the intercept only
 fires while it is closed, that bought a plain terminal for free. It was neat and
 it depended on Escape not doing what Escape does everywhere else, so the user
@@ -1575,13 +1575,24 @@ dismissal suppressed the intercept — and that is what the user hit and reporte
 had stopped meaning "close" and started meaning "close, and speak for my next
 keystroke".
 
-So it moved off the keyboard entirely. The reason it works there is that a press
-in the terminal is the ONLY gesture in this window that is unambiguously about
-the shell: Escape is about the panel, and a click elsewhere — the tab strip, the
-session panel — is about neither. **Note what this costs**: with the setting on
-and nothing suppressing, every printable keystroke reaches the composer, so the
-hatch is load-bearing rather than a convenience. Losing it entirely would leave
-the Settings toggle as the only way to type at a shell.
+So it moved off the keyboard onto the POINTER: a press in the terminal armed a
+suppression that withstood every keystroke until the user summoned the composer.
+That was the design working as written, and the user rejected the design too:
+*"when I start typing it stopped showing the prompt composer and instead I type
+directly to the terminal."* The flaw was the same each time, and it was not
+where the hatch lived but THAT it lived: arming it was invisible, and in an app
+where the terminal fills the window, "click into the terminal" is not a
+considered declaration of shell intent — it is how you focus the window, scroll
+output, select a path. The clicks that disarmed the intercept were the ordinary
+static of using the app, so from the user's side typing opened the composer
+sometimes and betrayed them the rest, with nothing on screen saying which.
+
+**Nothing suppresses the intercept now.** Its only conditions are the setting
+and `mode === 'hidden'`, both of which are visible on screen. The cost is real
+and accepted: with the setting on and the panel closed, every printable
+keystroke opens the composer, so a shell command always starts with a summons
+(`Ctrl+\``, or the toggle) or with opening the card first — option 1 above. The
+user types prompts for a living here and chose that trade in as many words.
 
 ### 26.2 `closeComposerOnSend`
 
