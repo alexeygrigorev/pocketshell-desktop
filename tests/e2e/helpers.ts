@@ -116,3 +116,37 @@ export async function resetWorkspaceState(page: Page): Promise<void> {
   await page.reload();
   await page.waitForLoadState('domcontentloaded');
 }
+
+/**
+ * Ask the FIXTURE (not the app) what sessions it is actually running, over a
+ * plain ssh exec on the compose port. The point is to split one question in
+ * two when a session tab vanishes: did the tmux session die on the host, or
+ * did the app fail to list it? Both arrive in the test as "the button is
+ * gone"; only the host can say which.
+ *
+ * Best effort by design - called from a failure path that is already throwing.
+ */
+export function dumpFixtureSessionState(): string {
+  const probe = (cmd: string): string => {
+    try {
+      return execSync(
+        `ssh -i "${TEST_KEY}" -p ${HOST_PORT} -o BatchMode=yes -o ConnectTimeout=3 ` +
+          `-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null testuser@127.0.0.1 ${JSON.stringify(cmd)}`,
+        { stdio: ['ignore', 'pipe', 'ignore'], timeout: 8_000 },
+      )
+        .toString()
+        .trim();
+    } catch (err) {
+      return `(probe failed: ${(err as Error).message.slice(0, 80)})`;
+    }
+  };
+  const sweep =
+    'for s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*; do [ -S "$s" ] || continue; ' +
+    'echo "-- $s"; tmux -S "$s" list-sessions -F "#{session_name} attached=#{session_attached}" 2>/dev/null; done';
+  return [
+    'host tmux sweep:',
+    probe(sweep),
+    'helper sessions list:',
+    probe('export PATH="$HOME/.local/bin:$PATH"; pocketshell sessions list 2>&1 | head -20'),
+  ].join('\n');
+}

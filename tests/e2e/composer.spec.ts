@@ -94,7 +94,7 @@ async function openSession(page: Page, name: string): Promise<void> {
     const bar = await page.locator('.folder-bar nav.tabs').innerText().catch(() => '(no tab bar)');
     const rows = await page.locator('.dir-header').allInnerTexts().catch(() => []);
     throw new Error(
-      `could not open session "${name}"; tabs: [${bar.replace(/\n/g, " | ")}] panel rows: [${rows.join(" | ")}]`,
+      `could not open session "${name}"; tabs: [${bar.replace(/\n/g, " | ")}] panel rows: [${rows.join(" | ")}]\n${dumpFixtureSessionState()}`,
       { cause: err as Error },
     );
   }  // The composer is hidden until summoned - typing opens it, and so does
