@@ -119,7 +119,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: e2e-traces
-          path: test-results/
+          path: |
+            test-results/
+            /home/runner/.pocketshell/desktop.log
           retention-days: 3
           if-no-files-found: ignore
       - name: Dump fixture state (diagnostics)
