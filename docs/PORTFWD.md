@@ -1046,3 +1046,50 @@ link. Tested in `tests/unit/autoForwardIndicator.test.ts` (mount, plain-OFF,
 reconnect, live mirror) and `tests/unit/SessionTree.test.ts` (the relay, and
 that Usage — the sibling button — is never marked).
 
+---
+
+## 17. One-click open in the browser
+
+> "for port forwarding I want to open the port in the browser with one click —
+> like I do it with ssh-auto-forward or in the Android app"
+
+A forwarded port is a URL, and the commonest thing to do with a URL is look at
+it. The actions column now opens it: every row with a live LOCAL tunnel has an
+`external-link` button first in the cell, which opens
+`http://127.0.0.1:<listenPort>/` in the system browser
+(`PortPanelView.vue`, `localUrlOf`/`openLocal`).
+
+Where the button appears is the whole design, because a forwarded port is only
+a URL when a local tunnel for it exists:
+
+- **A live local forward gets it, at the tunnel's LISTEN port** — not the
+  remote port. They differ whenever a pin or an allocation moved the local
+  end (`remap`), and a URL naming the remote port would reach whatever else
+  happens to sit there.
+- **A `-R` forward does not.** Its listener is on the HOST; a browser on this
+  machine reaches nothing there.
+- **A discovered-but-not-forwarded port does not.** There is no tunnel, and a
+  button that opens an error page teaches the user it lies.
+- **The served row keeps its own open** — it has been this feature for one
+  special row since SERVE landed, its URL carries the trailing slash the
+  directory index needs, and "stop" is the other half of that pair. It does
+  not get a second button.
+
+Two consistency decisions ride along. The served row's open mark was
+`arrow-right` while the new one is Feather's `external-link` — two glyphs for
+one action in one column was drift, so both now carry `external-link`
+(AppIcon.vue). And the URL host is the loopback unless the forward bound a
+specific interface on purpose (`listenHost` passed through verbatim); a
+listen host of "any" (`0.0.0.0`, `::`, empty) maps to `127.0.0.1` rather than
+putting `0.0.0.0` in an address bar. `serveUrl` (serveCommand.ts) words the
+same URL for served folders.
+
+The open itself is `window.open(url, '_blank', 'noopener,noreferrer')` — not
+an IPC verb — because main's `setWindowOpenHandler` already allow-lists
+http(s) into `shell.openExternal` (index.ts), and that is the route every
+other in-app link takes. The tooltip names the exact URL, which is the one
+fact the click needs to be predictable.
+
+Tests: `tests/unit/portPanelOpen.test.ts` — the URL at the listen port, the
+verbatim interface host, the wide-host mapping, no button on `-R`, none on
+unforwarded, and the served row keeping its single open.
