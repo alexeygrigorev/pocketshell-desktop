@@ -1,91 +1,70 @@
 /**
  * The command that joins an existing session inside the session PTY.
  *
- * ## Why this is not `tmux attach -t <name>`
+ * ## The join locates its own server, then attaches
  *
- * It used to be, and it did not work. Sessions are CREATED through the helper
- * (`sessions create` -> `tmuxctl create-detached`) and LISTED through the
- * helper (`pocketshell sessions list`), but attaching went straight to raw
- * tmux — so the one operation in the trio that bypassed the helper was the one
- * that failed, with `can't find session: <name>` for every session in a list
- * the app had just rendered from that same host.
+ * The join asks ONE question the host can answer exactly — which of this
+ * user's tmux servers holds a session called exactly [sessionName]? — by
+ * sweeping the socket directory the way `SESSION_ENRICHMENT_COMMAND` does and
+ * running `has-session -t '=<name>'` on each socket. The winner is attached
+ * directly with `tmux -S <socket> attach-session -t '=<name>'`. When the sweep
+ * finds nothing the join falls back to `tmuxctl <name>`, the helper's own
+ * spelling, which still covers the shapes the sweep cannot see: joins by
+ * index, tmuxctl's name normalisation, and a `TMUX_TMPDIR` the glob does not
+ * model.
  *
- * That failure was originally written up here as "the helper does not keep its
- * sessions on the default tmux socket". That explanation is WRONG, and it is
- * corrected rather than deleted because the rest of this file was reasoned
- * from it. tmuxctl 0.3.4 shells out to a bare `tmux` with no `-L`/`-S` and no
- * TMUX_TMPDIR of its own (`tmuxctl/tmux_api.py::_run_tmux`), and a session it
- * created reports `#{socket_path}` = `/tmp/tmux-<uid>/default`. Whatever broke
- * the raw attach on that host — most likely `tmux` resolving differently, or
- * the name having been normalised by tmuxctl's `_resolve_session_name` — it
- * was not the socket.
+ * ## Why the sweep is the join's first arm (the fourth correction)
  *
- * BUT the next correction is this one, and it reverses the conclusion the
- * first correction drew: tmuxctl 0.3.5 moved `create-detached` onto a
- * PER-SESSION server — a session it creates now lives on
- * `/tmp/tmux-<uid>/tmuxctl-<name>`, measured directly against the fixture
- * when CI's fresh image build surfaced the change (see
- * tests-docker/Dockerfile.helper for why the pin records it). A bare `tmux`
- * command addresses the default socket and is blind to every session the
- * helper makes. Which is, finally, the strongest reason for the conclusion
- * below: `tmuxctl <name>` stays the ONE join, because it is now the only
- * spelling that can find the session at all — it resolves the name against
- * the servers tmuxctl knows, wherever it put them.
+ * This file has reversed itself three times, and each reversal was reasoned
+ * from evidence, so the chain is kept: raw `tmux attach` was replaced by
+ * `tmuxctl <name>` after raw attach answered `can't find session` for sessions
+ * a freshly rendered list had just shown; the "helper keeps sessions off the
+ * default socket" explanation was then corrected (tmuxctl 0.3.4 shells out to
+ * a bare `tmux`); then tmuxctl 0.3.5 moved every create onto a PER-SESSION
+ * server (`tmuxctl-<name>` sockets), which finally explained the original
+ * failure and made `tmuxctl <name>` the only join that could find helper
+ * sessions at all.
  *
- * The conclusion below is unchanged: `tmuxctl <name>` stays the ONE join. It
- * resolves ids and normalised names, it checks the session exists before
- * attaching, and it is what the helper documents. It is also, in the
- * per-session-server world, the only spelling that can find the session at
- * all — see the second correction above.
+ * The user's rename bug is the fourth correction, and it breaks
+ * `tmuxctl <name>` itself. The per-session-server world gives the helper an
+ * identity invariant the raw protocol does not have: the socket is named
+ * after the session (`tmux_api.locate_session` resolves a join by checking
+ * `robust.socket_for(name)` — literally `tmuxctl-<name>` — and then the
+ * default socket, and nothing else). `tmux rename-session` keeps the session
+ * on its original server, so the first raw rename leaves session `beta` on
+ * `tmuxctl-alpha`: `tmuxctl beta` checks `tmuxctl-beta` and default, finds
+ * nothing, and answers `tmux session 'beta' was not found`; `tmuxctl alpha`
+ * finds the right server and no session of that name on it. Both names dead,
+ * permanently, with no fallback behind them. Measured on the fixture the
+ * helper pins (tmuxctl 0.3.5): a fresh session's join dies at `open terminal
+ * failed: not a terminal` — resolution SUCCEEDED on an exec channel — while
+ * the renamed session's dies at `was not found`. That is the whole of
+ * "rename doesn't really rename": the rename committed at the tmux level and
+ * orphaned the session out of the only join path that could reach it.
  *
- * ## What a raw attach would save, and why it is still not taken
+ * The sweep is the same remedy every other command on this host ended up
+ * taking (Stop, rename, redraw, the geometry probe): the locator's view of
+ * where a session lives is the one fact that survives a rename, so the join
+ * derives it from the host instead of from the name. It costs one
+ * `has-session` per existing socket on the join path — local round trips
+ * inside the PTY's own shell, no extra SSH channel — and it is exact where
+ * `tmuxctl` is name-derived.
  *
- * `tmuxctl` is Python, and starting the interpreter with typer and rich is
- * almost the whole of the join. Measured against the fixture, PTY + login shell
- * + `tmuxctl <name>` is p50 154 ms (max 284); the same PTY running
- * `tmux attach-session -t '=<name>'` instead is p50 12 ms. On the user's host
- * the gap is far wider — their joins run 1.5-2 s.
+ * ## What `tmuxctl <name>` is still for
  *
- * That 12x is real and it is now the largest cost left in opening a session,
- * because the pool opens one client per tab and holds it (see TmuxClientPool),
- * so a join happens once per tab rather than once per switch. It is still not
- * taken here, for the reason the removed fallback ladder was removed: raw
- * `tmux attach` is the command that was observed failing on a real host, and a
- * join that degrades into it turns "the helper is missing" into "can't find
- * session", which reads as a stale session list rather than a broken install.
- * Changing the join is a separate decision from changing how many joins there
- * are, and only the second one had to be made to stop tab switching being slow.
+ * The degraded arm, not dead weight. A session the sweep cannot see (a
+ * `TMUX_TMPDIR` outside the glob, a server created between the sweep and the
+ * attach), a host where only the helper knows the spelling, the helper's own
+ * normalisation of foreign session names — these still join the documented
+ * way. What is NOT coming back is the raw default-socket attach: a command
+ * that can only ever see one server has no arm here.
  *
- * The helper's own output says what the join command is. The footer of
- * `pocketshell sessions list` on 0.4.44 (captured verbatim in
- * tests/unit/fixtures/v0.4.44-sessions-list.txt) reads:
+ * ## Why there is still no ladder under `tmuxctl`
  *
- *     Join a session: tmuxctl <id> or tmuxctl <session>
- *     Create a new one: tmuxctl :<session>
- *
- * A bare name joins; the `:` prefix is what creates. So a plain
- * `tmuxctl <session>` is the documented join, and it cannot silently create a
- * session that was not there.
- *
- * ## Why there is no fallback ladder
- *
- * The first attempt at this fix was a three-branch chain — `tmuxctl`, else the
- * older `pocketshell sessions <name>` spelling, else raw `tmux attach`. Both
- * fallbacks are removed, for different reasons.
- *
- * `pocketshell sessions <name>` is the pre-0.4.44 spelling of the same
- * operation, kept only for hosts running an older helper. Real hosts run
- * 0.4.44; the v0.4.8 contract in the docs is stale. This app takes hard cuts
- * rather than carrying legacy shims, so the old
- * spelling goes.
- *
- * The raw-tmux branch is worse than merely redundant: it is the command that
- * was already observed failing on a real host, and a chain that degrades into
- * it turns "the helper is missing" into "can't find session", which reads as a
- * stale session list rather than a broken install. A fallback whose failure
- * mode impersonates a different bug is not a fallback.
- *
- * So there is one join path, and when it cannot be taken the terminal says so.
+ * Unchanged from the first correction: `pocketshell sessions <name>` is a
+ * stale pre-0.4.44 spelling and stays gone, and the raw attach that joins is
+ * aimed at a socket the host just proved holds the session — it is not the
+ * default-socket guess that failed on a real host.
  *
  * ## Why the PATH is widened first
  *
@@ -94,11 +73,13 @@
  * always have it. Rather than probe and guess, the join prepends exactly the
  * directories {@link USER_BIN_DIRS} that `bootstrap.ts` prepends when it
  * decides whether the helper is installed at all — so the shell that joins
- * searches the same places as the probe that said the host was ready.
+ * searches the same places as the probe that said the host was ready. The
+ * sweep's `tmux` searches the same widened PATH, which is the same assumption
+ * `tmux_api._run_tmux` makes when the helper itself shells out to `tmux`.
  *
  * The assignment sits inside a subshell so it lasts exactly as long as the
  * join. The user is left at their own login shell afterwards, with the PATH
- * their dotfiles gave them, not one this app edited behind their back.
+ * their dotfiles gave them, not one this app edited behind them.
  *
  * ## Why a failed join shouts
  *
@@ -125,20 +106,37 @@ export function shellSingleQuote(value: string): string {
 /**
  * Build the join command for [sessionName].
  *
- * The name is quoted once and reused, so a session called `it's mine` — which
- * tmux permits and {@link sanitisePart} never produces but a foreign session
- * can carry — cannot break out of the quoting, in the join or in the
- * diagnostic. The diagnostic passes the name as a printf *argument* rather
- * than splicing it into the format string, so a name containing a `%` cannot
- * turn into a conversion specifier.
+ * The name is quoted once per SHAPE and each quoting is reused everywhere that
+ * shape appears: [name] (the bare word) goes to `tmuxctl` and the failure
+ * diagnostic, [target] (`=`-prefixed, tmux's exact-match spelling) goes to the
+ * sweep's `has-session` and the aimed `attach-session`. A session called
+ * `it's mine` — which tmux permits and {@link sanitisePart} never produces but
+ * a foreign session can carry — therefore survives all four positions.
+ *
+ * The diagnostic passes the name as a printf *argument* rather than splicing
+ * it into the format string, so a name containing a `%` cannot turn into a
+ * conversion specifier.
+ *
+ * The sweep variables are `__ps_*` and live inside the subshell, so nothing
+ * leaks into the login shell the user lands in afterwards.
  */
 export function sessionAttachCommand(sessionName: string, ttyVar?: string): string {
   const name = shellSingleQuote(sessionName);
+  const target = shellSingleQuote(`=${sessionName}`);
   const failure =
     '\\n[PocketShell] could not join session %s. ' +
-    'The helper (tmuxctl) is how sessions are joined - check it is installed on this host.\\n';
+    'No tmux server on this host has it, and the helper (tmuxctl) could not join it either.\\n';
   const handshake = ttyVar ? `${publishClientTty(ttyVar)}; ` : '';
-  return `( PATH="${USER_BIN_PATH}:$PATH"; ${handshake}tmuxctl ${name} ) || printf '${failure}' ${name}`;
+  const locate =
+    '__ps_sock=; ' +
+    'for __ps_s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*; do ' +
+    '[ -S "$__ps_s" ] || continue; ' +
+    `if tmux -S "$__ps_s" has-session -t ${target} 2>/dev/null; then __ps_sock=$__ps_s; break; fi; done; `;
+  const join =
+    'if [ -n "$__ps_sock" ]; then ' +
+    `tmux -S "$__ps_sock" attach-session -t ${target}; ` +
+    `else tmuxctl ${name}; fi`;
+  return `( PATH="${USER_BIN_PATH}:$PATH"; ${handshake}${locate}${join} ) || printf '${failure}' ${name}`;
 }
 
 // ---------------------------------------------------------------------------

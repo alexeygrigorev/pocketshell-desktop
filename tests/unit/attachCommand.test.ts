@@ -10,13 +10,12 @@ import { USER_BIN_DIRS } from '../../src/shared/userBinPath';
  * These pin the join contract, which is the thing that actually broke: the app
  * created and listed sessions through the helper but attached with raw
  * `tmux attach -t`, so every session in a freshly rendered list failed with
- * `can't find session`. The helper's own footer documents the join command,
- * and the fixture in ./fixtures/v0.4.44-sessions-list.txt carries it verbatim.
- *
- * The first fix replaced the raw command with a three-branch fallback chain.
- * That is gone too, and several tests below now assert its ABSENCE — see
- * src/shared/attachCommand.ts for why a chain ending in raw tmux was actively
- * harmful rather than merely dead weight.
+ * `can't find session`. The join that replaced it went through `tmuxctl`, and
+ * the rename bug then broke THAT: tmuxctl resolves a name against the socket
+ * derived from it, so a renamed session answered `was not found` under both
+ * names. The join now locates the session's own server host-side and attaches
+ * there, keeping `tmuxctl` as the arm for what the sweep cannot see — see
+ * src/shared/attachCommand.ts for the four-correction history.
  */
 /**
  * The inverse of POSIX single-quoting, used to prove a quoted name round-trips.
@@ -50,8 +49,27 @@ function posixUnquote(quoted: string): string {
 describe('sessionAttachCommand', () => {
   const command = sessionAttachCommand('git-red-stamp-sound');
 
-  it('joins with tmuxctl, the command the helper itself documents', () => {
-    expect(command).toContain("tmuxctl 'git-red-stamp-sound'");
+  it('locates the session by sweeping the host’s tmux sockets', () => {
+    // The rename bug: tmuxctl resolves a join against the socket DERIVED from
+    // the name (`tmuxctl-<name>`) plus the default socket, so the first raw
+    // rename left the session unjoinable under EITHER name. The sweep asks the
+    // host where the session actually lives instead.
+    expect(command).toContain('for __ps_s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*');
+    expect(command).toContain('[ -S "$__ps_s" ] || continue;');
+    // Exact match on every socket, and silent when a socket says no.
+    expect(command).toContain("has-session -t '=git-red-stamp-sound' 2>/dev/null");
+  });
+
+  it('attaches on the socket the sweep found, exact-match', () => {
+    expect(command).toContain('tmux -S "$__ps_sock" attach-session -t ');
+    expect(command).toContain("attach-session -t '=git-red-stamp-sound'");
+  });
+
+  it('keeps tmuxctl as the arm for everything the sweep cannot see', () => {
+    // Ids, tmuxctl's name normalisation, a TMUX_TMPDIR the glob does not
+    // model: the helper's documented join remains the degraded arm.
+    expect(command).toContain("else tmuxctl 'git-red-stamp-sound'");
+    expect(command.match(/tmuxctl '/g)).toHaveLength(1);
   });
 
   it('joins with a bare name — never `:name`, which would CREATE', () => {
@@ -59,28 +77,16 @@ describe('sessionAttachCommand', () => {
     // session would turn a stale row into a brand-new empty pane.
     expect(command).not.toContain(":'git-red-stamp-sound'");
     expect(command).not.toMatch(/tmuxctl\s+:/);
+    // And the exact-match target is `=name`, not the `:` create spelling.
+    expect(command).toContain("'=git-red-stamp-sound'");
   });
 
-  it('never falls back to raw tmux, which is the failure that started this', () => {
-    // Not because raw tmux cannot reach these sessions — it can; tmuxctl runs
-    // a bare `tmux` on the default socket and so would this. It is because a
-    // second way to join turns "the helper is missing" into "can't find
-    // session", which reads as a stale session list rather than a broken
-    // install. One join, one failure message.
-    expect(command).not.toContain('tmux attach');
-    expect(command).not.toContain('-t ');
-  });
-
-  it('carries no pre-0.4.44 helper spelling (hard cuts, no shims)', () => {
-    expect(command).not.toContain('pocketshell sessions');
-  });
-
-  it('has exactly one command that can join — no branching ladder', () => {
-    expect(command).not.toContain('elif');
-    expect(command).not.toContain('command -v');
-    // One INVOCATION — `tmuxctl <quoted-name>`. The bare word appears again in
-    // the failure text, which is prose, not a second thing that could run.
-    expect(command.match(/tmuxctl '/g)).toHaveLength(1);
+  it('never attaches to the default socket by guesswork', () => {
+    // The raw attach that failed on a real host was the DEFAULT-socket
+    // spelling — blind to every per-session server. The only attach here is
+    // the one pointed at a socket the host just proved holds the session.
+    expect(command.match(/attach-session/g)).toHaveLength(1);
+    expect(command).toContain('tmux -S "$__ps_sock" attach-session');
   });
 
   it('searches the same user-bin dirs bootstrap probes, so the two agree', () => {
@@ -92,11 +98,17 @@ describe('sessionAttachCommand', () => {
     expect(command).toContain('$PATH');
   });
 
+  it('carries no pre-0.4.44 helper spelling (hard cuts, no shims)', () => {
+    expect(command).not.toContain('pocketshell sessions');
+  });
+
   it('scopes the PATH change to a subshell, leaving the login shell alone', () => {
     expect(command).toMatch(/^\(\s*PATH=/);
-    // The assignment is inside the parens, not before them.
+    // The assignment is inside the parens, not before them, and the subshell
+    // stays open across the whole locate-and-join, closing only before the
+    // failure diagnostic.
     expect(command.indexOf('PATH=')).toBeGreaterThan(command.indexOf('('));
-    expect(command.indexOf(')')).toBeGreaterThan(command.indexOf('tmuxctl'));
+    expect(command.indexOf(') || printf')).toBeGreaterThan(command.indexOf('tmuxctl'));
   });
 
   it('reports a failed join instead of leaving a silent prompt', () => {
@@ -125,8 +137,12 @@ describe('sessionAttachCommand', () => {
 
   it('quotes a name carrying a single quote everywhere it appears', () => {
     const nasty = sessionAttachCommand("it's mine");
-    // Twice: once joined, once named in the failure line.
+    // Twice as the bare word — tmuxctl and the failure line. The aimed probe
+    // and attach quote the WHOLE `=name` word (`'=it'\''s mine'`), so the
+    // standalone escaped form does not surface there, but the name is still
+    // inside quotes at those two positions.
     expect(nasty.match(/'it'\\''s mine'/g)).toHaveLength(2);
+    expect(nasty).toContain("'=it'\\''s mine'");
     expect(nasty).not.toContain("'it's mine'");
   });
 
