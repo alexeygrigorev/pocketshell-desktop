@@ -1,92 +1,130 @@
 # PocketShell Desktop
 
-A desktop (Electron) port of [PocketShell](https://github.com/alexeygrigorev/pocketshell)
-— a tmux-native, agent-aware SSH client. Where the Android app is a
-voice-first phone cockpit, the desktop app is a keyboard-first workspace:
-read your hosts from `~/.ssh/config`, browse the tmux session tree, click
-into a terminal, edit files over SFTP, forward ports, and follow your AI
-coding agents — all talking to the server-side `pocketshell`
-helper on each dev box.
+A desktop SSH client built around tmux and AI coding agents — the keyboard-first
+sibling of the [PocketShell](https://github.com/alexeygrigorev/pocketshell)
+Android app. Pick a machine you develop on, see every tmux session running on
+it, work in real terminals, edit files, forward ports, and keep an eye on your
+AI agent usage — all in one window.
 
-> **Status:** under active development. Phases 0–5 in
-> [docs/PLAN.md](./docs/PLAN.md).
+<p align="center">
+  <img src="docs/screenshots/polish-01-host-picker.png" width="49%" alt="Host picker">
+  <img src="docs/screenshots/projects-20-flat-list-280.png" width="49%" alt="Session panel">
+</p>
 
-## What it does
+> **Status:** under active development. Phases 0–5 of the
+> [roadmap](./docs/PLAN.md) are done.
 
-- **Host picker** reads `~/.ssh/config` (with manual-add fallback) and
-  honours `~/.ssh/known_hosts`.
-- **Folder panel** from `pocketshell sessions list`, grouped root ->
-  folder; click a folder to open its workspace — a tab per tmux session
-  in it, in a real terminal (`xterm.js`), plus Files tabs. See
-  [docs/WORKSPACE.md](./docs/WORKSPACE.md).
-- **Files** — full SFTP: browse, edit (CodeMirror), upload/download,
-  create/rename/delete.
-- **Port forwarding** — local (`-L`), remote (`-R`), and dynamic SOCKS
-  (`-D`), with auto-forward that mirrors remote listeners.
-- **Agent awareness** — start a session with a chosen engine
-  (`pocketshell agent <kind>`), an env editor, and a usage/quota
-  dashboard (`pocketshell usage`).
+## How it works
 
-## Docs
+PocketShell pairs with a small helper (`pocketshell`) that runs on the machine
+you connect to. The app reads your existing `~/.ssh/config` — no new
+credentials to set up — and the helper tells it about sessions, agents, and
+quota. Your API keys stay on the server; the desktop never holds any.
 
-- [docs/ANALYSIS.md](./docs/ANALYSIS.md) — source-app analysis + the
-  v0.4.8 helper contract.
-- [docs/FEATURES.md](./docs/FEATURES.md) — feature backlog (P0–P3).
-- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — process model, module
-  layout, terminal model, security.
-- [docs/PLAN.md](./docs/PLAN.md) — phased implementation plan.
-- [docs/TESTING.md](./docs/TESTING.md) — Docker E2E test strategy.
+Because every session is a real tmux session, your work doesn't live in the
+app. Close the laptop, come back tomorrow, reconnect — everything is still
+running, exactly where you left it.
 
-## Tech stack
+## What you can do
 
-Electron · Vue 3 + TypeScript · Vite (`electron-vite`) · `ssh2` ·
-`xterm.js` · CodeMirror 6 · Pinia · electron-builder.
-Tests: vitest · `testcontainers` · Playwright.
+**Connect.** Hosts come straight from `~/.ssh/config` (with a manual-add
+fallback), and host keys are verified against `known_hosts`. On connect, the
+app checks the machine for `tmux` and the `pocketshell` helper and offers to
+install whatever is missing. If the network drops, the app reconnects on its
+own and restores your sessions and port forwards.
 
-## Development
+**Sessions and terminals.** The session panel lists every tmux session on the
+host with its last activity and a badge showing which agent is running in it —
+Claude Code, Codex, OpenCode. Sessions that share a project folder open
+together as one workspace: a tab per session, plus tabs for browsing files.
+Terminals are fast and real — keystrokes and resize go straight to tmux.
+Click the active tab to rename the session; right-click it to stop it; start a
+new session with an agent of your choice from the workspace's `+` menu.
 
-Prerequisites: Node 20+, npm, Docker (for integration/E2E tests).
+**Prompt composer.** A side panel for drafting what you send to your agents —
+multi-line, resizable, with file attachments. Each workspace keeps its own
+draft, so switching tabs never loses what you typed. Toggle it with
+<kbd>Ctrl</kbd>+<kbd>\`</kbd>, send with <kbd>Enter</kbd>. Start typing
+anywhere in a workspace and the composer opens for you (configurable).
+
+**Files.** A full file browser over SFTP: browse the remote tree, open and
+edit text files in the built-in editor, preview images, upload and download
+(by drag-and-drop), create, rename and delete. Saving writes straight back to
+the server.
+
+**Port forwarding.** Local, remote, and dynamic SOCKS forwards, added by hand
+or discovered for you: auto-forward watches which ports are actually listening
+on the server and mirrors them locally. Each rule shows its status, bytes and
+speed; forwarded HTTP ports open in your browser with one click. Forward
+setups are remembered per host.
+
+**Usage and environment.** A quota dashboard shows what's left per AI provider
+and when it resets — read from the server helper, so your keys are never
+needed on the desktop. A per-folder env editor lets you inspect and change the
+environment your agents run with.
+
+## Keyboard
+
+Every shortcut is listed — and rebindable — in **Settings → Keyboard**. The
+ones worth learning first:
+
+| Keys | Does |
+|---|---|
+| <kbd>Ctrl</kbd>+<kbd>\`</kbd> | Toggle the prompt composer |
+| <kbd>Ctrl</kbd>+<kbd>[</kbd> / <kbd>]</kbd> | Previous / next tab |
+| <kbd>Ctrl</kbd>+<kbd>↑</kbd> / <kbd>↓</kbd> | Move between folder workspaces |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> | New session |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd> | Copy selection / paste into the composer |
+| right-click | Paste into the shell |
+| <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>L</kbd> / <kbd>F</kbd> | Save / path bar / filter — on the Files tab |
+
+Chords that belong to the shell (<kbd>Ctrl</kbd>+<kbd>C</kbd>,
+<kbd>Ctrl</kbd>+<kbd>D</kbd>, the tmux prefix, …) are never taken by the app.
+
+## Getting started
+
+**On the machine you connect to** you need SSH access with key
+authentication, `tmux`, and the helper:
+
+```bash
+uv tool install pocketshell
+```
+
+(The app detects what's missing on first connect and offers one-click
+install, so this step is optional.)
+
+**On your desktop**, grab an installer for Windows, macOS or Linux from the
+[Releases](../../releases) page, or run from source — you need Node 20+:
 
 ```bash
 npm install
-npm run dev                 # launch the app with HMR
-
-npm run test:unit           # pure-logic tests (no Docker)
-npm run test:integration    # needs Docker (testcontainers)
-npm run test:e2e            # needs Docker (compose + Playwright)
-scripts/smoke.sh            # full Docker-backed gate
+npm run dev
 ```
 
-### Docker test fixtures
+## Design principles
 
-```bash
-docker compose -f tests-docker/docker-compose.yml up -d --build helper
+- **Your state lives on the server.** tmux keeps the sessions; the app is a
+  window onto them and reconnects freely.
+- **No secrets on the client.** Quota and agent data come from the server
+  helper; the desktop stores no API keys.
+- **Your keys stay yours.** The shell gets every key it expects — the app
+  only claims chords a terminal cannot send.
 
-# sanity check the helper container
-ssh -i tests-docker/test_key -p 3205 -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null testuser@127.0.0.1 \
-  'pocketshell sessions list && pocketshell usage --json'
+## Design & development docs
 
-docker compose -f tests-docker/docker-compose.yml down --volumes --remove-orphans
-```
+The reasoning behind the app lives in [docs/](./docs): the helper contract
+([ANALYSIS](./docs/ANALYSIS.md)), process model and security
+([ARCHITECTURE](./docs/ARCHITECTURE.md)), the folder workspace
+([WORKSPACE](./docs/WORKSPACE.md)), port-forwarding behaviour
+([PORTFWD](./docs/PORTFWD.md)), every shortcut and why it exists
+([SHORTCUTS](./docs/SHORTCUTS.md)), plus the roadmap, feature backlog and
+test strategy ([PLAN](./docs/PLAN.md), [FEATURES](./docs/FEATURES.md),
+[TESTING](./docs/TESTING.md)).
 
-The committed `tests-docker/test_key` is a fixture used only by Docker
-tests.
-
-## Build
-
-```bash
-npm run build               # build main + preload + renderer
-npm run dist                # electron-builder → installers (win/mac/linux)
-```
-
-## Design principles (inherited from PocketShell)
-
-- **No backwards-compatibility** — hard cuts only (D22). Greenfield codebase.
-- **Zero provider credentials on the client** (D19) — usage/quota comes
-  from the server-side helper; the desktop holds no API keys.
-- **Long-running state lives on the remote** (tmux), the client reconnects.
-- **Deterministic Docker tests** — never real hosts or real keys.
+Development at a glance: `npm run dev` (app with HMR) · `npm run dist`
+(installers) · `npm run test:unit` / `test:integration` / `test:e2e` (the
+latter two need Docker) · `scripts/smoke.sh` (full gate). Tech: Electron ·
+Vue 3 + TypeScript · Vite · `ssh2` · xterm.js · CodeMirror 6 · Pinia.
 
 ## License
 
