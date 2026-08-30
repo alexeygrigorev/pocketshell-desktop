@@ -498,6 +498,22 @@ function fmtScanTime(epochMs: number | null): string {
                   @change="onLocalPort(row, $event)"
                   @keyup.enter="($event.target as HTMLInputElement).blur()"
                 />
+                <!-- One-click open (§17) lives HERE, beside the port number
+                     it opens, not out in the actions column: the open is an
+                     attribute of the local end — the URL IS this port — so
+                     the mark reads as "this number, in a browser" rather
+                     than as one more row verb. Same rules as ever: a live
+                     LOCAL tunnel only, and the served row keeps its own
+                     single open with the server's URL. -->
+                <button
+                  v-if="servedOf(row) || localUrlOf(row)"
+                  class="icon-btn sm"
+                  :disabled="servedOf(row) !== null && !servedOf(row)!.url"
+                  :title="servedOf(row) ? servedOf(row)!.url ?? 'no tunnel' : `Open ${localUrlOf(row)} in your browser`"
+                  @click="servedOf(row) ? openServed(row) : openLocal(row)"
+                >
+                  <AppIcon name="external-link" :size="14" />
+                </button>
                 <button
                   v-if="isRemapped(row) && row.remotePort !== null"
                   class="icon-btn sm"
@@ -533,43 +549,22 @@ function fmtScanTime(epochMs: number | null): string {
 
             <td class="c-actions">
               <div class="actions">
-                <!-- Served rows first: opening and stopping are the only two
-                     things anyone wants to do with one. -->
-                <template v-if="servedOf(row)">
-                  <button
-                    class="icon-btn sm"
-                    :disabled="!servedOf(row)!.url"
-                    :title="servedOf(row)!.url ?? 'no tunnel'"
-                    @click="openServed(row)"
-                  >
-                    <AppIcon name="external-link" :size="14" />
-                  </button>
-                  <button
-                    class="btn-auto stop"
-                    title="Stop the server on the host and close its tunnel"
-                    @click="onStopServing(row)"
-                  >
-                    stop
-                  </button>
-                </template>
-                <template v-else>
-                  <!-- One-click open on a live local tunnel (§17): the action
-                       the Android app and ssh-auto-forward both taught — a
-                       forwarded port is a URL, and looking at it is the
-                       commonest thing to do with one. It shares the served
-                       row's mark because it IS the served row's action: open
-                       this port's URL in the browser. The tooltip names the
-                       URL, which is the one fact the click needs to be
-                       predictable. -->
-                  <button
-                    v-if="localUrlOf(row)"
-                    class="icon-btn sm"
-                    :title="`Open ${localUrlOf(row)} in your browser`"
-                    @click="openLocal(row)"
-                  >
-                    <AppIcon name="external-link" :size="14" />
-                  </button>
-                </template>
+                <!-- The opens live in the Local column now, beside the port
+                     they open (§17). What is left here is the row's VERBS:
+                     a served row's stop, the on/off toggle, the forgotten-
+                     override "auto", and remove for the rows the toggle
+                     cannot reach. -->
+                <!-- Served rows: "stop" is the operation that ends both the
+                     server on the host and the tunnel — the toggle below is
+                     disabled on these rows for exactly that reason. -->
+                <button
+                  v-if="servedOf(row)"
+                  class="btn-auto stop"
+                  title="Stop the server on the host and close its tunnel"
+                  @click="onStopServing(row)"
+                >
+                  stop
+                </button>
                 <!-- A real two-state mark: the knob moves, so on/off differ in
                      shape and not only in colour. -->
                 <!-- Disabled on a served row, and this is not fussiness: the
@@ -868,8 +863,10 @@ function fmtScanTime(epochMs: number | null): string {
 .c-name {
   width: 9rem;
 }
+/* Room for the port input plus the open and clear-pin buttons that live in
+   this cell now. */
 .c-local {
-  width: 7rem;
+  width: 8rem;
 }
 .c-proc {
   max-width: 8rem;

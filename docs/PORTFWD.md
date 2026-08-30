@@ -1081,10 +1081,13 @@ props, and that Usage — the sibling button — is never marked).
 > like I do it with ssh-auto-forward or in the Android app"
 
 A forwarded port is a URL, and the commonest thing to do with a URL is look at
-it. The actions column now opens it: every row with a live LOCAL tunnel has an
-`external-link` button first in the cell, which opens
+it. The LOCAL column now opens it: every row with a live LOCAL tunnel has an
+`external-link` button beside the port number, which opens
 `http://127.0.0.1:<listenPort>/` in the system browser
-(`PortPanelView.vue`, `localUrlOf`/`openLocal`).
+(`PortPanelView.vue`, `localUrlOf`/`openLocal`). The open belongs to the local
+end — the URL IS that number — so the mark sits next to the port it names,
+reading as "this number, in a browser", while the actions column keeps the row
+verbs (stop, toggle, auto, remove).
 
 Where the button appears is the whole design, because a forwarded port is only
 a URL when a local tunnel for it exists:
