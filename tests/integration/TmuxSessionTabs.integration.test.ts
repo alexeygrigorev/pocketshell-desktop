@@ -4,7 +4,7 @@ import { SshService } from '@main/ssh/SshService';
 import { MAX_LIVE_CLIENTS, TmuxClientPool } from '@main/ssh/TmuxClientPool';
 import { PocketshellClient } from '@main/helper/PocketshellClient';
 import { pathAwareCommand } from '@main/helper/bootstrap';
-import type { ShellId } from '../../src/shared/types';
+import type { GridSize, ShellId } from '../../src/shared/types';
 import { TEST_KEY_PATH, describeDocker } from './helpers';
 
 /**
@@ -213,19 +213,21 @@ describeDocker('a tmux client per session tab', () => {
     expect(joined.switched).toBe(false);
 
     // The join resolves when the PTY opens, which can beat tmuxctl finishing
-    // the attach. The geometry probe doubles as the readiness signal: a
-    // non-null answer means our client is attached, tmux can name it, and —
-    // under `window-size latest` with it as the only client — the window has
-    // taken the size we attached with.
-    let size: { cols: number; rows: number } | null = null;
+    // the attach. The geometry probe doubles as the readiness signal: an `ok`
+    // answer means our client is attached, tmux can name it, and — under
+    // `window-size latest` with it as the only client — the window has taken
+    // the size we attached with.
+    let size: GridSize | null = null;
     for (let i = 0; i < 100 && !size; i++) {
-      size = await pool.windowSize(joined.shellId);
-      if (!size) await new Promise((r) => setTimeout(r, 200));
+      const probe = await pool.windowSize(joined.shellId);
+      if (probe.kind === 'ok') size = probe.client;
+      else await new Promise((r) => setTimeout(r, 200));
     }
-    // The window is one row SHORTER than the client we attached: the status
-    // line takes that row. Same reasoning the sizing test above gives for
-    // pinning the width exactly and being careful about the height.
-    expect(size).toEqual({ cols: 80, rows: 23 });
+    // Asserted against the CLIENT's tty — exactly what the attach set. (The
+    // window would be one row shorter: the status line takes that row. Same
+    // reasoning the sizing test above gives for pinning the width exactly and
+    // being careful about the height.)
+    expect(size).toEqual({ cols: 80, rows: 24 });
 
     // The regression itself: refresh-client reaches the client through its
     // own server. With the default-socket spelling this answered `can't find

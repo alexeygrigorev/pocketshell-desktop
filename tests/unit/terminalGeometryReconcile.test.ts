@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { nextTick } from 'vue';
+import type { GeometryProbe } from '../../src/shared/types';
 
 /**
  * The geometry reconcile loop: the interval that asks tmux what size IT thinks
@@ -78,11 +79,15 @@ const mockApi = {
     resize: vi.fn(async (_shellId: string, _cols: number, _rows: number) => true),
     redraw: vi.fn(async (_shellId: string) => true),
     close: vi.fn(async () => true),
-    // The probe answers agree by default; each test that needs a drift or a
-    // refusal overrides this after the baseline drain.
-    windowSize: vi.fn(async (): Promise<{ cols: number; rows: number } | null> => ({
-      cols: 80,
-      rows: 24,
+    // The probe answers agree by default, in the shape the fixture MEASURED: a
+    // session running its status line (the default) has a window one row
+    // shorter than the client tty, and the client tty equals what we sent.
+    // Tests that need drift or a refusal override this after the baseline
+    // drain.
+    windowSize: vi.fn(async (): Promise<GeometryProbe> => ({
+      kind: 'ok',
+      client: { cols: 80, rows: 24 },
+      window: { cols: 80, rows: 23 },
     })),
     onData: vi.fn(() => () => {}),
     onExited: vi.fn(() => () => {}),
@@ -140,13 +145,18 @@ describe('the geometry reconcile loop', () => {
     wrapper.unmount();
   });
 
-  it('repairs once when the far end reports a drifted window size', async () => {
-    // THE reported failure: another client became `window-size latest`, tmux
-    // moved its window from 80x24 to something smaller, nothing here changed,
-    // and the status line landed mid-pane over stale rows.
+  it('repairs once when our client tty is not what we told it', async () => {
+    // The disagreement that is OURS to fix: the client tty tmux reports is not
+    // the grid we have, so whatever we last pushed never landed (or was
+    // clobbered). One re-push of the true size, plus the repaint that makes
+    // tmux redraw rows a resize it considers a no-op would leave stale.
     const wrapper = await mountTerminal();
     const [resizes, redraws] = [sentCount(), redrawCount()];
-    mockApi.shell.windowSize.mockImplementation(async () => ({ cols: 48, rows: 16 }));
+    mockApi.shell.windowSize.mockImplementation(async () => ({
+      kind: 'ok',
+      client: { cols: 48, rows: 16 },
+      window: { cols: 48, rows: 15 },
+    }));
 
     await vi.advanceTimersByTimeAsync(5_000);
 
@@ -161,13 +171,35 @@ describe('the geometry reconcile loop', () => {
     wrapper.unmount();
   });
 
-  it('treats a null answer as quiet, never as an error to react to', async () => {
-    // Bare shells get null without ever reaching an exec channel; an evicted
+  it('leaves the window alone when another client is driving it', async () => {
+    // `window-size latest`: the phone joined at 48x15 and took the window.
+    // Our own client tty still matches what we sent, so nothing here is wrong
+    // in a way a resize could fix — pushing 80x24 again would only start a
+    // fight between two clients, and `refresh-client` would repaint at the
+    // 48x15 window, not at ours. The quantity that guards the repair is the
+    // client tty; the window is read to know what the OTHER side is doing.
+    const wrapper = await mountTerminal();
+    const [resizes, redraws] = [sentCount(), redrawCount()];
+    mockApi.shell.windowSize.mockImplementation(async () => ({
+      kind: 'ok',
+      client: { cols: 80, rows: 24 },
+      window: { cols: 48, rows: 15 },
+    }));
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(sentCount()).toBe(resizes);
+    expect(redrawCount()).toBe(redraws);
+    wrapper.unmount();
+  });
+
+  it('treats a bare answer as quiet, never as an error to react to', async () => {
+    // Bare shells get `bare` without ever reaching an exec channel; an evicted
     // tab recovers through scheduleFit instead. Either way this loop must not
     // churn the pane.
     const wrapper = await mountTerminal();
     const [resizes, redraws] = [sentCount(), redrawCount()];
-    mockApi.shell.windowSize.mockResolvedValue(null);
+    mockApi.shell.windowSize.mockResolvedValue({ kind: 'bare' });
 
     await vi.advanceTimersByTimeAsync(10_000);
 
@@ -206,7 +238,7 @@ describe('the geometry reconcile loop', () => {
     // moved during the round trip, and a tab closed between ask and reply must
     // not let its corpse push geometry into anything.
     const wrapper = await mountTerminal();
-    let releaseProbe!: (value: { cols: number; rows: number }) => void;
+    let releaseProbe!: (value: GeometryProbe) => void;
     mockApi.shell.windowSize.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -220,7 +252,7 @@ describe('the geometry reconcile loop', () => {
     const resizes = sentCount();
     const redraws = redrawCount();
     wrapper.unmount();
-    releaseProbe({ cols: 40, rows: 12 });
+    releaseProbe({ kind: 'ok', client: { cols: 40, rows: 12 }, window: { cols: 40, rows: 11 } });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(sentCount()).toBe(resizes);

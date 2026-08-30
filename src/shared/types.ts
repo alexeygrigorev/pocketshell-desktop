@@ -253,3 +253,36 @@ export type UpdateCheckResult =
   | ({ status: 'available'; currentVersion: string } & ReleaseAssetInfo)
   | { status: 'up-to-date'; currentVersion: string }
   | { status: 'failed'; reason: string; currentVersion: string };
+
+/** A cols×rows pair, as two ends of the terminal geometry conversation see it. */
+export interface GridSize {
+  cols: number;
+  rows: number;
+}
+
+/**
+ * One answer to "what does tmux believe the geometry behind this shell is?"
+ *
+ * The three kinds are deliberately not collapsible into a nullable size,
+ * because the renderer's reconcile loop has to treat them differently:
+ *
+ *   - `bare` — the shell is not a tmux client this pool holds (a bare-shell
+ *     tab, an evicted one). There is nothing to check, ever; the renderer
+ *     stops probing.
+ *   - `dead` — the pool holds a client but tmux could not be asked about it
+ *     (the handshake variable never published, the client detached, the
+ *     server died, the exec failed). This is the state whose honest naming
+ *     matters most: swallowed into a null it is indistinguishable from
+ *     healthy agreement, and a pane whose repair path has quietly died sits
+ *     garbled forever. The renderer counts these and re-joins.
+ *   - `ok` — both quantities, measured. `client` is the size of OUR client's
+ *     tty (what `resize` set — the thing our grid must equal);
+ *     `window` is the size of the tmux window the client is showing, which
+ *     `window-size latest` moves when another client drives the session.
+ *     The window is at most one row shorter than the client: that row is
+ *     tmux's status line, when the session runs with it on.
+ */
+export type GeometryProbe =
+  | { kind: 'bare' }
+  | { kind: 'dead' }
+  | { kind: 'ok'; client: GridSize; window: GridSize };

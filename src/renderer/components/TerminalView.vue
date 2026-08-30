@@ -45,7 +45,7 @@ import { resolveMonoStack } from '../fonts';
 import { resolveTheme } from '../themes';
 import { isTypingKey } from '../../shared/composerText';
 import { isShortcut } from '../../shared/shortcuts';
-import type { ConnectionId, ShellId } from '../../shared/types';
+import type { ConnectionId, GeometryProbe, ShellId } from '../../shared/types';
 import '@xterm/xterm/css/xterm.css';
 
 // The PTY this component owns is published to the shells store so other
@@ -1127,7 +1127,7 @@ async function reconcileTick(): Promise<void> {
   const id = shellId;
   if (probeInFlight) return;
   probeInFlight = true;
-  let far: { cols: number; rows: number } | null = null;
+  let far: GeometryProbe | null = null;
   try {
     far = await api.shell.windowSize(id);
   } finally {
@@ -1138,7 +1138,13 @@ async function reconcileTick(): Promise<void> {
   // longer describes the pane on screen.
   if (!term || id !== shellId || shellGone) return;
   if (far === null) return; // bare shell, or nothing tmux can be asked about
-  if (far.cols === term.cols && far.rows === term.rows) return;
+  if (far.kind !== 'ok') return;
+  // The quantity that must match the grid is the CLIENT's tty — exactly what
+  // `resize` set. The window is compared against nothing: a session running
+  // its status line answers one row short of the PTY forever, and under
+  // `window-size latest` another client legitimately moves it without this
+  // pane being wrong about anything it controls.
+  if (far.client.cols === term.cols && far.client.rows === term.rows) return;
   resyncDisplay();
 }
 

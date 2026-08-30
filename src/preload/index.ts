@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, type IpcRendererEvent } from 'electron';
 import { ipc } from '../shared/channels.js';
-import type { UpdateCheckResult } from '../shared/types';
+import type { GeometryProbe, UpdateCheckResult } from '../shared/types';
 import type { ZoomCommand } from '../shared/zoomKeys.js';
 import type {
   AttachmentSource,
@@ -218,17 +218,21 @@ const api = {
       ipcRenderer.invoke(ipc.shell.redraw, shellId),
 
     /**
-     * Ask tmux what size IT believes the window behind this shell currently
-     * is. Read-only: no resize, no repaint, no bytes into the pane.
+     * Ask tmux what geometry IT believes is behind this shell, as two
+     * measured quantities — our client's tty size, and the tmux window that
+     * tty is showing — plus an honest verdict on whether tmux could be asked
+     * at all. Read-only: no resize, no repaint, no bytes into the pane.
      *
      * This is the noticing half of the stale-geometry repair — the far end can
      * move the window under us (`window-size latest`, a second client such as
      * the phone becoming latest) without anything on this side changing, and
      * `resize`'s own change-detection then correctly sends nothing forever.
-     * Resolves null when there is nothing to ask (a bare shell this pool never
-     * opened, an evicted tab); that is a normal answer, not a failure.
+     * `bare` means there is nothing to ask (a shell this pool never opened —
+     * a bare-shell tab, an evicted one); `dead` means the pool holds a client
+     * but tmux would not answer, which the renderer must hear about as a
+     * failure rather than read as agreement.
      */
-    windowSize: (shellId: ShellId): Promise<{ cols: number; rows: number } | null> =>
+    windowSize: (shellId: ShellId): Promise<GeometryProbe> =>
       ipcRenderer.invoke(ipc.shell.windowSize, shellId),
 
     /** Close a shell. */

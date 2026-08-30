@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { ShellId } from '../../shared/types.js';
+import type { GeometryProbe, ShellId } from '../../shared/types.js';
 import { clientTtyVar, sessionAttachCommand } from '../../shared/attachCommand.js';
 import { shellQuote } from '../../shared/shellQuote.js';
 import type { PocketshellClient } from '../helper/PocketshellClient.js';
@@ -342,63 +342,95 @@ export class TmuxClientPool {
   }
 
   /**
-   * Ask tmux what size IT believes the window for [shellId] currently is.
+   * Ask tmux what geometry IT believes is behind [shellId], and answer
+   * honestly about whether it could be asked at all.
    *
-   * ## Why this exists
+   * ## Why two quantities, not one
    *
-   * The stale-geometry failure starts on the FAR side:
-   * under `window-size latest`, another client of the same session — the phone,
-   * the user's own terminal — can become latest and shrink or grow the window
+   * The stale-geometry failure starts on the FAR side: under tmux's
+   * `window-size latest`, another client of the same session — the phone, the
+   * user's own terminal — can become latest and shrink or grow the window
    * while nothing moves here. From this side nothing changed, so
    * TerminalView's `sent` guard correctly sends nothing, and the disagreement
    * sits on screen until something outside forces a repaint. Correcting what
    * cannot be noticed requires being ABLE to notice it, and this read-only
    * question is that ability.
    *
+   * But which number to compare against was measured, not assumed, and the
+   * first spelling of this probe got it wrong: it asked for
+   * `#{window_width} #{window_height}` and the renderer compared that against
+   * the xterm grid. `window_height` is the PANE area — a session running its
+   * status line (the default) answers one row SHORT of the PTY's height
+   * forever. Compared against the full grid, the probe therefore disagreed on
+   * every tick, and every visible pane re-sent its size and repainted every
+   * interval while healthy; with the status line OFF it agreed even when
+   * genuinely drifted. Both halves of that are fixed by asking for two
+   * quantities and letting the renderer compare each against the thing it is
+   * actually about: `#{client_width} #{client_height}` is the size of OUR
+   * client's tty — exactly what `resize` set — and
+   * `#{window_width} #{window_height}` is the window that tty is showing,
+   * which is `client` minus the status-line row at most. One `display-message`
+   * carries both; the probe still costs one exec and zero bytes into the pane.
+   *
    * ## Why `display-message` and not the PTY's own size
    *
    * The kernel pty behind this channel already answers with our size — but it
    * only ever repeats what WE told sshd, so comparing against it checks our
-   * bookkeeping against itself. The quantity whose drift breaks rendering is
-   * `#{window_width}`/`#{window_height}` of the window our client is showing,
-   * which is set by the tmux SERVER from every attached client. `-t "$tty"`
-   * names OUR client by its tty (the same rendezvous {@link redraw} uses), so
-   * the answer is about our view, not somebody else's.
+   * bookkeeping against itself. The quantities whose drift breaks rendering
+   * live in the tmux SERVER. `-t "$tty"` names OUR client by its tty (the
+   * same rendezvous {@link redraw} uses), so the answer is about our view,
+   * not somebody else's.
    *
-   * ## Cost and failure, both bounded to nothing
+   * ## Why the three kinds, and not a nullable size
    *
-   * One exec, one round trip, zero bytes into the pane and no repaint — that
-   * asymmetry is the whole point. The docs' original objection to watching was
-   * "an exec AND a full-screen repaint per tab every few seconds forever";
-   * splitting watch from repair removes the second half while healthy, which
-   * is the common case by far. A shell this pool did not open returns null
-   * WITHOUT an exec, as does anything that goes wrong: bare shells are normal,
-   * not errors, and a probe that cannot be answered must cost less than doing
-   * without one.
+   * The probe used to fold every failure — shell not ours, handshake variable
+   * never published, client detached, exec failed — into `null`, and the
+   * renderer treated null as "nothing to check". On a host where the aiming
+   * could not reach the client, the repair loop was then permanently DEAD
+   * while looking healthy: no answer, no error, no repair, forever — which is
+   * the shape of the garbled-pane report that only a manual re-join cured.
+   * `bare` says "never ask again"; `dead` says "ask, and keep failing" so the
+   * renderer can re-join; `ok` carries the measured pair. See
+   * {@link GeometryProbe} for the contract.
+   *
+   * ## Cost and failure, both bounded
+   *
+   * One exec for a shell the pool holds, NOTHING AT ALL for a shell it does
+   * not — a bare shell is normal, not an error, and a probe that cannot be
+   * answered must cost less than doing without one. Nothing here throws.
    */
-  async windowSize(shellId: ShellId): Promise<{ cols: number; rows: number } | null> {
+  async windowSize(shellId: ShellId): Promise<GeometryProbe> {
     const held = this.clientForShell(shellId);
-    if (!held) return null;
+    if (!held) return { kind: 'bare' };
     const connectionId = this.connectionForShell(shellId);
-    if (!connectionId) return null;
+    if (!connectionId) return { kind: 'bare' };
     // Same shape as {@link redraw}: recover our client's tty from the global
     // environment, aim at the session's own tmux server (see the redraw note
     // for why bare `tmux` cannot reach a helper-created client), and name our
     // client by its tty, so the answer is about our view and the command
     // costs one round trip.
     const command = `tty=${readTmuxGlobalVar(held.ttyVar)}; ` +
-      `[ -n "$tty" ] && ${aimedTmux(held.socketPath, `display-message -p -t "$tty" '#{window_width} #{window_height}'`)}`;
+      `[ -n "$tty" ] && ${aimedTmux(
+        held.socketPath,
+        `display-message -p -t "$tty" '#{client_width} #{client_height} #{window_width} #{window_height}'`,
+      )}`;
     try {
       const res = await this.ssh.exec(connectionId, pathAwareCommand(command));
-      // An empty stdout means either the variable never published (the join
-      // raced, or tmux pre-dates `set-environment`) or the client has since
-      // detached — both "no answer", never an error worth raising.
-      if (res.exitCode !== 0) return null;
-      const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(res.stdout);
-      if (!m) return null;
-      return { cols: Number(m[1]), rows: Number(m[2]) };
+      // A non-zero exit covers every "could not ask": the variable never
+      // published (the join raced, or tmux pre-dates `set-environment`), the
+      // client has since detached (`can't find client`), the server is gone.
+      // All are `dead`, never an error worth raising — but never a quiet
+      // `ok` either.
+      if (res.exitCode !== 0) return { kind: 'dead' };
+      const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/.exec(res.stdout);
+      if (!m) return { kind: 'dead' };
+      return {
+        kind: 'ok',
+        client: { cols: Number(m[1]), rows: Number(m[2]) },
+        window: { cols: Number(m[3]), rows: Number(m[4]) },
+      };
     } catch {
-      return null;
+      return { kind: 'dead' };
     }
   }
 
