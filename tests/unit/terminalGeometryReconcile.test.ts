@@ -6,23 +6,24 @@ import { nextTick } from 'vue';
 import type { GeometryProbe } from '../../src/shared/types';
 
 /**
- * The geometry reconcile loop: the interval that asks tmux what size IT thinks
- * the window is, and repairs when the answer disagrees with our grid.
+ * The geometry reconcile loop: the interval that asks tmux what it believes
+ * about our geometry, and repairs, repaints, or re-joins depending on the
+ * answer.
  *
- * This is the failure whose first move happens where nothing local can see it
- *: `window-size latest` means another client of the
- * session — the phone, the user's own terminal — can move the window under us
- * while xterm's grid and TerminalView's `sent` both stay consistent, every
- * existing guard correctly sends nothing, and tmux draws its status line into
- * the middle of a pane full of stale rows until something outside fixes it.
- * The user's workaround was switching workspaces away and back, which re-joins
- * fresh; these tests pin the automatic repair against exactly that class of
- * state.
+ * Three failures meet here, and only one of them is a size. The first spelling
+ * of this loop compared the WINDOW's height against the xterm grid — measured
+ * on tmux 3.4, a session running its status line answers one row short of the
+ * PTY forever — so it disagreed on every tick while healthy (a resize-plus-
+ * repaint storm every interval) and agreed straight through real drift with
+ * the status line off. The comparison now guards the quantity this side
+ * controls, the client tty; the window is read to know what the OTHER side is
+ * doing; and the state no comparison can see — a pane garbling at constant
+ * geometry, curable only by leaving the tab and coming back — is answered by
+ * the same move on a clock: one full repaint per healthy interval.
  *
  * As everywhere else in this directory, jsdom lays nothing out, so these tests
- * assert SCHEDULING: that a disagreement produces one resize-plus-redraw, that
- * agreement and "no answer" produce nothing, and that a pane nobody is looking
- * at spends no round trip at all.
+ * assert SCHEDULING: which of resize, repaint, close and re-join each answer
+ * produces, and that a pane nobody is looking at spends no round trip at all.
  */
 
 vi.mock('@xterm/xterm', () => ({
@@ -145,6 +146,26 @@ describe('the geometry reconcile loop', () => {
     wrapper.unmount();
   });
 
+  it('repaints a healthy pane on the clock, and nothing more often', async () => {
+    // The garble no geometry check can see: a desync between xterm's parser
+    // state and the client's byte stream garbles a pane at CONSTANT geometry,
+    // and the user's only cure was leaving the tab and coming back — which
+    // fires exactly one refresh-client. The loop does that by hand, on the
+    // clock, once per HEALTHY_REPAIR_INTERVAL; anything more often would be
+    // the storm the first spelling of this loop produced, when a status-lined
+    // session's window (always one row short of the PTY) read as drift.
+    const wrapper = await mountTerminal();
+    const [resizes, redraws] = [sentCount(), redrawCount()];
+
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(redrawCount()).toBe(redraws);
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(redrawCount()).toBe(redraws + 1);
+    expect(sentCount()).toBe(resizes); // a repaint, never a resize
+    wrapper.unmount();
+  });
+
   it('repairs once when our client tty is not what we told it', async () => {
     // The disagreement that is OURS to fix: the client tty tmux reports is not
     // the grid we have, so whatever we last pushed never landed (or was
@@ -171,13 +192,15 @@ describe('the geometry reconcile loop', () => {
     wrapper.unmount();
   });
 
-  it('leaves the window alone when another client is driving it', async () => {
+  it('leaves the window alone when another client is driving it, but repaints once', async () => {
     // `window-size latest`: the phone joined at 48x15 and took the window.
     // Our own client tty still matches what we sent, so nothing here is wrong
     // in a way a resize could fix — pushing 80x24 again would only start a
-    // fight between two clients, and `refresh-client` would repaint at the
-    // 48x15 window, not at ours. The quantity that guards the repair is the
-    // client tty; the window is read to know what the OTHER side is doing.
+    // fight between two clients (measured on tmux 3.4: there is no portable
+    // reclaim — `resize-window -c` does not exist, `refresh-client -C` is
+    // control-mode-only). What the episode DOES get is one repaint, so the
+    // drift shows correctly instead of compounding stale rows; after that the
+    // pane costs nothing until the window comes back.
     const wrapper = await mountTerminal();
     const [resizes, redraws] = [sentCount(), redrawCount()];
     mockApi.shell.windowSize.mockImplementation(async () => ({
@@ -189,7 +212,58 @@ describe('the geometry reconcile loop', () => {
     await vi.advanceTimersByTimeAsync(20_000);
 
     expect(sentCount()).toBe(resizes);
-    expect(redrawCount()).toBe(redraws);
+    expect(redrawCount()).toBe(redraws + 1);
+    wrapper.unmount();
+  });
+
+  it('rejoins the session after the probe answers dead twice in a row', async () => {
+    // The repair path itself died: the handshake variable never published, the
+    // client detached, or the tmux server restarted. Folded into a null this
+    // read as healthy agreement and the pane sat frozen forever behind a dead
+    // repair loop — the state the user could only cure by connecting to
+    // another session and back. Two consecutive `dead`s close the shell (main
+    // drops the pool record, so the next attach cannot answer with the same
+    // dead client) and join fresh — the full re-initialisation that is the one
+    // repair for stream-state desync.
+    const wrapper = await mountTerminal();
+    const joinsAtStart = mockApi.shell.attachSession.mock.calls.length;
+    mockApi.shell.windowSize.mockResolvedValue({ kind: 'dead' });
+
+    await vi.advanceTimersByTimeAsync(5_000); // first dead tick: not yet
+    expect(mockApi.shell.close).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000); // second dead tick: rejoin
+    for (let i = 0; i < 10; i++) await nextTick();
+
+    expect(mockApi.shell.close).toHaveBeenCalledWith('shell-1');
+    expect(mockApi.shell.attachSession.mock.calls.length).toBe(joinsAtStart + 1);
+    wrapper.unmount();
+  });
+
+  it('spends at most one re-join per minute and three before giving up', async () => {
+    // A tmux server that is genuinely gone fails every re-join. Without the
+    // spacing the pane would hammer the host with a join a tick; without the
+    // cap it would print its failure line and re-join every minute forever.
+    const wrapper = await mountTerminal();
+    mockApi.shell.windowSize.mockResolvedValue({ kind: 'dead' });
+
+    // Three episodes, each needing two dead ticks, each at least a minute
+    // after the last re-join.
+    for (let episode = 0; episode < 3; episode++) {
+      await vi.advanceTimersByTimeAsync(10_000); // two dead ticks -> rejoin
+      for (let i = 0; i < 10; i++) await nextTick();
+      await vi.advanceTimersByTimeAsync(61_000); // clear the spacing
+      for (let i = 0; i < 5; i++) await nextTick();
+    }
+
+    const closes = mockApi.shell.close.mock.calls.length;
+    expect(closes).toBe(3);
+
+    // A fourth episode is refused: the budget is spent, the pane is left
+    // alone with whatever the last join printed into it.
+    await vi.advanceTimersByTimeAsync(61_000);
+    for (let i = 0; i < 10; i++) await nextTick();
+    expect(mockApi.shell.close.mock.calls.length).toBe(3);
     wrapper.unmount();
   });
 

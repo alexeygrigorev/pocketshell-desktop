@@ -1017,48 +1017,13 @@ watch(
 /**
  * Put the pane and the far end back in agreement, on demand.
  *
- * ## The picture this is for
- *
- * Reported with a screenshot: tmux's status line drawn in the MIDDLE of the
- * pane, correct output above it, and below it rows holding stale text — a diff
- * hunk repeated eleven times, a TUI's input line repeated five. The user added
- * the trigger: "it happens when codex starts redrawing like crazy".
- *
- * That is one specific disagreement and not a rendering fault on this side.
- * tmux draws its status line where IT believes the screen ends, so a status
- * line at row 24 of a 40-row pane means the far end is working to a smaller
- * screen than we have; the rows below it are cells tmux does not think it owns,
- * still holding whatever the renderer last put there. A busy TUI does not cause
- * that — it makes it obvious, because a quiet pane has nothing to redraw
- * wrongly.
- *
- * ## Why a BUTTON exists for it, when `pushGeometry` is supposed to prevent it
- *
- * Because the disagreement can start on the far side, where nothing we do
- * reaches. A tmux session can hold several clients — this app's tab, the phone,
- * the user's own terminal — and `window-size latest` sizes the window to the
- * most recently used one. Another client becoming "latest" shrinks the window
- * under us, and from this side NOTHING HAS CHANGED: xterm's grid is what it
- * was, so `sent` still matches it, so the guard that exists to stop pointless
- * resizes correctly sends nothing. The state is stale and self-consistent, and
- * only an outside nudge can break it.
- *
- * So this does the two things that recover it, in the order that matters:
- *
- *   1. `sent = null` — forget what the far end was TOLD, so the size is sent
- *      again even though our side never moved. This is the half a plain redraw
- *      cannot do: `refresh-client` repaints the window at whatever size tmux
- *      currently believes in, which is exactly the wrong size in this picture.
- *   2. push, with a repaint, so tmux draws all of it rather than the part it
- *      thinks changed.
- *
- * It USED to be manual only — a lever the user could reach when they saw the
- * picture — because watching for this state was assumed to mean "an exec AND a
- * full-screen repaint per tab every few seconds forever". Those two costs have
- * since been split: `reconcileTick` below asks a read-only question on an
- * interval and pulls THIS lever only when the answer says the geometry has
- * actually drifted. The menu item stays: it is still the instant, on-demand
- * version, and the thing the interval calls when it decides repair is due.
+ * `sent = null` forgets what the far end was TOLD, so the size is sent again
+ * even though our side never moved — the half a plain redraw cannot do, since
+ * `refresh-client` repaints the window at whatever size tmux currently
+ * believes in. Then push, with a repaint, so tmux draws all of it rather than
+ * the part it thinks changed. The menu item is the instant, on-demand version;
+ * {@link reconcileTick} calls it when a probe says our client's tty has
+ * drifted from the grid.
  */
 function resyncDisplay(): void {
   fitAddon?.fit();
@@ -1067,45 +1032,104 @@ function resyncDisplay(): void {
 }
 
 /**
- * How often a VISIBLE pane checks whether the far end still agrees about the
- * geometry. See {@link reconcileTick} for why this exists at all and what
- * bounds its cost.
+ * How often a VISIBLE pane asks tmux what it believes about our geometry.
+ * See {@link reconcileTick} for why this exists at all and what bounds its
+ * cost.
  */
 const GEOMETRY_PROBE_INTERVAL_MS = 5000;
+/**
+ * How often a healthy pane asks tmux for a full repaint anyway.
+ *
+ * This interval is the answer to the report no geometry check can see: a
+ * session garbling under a busy TUI — frames repeated down the pane, stale
+ * rows below tmux's status bar — that stayed broken through every resize and
+ * every geometry probe, and that the user could only cure by leaving the tab
+ * and coming back. Leaving and coming back fires exactly one
+ * {@link api.shell.redraw}, and that repaint is what cured it. A desync
+ * between xterm's parser state and the client's byte stream is invisible to
+ * size comparison by construction — both ends agree on the geometry and
+ * disagree about everything drawn in it — so the loop repaints on the clock
+ * instead of on detection: one exec and one full-screen repaint per visible
+ * pane per {@link HEALTHY_REPAIR_INTERVAL_MS}, which is the user's workaround,
+ * automated, at a rate nobody pays for.
+ */
+const HEALTHY_REPAIR_INTERVAL_MS = 30_000;
+/**
+ * Consecutive `dead` probe answers required before the pane re-joins on its
+ * own. Two: one bad answer is a network blip, and a re-join is seconds of
+ * join not to be spent on one; two in a row means the tmux client is really
+ * unreachable.
+ */
+const DEAD_TICKS_BEFORE_REJOIN = 2;
+/** Minimum spacing between self-re-joins, so a dead host cannot get hammered. */
+const REJOIN_MIN_INTERVAL_MS = 60_000;
+/**
+ * Re-join episodes allowed in a row without a single healthy probe answer in
+ * between. A tmux server that is genuinely gone fails every re-join; without
+ * this cap the pane would print its failure line and re-join every minute
+ * forever.
+ */
+const MAX_CONSECUTIVE_REJOINS = 3;
+
 /** The pending reconcile timer, when this pane is mounted. */
 let probeTimer: ReturnType<typeof setInterval> | null = null;
 /** True while a probe's round trip is in flight, so ticks cannot stack. */
 let probeInFlight = false;
+/** Consecutive `dead` answers on the current pane. */
+let deadTicks = 0;
+/** Epoch ms of the last repaint the loop decided to ask for. */
+let lastRepairAt = 0;
+/** True once an episode of another client driving the window has been repainted. */
+let driftRepaintDone = false;
+/** Re-join episodes since the last healthy probe answer. */
+let rejoinStreak = 0;
+/** Epoch ms of the last self-re-join, for {@link REJOIN_MIN_INTERVAL_MS}. */
+let lastRejoinAt = 0;
 
 /**
- * Watch for the far end moving the window under us, and repair when it has.
+ * Watch the far end, repair what is ours, repaint what is not, and re-join
+ * what is gone.
  *
  * ## Why this has to exist after all the wiring above
  *
  * Every route above reads true from the same assumption: before sending a
- * size we compare against {@link sent}, what the far end was last TOLD. But
- * there is a failure whose first move happens where no local bookkeeping can
- * see it: under tmux's `window-size latest`, another
- * client of the same session — the phone, the user's own terminal — becomes
- * latest and RESIZES THE WINDOW while nothing here moves. xterm's grid still
- * matches `sent`, every guard correctly sends nothing, and the disagreement —
- * tmux drawing its status line mid-pane over rows of stale text — is stable
- * indefinitely. The user's reported workaround was leaving the workspace and
- * coming back, which re-joins the session fresh; their longer-standing lever
- * was the manual Redraw item.
+ * size we compare against {@link sent}, what the far end was last TOLD. Two
+ * classes of failure defeat that by construction, and the loop is shaped
+ * around them:
  *
- * ## Why an interval, against the objection recorded in the docs
+ *   1. **The far end moved something we control.** Our client's tty size can
+ *      end up other than what we pushed — a resize lost in a transient, a
+ *      layout that settled wrong. The probe answers
+ *      `#{client_width} #{client_height}` — the size of OUR client's tty, the
+ *      quantity {@link pushGeometry} sets — and a mismatch is repaired by
+ *      {@link resyncDisplay}: push the true size again, repaint.
+ *   2. **The far end moved something we do not control, or control nothing
+ *      about.** Under `window-size latest`, another client of the session —
+ *      the phone, the user's own terminal — can take the window; and a
+ *      desync between xterm's parser state and the client's byte stream can
+ *      garble a pane at CONSTANT geometry, which no comparison of sizes can
+ *      ever detect. Both are answered the same way the user answered them by
+ *      hand: a full repaint, asked on the clock while healthy (item 2's only
+ *      cure), and once per episode when the window has been taken (item 1's
+ *      honest picture). We never FIGHT for the window: there is no portable
+ *      way to reclaim `latest` (measured on tmux 3.4: `resize-window -c`
+ *      does not exist, `refresh-client -C` is control-mode-only), and a
+ *      resize war between two active clients would garble both.
  *
- * The docs' case against watching was cost: "an exec AND a full-screen repaint
- * per tab every few seconds forever". Those are two costs, and only the exec
- * is unconditional. The watch therefore asks a READ-ONLY question —
- * `display-message` reporting `#{window_width}`/`#{window_height}` for our own
- * client ({@link api.shell.windowSize}) — which sends nothing into the pane
- * and repaints nothing while the sizes agree. Healthy steady state costs one
- * short-lived SSH channel per visible pane per five seconds, well inside the
- * headroom `MAX_LIVE_CLIENTS` leaves under sshd's ceiling; the expensive half,
- * resize plus `refresh-client`, runs only through {@link resyncDisplay} on an
- * actual disagreement or via the menu item as before.
+ * ## The exit that is not an exit: re-joining on `dead`
+ *
+ * A probe that cannot be answered — the handshake variable never published,
+ * the client detached, the tmux server restarted under the session — used to
+ * read as `null`, indistinguishable from healthy agreement, and the pane sat
+ * frozen or garbled forever behind a repair path that had quietly died. The
+ * probe now answers `dead`, and two `dead`s in a row do what the user did by
+ * hand: close the shell and join the session fresh. The fresh join is the one
+ * repair that re-initialises BOTH ends — a new tmux client sends its complete
+ * stream, and the terminal is reset before it binds. Bounded by
+ * {@link REJOIN_MIN_INTERVAL_MS} and {@link MAX_CONSECUTIVE_REJOINS} so a
+ * genuinely gone session cannot be hammered; a pane the user exited on purpose
+ * never reaches here at all, because its channel is dead and `shellGone`
+ * gates the tick.
  *
  * ## The guards, in order
  *
@@ -1117,15 +1141,6 @@ let probeInFlight = false;
  * when the channel budget counts. And since the answer takes a network round
  * trip to arrive, everything below the await re-reads the world instead of
  * trusting the world that asked.
- *
- * ## What a disagreement triggers
- *
- * Nothing clever: {@link resyncDisplay}, the same repair the menu item runs —
- * re-measure locally, forget what was sent, push, ask for a full repaint.
- * Both directions of drift heal, not just shrinkage, and if ANOTHER client is
- * actively driving the session (someone typing on the phone) it will win its
- * size back the moment they touch it again; a desktop pane sitting garbled
- * while nobody else is using the host is the outcome being removed.
  */
 async function reconcileTick(): Promise<void> {
   if (!term || !shellId || !fitAddon || shellGone) return;
@@ -1136,7 +1151,7 @@ async function reconcileTick(): Promise<void> {
   const id = shellId;
   if (probeInFlight) return;
   probeInFlight = true;
-  let far: GeometryProbe | null = null;
+  let far: GeometryProbe;
   try {
     far = await api.shell.windowSize(id);
   } finally {
@@ -1146,19 +1161,81 @@ async function reconcileTick(): Promise<void> {
   // closed, or exited underneath the await. Any of those means the answer no
   // longer describes the pane on screen.
   if (!term || id !== shellId || shellGone) return;
-  if (far === null) return; // bare shell, or nothing tmux can be asked about
-  if (far.kind !== 'ok') return;
-  // The quantity that must match the grid is the CLIENT's tty — exactly what
-  // `resize` set. The window is compared against nothing: a session running
-  // its status line answers one row short of the PTY forever, and under
-  // `window-size latest` another client legitimately moves it without this
-  // pane being wrong about anything it controls.
-  if (far.client.cols === term.cols && far.client.rows === term.rows) return;
-  resyncDisplay();
+  if (far.kind === 'bare') return; // not a tmux client of ours; nothing to check, ever
+  if (far.kind === 'dead') {
+    scheduleRejoin(id);
+    return;
+  }
+  // An answer at all means the repair path is alive: any streak that led
+  // here is over.
+  deadTicks = 0;
+  rejoinStreak = 0;
+  const grid = { cols: term.cols, rows: term.rows };
+  if (far.client.cols !== grid.cols || far.client.rows !== grid.rows) {
+    // OUR side is wrong: the tty is not the grid we pushed. Re-push and
+    // repaint — the repair that is unambiguously ours to make.
+    resyncDisplay();
+    lastRepairAt = Date.now();
+    driftRepaintDone = false;
+    return;
+  }
+  // The window is at most one row shorter than the client: that row is the
+  // status line, when the session runs one (measured both ways on tmux 3.4).
+  const windowIsOurs =
+    far.window.cols === far.client.cols &&
+    (far.window.rows === far.client.rows || far.window.rows === far.client.rows - 1);
+  if (!windowIsOurs) {
+    // Another client is driving `window-size latest`. Not ours to fight — but
+    // the first tick of the episode repaints, so the drift at least shows
+    // correctly instead of compounding stale rows under a moving window.
+    if (!driftRepaintDone) {
+      driftRepaintDone = true;
+      lastRepairAt = Date.now();
+      void api.shell.redraw(id);
+    }
+    return;
+  }
+  driftRepaintDone = false;
+  // Healthy, and ours. Repaint on the clock: the garble no comparison catches.
+  if (Date.now() - lastRepairAt >= HEALTHY_REPAIR_INTERVAL_MS) {
+    lastRepairAt = Date.now();
+    void api.shell.redraw(id);
+  }
+}
+
+/**
+ * The bounded automatic re-join: what the user did by hand ("connect to
+ * another session then go back and connect again to the current one"), because
+ * a fresh join is the only repair that re-initialises both ends of the stream.
+ */
+function scheduleRejoin(id: ShellId): void {
+  deadTicks += 1;
+  if (deadTicks < DEAD_TICKS_BEFORE_REJOIN) return;
+  if (Date.now() - lastRejoinAt < REJOIN_MIN_INTERVAL_MS) return;
+  if (rejoinStreak >= MAX_CONSECUTIVE_REJOINS) return;
+  deadTicks = 0;
+  lastRejoinAt = Date.now();
+  rejoinStreak += 1;
+  // The join's own attach repaints everything; do not double-repair behind it.
+  lastRepairAt = Date.now();
+  driftRepaintDone = false;
+  term?.write('\r\n\x1b[90m[PocketShell] lost the tmux client — rejoining…\x1b[0m\r\n');
+  void (async () => {
+    // Closing is what makes the next attach a FRESH JOIN: main drops the
+    // pool record when the channel dies, so `attachSession` cannot answer
+    // with the very client that just proved unreachable.
+    await api.shell.close(id);
+    if (id !== shellId || !term) return; // the pane moved on meanwhile
+    await showTarget();
+  })();
 }
 
 function startProbing(): void {
   if (probeTimer !== null) return;
+  // The clocked repaint counts from here, not from epoch zero: a pane that
+  // mounts already owns a fresh attach's full repaint, and its first owed
+  // one is a full interval away, not overdue.
+  lastRepairAt = Date.now();
   probeTimer = setInterval(() => {
     void reconcileTick();
   }, GEOMETRY_PROBE_INTERVAL_MS);
