@@ -370,20 +370,29 @@ function pushGeometry(opts: { redraw?: boolean } = {}): void {
   const id = shellId;
   if (!sent || sent.cols !== cols || sent.rows !== rows) {
     sent = { cols, rows };
-    void api.shell.resize(id, cols, rows);
+    const pushed = api.shell.resize(id, cols, rows);
+    // The repaint must describe the size we JUST pushed, not race it.
+    // `refresh-client` draws the window as tmux currently believes it is, and
+    // an exec channel can outrun the client's own WINCH processing — a repaint
+    // that lands first would redraw the OLD size into a grid already reflowed
+    // to the new one. Ordering them costs nothing: the resize IPC resolves
+    // only after `setWindow` ran.
+    if (opts.redraw === true) void pushed.then(() => api.shell.redraw(id));
+    else void pushed;
+  } else if (opts.redraw === true) {
+    // The redraw is NOT conditional on the size having moved, and that is the
+    // whole point of asking for one. The case it exists for is precisely the
+    // case where nothing moved: a tab coming back into view at the size it was
+    // hidden at, whose tmux client may have been resized by something else
+    // meanwhile, or which simply stopped owning the rows below its status line.
+    // A resize tmux considers a no-op repaints nothing at all.
+    //
+    // It stays opt-in per call site rather than automatic because an ordinary
+    // drag-resize produces a run of pushes and tmux repaints itself on each one;
+    // asking again would be an SSH exec per frame for no visible difference. It
+    // is the EDGES that need it — hidden to visible, and a freshly adopted PTY.
+    void api.shell.redraw(id);
   }
-  // The redraw is NOT conditional on the size having moved, and that is the
-  // whole point of asking for one. The case it exists for is precisely the
-  // case where nothing moved: a tab coming back into view at the size it was
-  // hidden at, whose tmux client may have been resized by something else
-  // meanwhile, or which simply stopped owning the rows below its status line.
-  // A resize tmux considers a no-op repaints nothing at all.
-  //
-  // It stays opt-in per call site rather than automatic because an ordinary
-  // drag-resize produces a run of pushes and tmux repaints itself on each one;
-  // asking again would be an SSH exec per frame for no visible difference. It
-  // is the EDGES that need it — hidden to visible, and a freshly adopted PTY.
-  if (opts.redraw === true) void api.shell.redraw(id);
 }
 
 /** Bind the main->renderer byte and exit streams for the current `shellId`. */

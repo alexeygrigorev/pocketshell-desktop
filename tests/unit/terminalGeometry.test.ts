@@ -298,6 +298,38 @@ describe('the far end is told the geometry the pane actually has', () => {
     wrapper.unmount();
   });
 
+  it('paints only after the resize it belongs to has landed', async () => {
+    // `refresh-client` redraws the window as tmux CURRENTLY believes it is.
+    // The two pushes used to fire as unordered fire-and-forget IPCs, and an
+    // exec channel can outrun the client's own WINCH processing — so the
+    // repaint could land first and redraw the OLD size into a grid that
+    // `fit()` had already reflowed to the new one. Chaining the repaint behind
+    // the resize's own resolution orders them for free: the resize IPC does
+    // not resolve until `setWindow` ran.
+    const wrapper = await mountTerminal();
+    resize.mockClear();
+    redraw.mockClear();
+
+    let releaseResize!: (value: boolean) => void;
+    resize.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseResize = resolve;
+        }),
+    );
+
+    (wrapper.vm as unknown as { resyncDisplay: () => void }).resyncDisplay();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(resize).toHaveBeenCalledWith('shell-1', 80, 24);
+    expect(redraw).not.toHaveBeenCalled();
+
+    releaseResize(true);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(redraw).toHaveBeenCalledWith('shell-1');
+    wrapper.unmount();
+  });
+
   it('re-asserts geometry AND asks for a repaint when a hidden tab comes back', async () => {
     // The second half of the report: a tab that returns at the size it was
     // hidden at changes nothing on our side, so the old wiring — which only
