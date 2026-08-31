@@ -769,7 +769,7 @@ The visual spec follows Android `FolderListScreen.kt`:
 | `SESSIONS` header | `--fs-100`/`--fw-semibold`/`--fg-muted`, `letter-spacing: .08em`, uppercase — keep as is, it is already right |
 | `.session-row` | height `--row-h` (28px), padding `0 var(--row-pad-x) 0 var(--sp-2)`, **no child indent** — there is no parent row to align under |
 | `.dot` | 8px; `--fg-muted` detached, `--success` attached (replaces the hard-coded `#a6e3a1`) |
-| `.label` (primary) | folder basename, `--font-ui`/`--fs-300`, `flex: 1 1 auto; min-width: 0`. `--fw-semibold` when attached. Middle-truncates via a `.label-head` (shrink + ellipsis) / `.label-tail` (protected, last 8 chars) span pair, so `pocketshell-desktop` degrades to `poc…-desktop` rather than to `pocketshell` |
+| `.label` (primary) | folder basename, `--font-ui`/`--fs-300`, `flex: 1 1 auto; min-width: 0`. `--fw-semibold` when attached. End-truncates with the standard `text-overflow: ellipsis` (**revised**: §5's `.label-head`/`.label-tail` middle-truncation span pair is retired — SESSIONLIST §5 Revision 7); the row tooltip carries the full name |
 | `.row-name` (secondary) | session name, `--font-mono`/`--fs-100`/`--fg-secondary`, end-ellipsis. Rendered **only** when the name is not derivable from the label, or the folder holds siblings |
 | `.agent-badge` | unchanged — `--agent` on `--agent-soft`, `--r-sm`, `--fs-100`, the shared chip metric |
 | `.row-time` | **relative** (`now`, `12m`, `3h`, `2d`, then `Aug 12`), `--fs-100`/`--fg-secondary`/`tabular-nums`, right-aligned. Absolute form moved to the row tooltip. Hidden under `@container (width < 230px)` |

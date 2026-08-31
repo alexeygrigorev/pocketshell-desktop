@@ -51,8 +51,8 @@
 //     semibold label. The `attached` text tag stays retired: position, weight
 //     and colour already say it.
 //   - the timestamp is relative (`12m`), absolute in the tooltip.
-//   - labels middle-truncate, so `git-pocketshell` and `git-pocketshell-quse`
-//     stop rendering identically when the panel is narrow.
+//   - labels end-truncate with the ordinary CSS ellipsis; the row tooltip
+//     carries the full name and path on hover.
 //   - the tooltip carries the full truth: session name, full path, absolute
 //     time.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
@@ -1076,15 +1076,12 @@ function fmtRelative(epochSeconds: number): string {
                    only place the panel reports attachment at all, because the
                    sessions it belonged to are no longer rows. -->
               <span class="dot" :class="{ active: dir.active }" />
-              <!-- Two spans, no measurement code: the head shrinks and
-                   ellipsises, the tail is protected, so `pocketshell-desktop`
-                   degrades to `poc…-desktop` rather than to `pocketshell`.
-                   An untracked folder is labelled by its session name, which is
-                   the only label it has. -->
-              <span class="label" :class="{ mono: dir.untracked }">
-                <span class="label-head">{{ dir.labelHead }}</span>
-                <span v-if="dir.labelTail" class="label-tail">{{ dir.labelTail }}</span>
-              </span>
+              <!-- One span, one CSS ellipsis: when the row runs out of width
+                   the label degrades to `course-managemen…` and the tooltip
+                   carries the full name (the full path) on hover. An untracked
+                   folder is labelled by its session name, which is the only
+                   label it has. -->
+              <span class="label" :class="{ mono: dir.untracked }">{{ dir.label }}</span>
               <!-- Counted only from 2 up. The `1` is the dead field §1 of
                    SESSIONLIST measured: every folder row stands for at least
                    one session, so saying so on most of them is noise.
@@ -1508,8 +1505,8 @@ function fmtRelative(epochSeconds: number): string {
    Dropping the chevron gives every row 18px back. At the 232px panel floor the
    timestamp is already gone (see the container query at the bottom of this
    block) and a folder row has 232 - 36 - 10 = 186px for its label, badges and
-   count. Middle truncation is kept anyway: `pocketshell` and
-   `pocketshell-desktop` are still one root apart. */
+   count. Truncation is the ordinary end ellipsis; the row tooltip carries the
+   full name. */
 /* Sits in the folder slot, but is prose rather than a row: no dot, so
    it starts where a directory LABEL starts (36) instead of where its dot
    does. */
@@ -1578,10 +1575,11 @@ function fmtRelative(epochSeconds: number): string {
    by `.row-time`'s `auto` margin instead, so the timestamps still line up in a
    column down the panel. */
 .label {
-  display: flex;
-  align-items: baseline;
   flex: 0 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg);
 }
 .label.mono {
@@ -1595,18 +1593,6 @@ function fmtRelative(epochSeconds: number): string {
    (docs/SESSIONLIST.md §6). The mark stays; the movement went. */
 .dir-header.attached .label {
   font-weight: var(--fw-semibold);
-}
-.label-head {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* Protected: the distinguishing text of a project name is its tail. */
-.label-tail {
-  flex: none;
-  white-space: nowrap;
 }
 /* Badge metric, shared by every --r-sm chip in the app:
    inline-flex, 0 var(--sp-1) padding, --lh-100. */

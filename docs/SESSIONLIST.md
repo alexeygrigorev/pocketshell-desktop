@@ -38,6 +38,14 @@ under §6.1), and the user can drag them up and down to override it (§14). The
 root header also now names its directory — `~/git`, not `git` — with its count
 beside it rather than pinned right (§15).
 
+**Revision 7 — the ordinary ellipsis.** §5's middle truncation is overturned at
+the user's ask ("this shortening looks strange — these names don't really need
+to be shortened"): a directory label renders as ONE span with the standard
+`text-overflow: ellipsis`, and the full name is read on hover from the row
+tooltip that was already carrying it. The two-span head/tail pair is gone from
+the renderer, and `SessionDirectory` no longer carries `labelHead` /
+`labelTail` (§8).
+
 **What changed:** the panel is now `root -> folder`, TWO levels, one row per
 folder. There is no session level. Clicking a folder row opens a folder
 WORKSPACE in the right pane whose tab bar carries every session in that folder.
@@ -442,7 +450,7 @@ disambiguate. `select` is emitted from leaves only, and it still carries a
 |---|-------|------|
 | 1 | Left inset + disclosure | 2px rail + 18px, so the 14px `chevron-right` box sits at 20–34 and a 4px gap lands the dot at **38**, one 8px step right of the root's. Revision 2 pinned this dot at 30 because directory headers and single-session directory rows alternated down the list and a stepped dot would have read as jitter; there is no such alternation now |
 | 2 | Status dot | **Aggregate**: `--success` when *any* session in the directory is attached. Same rule §3a gives the root header, for the same reason — a collapsed node's only way to say "something live is in here" |
-| 3 | Directory label | The directory's own name — its trailing path component, never the full path and never a session name. `--font-ui` `--fs-300`. Middle-truncates (§5). Wins the width fight: `flex: 0 1 auto; min-width: 0` — it shrinks last but no longer GROWS, which is what let the count drift to the right edge (§15) |
+| 3 | Directory label | The directory's own name — its trailing path component, never the full path and never a session name. `--font-ui` `--fs-300`. **Revision 7:** end-truncates with the standard ellipsis (§5's middle truncation retired here); the row tooltip carries the full name. Wins the width fight: `flex: 0 1 auto; min-width: 0` — it shrinks last but no longer GROWS, which is what let the count drift to the right edge (§15) |
 | 4 | Count | Bare integer, `--fs-100` `--fg-muted` — **only from 2 up**. This is the one place §1's measurement still binds: a `1` beside a header whose only child is drawn on the next row is exactly the dead field §1 named, and dropping it hands the label back width the new level took. **Revision 6:** it sits immediately after the label, ahead of the agent badges, matching the root header (§15) |
 | 5 | Relative time | **The newest activity in the directory.** It used to be the key the row sorted on too, so a header could never display an older time than one below it; revision 6 breaks that pairing (§6.0) and the time is now an independent field — which makes it carry more, not less. It holds the right edge with `margin-left: auto`. The alternative (no time) makes a directory row the one row in the panel that cannot answer "was this touched recently?" |
 
@@ -581,6 +589,14 @@ src/shared/sessionNameParts.ts:21-27; see §8 for why it lives there).
    has and we do not call.
 
 ## 5. Truncation
+
+> **Revision 7 — overturned for the panel.** Directory labels end-truncate with
+> the ordinary CSS ellipsis and lean on the tooltip for the full name (§3b).
+> The text below stands as the record of why middle truncation was chosen and
+> what gave way: the shared-prefix argument cuts both ways, since the user
+> whose directories are `course-management-agent` and
+> `course-management-platform` read `course-manage… nt-agent` as a mangled
+> single name rather than as a protected tail.
 
 End-ellipsis is the wrong operator for the primary: `pocketshell` and
 `pocketshell-desktop` differ only at the tail. Spec **middle truncation via
@@ -763,12 +779,13 @@ the eye lands first).
   - `groupSessionsIntoRoots(sessions, home): SessionRootFolder[]` — what the
     panel renders. `SessionRootFolder = { key, label, directories,
     sessionCount, mostRecentActivity, active, other }`, and
-    `SessionDirectory = { key, path, label, labelHead, labelTail, rows,
-    mostRecentActivity, active, untracked, inferredRoot }`. **Revision 3
-    changes no field here.** The projection was already uniform; it was the
-    renderer that branched on `rows.length === 1`, and that test is gone.
-    `rows.length` is now a count and nothing else — the only thing that still
-    reads it is the header's `≥ 2` count field (§3b).
+    `SessionDirectory = { key, path, label, rows,
+    mostRecentActivity, active, untracked, inferredRoot }`. **Revision 7
+    removes `labelHead` / `labelTail`** — the renderer end-truncates (§5) —
+    and changes no other field here. The projection was already uniform; it
+    was the renderer that branched on `rows.length === 1`, and that test is
+    gone. `rows.length` is now a count and nothing else — the only thing that
+    still reads it is the header's `≥ 2` count field (§3b).
   - `flattenSessions(sessions): SessionRow[]` — the tree's degenerate case and
     the row model's direct test surface.
   - `groupSessionsByFolder(sessions): SessionFolder[]` — the phone-parity LEAF
@@ -778,7 +795,7 @@ the eye lands first).
   All three go through one private `buildRows`, so they cannot disagree about
   a label. `buildRows` deliberately does **not** disambiguate — the correct
   scope differs (§4.5), so each projection applies `disambiguateLabels` over
-  its own scope. That helper is generic over `{label, labelHead, labelTail,
+  its own scope. That helper is generic over `{label,
   untracked}` plus a `pathOf` accessor, because two levels now need it: the
   flat list's rows and the tree's directories.
 - **Keys at both levels are written home-relative.** `rootForPath(path, home)`

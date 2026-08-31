@@ -953,6 +953,24 @@ describe('SessionTree — the root header row', () => {
       'row-time',
     ]);
   });
+
+  it('renders the whole label in one span and hands the full name to the tooltip', async () => {
+    // SESSIONLIST §5 Revision 7: the head/tail span pair is gone — a long name
+    // now degrades by CSS to one end ellipsis, and the row `title` is where
+    // the full name is read. Scoped CSS does not apply under jsdom, so what is
+    // pinned here is the DOM contract the stylesheet works on: a single
+    // childless span holding the whole label, on a row whose title carries the
+    // path that names it.
+    const wrapper = await open([
+      session('git-course-management-agent', `${HOME}/git/course-management-agent`),
+    ]);
+    const label = wrapper.get('.dir-header .label');
+    expect(label.text()).toBe('course-management-agent');
+    expect(label.element.children).toHaveLength(0);
+    expect(wrapper.get('.dir-header').attributes('title')).toContain(
+      '~/git/course-management-agent',
+    );
+  });
 });
 
 /**

@@ -353,11 +353,9 @@ function compareRows(a: SessionSummary, b: SessionSummary): number {
   return a.name.localeCompare(b.name);
 }
 
-/** The shape {@link disambiguateLabels} needs: a path-derived, splittable label. */
+/** The shape {@link disambiguateLabels} needs: a path-derived label. */
 interface PathLabelled {
   label: string;
-  labelHead: string;
-  labelTail: string;
   untracked: boolean;
 }
 
@@ -392,9 +390,7 @@ function disambiguateLabels<T extends PathLabelled>(items: T[], pathOf: (item: T
     }
     for (const item of items) {
       if (item.untracked || item.label !== label) continue;
-      const grown = tailSegments(pathOf(item), depth);
-      item.label = grown || item.label;
-      Object.assign(item, splitLabel(item.label));
+      item.label = tailSegments(pathOf(item), depth) || item.label;
     }
   }
 }
@@ -469,6 +465,9 @@ function buildRows(sessions: SessionSummary[]): SessionRow[] {
 export function flattenSessions(sessions: SessionSummary[]): SessionRow[] {
   const rows = buildRows(sessions);
   disambiguateLabels(rows, (row) => row.folderPath);
+  // Disambiguation may have grown a label after `buildRows` split it — re-split
+  // so the head/tail pair always matches the label that ships beside it.
+  for (const row of rows) Object.assign(row, splitLabel(row.label));
   return rows;
 }
 
@@ -508,8 +507,6 @@ export interface SessionDirectory {
   path: string;
   /** The directory's own name (leaf component), grown only on collision. */
   label: string;
-  labelHead: string;
-  labelTail: string;
   /** The directory's sessions, in the flat list's order. Never empty. */
   rows: SessionRow[];
   /**
@@ -1194,7 +1191,6 @@ function buildDirectories(rows: SessionRow[], home: string | null): SessionDirec
       key,
       path,
       label,
-      ...splitLabel(label),
       rows: [row],
       created: 0,
       mostRecentActivity: 0,
