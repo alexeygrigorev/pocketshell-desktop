@@ -242,3 +242,26 @@ components render.
 - Tails and shells are torn down on drop and re-established by their
   owners on the new connection (same contract as Android — tail does not
   self-heal).
+
+### 9.1 Terminal parse stalls
+
+The renderer's unhandled errors reach the desktop log through
+`diag.log` (renderer/diag.ts), but one failure class needs more than a
+stack trace: xterm's write loop is a `setTimeout` queue, and when a byte
+sequence makes the parser throw — an xterm-internal buffer invariant,
+broken by the remote's region/scroll-heavy TUI output, not by our code —
+the throw kills the loop and every pane fed by it silently stops
+rendering. The thrown error lands in the log, but with no pane, no
+bytes, and no hint that anything but a one-off glitch happened.
+
+So every byte a `TerminalView` feeds xterm goes through
+`ParseStallMonitor` (renderer/parseStall.ts), which wraps each chunk
+with the completion callback xterm already supports. A healthy chunk
+parses in microseconds; when the head chunk's callback has not run
+within two seconds the loop is dead, and the monitor reports
+`terminal-stall` with what the root cause is reconstructed from: the
+session and connection, the terminal's buffer state (line count, baseY,
+cursor), the exact stalled bytes in printable and hex form, and how
+much output was queued behind them. The same report drives the diag
+banner, so a frozen pane says so instead of just stopping.
+

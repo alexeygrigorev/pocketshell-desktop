@@ -873,9 +873,17 @@ export function registerIpcHandlers(deps: {
   // a packaged app leaves nothing else of. Fire-and-forget (`on`, not
   // `handle`): a diagnostic that could block or reject in the process that
   // reported it would be a failure with a failure of its own.
-  ipcMain.on(ipc.diag.log, (_evt, entry: { kind: string; message: string; stack?: string }) => {
-    log('renderer', `${entry.kind}: ${entry.message}`, entry.stack ? { stack: entry.stack } : undefined);
-  });
+  ipcMain.on(
+    ipc.diag.log,
+    (_evt, entry: { kind: string; message: string; stack?: string; detail?: Record<string, unknown> }) => {
+      // The structured detail (parse-stall reports, first of all) IS the
+      // diagnosis; the stack is the other shape a report can take. Either or
+      // both may be present.
+      const data: Record<string, unknown> = { ...(entry.detail ?? {}) };
+      if (entry.stack) data.stack = entry.stack;
+      log('renderer', `${entry.kind}: ${entry.message}`, Object.keys(data).length > 0 ? data : undefined);
+    },
+  );
 
   // --- update:check / update:open -------------------------------------------
   // The phone's ReleaseChecker, ported: one GitHub Releases poll per check,

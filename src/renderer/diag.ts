@@ -19,7 +19,7 @@ import { ref } from 'vue';
 import { api } from './ipc';
 
 /** Where an unhandled error was caught. Drives the desktop-log line only. */
-export type DiagKind = 'render' | 'unhandledrejection' | 'error';
+export type DiagKind = 'render' | 'unhandledrejection' | 'error' | 'terminal-stall';
 
 export interface DiagEntry {
   kind: DiagKind;
@@ -57,6 +57,26 @@ function toMessage(error: unknown): string {
 export function recordDiagError(kind: DiagKind, error: unknown): void {
   const message = toMessage(error);
   const stack = error instanceof Error && error.stack ? error.stack : null;
+  pushDiag(kind, message, stack);
+}
+
+/**
+ * Record a structured diagnostic that is not a thrown error — the parse-stall
+ * detector's report, first of all. The strip shows the message like any error
+ * row; the desktop log gets the full detail object, which is the part a root
+ * cause is actually reconstructed from (the stalled bytes, the buffer state,
+ * which pane).
+ */
+export function recordDiagDetail(kind: DiagKind, message: string, detail: Record<string, unknown>): void {
+  try {
+    api.diag.log({ kind, message, detail });
+  } catch {
+    // Same contract as pushDiag: the log channel is best-effort.
+  }
+  pushDiag(kind, message, null);
+}
+
+function pushDiag(kind: DiagKind, message: string, stack: string | null): void {
   try {
     api.diag.log({ kind, message, stack: stack ?? undefined });
   } catch {

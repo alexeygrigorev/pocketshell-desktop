@@ -777,7 +777,7 @@ const api = {
      * the reporter is already in a failed state, so this must not be able to
      * reject or block it further.
      */
-    log: (entry: { kind: string; message: string; stack?: string }): void =>
+    log: (entry: { kind: string; message: string; stack?: string; detail?: Record<string, unknown> }): void =>
       ipcRenderer.send(ipc.diag.log, entry),
   },
   update: {

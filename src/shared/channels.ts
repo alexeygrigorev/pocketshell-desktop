@@ -215,7 +215,7 @@ export const ipc = {
    * (renderer/diag.ts + DiagBanner) so the failure is visible, not swallowed.
    */
   diag: {
-    log: 'diag:log', // send: { kind, message, stack? }
+    log: 'diag:log', // send: { kind, message, stack?, detail? }
   },
   /**
    * Update check — the desktop port of the phone's ReleaseChecker: main polls

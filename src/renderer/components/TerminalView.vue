@@ -45,6 +45,8 @@ import { resolveMonoStack } from '../fonts';
 import { resolveTheme } from '../themes';
 import { isTypingKey } from '../../shared/composerText';
 import { isShortcut } from '../../shared/shortcuts';
+import { ParseStallMonitor, type ParseStallReport } from '../parseStall';
+import { recordDiagDetail } from '../diag';
 import type { ConnectionId, GeometryProbe, ShellId } from '../../shared/types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -162,6 +164,12 @@ const containerEl = ref<HTMLDivElement | null>(null);
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let shellId: ShellId | null = null;
+/**
+ * Watches every byte this component feeds xterm, so a parser death is a
+ * REPORT (which pane, which bytes, what buffer state) instead of a pane that
+ * quietly stops updating. See {@link paneWrite} and src/renderer/parseStall.ts.
+ */
+let stallMonitor: ParseStallMonitor | null = null;
 /** The key `shellId` is currently published under, so a re-open can retract it. */
 let registeredKey: string | null = null;
 let unsubscribeData: (() => void) | null = null;
@@ -399,15 +407,71 @@ function pushGeometry(opts: { redraw?: boolean } = {}): void {
 function bindShellStream(): void {
   unsubscribeData = api.shell.onData(({ shellId: id, data }) => {
     if (id === shellId && term) {
-      term.write(data);
+      paneWrite(data);
     }
   });
   unsubscribeExit = api.shell.onExited(({ shellId: id }) => {
     if (id === shellId && term) {
       shellGone = true;
-      term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n');
+      paneWrite('\r\n\x1b[90m[process exited]\x1b[0m\r\n');
     }
   });
+}
+
+/**
+ * The ONE door bytes take into xterm.
+ *
+ * Every write goes through the stall monitor with a completion callback,
+ * because a parse that dies mid-chunk (the `start argument out of range`
+ * family: an xterm handler throws, the write loop never reschedules) has a
+ * signature of exactly one thing: SOME chunk's callback never firing, ever.
+ * Without the callback there is no signal at all — the pane just stops.
+ *
+ * Diagnostics bypass this helper deliberately: a report must reach the
+ * terminal even while the monitor is declaring a stall, and one more watched
+ * write on top of a wedged queue would only be reported as a second stall.
+ */
+function paneWrite(data: string | Uint8Array): void {
+  if (!term) return;
+  stallMonitor?.write(term, data);
+}
+
+/** Live facts a stall report needs, read at stall time, not at bind time. */
+function describePaneForDiag(): Record<string, unknown> {
+  // Every field is best-effort: this runs on a failing path, and tests drive
+  // this component with stub terminals that implement only what they exercise.
+  const buffer = term?.buffer?.active;
+  return {
+    session: targetSession.value || '(shell)',
+    connection: props.connectionId,
+    shellId: shellId ?? '(none)',
+    cols: term?.cols,
+    rows: term?.rows,
+    bufferLines: buffer?.length,
+    baseY: buffer?.baseY,
+    viewportY: buffer?.viewportY,
+    cursorX: buffer?.cursorX,
+    cursorY: buffer?.cursorY,
+  };
+}
+
+/**
+ * What happens when the parse loop is declared dead.
+ *
+ * The thrown error itself already reached the desktop log through the window
+ * `error` handler — but anonymous, unattached to this pane, and with no idea
+ * what bytes killed it. This writes the other half of the story: the stalled
+ * chunk and the buffer state, tagged with the session, so the next incident
+ * is reproducible from the log alone. A marker line goes INTO the pane too —
+ * a frozen pane must say so, not just silently stop.
+ */
+function handleParseStall(report: ParseStallReport): void {
+  recordDiagDetail(
+    'terminal-stall',
+    `terminal output parsing stalled (${report.chunkLength} chars queued, session ${targetSession.value || 'shell'})`,
+    { ...report.details, stalledChunk: report.chunk, stalledChunkHex: report.chunkHex, pendingBehind: report.pendingBehind, ageMs: report.ageMs },
+  );
+  term?.write('\r\n\x1b[90m[PocketShell] output parsing stalled — see desktop log\x1b[0m\r\n');
 }
 
 function unbindShellStream(): void {
@@ -460,7 +524,7 @@ async function showTarget(): Promise<void> {
     unbindShellStream();
     shellId = null;
     sent = null;
-    term.write(`\r\n\u001b[31mCould not open a shell: ${describe(e)}\u001b[0m\r\n`);
+    paneWrite(`\r\n\u001b[31mCould not open a shell: ${describe(e)}\u001b[0m\r\n`);
     return;
   }
 
@@ -784,6 +848,14 @@ onMounted(async () => {
   term.open(containerEl.value!);
   fitAddon.fit();
 
+  // Output bytes are observed from here on: one monitor per terminal, for the
+  // terminal's whole life, across session re-points (it watches `term`, which
+  // survives a switch).
+  stallMonitor = new ParseStallMonitor({
+    describe: describePaneForDiag,
+    onStall: handleParseStall,
+  });
+
   // xterm -> shell. Bound once, against the terminal's whole lifetime.
   termDisposables = [
     term.onData((data) => {
@@ -904,6 +976,8 @@ onBeforeUnmount(() => {
   containerEl.value?.removeEventListener('mousedown', onTerminalMouseDown);
   containerEl.value?.removeEventListener('contextmenu', onTerminalContextMenu);
   stopProbing();
+  stallMonitor?.dispose();
+  stallMonitor = null;
   for (const d of termDisposables) d.dispose();
   termDisposables = [];
   closeShell();
@@ -1219,7 +1293,7 @@ function scheduleRejoin(id: ShellId): void {
   // The join's own attach repaints everything; do not double-repair behind it.
   lastRepairAt = Date.now();
   driftRepaintDone = false;
-  term?.write('\r\n\x1b[90m[PocketShell] lost the tmux client — rejoining…\x1b[0m\r\n');
+  paneWrite('\r\n\x1b[90m[PocketShell] lost the tmux client — rejoining…\x1b[0m\r\n');
   void (async () => {
     // Closing is what makes the next attach a FRESH JOIN: main drops the
     // pool record when the channel dies, so `attachSession` cannot answer
