@@ -46,7 +46,8 @@ import { resolveTheme } from '../themes';
 import { isTypingKey } from '../../shared/composerText';
 import { isShortcut } from '../../shared/shortcuts';
 import { ParseStallMonitor, type ParseStallReport } from '../parseStall';
-import { recordDiagDetail } from '../diag';
+import { recordDiagDetail, msSinceLastUnhandledError } from '../diag';
+import { resumeWriteBufferAfterError } from '../xtermWriteBuffer';
 import type { ConnectionId, GeometryProbe, ShellId } from '../../shared/types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -464,14 +465,63 @@ function describePaneForDiag(): Record<string, unknown> {
  * chunk and the buffer state, tagged with the session, so the next incident
  * is reproducible from the log alone. A marker line goes INTO the pane too —
  * a frozen pane must say so, not just silently stop.
+ *
+ * Then, when a thrown unhandled error arrived just before the stall — the
+ * signature of exactly one event, the parser dying mid-chunk — the loop is
+ * restarted and the pane re-joins its session. The restart alone is not the
+ * repair: the chunk that killed the parser is lost mid-sequence and the
+ * buffer's line invariants are whatever the throw left them as, so drawing
+ * continues into a suspect emulator. The fresh join is the one repair that
+ * re-initialises BOTH ends — the same truth the dead-probe path is built on,
+ * under the same bounds, so a parser that dies in a loop cannot hammer the
+ * host with joins.
  */
 function handleParseStall(report: ParseStallReport): void {
+  const parserThrew = msSinceLastUnhandledError() <= PARSER_DEATH_WINDOW_MS;
+  const id = shellId;
+  const resumed = parserThrew ? resumeWriteBufferAfterError(term) : false;
+  const recovering = parserThrew && resumed && id !== null && !shellGone;
   recordDiagDetail(
     'terminal-stall',
     `terminal output parsing stalled (${report.chunkLength} chars queued, session ${targetSession.value || 'shell'})`,
-    { ...report.details, stalledChunk: report.chunk, stalledChunkHex: report.chunkHex, pendingBehind: report.pendingBehind, ageMs: report.ageMs },
+    {
+      ...report.details,
+      stalledChunk: report.chunk,
+      stalledChunkHex: report.chunkHex,
+      pendingBehind: report.pendingBehind,
+      ageMs: report.ageMs,
+      parserThrew,
+      loopResumed: resumed,
+      rejoining: recovering,
+    },
   );
   term?.write('\r\n\x1b[90m[PocketShell] output parsing stalled — see desktop log\x1b[0m\r\n');
+  if (recovering && id !== null) rejoinAfterParseDeath(id);
+}
+
+/** A throw within this window before a stall counts as the parser's death. */
+const PARSER_DEATH_WINDOW_MS = 10_000;
+
+/**
+ * The bounded re-join after a parser death. The dead-probe path
+ * ({@link scheduleRejoin}) waits for two bad probe answers before trusting
+ * that the client is gone; a parser death needs no second opinion — the
+ * throw IS the evidence — but it shares the anti-hammer bounds, so every
+ * repair path in this component spends re-joins out of the same budget.
+ */
+function rejoinAfterParseDeath(id: ShellId): void {
+  if (Date.now() - lastRejoinAt < REJOIN_MIN_INTERVAL_MS) return;
+  if (rejoinStreak >= MAX_CONSECUTIVE_REJOINS) return;
+  lastRejoinAt = Date.now();
+  rejoinStreak += 1;
+  lastRepairAt = Date.now();
+  driftRepaintDone = false;
+  paneWrite('\r\n\x1b[90m[PocketShell] parser crashed — rejoining for a clean slate…\x1b[0m\r\n');
+  void (async () => {
+    await api.shell.close(id);
+    if (id !== shellId || !term) return; // the pane moved on meanwhile
+    await showTarget();
+  })();
 }
 
 function unbindShellStream(): void {

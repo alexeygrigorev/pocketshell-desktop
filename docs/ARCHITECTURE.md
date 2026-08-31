@@ -265,3 +265,17 @@ cursor), the exact stalled bytes in printable and hex form, and how
 much output was queued behind them. The same report drives the diag
 banner, so a frozen pane says so instead of just stopping.
 
+Recovery (renderer/xtermWriteBuffer.ts): a stall with a thrown
+unhandled error just before it is a parser death, and
+`resumeWriteBufferAfterError` restarts the loop — the chunk it died on
+is retired, the backlog behind it parses again. That alone does not
+make the pane whole (the dead chunk left the parser mid-escape, and its
+un-parsed tail is gone), so the pane follows with a bounded fresh join
+— the same repair, and the same anti-hammer budget, as a dead geometry
+probe: the one thing that re-initialises both ends of the stream. The
+regression test (tests/unit/xtermWriteBuffer.test.ts) drives the real
+`@xterm/headless` internals through the identical sync-throw path;
+`scripts/xterm-fuzz.mjs` is the fuzzer that found the original
+invariant break (seed 32) and is the tool to rerun when upgrading
+xterm.
+

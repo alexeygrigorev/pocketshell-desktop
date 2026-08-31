@@ -43,6 +43,21 @@ export const diagErrors = ref<DiagEntry[]>([]);
 
 let nextId = 1;
 
+/**
+ * Epoch ms of the most recent THROWN unhandled error, for correlating an
+ * unrelated-looking symptom with its cause: the parse-stall detector fires
+ * two seconds after a wedged write loop, and the throw that wedged it arrived
+ * just before — so a stall with a recent error behind it is a parser death,
+ * and one without is something else. Never reset to 0 once an error has
+ * happened; `msSinceLastUnhandledError` answers the only question asked.
+ */
+let lastUnhandledErrorAt = 0;
+
+/** How long ago the last thrown unhandled error was. `Infinity` before any. */
+export function msSinceLastUnhandledError(): number {
+  return lastUnhandledErrorAt === 0 ? Number.POSITIVE_INFINITY : Date.now() - lastUnhandledErrorAt;
+}
+
 function toMessage(error: unknown): string {
   if (error instanceof Error) return error.message || error.name || 'unknown error';
   const text = String(error);
@@ -55,6 +70,7 @@ function toMessage(error: unknown): string {
  * not a new one worth a second row.
  */
 export function recordDiagError(kind: DiagKind, error: unknown): void {
+  lastUnhandledErrorAt = Date.now();
   const message = toMessage(error);
   const stack = error instanceof Error && error.stack ? error.stack : null;
   pushDiag(kind, message, stack);
