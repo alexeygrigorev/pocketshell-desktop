@@ -270,3 +270,56 @@ describe('HostPickerView — a relaunch lands in the folder the host was last op
     expect(routerPush).toHaveBeenCalledWith({ name: 'host-sessions', params: { name: 'hetzner' } });
   });
 });
+
+describe('HostPickerView — reloads SSH config on demand', () => {
+  it('shows loading feedback until the config read finishes', async () => {
+    const wrapper = await openPicker([host('hetzner')]);
+    let resolveReload!: (hosts: HostEntry[]) => void;
+    const pendingReload = new Promise<HostEntry[]>((resolve) => {
+      resolveReload = resolve;
+    });
+    listConfigHosts.mockReturnValueOnce(pendingReload);
+
+    const reloadButton = wrapper.get('[aria-label="Reload hosts"]');
+    const reload = reloadButton.trigger('click');
+    await wrapper.vm.$nextTick();
+
+    expect(reloadButton.attributes('disabled')).toBeDefined();
+    expect(reloadButton.attributes('aria-busy')).toBe('true');
+    expect(reloadButton.get('.app-icon').classes()).toContain('spin');
+
+    resolveReload([host('pocketshell-local')]);
+    await reload;
+    await flush(wrapper);
+
+    expect(reloadButton.attributes('disabled')).toBeUndefined();
+    expect(reloadButton.attributes('aria-busy')).not.toBe('true');
+    expect(reloadButton.get('.app-icon').classes()).not.toContain('spin');
+  });
+
+  it('re-reads the host list without restarting or reconnecting', async () => {
+    const wrapper = await openPicker([host('hetzner')]);
+    listConfigHosts.mockResolvedValue([host('hetzner'), host('pocketshell-local')]);
+
+    await wrapper.get('[title="Reload hosts"]').trigger('click');
+    await flush(wrapper);
+
+    expect(listConfigHosts).toHaveBeenCalledTimes(2);
+    expect(wrapper.findAll('.host-name').map((item) => item.text())).toEqual([
+      'hetzner',
+      'pocketshell-local',
+    ]);
+    expect(sshConnect).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing list and reports a config-read failure', async () => {
+    const wrapper = await openPicker([host('hetzner')]);
+    listConfigHosts.mockRejectedValue(new Error('permission denied'));
+
+    await wrapper.get('[title="Reload hosts"]').trigger('click');
+    await flush(wrapper);
+
+    expect(wrapper.findAll('.host-name').map((item) => item.text())).toEqual(['hetzner']);
+    expect(wrapper.get('.error').text()).toContain('Could not reload ~/.ssh/config: permission denied');
+  });
+});

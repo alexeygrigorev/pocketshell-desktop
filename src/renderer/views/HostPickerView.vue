@@ -52,6 +52,8 @@ const settings = useSettingsStore();
 const connectError = ref<string | null>(null);
 const connectingTo = ref<string | null>(null);
 const settingsOpen = ref(false);
+const reloadingHosts = ref(false);
+const hostReloadError = ref<string | null>(null);
 
 /** True while the in-flight dial was started by the app, not by a click.
  *  Only the banner's wording reads it now — "(your default host)" is the one
@@ -118,6 +120,21 @@ async function runAutoConnect(host: HostEntry): Promise<void> {
   const ok = await dial(host);
   autoConnecting.value = false;
   if (ok) enterWorkspace(host);
+}
+
+/** Re-read ~/.ssh/config without disturbing an existing connection or dial. */
+async function onReloadHosts(): Promise<void> {
+  if (reloadingHosts.value) return;
+  reloadingHosts.value = true;
+  hostReloadError.value = null;
+  try {
+    await connection.loadHosts();
+  } catch (error) {
+    const detail = error instanceof Error && error.message ? `: ${error.message}` : '';
+    hostReloadError.value = `Could not reload ~/.ssh/config${detail}`;
+  } finally {
+    reloadingHosts.value = false;
+  }
 }
 
 /**
@@ -216,9 +233,21 @@ function onToggleDefault(host: HostEntry): void {
   <div class="picker">
     <header>
       <h1>PocketShell</h1>
-      <button class="icon-btn settings-btn" title="Settings" @click="settingsOpen = true">
-        <AppIcon name="settings" />
-      </button>
+      <div class="header-actions">
+        <button
+          class="icon-btn"
+          :disabled="reloadingHosts"
+          :aria-busy="reloadingHosts"
+          title="Reload hosts"
+          aria-label="Reload hosts"
+          @click="onReloadHosts"
+        >
+          <AppIcon name="refresh" :class="{ spin: reloadingHosts }" />
+        </button>
+        <button class="icon-btn" title="Settings" @click="settingsOpen = true">
+          <AppIcon name="settings" />
+        </button>
+      </div>
     </header>
     <main>
       <!-- The escape hatch, for ANY dial — automatic or clicked. It sits
@@ -246,7 +275,8 @@ function onToggleDefault(host: HostEntry): void {
         </span>
         <button class="btn-ghost" @click="settings.set('defaultHost', null)">Clear</button>
       </p>
-      <p v-if="!connection.hosts.length && !connection.error" class="muted">
+      <p v-if="hostReloadError" class="error">{{ hostReloadError }}</p>
+      <p v-if="!connection.hosts.length && !connection.error && !hostReloadError" class="muted">
         No hosts found in <code>~/.ssh/config</code>. Add one there to get started.
       </p>
       <ul class="host-list">
@@ -333,10 +363,13 @@ h1 {
   font-weight: var(--fw-bold);
   color: var(--fg);
 }
-/* Trails the wordmark. `align-self` because the header baseline-aligns its
-   children and an icon button has no baseline worth aligning to. */
-.settings-btn {
+/* Keeps the config reload and settings actions together at the trailing edge
+   of the wordmark. The shared icon button supplies the square geometry. */
+.header-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
   align-self: center;
 }
 /* Status strip above the list: the app is doing something, the list is still

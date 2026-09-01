@@ -252,7 +252,9 @@ With the app built (`npm run build`) or running in dev mode (`npm run dev`),
 select `pocketshell-local` in the host picker. Configure root folders there
 when testing instance-specific settings; the alias is a separate host identity
 from any Hetzner or AWS entry. The app reaches the same SSH/SFTP/tmux/helper
-surface as a remote machine.
+surface as a remote machine. If you edit `~/.ssh/config` while PocketShell is
+open, click **Reload hosts** in the host picker's header to see the changed
+aliases without restarting the app.
 
 ---
 
