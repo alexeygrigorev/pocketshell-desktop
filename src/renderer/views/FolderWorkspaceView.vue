@@ -78,7 +78,8 @@ import {
   tabAfterClose,
   type WorkspaceTab,
 } from '../../shared/workspaceTabs';
-import { groupSessionsIntoRoots, rootHostPath, UNTRACKED_PATH } from '../sessionGrouping';
+import { rootHostPath, UNTRACKED_PATH } from '../sessionGrouping';
+import { useFolderTree } from '../folderTree';
 import { parkedAgentLaunch, takeAgentLaunch } from '../pendingAgentLaunch';
 import {
   readWorkspaceMemory,
@@ -103,6 +104,7 @@ const files = useFilesStore();
 const composer = useComposerStore();
 const settings = useSettingsStore();
 const shells = useShellsStore();
+const { folders } = useFolderTree();
 
 /**
  * Per-workspace UI state that must survive leaving and coming back: which
@@ -241,25 +243,15 @@ function writeTabOrder(next: string[]): void {
  * The folder node this workspace is showing, out of the same grouping the
  * panel renders.
  *
- * Deriving it from the grouping rather than by filtering sessions on `path`
- * is what keeps the two in agreement: the grouping is where `~/git/foo` and
+ * Read from the same projection as the session panel rather than filtering
+ * sessions on `path`. The shared projection is where `~/git/foo` and
  * `/home/me/git/foo` are folded into one key, where a session with no cwd
  * becomes a folder of its own, and where a sibling-inferred path has already
- * been applied. A second, simpler filter here would disagree with the panel on
- * every one of those and the symptom would be a folder row that opens an empty
- * workspace.
+ * been applied. Keeping one computed list for both surfaces prevents the
+ * panel from showing a folder whose workspace has a different set of tabs.
  */
 const folder = computed(() => {
-  const home = projects.home;
-  for (const root of groupSessionsIntoRoots(
-    sessions.sessions,
-    home,
-    settings.sessionRootsFor(hostAlias.value),
-  )) {
-    const match = root.directories.find((dir) => dir.key === folderKey.value);
-    if (match) return match;
-  }
-  return null;
+  return folders.value.find((dir) => dir.key === folderKey.value) ?? null;
 });
 
 /** The folder's real path, or null for an untracked session's pseudo-folder. */

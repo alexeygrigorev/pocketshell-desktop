@@ -243,12 +243,21 @@ test.describe('folder-first session creation + port panel controls', () => {
       await expect(page.locator('.fwd-table thead')).toContainText(column);
     }
 
-    // sshd is always listening on the fixture, so at least one discovered row
-    // exists even with auto-forward off.
-    const more = page.locator('.more-btn');
-    if (await more.count()) await more.click();
-    await expect(page.locator('.fwd-table tbody tr').first()).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('.fwd-table tbody tr', { hasText: '22' }).first()).toBeVisible();
+    // sshd is always listening on the fixture, so the port-22 row must arrive
+    // even with auto-forward off. The scan runs asynchronously and may first
+    // publish the traffic listener only, so wait for the specific row before
+    // deciding whether its disclosure row needs opening.
+    const port22 = page
+      .locator('.fwd-table tbody tr')
+      .filter({ has: page.locator('.c-port .port-num', { hasText: /^22$/ }) })
+      .first();
+    await expect(port22).toHaveCount(1, { timeout: 30_000 });
+    if (!(await port22.isVisible())) {
+      const more = page.locator('.more-btn');
+      await expect(more).toBeVisible({ timeout: 30_000 });
+      await more.click();
+    }
+    await expect(port22).toBeVisible({ timeout: 30_000 });
 
     // Every discovered row carries the per-row controls, whether or not it is
     // currently forwarded — that is what makes a port above maxAutoPort
