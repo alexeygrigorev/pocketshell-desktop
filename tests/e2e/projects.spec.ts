@@ -245,6 +245,8 @@ test.describe('folder-first session creation + port panel controls', () => {
 
     // sshd is always listening on the fixture, so at least one discovered row
     // exists even with auto-forward off.
+    const more = page.locator('.more-btn');
+    if (await more.count()) await more.click();
     await expect(page.locator('.fwd-table tbody tr').first()).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('.fwd-table tbody tr', { hasText: '22' }).first()).toBeVisible();
 
@@ -254,9 +256,14 @@ test.describe('folder-first session creation + port panel controls', () => {
     const first = page.locator('.fwd-table tbody tr').first();
     await expect(first.locator('.c-name .cell-input')).toBeEnabled();
     await expect(first.locator('.c-local .cell-input')).toBeEnabled();
+    // A discovered local port has one action: force it on. The remove mark is
+    // reserved for unkeyed -R/-D forwards, which have no remote port to toggle.
+    await expect(first.locator('.actions .icon-btn')).toHaveCount(1);
     await expect(first.locator('.actions .icon-btn').first()).toBeEnabled();
-    // Nothing is forwarded yet, so removal has nothing to act on.
-    await expect(first.locator('.actions .icon-btn').last()).toBeDisabled();
+    await expect(first.locator('.actions .icon-btn').first()).toHaveAttribute(
+      'title',
+      'Force this port on',
+    );
   });
 
   test('auto-forward turns on without a structured-clone failure', async () => {
