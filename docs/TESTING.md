@@ -11,7 +11,7 @@ hosts or real provider credentials.**
 | Tier | Runner | Target | Covers | When |
 |---|---|---|---|---|
 | **Unit** | vitest (node) | none (pure logic) | parsers, ssh-config, known_hosts, reconnect FSM logic, port-scanner parser, shell-quote | every push |
-| **Integration** | vitest + `testcontainers` | ephemeral Docker port per test | SshService, SftpService, forwarder round-trips, helper-client | every push (auto-skip if Docker absent) |
+| **Integration** | vitest + `testcontainers` | ephemeral Docker port per test | SshService, SftpService, forwarder round-trips, helper-client | every push (requires Docker) |
 | **E2E** | Playwright + Electron | fixed compose port (3205) | full UI flows: host pick → tree → terminal → files → conversation → usage | on PR + pre-release |
 | **Manual smoke** | `scripts/smoke.sh` | compose fleet | brings everything up, runs unit+integration+E2E, tears down, prints summary | pre-release gate |
 
@@ -36,9 +36,9 @@ transforms bytes → data:
 
 `testcontainers` builds the Dockerfiles at test time and maps container 22
 to an **ephemeral** host port, so tests are isolated and parallel-safe.
-Each suite starts its own container. **Auto-skips** when Docker is not
-available (same `assumeTrue(dockerAvailable)` pattern as the Android JVM
-suite) so CI without Docker still runs unit tests.
+Each suite starts its own container. Docker is a required integration-test
+prerequisite; collection fails loudly when the daemon is unavailable, so a
+machine that ran no integration tests cannot report a misleading green suite.
 
 Examples:
 
@@ -97,7 +97,129 @@ Headless in CI; screenshots + traces on failure.
 
 ---
 
-## 2. Docker fixtures (`tests-docker/`)
+## 2. Local Docker instance
+
+The standalone `instance` service is a disposable remote-like machine for
+manual PocketShell demos and for testing host-scoped settings. It is separate
+from the ephemeral fleet below, so it can stay running while unit or
+testcontainer tests execute.
+
+### Prerequisites
+
+- Docker Desktop with **Linux containers** and Docker Compose v2.
+- An OpenSSH client (`ssh` and `sftp`). Windows 10/11 normally includes it;
+  check with `Get-Command ssh,sftp` in PowerShell.
+- Node 20+ if you are running the Electron app from this checkout.
+- Bash, Git Bash, or WSL for the `.sh` commands. PowerShell users can use the
+  checked-in `.ps1` wrapper instead.
+
+### Build and start
+
+From the repository root, the Bash/Git Bash/WSL workflow is:
+
+```bash
+bash scripts/test-instance.sh build
+bash scripts/test-instance.sh start
+bash scripts/test-instance.sh status
+```
+
+The equivalent PowerShell command works even when local script execution is
+restricted:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-instance.ps1 start
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-instance.ps1 status
+```
+
+`start` builds `pocketshell-test:instance` from
+`tests-docker/Dockerfile.instance`, starts Compose service `instance`, and
+waits for its in-container SSH healthcheck. The default host port is **3222**
+so it does not collide with the test fleet's 3202–3206 ports. Override it for
+one run with `POCKETSHELL_SSH_PORT=3322` (PowerShell:
+`$env:POCKETSHELL_SSH_PORT = '3322'`).
+
+The image includes OpenSSH + SFTP, `testuser`, tmux, git, Python 3, `curl`,
+`ss`/`netstat`, the pinned `pocketshell` and `tmuxctl` helpers, deterministic
+agent command stubs, and the byte-moving port-forward test responder. The
+entrypoint creates `~/git` and `~/tmp`, then starts the `main` and `build`
+tmux sessions. No provider credentials or network access are needed by the
+stubs.
+
+### Stop, reset, and inspect
+
+```bash
+bash scripts/test-instance.sh stop    # stop; preserve the remote home
+bash scripts/test-instance.sh shell   # open /bin/sh as testuser
+bash scripts/test-instance.sh logs    # follow sshd/fixture logs
+bash scripts/test-instance.sh reset   # delete the home volume and start clean
+```
+
+The PowerShell wrapper accepts the same actions (`stop`, `shell`, `logs`, and
+`reset`). The Compose volume `pocketshell-test-instance-home` preserves files
+and helper state across `stop`/`start`; the entrypoint recreates the seed tmux
+sessions after a container restart. `reset` is deliberately destructive and
+removes that named volume before creating a clean instance. Use reset after
+changing the image or when a test needs a pristine remote filesystem.
+
+The raw Compose equivalent is:
+
+```bash
+docker compose --project-name pocketshell-local \
+  --file tests-docker/docker-compose.instance.yml \
+  up -d --build --wait instance
+```
+
+### Add the SSH alias
+
+Add this block to `~/.ssh/config` (create the file if necessary):
+
+```sshconfig
+Host pocketshell-local
+  HostName 127.0.0.1
+  Port 3222
+  User testuser
+  IdentityFile C:/Users/<your-user>/git/pocketshell-electron/tests-docker/test_key
+  IdentitiesOnly yes
+```
+
+Use a forward-slash absolute path on Windows. Git Bash/WSL can instead use
+`/c/Users/<your-user>/git/pocketshell-electron/tests-docker/test_key`. The
+committed `test_key` is intentionally only a local fixture; never use it for
+AWS, Hetzner, or another real host. PocketShell will apply its normal TOFU
+decision to the container's host key.
+
+Verify the alias before opening the app:
+
+```bash
+ssh pocketshell-local 'whoami; command -v pocketshell; command -v tmuxctl; tmux list-sessions'
+sftp pocketshell-local
+```
+
+Both commands should authenticate as `testuser`; the first should show the
+`main` and `build` sessions. For a one-off command without editing SSH config,
+use `-i tests-docker/test_key -p 3222 testuser@127.0.0.1`.
+
+On Windows, if OpenSSH reports that the private key is too accessible, tighten
+the fixture file's ACL from PowerShell:
+
+```powershell
+$key = (Resolve-Path .\tests-docker\test_key).Path
+icacls $key /inheritance:r /grant:r "$($env:USERNAME):(R)"
+```
+
+The repository normalizes the key to LF line endings. If the key was copied
+outside Git, keep it as an OpenSSH private-key file and do not let an editor
+convert it to a different format.
+
+With the app built (`npm run build`) or running in dev mode (`npm run dev`),
+select `pocketshell-local` in the host picker. Configure root folders there
+when testing instance-specific settings; the alias is a separate host identity
+from any Hetzner or AWS entry. The app reaches the same SSH/SFTP/tmux/helper
+surface as a remote machine.
+
+---
+
+## 3. Docker fixtures (`tests-docker/`)
 
 Mirror of the Android project's `tests/docker/`, adapted for the desktop
 test runner.
@@ -114,8 +236,7 @@ test runner.
   `uv tool install pocketshell` (the **real** helper, so the test exercises
   the actual `pocketshell sessions list` / `usage` code
   paths). Plus `/bin/sh` stub binaries for `claude`/`codex`/`opencode`/
-  `quse` (deterministic, no API keys) and seeded agent logs under
-  `~/.claude/projects/`, `~/.codex/sessions/`, `~/.local/share/opencode/`.
+  `quse` (deterministic, no API keys).
 - **`Dockerfile.flaky`** — `FROM pocketshell-test:ssh` + a chaos
   entrypoint (`flaky-entrypoint.sh`): every
   `PS_FLAKY_INTERVAL_SEC` (default 45) it kills the PER-CONNECTION sshd
@@ -139,13 +260,10 @@ Shared healthcheck: in-container
 
 ### Fixtures (`tests-docker/fixtures/`)
 
-Copied from the source repo's `tests/docker/agent-fixtures/` so output
-shapes match the parsers exactly:
-
-- `claude-session.jsonl`, `codex-session.jsonl`, `opencode-rows.jsonl`
-  (seeded under canonical paths by the helper image entrypoint).
-- `pocketshell-usage.ndjson`, `pocketshell-sessions-list.txt`,
-  `pocketshell-jobs-list.txt`.
+The checked-in fixture files are small, credential-free inputs for the helper
+stubs: `pocketshell-sessions-list.txt` and
+`pocketshell-usage.ndjson`. The real helper is still installed and exercised;
+the fixture files only make the provider stub deterministic.
 
 ### The `test_key`
 
@@ -155,7 +273,7 @@ half loaded by the integration tests via `SshKey.Path`.
 
 ---
 
-## 3. Determinism rules
+## 4. Determinism rules
 
 - Only Docker targets; never real hosts or real keys.
 - Agent CLIs are stubs with canned output — no real provider credentials,
@@ -167,7 +285,7 @@ half loaded by the integration tests via `SshKey.Path`.
 
 ---
 
-## 4. Commands
+## 5. Commands
 
 ```bash
 # Unit (no Docker)
@@ -182,9 +300,12 @@ npm run test:e2e
 # Full Docker-backed smoke gate
 scripts/smoke.sh
 
-# Bring fixtures up / down by hand
-docker compose -f tests-docker/docker-compose.yml up -d --build helper
-docker compose -f tests-docker/docker-compose.yml down --volumes --remove-orphans
+# Build the ephemeral fleet in dependency order, then bring up the E2E target
+bash scripts/build-docker.sh
+docker compose --project-name pocketshell-tests \
+  -f tests-docker/docker-compose.yml up -d --wait helper
+docker compose --project-name pocketshell-tests \
+  -f tests-docker/docker-compose.yml down --volumes --remove-orphans
 
 # Manual sanity check against the helper container
 ssh -i tests-docker/test_key -p 3205 -o StrictHostKeyChecking=no \
@@ -194,7 +315,7 @@ ssh -i tests-docker/test_key -p 3205 -o StrictHostKeyChecking=no \
 
 ---
 
-## 5. CI matrix (target)
+## 6. CI matrix (target)
 
 GitHub Actions:
 

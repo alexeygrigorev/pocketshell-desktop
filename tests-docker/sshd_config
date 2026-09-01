@@ -15,6 +15,11 @@ UsePAM no
 # Absolute path avoids any home-dir resolution ambiguity under non-login shells.
 AuthorizedKeysFile /home/testuser/.ssh/authorized_keys
 
+# OpenSSH's non-interactive exec environment otherwise replaces PATH with its
+# system default, hiding the helper tools installed under ~/.local/bin. Keep
+# `ssh alias pocketshell ...` equivalent to PocketShell's path-aware probes.
+SetEnv PATH=/home/testuser/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 AllowTcpForwarding yes
 GatewayPorts no
 X11Forwarding no

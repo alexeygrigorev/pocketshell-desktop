@@ -1,0 +1,65 @@
+# Standalone local PocketShell instance.
+#
+# This image intentionally does not use `FROM pocketshell-test:*`: the local
+# instance must be buildable from a clean checkout with one Compose command.
+# It contains the same SSH/SFTP/tmux/helper toolchain as the test fleet, plus
+# the deterministic agent stubs and traffic responder used by the integration
+# and E2E expectations.
+FROM alpine:3.20
+
+ARG POCKETSHELL_VERSION=0.4.44
+ARG TMUXCTL_VERSION=0.3.5
+
+RUN apk add --no-cache \
+      bash \
+      curl \
+      git \
+      iproute2 \
+      net-tools \
+      openssh-client \
+      openssh-server \
+      openssh-sftp-server \
+      py3-pip \
+      python3 \
+      tmux \
+    && ssh-keygen -A \
+    && adduser -D -s /bin/sh testuser \
+    && passwd -u testuser \
+    && mkdir -p /home/testuser/.ssh \
+    && chmod 700 /home/testuser/.ssh \
+    && python3 -m pip install --break-system-packages --no-cache-dir uv \
+    && su testuser -c "uv tool install 'pocketshell==${POCKETSHELL_VERSION}' && uv tool install 'tmuxctl==${TMUXCTL_VERSION}'"
+
+ENV HOME=/home/testuser
+ENV PATH=/home/testuser/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+COPY sshd_config /etc/ssh/sshd_config
+COPY test_key.pub /home/testuser/.ssh/authorized_keys
+# The private key is a fixture used only for the in-container healthcheck and
+# local manual testing. It is not a production credential.
+COPY test_key /root/test_key
+
+RUN chmod 600 /home/testuser/.ssh/authorized_keys /root/test_key \
+    && chown -R testuser:testuser /home/testuser/.ssh \
+    # Alpine's sshd starts the user's shell as a login shell. Keep the helper
+    # tools available to both PocketShell and a plain `ssh alias command`.
+    && printf '%s\n' 'export PATH="/home/testuser/.local/bin:$PATH"' >> /etc/profile
+
+COPY agent-bin/ /usr/local/bin/
+COPY fixtures/ /opt/pocketshell-fixtures/
+COPY traffic-server.py /usr/local/bin/ps-traffic-server
+COPY helper-entrypoint.sh /usr/local/bin/pocketshell-helper-entrypoint
+COPY instance-entrypoint.sh /usr/local/bin/pocketshell-instance-entrypoint
+
+RUN chmod +x \
+      /usr/local/bin/claude \
+      /usr/local/bin/codex \
+      /usr/local/bin/opencode \
+      /usr/local/bin/quse \
+      /usr/local/bin/ps-traffic-server \
+      /usr/local/bin/pocketshell-helper-entrypoint \
+      /usr/local/bin/pocketshell-instance-entrypoint
+
+EXPOSE 22 8021
+
+CMD ["/usr/local/bin/pocketshell-instance-entrypoint"]

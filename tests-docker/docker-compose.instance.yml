@@ -1,0 +1,39 @@
+# One persistent, local-only SSH target for manually exercising PocketShell.
+#
+# This file is separate from docker-compose.yml because the latter is a fleet
+# of ephemeral test targets used by testcontainers and E2E. The standalone
+# image builds directly from Alpine, so this file works on a clean Docker
+# installation without first creating the `pocketshell-test:ssh` tag.
+
+x-ssh-healthcheck: &ssh-healthcheck
+  test:
+    - CMD-SHELL
+    - >-
+      ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null -i /root/test_key testuser@localhost true
+  interval: 2s
+  timeout: 5s
+  retries: 10
+  start_period: 5s
+
+services:
+  instance:
+    build:
+      context: .
+      dockerfile: Dockerfile.instance
+      args:
+        POCKETSHELL_VERSION: ${POCKETSHELL_VERSION:-0.4.44}
+        TMUXCTL_VERSION: ${TMUXCTL_VERSION:-0.3.5}
+    image: pocketshell-test:instance
+    environment:
+      PS_TRAFFIC_PORT: ${PS_TRAFFIC_PORT:-8021}
+    ports:
+      - "${POCKETSHELL_SSH_PORT:-3222}:22"
+    volumes:
+      - instance-home:/home/testuser
+    healthcheck:
+      <<: *ssh-healthcheck
+
+volumes:
+  instance-home:
+    name: pocketshell-test-instance-home
