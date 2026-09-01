@@ -139,11 +139,48 @@ one run with `POCKETSHELL_SSH_PORT=3322` (PowerShell:
 `$env:POCKETSHELL_SSH_PORT = '3322'`).
 
 The image includes OpenSSH + SFTP, `testuser`, tmux, git, Python 3, `curl`,
-`ss`/`netstat`, the pinned `pocketshell` and `tmuxctl` helpers, deterministic
-agent command stubs, and the byte-moving port-forward test responder. The
-entrypoint creates `~/git` and `~/tmp`, then starts the `main` and `build`
-tmux sessions. No provider credentials or network access are needed by the
-stubs.
+`ss`/`netstat`, Node.js 22/npm, the pinned `pocketshell` and `tmuxctl` helpers,
+deterministic agent command stubs, and the byte-moving port-forward test
+responder. The entrypoint creates `~/git` and `~/tmp`, then starts the `main`
+and `build` tmux sessions. No provider credentials or network access are
+needed by the stubs.
+
+### Optional real Codex and Claude
+
+The default image intentionally keeps `codex` and `claude` as deterministic
+stubs so normal tests never make provider requests. To install the real CLIs
+in the standalone development instance, rebuild it with the opt-in flag:
+
+```bash
+POCKETSHELL_REAL_AGENTS=true bash scripts/test-instance.sh start
+```
+
+PowerShell:
+
+```powershell
+$env:POCKETSHELL_REAL_AGENTS = 'true'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-instance.ps1 start
+```
+
+The Compose build also accepts `POCKETSHELL_CODEX_VERSION` and
+`POCKETSHELL_CLAUDE_CODE_VERSION`; leave them at `latest` for a local demo or
+set explicit versions when you need a repeatable image. Check the result with:
+
+```bash
+ssh pocketshell-local 'node --version; codex --version; claude --version'
+```
+
+Authentication is deliberately a runtime action, never a Docker build input:
+
+```bash
+ssh -t pocketshell-local codex
+ssh -t pocketshell-local claude
+```
+
+Complete each CLI's own sign-in flow. The named `/home/testuser` volume keeps
+the resulting user-scoped configuration across `stop`/`start`; `reset` removes
+it. Real CLIs need internet access and the relevant OpenAI/Anthropic account or
+API billing. The normal test fleet continues to use its credential-free stubs.
 
 ### Stop, reset, and inspect
 

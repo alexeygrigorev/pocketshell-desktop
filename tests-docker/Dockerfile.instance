@@ -5,10 +5,13 @@
 # It contains the same SSH/SFTP/tmux/helper toolchain as the test fleet, plus
 # the deterministic agent stubs and traffic responder used by the integration
 # and E2E expectations.
-FROM alpine:3.20
+FROM node:22-alpine3.20
 
 ARG POCKETSHELL_VERSION=0.4.44
 ARG TMUXCTL_VERSION=0.3.5
+ARG INSTALL_REAL_AGENTS=false
+ARG CODEX_VERSION=latest
+ARG CLAUDE_CODE_VERSION=latest
 
 RUN apk add --no-cache \
       bash \
@@ -23,7 +26,12 @@ RUN apk add --no-cache \
       python3 \
       tmux \
     && ssh-keygen -A \
-    && adduser -D -s /bin/sh testuser \
+    # The Node base image already reserves UID 1000 for its `node` user. Keep
+    # the fixture user at the UID used by the original Alpine image so an
+    # existing named home volume remains readable after this image upgrade.
+    && (deluser node 2>/dev/null || true) \
+    && (delgroup node 2>/dev/null || true) \
+    && adduser -D -u 1000 -s /bin/sh testuser \
     && passwd -u testuser \
     && mkdir -p /home/testuser/.ssh \
     && chmod 700 /home/testuser/.ssh \
@@ -45,15 +53,29 @@ RUN chmod 600 /home/testuser/.ssh/authorized_keys /root/test_key \
     # tools available to both PocketShell and a plain `ssh alias command`.
     && printf '%s\n' 'export PATH="/home/testuser/.local/bin:$PATH"' >> /etc/profile
 
-COPY agent-bin/ /usr/local/bin/
 COPY fixtures/ /opt/pocketshell-fixtures/
 COPY traffic-server.py /usr/local/bin/ps-traffic-server
 COPY helper-entrypoint.sh /usr/local/bin/pocketshell-helper-entrypoint
 COPY instance-entrypoint.sh /usr/local/bin/pocketshell-instance-entrypoint
 
+COPY agent-bin/ /opt/pocketshell-agent-stubs/
+
+# Keep the default image deterministic and credential-free. A local developer
+# can opt into the real provider CLIs at build time; they are installed after
+# the stubs so their commands are the ones on PATH in that mode.
+RUN install -m 0755 /opt/pocketshell-agent-stubs/opencode /usr/local/bin/opencode \
+    && install -m 0755 /opt/pocketshell-agent-stubs/quse /usr/local/bin/quse \
+    && case "$INSTALL_REAL_AGENTS" in \
+         true|1|yes) \
+           npm install --global --no-fund --no-audit \
+             "@openai/codex@${CODEX_VERSION}" \
+             "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" ;; \
+         *) \
+           install -m 0755 /opt/pocketshell-agent-stubs/claude /usr/local/bin/claude \
+           && install -m 0755 /opt/pocketshell-agent-stubs/codex /usr/local/bin/codex ;; \
+       esac
+
 RUN chmod +x \
-      /usr/local/bin/claude \
-      /usr/local/bin/codex \
       /usr/local/bin/opencode \
       /usr/local/bin/quse \
       /usr/local/bin/ps-traffic-server \

@@ -24,6 +24,9 @@ services:
       args:
         POCKETSHELL_VERSION: ${POCKETSHELL_VERSION:-0.4.44}
         TMUXCTL_VERSION: ${TMUXCTL_VERSION:-0.3.5}
+        INSTALL_REAL_AGENTS: ${POCKETSHELL_REAL_AGENTS:-false}
+        CODEX_VERSION: ${POCKETSHELL_CODEX_VERSION:-latest}
+        CLAUDE_CODE_VERSION: ${POCKETSHELL_CLAUDE_CODE_VERSION:-latest}
     image: pocketshell-test:instance
     environment:
       PS_TRAFFIC_PORT: ${PS_TRAFFIC_PORT:-8021}
