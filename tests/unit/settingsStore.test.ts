@@ -242,72 +242,97 @@ describe('zoom', () => {
 });
 
 describe('session roots', () => {
-  it('defaults to an empty list, which means "derive roots from $HOME"', () => {
-    expect(useSettingsStore().sessionRoots).toEqual([]);
+  it('defaults to an empty map, which means "derive roots from $HOME" for every host', () => {
+    expect(useSettingsStore().sessionRoots).toEqual({});
   });
 
-  it('hands every caller its own array, never the spec default itself', () => {
+  it('hands every caller its own map, never the spec default itself', () => {
     // A shared reference here would let one mutation rewrite the default for
     // every future load — a bug that only shows up on the second boot.
     const a = settingsDefaults();
-    a.sessionRoots.push('~/git');
-    expect(settingsDefaults().sessionRoots).toEqual([]);
+    a.sessionRoots.hetzner = ['~/git'];
+    expect(settingsDefaults().sessionRoots).toEqual({});
   });
 
-  it('adds, normalises and persists a root', () => {
+  it('adds, normalises and persists a root for one host', () => {
     const settings = useSettingsStore();
-    expect(settings.addSessionRoot('  ~/git/  ')).toBe(true);
-    expect(settings.sessionRoots).toEqual(['~/git']);
-    expect(stored()['sessionRoots']).toEqual(['~/git']);
+    expect(settings.addSessionRoot('hetzner', '  ~/git/  ')).toBe(true);
+    expect(settings.sessionRootsFor('hetzner')).toEqual(['~/git']);
+    expect(stored()['sessionRoots']).toEqual({ hetzner: ['~/git'] });
   });
 
-  it('keeps registered order, which is what the panel renders in', () => {
+  it('keeps registered order independently for each host', () => {
     const settings = useSettingsStore();
-    settings.addSessionRoot('~/tmp');
-    settings.addSessionRoot('~/git');
-    expect(settings.sessionRoots).toEqual(['~/tmp', '~/git']);
+    settings.addSessionRoot('hetzner', '~/tmp');
+    settings.addSessionRoot('hetzner', '~/git');
+    settings.addSessionRoot('aws', '~/work');
+    expect(settings.sessionRootsFor('hetzner')).toEqual(['~/tmp', '~/git']);
+    expect(settings.sessionRootsFor('aws')).toEqual(['~/work']);
   });
 
-  it('refuses a duplicate and a path anchored to nothing', () => {
+  it('refuses a duplicate, a path anchored to nothing, and a blank host', () => {
     const settings = useSettingsStore();
-    expect(settings.addSessionRoot('~/git')).toBe(true);
-    expect(settings.addSessionRoot('~/git/')).toBe(false);
-    expect(settings.addSessionRoot('git')).toBe(false);
-    expect(settings.addSessionRoot('')).toBe(false);
-    expect(settings.sessionRoots).toEqual(['~/git']);
+    expect(settings.addSessionRoot('hetzner', '~/git')).toBe(true);
+    expect(settings.addSessionRoot('hetzner', '~/git/')).toBe(false);
+    expect(settings.addSessionRoot('hetzner', 'git')).toBe(false);
+    expect(settings.addSessionRoot('hetzner', '')).toBe(false);
+    expect(settings.addSessionRoot('', '~/git')).toBe(false);
+    expect(settings.sessionRootsFor('hetzner')).toEqual(['~/git']);
   });
 
-  it('removes by the stored spelling', () => {
+  it('removes by the stored spelling and host', () => {
     const settings = useSettingsStore();
-    settings.addSessionRoot('~/git');
-    settings.addSessionRoot('~/tmp');
-    settings.removeSessionRoot('~/git');
-    expect(settings.sessionRoots).toEqual(['~/tmp']);
+    settings.addSessionRoot('hetzner', '~/git');
+    settings.addSessionRoot('hetzner', '~/tmp');
+    settings.addSessionRoot('aws', '~/git');
+    settings.removeSessionRoot('hetzner', '~/git');
+    expect(settings.sessionRootsFor('hetzner')).toEqual(['~/tmp']);
+    expect(settings.sessionRootsFor('aws')).toEqual(['~/git']);
     // A spelling that was never registered is a no-op, not an error.
-    settings.removeSessionRoot('/home/alexey/tmp');
-    expect(settings.sessionRoots).toEqual(['~/tmp']);
+    settings.removeSessionRoot('hetzner', '/home/alexey/tmp');
+    expect(settings.sessionRootsFor('hetzner')).toEqual(['~/tmp']);
   });
 
   it('survives a restart', () => {
-    useSettingsStore().addSessionRoot('~/git');
+    useSettingsStore().addSessionRoot('hetzner', '~/git');
     setActivePinia(createPinia());
-    expect(useSettingsStore().sessionRoots).toEqual(['~/git']);
+    expect(useSettingsStore().sessionRootsFor('hetzner')).toEqual(['~/git']);
+    expect(useSettingsStore().sessionRootsFor('aws')).toEqual([]);
   });
 
-  it('degrades a corrupt list per ENTRY, not per key', () => {
-    expect(coerceSettings({ sessionRoots: ['~/git', 7, 'relative', '~/tmp/'] }).sessionRoots).toEqual(
-      ['~/git', '~/tmp'],
-    );
+  it('degrades a corrupt map per HOST and per ENTRY', () => {
+    expect(
+      coerceSettings({
+        sessionRoots: {
+          hetzner: ['~/git', 7, 'relative', '~/tmp/'],
+          aws: 'not-a-list',
+          laptop: ['~/work'],
+        },
+      }).sessionRoots,
+    ).toEqual({ hetzner: ['~/git', '~/tmp'], laptop: ['~/work'] });
   });
 
-  it('falls back to the default when the value is not a list at all', () => {
-    expect(coerceSettings({ sessionRoots: '~/git' }).sessionRoots).toEqual([]);
-    expect(coerceSettings({ sessionRoots: null }).sessionRoots).toEqual([]);
+  it('falls back to the default when the value is not a map at all', () => {
+    expect(coerceSettings({ sessionRoots: ['~/git'] }).sessionRoots).toEqual({});
+    expect(coerceSettings({ sessionRoots: '~/git' }).sessionRoots).toEqual({});
+    expect(coerceSettings({ sessionRoots: null }).sessionRoots).toEqual({});
   });
 
-  it('keeps the rest of the blob when only the root list is corrupt', () => {
+  it('migrates an old shared list only to an explicit default host', () => {
+    expect(
+      coerceSettings({
+        defaultHost: 'hetzner',
+        sessionRoots: ['~/git', 7, 'relative', '~/tmp/'],
+      }).sessionRoots,
+    ).toEqual({ hetzner: ['~/git', '~/tmp'] });
+    // With no owner, retaining the old list for every host would preserve the
+    // cross-instance leak, so it is intentionally discarded.
+    expect(coerceSettings({ sessionRoots: ['~/git'] }).sessionRoots).toEqual({});
+  });
+
+  it('keeps the rest of the blob when only the root map is corrupt', () => {
     const settings = coerceSettings({ sessionRoots: 3, defaultHost: 'hetzner' });
-    expect(settings.sessionRoots).toEqual([]);
+    expect(settings.sessionRoots).toEqual({});
     expect(settings.defaultHost).toBe('hetzner');
   });
 });

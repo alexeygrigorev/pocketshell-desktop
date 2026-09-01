@@ -1,10 +1,10 @@
 <script setup lang="ts">
-// Settings: the app-level preferences screen.
+// Settings: the renderer preferences screen, with host-scoped project roots.
 //
 // WHERE THIS LIVES, AND WHY IT IS AN OVERLAY
 //
 // Ports and Usage are overlays because they are HOST-level and belong to the
-// workspace header. Settings are app-level, so on the face of it they belong
+// workspace header. Settings are mostly app-level, so on the face of it they belong
 // somewhere else entirely — a route. They are still an overlay, for two
 // reasons that both come out of this app's structure rather than out of taste:
 //
@@ -14,9 +14,12 @@
 //     with it. That is a real cost the Ports overlay was already avoiding.
 //   - It has to be reachable with no connection. `defaultHost` is a decision
 //     about STARTUP, so the host picker is precisely where a user goes looking
-//     for it. An overlay is the only host-agnostic surface this app has: the
-//     same component, opened from the picker's header and from the workspace's,
+//     for it. An overlay is the only host-agnostic surface this app has. The
+//     same component, opened from the picker's header and from the workspace's;
 //     over whatever is behind it.
+//     The project-root section is the host-scoped exception: from the picker
+//     it asks for an explicit host, while a workspace supplies its connected
+//     host automatically.
 //
 // So: one view, mounted inside `OverlayPanel` by two callers. It renders no
 // heading of its own — the overlay chrome owns the title (see UsageView's
@@ -72,12 +75,31 @@ const sessions = useSessionsStore();
 const settings = useSettingsStore();
 const updates = useUpdateStore();
 
+/**
+ * The host whose project roots this section edits.
+ *
+ * A connected workspace supplies its active alias, so opening Settings there
+ * cannot accidentally edit another instance. When Settings is opened from
+ * the disconnected host picker, the user chooses an alias explicitly before
+ * the root controls become active.
+ */
+const selectedRootHost = ref('');
+const rootHost = computed(() => connection.activeHost?.name ?? selectedRootHost.value);
+const scopedSessionRoots = computed(() => settings.sessionRootsFor(rootHost.value));
+
 onMounted(async () => {
   // The picker loads hosts on its own mount, but the workspace does not
   // re-read the config, and this panel opens over both. `listConfigHosts()` is
   // the single source for the default-host choices, so ask for it when the
   // list is empty rather than rendering an empty select.
   if (!connection.hosts.length) await connection.loadHosts();
+  if (
+    !connection.activeHost &&
+    settings.defaultHost &&
+    connection.hosts.some((host) => host.name === settings.defaultHost)
+  ) {
+    selectedRootHost.value = settings.defaultHost;
+  }
 });
 
 /**
@@ -96,9 +118,10 @@ function onDefaultHostChange(event: Event): void {
 }
 
 /* --- Session roots -------------------------------------------------------
- * The session panel's top level. Empty means "derive roots from $HOME", which
- * is what the panel did before this control existed, so this section is
- * additive: a user who never opens it sees no change.
+ * The session panel's top level for the selected host. An empty host entry
+ * means "derive roots from $HOME", which is what the panel did before this
+ * control existed, so this section is additive: a user who never opens it
+ * sees no change.
  * ---------------------------------------------------------------------- */
 
 const rootDraft = ref('');
@@ -111,26 +134,31 @@ const rootError = ref<string | null>(null);
  * This exists because a text field alone asks the user to remember paths on a
  * machine they are not looking at. Their real roots are, by definition, where
  * their sessions already are — so the app can just read them off the session
- * list it already has. There is no remote directory scan behind this: the
- * panel opens with no connection at all from the host picker, and a suggestion
- * list that is sometimes empty is better than one that sometimes blocks on
- * SSH. The phone solves it the other way, with a remote directory scan over
- * three guessed parents (WatchedFoldersViewModel.kt:397).
+ * list it already has when that host is connected. There is no remote
+ * directory scan behind this: the panel can open with no connection at all
+ * from the host picker, and a suggestion list that is sometimes empty is
+ * better than one that sometimes blocks on SSH. The phone solves it the other
+ * way, with a remote directory scan over three guessed parents
+ * (WatchedFoldersViewModel.kt:397).
  */
 const rootSuggestions = computed<string[]>(() => {
+  // Sessions are only associated with an alias while that host is connected.
+  // Do not offer stale rows from a previous connection for a host selected in
+  // the disconnected picker.
+  if (!rootHost.value || rootHost.value !== connection.activeHost?.name) return [];
   const paths = sessions.sessions.map((session) => session.path);
   const home = projects.home ?? inferHome(paths);
   const out: string[] = [];
   for (const path of paths) {
     const { key } = rootForPath(canonicalisePath(path), home);
     if (key === OTHER_ROOT) continue;
-    if (settings.sessionRoots.includes(key)) continue;
+    if (scopedSessionRoots.value.includes(key)) continue;
     if (!out.includes(key)) out.push(key);
   }
   return out.sort();
 });
 
-const rootsFull = computed(() => settings.sessionRoots.length >= SESSION_ROOTS_MAX);
+const rootsFull = computed(() => scopedSessionRoots.value.length >= SESSION_ROOTS_MAX);
 
 /**
  * Add whatever is in the field. The store owns normalisation and dedupe, so
@@ -140,12 +168,12 @@ const rootsFull = computed(() => settings.sessionRoots.length >= SESSION_ROOTS_M
  */
 function onAddRoot(): void {
   const value = rootDraft.value;
-  if (!value.trim()) return;
+  if (!rootHost.value || !value.trim()) return;
   if (normaliseRootPath(value) === null) {
     rootError.value = 'Use an absolute path, or one under ~ — for example ~/git.';
     return;
   }
-  if (!settings.addSessionRoot(value)) {
+  if (!settings.addSessionRoot(rootHost.value, value)) {
     rootError.value = rootsFull.value
       ? `That is the limit of ${SESSION_ROOTS_MAX} roots. Remove one first.`
       : 'That root is registered already.';
@@ -156,7 +184,8 @@ function onAddRoot(): void {
 }
 
 function onRemoveRoot(path: string): void {
-  settings.removeSessionRoot(path);
+  if (!rootHost.value) return;
+  settings.removeSessionRoot(rootHost.value, path);
   rootError.value = null;
 }
 
@@ -420,47 +449,69 @@ function shellCostNote(spec: ShortcutSpec): { text: string; safe: boolean } | nu
             The top level of the session tree: <code>~/git</code>, <code>~/tmp</code>, or
             any folder you keep projects in. Every session below a root is grouped under
             it, by the folder it runs in. Sessions under no root collect in
-            <em>other</em>, at the bottom. Leave this empty and PocketShell works the
-            roots out from where your sessions are, as it always has.
+            <em>other</em>, at the bottom. Roots are stored separately for each SSH host;
+            <template v-if="rootHost">
+              this list belongs to <code>{{ rootHost }}</code>.
+            </template>
+            <template v-else>choose an instance below to edit its list.</template>
           </p>
         </div>
 
-        <ul v-if="settings.sessionRoots.length" class="roots">
-          <li v-for="root in settings.sessionRoots" :key="root" class="root">
-            <span class="root-path">{{ root }}</span>
-            <button class="icon-btn" :title="`Remove ${root}`" @click="onRemoveRoot(root)">
-              <AppIcon name="trash-2" :size="14" />
-            </button>
-          </li>
-        </ul>
-
-        <div class="add-root">
-          <input
-            v-model="rootDraft"
-            class="control grow"
-            type="text"
-            list="root-suggestions"
-            placeholder="~/git"
-            :disabled="rootsFull"
-            aria-label="Add a project root"
-            @keydown.enter.prevent="onAddRoot"
-          />
-          <!-- Where the user's roots actually are, read off the running
-               sessions. Typing is still allowed: a root you have not started a
-               session in yet cannot be suggested, and registering one ahead of
-               time is a legitimate thing to want. -->
-          <datalist id="root-suggestions">
-            <option v-for="path in rootSuggestions" :key="path" :value="path" />
-          </datalist>
-          <button class="add-btn" :disabled="rootsFull" @click="onAddRoot">
-            <AppIcon name="plus" :size="14" />
-            Add
-          </button>
+        <div v-if="!rootHost && connection.hosts.length" class="root-host-picker">
+          <label for="root-host">Instance</label>
+          <select id="root-host" v-model="selectedRootHost" class="control">
+            <option disabled value="">Choose an SSH host</option>
+            <option v-for="host in connection.hosts" :key="host.name" :value="host.name">
+              {{ host.name }}
+            </option>
+          </select>
         </div>
 
-        <p v-if="rootError" class="notice">
+        <template v-if="rootHost">
+          <ul v-if="scopedSessionRoots.length" class="roots">
+            <li v-for="root in scopedSessionRoots" :key="root" class="root">
+              <span class="root-path">{{ root }}</span>
+              <button class="icon-btn" :title="`Remove ${root}`" @click="onRemoveRoot(root)">
+                <AppIcon name="trash-2" :size="14" />
+              </button>
+            </li>
+          </ul>
+
+          <div class="add-root">
+            <input
+              v-model="rootDraft"
+              class="control grow"
+              type="text"
+              list="root-suggestions"
+              placeholder="~/git"
+              :disabled="rootsFull"
+              :aria-label="`Add a project root for ${rootHost}`"
+              @keydown.enter.prevent="onAddRoot"
+            />
+            <!-- Where the user's roots actually are, read off the running
+                 sessions. Typing is still allowed: a root you have not started a
+                 session in yet cannot be suggested, and registering one ahead of
+                 time is a legitimate thing to want. -->
+            <datalist id="root-suggestions">
+              <option v-for="path in rootSuggestions" :key="path" :value="path" />
+            </datalist>
+            <button class="add-btn" :disabled="rootsFull" @click="onAddRoot">
+              <AppIcon name="plus" :size="14" />
+              Add
+            </button>
+          </div>
+
+          <p v-if="rootError" class="notice">
+            <AppIcon name="alert-triangle" :size="14" />
+            <span>{{ rootError }}</span>
+          </p>
+        </template>
+        <p v-else class="root-notice">
           <AppIcon name="alert-triangle" :size="14" />
-          <span>{{ rootError }}</span>
+          <span v-if="connection.hosts.length">
+            Connect to an instance, or choose an SSH host above, to configure its roots.
+          </span>
+          <span v-else>Connect to an instance to configure its roots.</span>
         </p>
       </div>
     </section>
@@ -1170,6 +1221,20 @@ kbd {
 .add-btn.self-start {
   align-self: flex-start;
 }
+.root-host-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.root-host-picker label {
+  flex: none;
+  font-size: var(--fs-200);
+  color: var(--fg-secondary);
+}
+.root-host-picker .control {
+  flex: 1;
+  max-width: none;
+}
 .roots {
   list-style: none;
   margin: 0;
@@ -1332,7 +1397,8 @@ kbd {
   color: var(--code-variable);
   font-size: var(--code-font-size);
 }
-.notice {
+.notice,
+.root-notice {
   display: flex;
   align-items: flex-start;
   gap: var(--sp-2);

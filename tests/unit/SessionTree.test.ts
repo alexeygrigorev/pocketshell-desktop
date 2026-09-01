@@ -115,6 +115,8 @@ async function open(
   sessions: SessionSummary[],
   roots: string[] = [],
   home: string | null = HOME,
+  host = 'hetzner',
+  rootsByHost: Record<string, string[]> | null = null,
 ): Promise<VueWrapper> {
   sessionsList.mockResolvedValue(sessions);
   projectsHome.mockResolvedValue(
@@ -125,8 +127,9 @@ async function open(
   // The manual folder order is keyed on the host ALIAS (`HostEntry.name`), so
   // the panel needs a connected host before a drag has anywhere to persist to.
   // The rest of the entry is inert here — nothing in this component reads it.
-  connection.activeHost = { name: 'hetzner' } as HostEntry;
-  useSettingsStore().sessionRoots = roots;
+  connection.activeHost = { name: host } as HostEntry;
+  useSettingsStore().sessionRoots =
+    rootsByHost ?? (roots.length ? { [host]: roots } : {});
 
   const wrapper = mount(SessionTree, {
     global: { stubs: { NewSessionDialog: DialogStub, PopupMenu: MenuStub } },
@@ -416,6 +419,20 @@ describe('SessionTree — the Ports button carries the auto-forward indicator', 
 });
 
 describe('SessionTree — the per-root +', () => {
+  it('does not render another host\'s registered roots', async () => {
+    const wrapper = await open(
+      [session('tmp-b', `${HOME}/tmp/b`, 100)],
+      [],
+      HOME,
+      'aws',
+      { hetzner: ['~/git'] },
+    );
+
+    // The AWS host has no root entry, so it uses its own derived `tmp` root;
+    // Hetzner's registered `git` must not leak in as an empty header.
+    expect(wrapper.findAll('.folder-label').map((label) => label.text())).toEqual(['~/tmp']);
+  });
+
   it('puts one on every real root and none on `other`', async () => {
     const wrapper = await open([
       session('git-a', `${HOME}/git/a`, 100),

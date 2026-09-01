@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
+import type { HostEntry } from '../../src/shared/types';
 
 /**
  * The Keyboard section of Settings — THE PART THE USER ASKED FOR FIRST.
@@ -32,6 +33,7 @@ vi.mock('../../src/renderer/ipc', () => ({
 
 const SettingsView = (await import('../../src/renderer/views/SettingsView.vue')).default;
 const { useSettingsStore } = await import('../../src/renderer/stores/settings');
+const { useConnectionStore } = await import('../../src/renderer/stores/connection');
 const { SHORTCUTS, formatChord, parseChord } = await import('../../src/shared/shortcuts');
 
 beforeEach(() => {
@@ -281,6 +283,23 @@ describe('Settings — rebinding', () => {
     await wrapper.find('.add-btn.self-start').trigger('click');
 
     expect(settings.hasShortcutOverrides).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+describe('Settings — project roots', () => {
+  it('edits only the connected host\'s roots', async () => {
+    const settings = useSettingsStore();
+    settings.sessionRoots = { hetzner: ['~/git'], aws: ['~/tmp'] };
+    useConnectionStore().activeHost = { name: 'aws' } as HostEntry;
+
+    const wrapper = mountSettings();
+    const input = wrapper.get('input[aria-label="Add a project root for aws"]');
+    await input.setValue('~/work');
+    await input.trigger('keydown', { key: 'Enter' });
+
+    expect(settings.sessionRootsFor('hetzner')).toEqual(['~/git']);
+    expect(settings.sessionRootsFor('aws')).toEqual(['~/tmp', '~/work']);
     wrapper.unmount();
   });
 });

@@ -934,11 +934,9 @@ attempted; unit tests and typecheck are the only verification.
   to count as an answer.
 - Whether any real host produces the label-collision case in §4.5, which is
   now scoped per root *and* moved to directories, and therefore rarer still.
-- **App-level roots against several differently-shaped hosts** (§12.2.4). A
-  user whose boxes do not share a layout gets every registered root on every
-  host, some of them permanently empty. The honest fixes if that bites are a
-  per-host override or hiding an empty root behind a toggle — not making the
-  root list per-host by default, which is the cost the phone pays.
+- **Per-host roots against several differently-shaped hosts** (§12.2.4). This
+  is now the desktop behaviour too: a root registered for `hetzner` does not
+  render on `aws`, even when both aliases use the same home-relative spelling.
 - **Whether §12.2.3 is the wrong call.** The phone collapses a session's
   folder to the first segment under its root, so `~/git/pocketshell/tools`
   groups under `pocketshell`; we keep the full directory and show `tools` as a
@@ -1039,41 +1037,48 @@ verbatim, because they are the behaviour the user already knows:
    changing it is a third redesign of a level neither user request mentioned.
    **This is the divergence most likely to be wrong**, and it is cheap to
    revisit: it is one projection of the directory key.
-4. **Roots are app-level, not per host.** The phone keys `project_roots` by
-   `hostId` (`ProjectRootEntity.kt:26-32`). A registered root is written
-   home-relative and `~/git` names the same place on every host, so a per-host
-   list would mostly make the user register the same three roots repeatedly.
-   The cost is real and is recorded in §11: a user whose boxes genuinely have
-   different layouts gets every root on every host, some of them empty.
+4. **Roots are per host.** The phone keys `project_roots` by `hostId`
+   (`ProjectRootEntity.kt:26-32`), and the desktop now keys its map by the
+   stable `~/.ssh/config` alias. A registered root is written home-relative,
+   but `~/git` can exist on one instance and not on another. The alias is the
+   identity that prevents one instance's layout appearing on another.
 5. **No ordering hack.** The phone has no `order` column and encodes position
    as a `[NN] ` prefix inside the label
    (`WatchedFoldersViewModel.kt:428-451`). A JSON array has an order already.
 6. **Suggestions come from the session list, not a remote scan.** The phone
    runs a remote `ls` over three guessed parents
-   (`WatchedFoldersViewModel.kt:397`). The Settings panel opens from the host
-   picker with no connection at all, so it reads the roots off the sessions
-   already loaded — which is, by definition, where the user's roots are.
+   (`WatchedFoldersViewModel.kt:397`). The Settings panel can open from the
+   host picker with no connection, so it asks the user to choose an SSH alias
+   first; suggestions appear only for the currently connected host, whose
+   already-loaded sessions are, by definition, where the user's roots are.
 
 ### 12.3 Storage and normalisation
 
-`settings.sessionRoots: string[]`, default `[]`, in the existing
-`pocketshell.settings.v1` blob. Its parser rejects only a NON-ARRAY outright;
-inside an array, damage is per entry (`normaliseRootList`), so one hand-edited
-line costs that line and not the user's root list — the same per-key degradation
-rule the store already applies per setting, one level down.
+`settings.sessionRoots: Record<string, string[]>`, default `{}`, in the
+existing `pocketshell.settings.v1` blob. The outer map is keyed by SSH config
+alias and each value is the ordered root list for that host. Its parser rejects
+only a non-object outright; inside the map, damage is per host and per entry
+(`normaliseRootList`), so one hand-edited value costs that host's list and not
+the other hosts' — the same per-key degradation rule the store already applies
+per setting, one level down.
 
 **Two forms, and the split is the point.**
 
 - The **stored** form is what the user typed, cleaned: trimmed, trailing
   slashes dropped, `..` refused rather than resolved, control characters
   refused, and anchored to `/` or `~`. `~/git` and `/home/alexey/git` are still
-  two different stored strings, because settings are app-level while `$HOME` is
-  per-host and at write time there is no home to fold them against.
+  two different stored strings, because `$HOME` is per-host and at write time
+  there is no home to fold them against.
 - The **resolved** form is `directoryKey(stored, home)` — *the same function*
   that already folds tmux's two spellings of one directory into one node (§8).
   Reusing it rather than writing a second normalisation is what stops the two
   rules drifting: if `~` resolution ever changes, it changes in one place.
   Dedupe happens here, on the resolved key.
+
+An older build stored one shared array under `sessionRoots`. On load, that
+array is migrated only when the saved `defaultHost` supplies an explicit host
+owner; otherwise it is discarded rather than copied to every host. Any new
+write uses the per-host map.
 
 ### 12.4 Decisions the two features force on each other
 
@@ -1317,13 +1322,12 @@ that is accepted and then snaps back reads as a bug rather than as a rule.
 The **settings store** (`AppSettings.folderOrder`), keyed by host alias:
 `{ hetzner: ['~/git/dataops', '~/git/dtc-website', …] }`.
 
-**Per host**, unlike `sessionRoots`, which is deliberately app-level. The two
-are not inconsistent: a registered root is written home-relative, so `~/git`
-names the same place on every box, but an arrangement is a statement about the
-folders that are actually THERE, and no two hosts have the same ones. The
-`~/.ssh/config` alias rather than the connection id, for §15.3's reason exactly
-— a connection id is an opaque handle minted per connect, so an order keyed on
-it would be a fresh key every launch and would never survive a restart.
+**Per host**, just like `sessionRoots`. Both maps use the `~/.ssh/config`
+alias rather than the connection id, for §15.3's reason exactly — a connection
+id is an opaque handle minted per connect, so a preference keyed on it would
+be a fresh key every launch and would never survive a restart. A registered
+root's home-relative path and a folder's arrangement are both facts about the
+instance behind that alias.
 
 **The settings store rather than `localStorage`**, which is where the tab order
 went. §15.3's rule — "the settings store is for preferences a user sets BY NAME

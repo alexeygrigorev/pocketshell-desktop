@@ -10,8 +10,9 @@
  *
  * The phone app has a second, outer grouping level ("watched roots" plus a
  * trailing "Other folders" bucket) driven by a per-host project-roots table.
- * The desktop has no such table, so we implement the phone's *no-watched-roots*
- * fallback path — `groupSessionsIntoFolders` — where folder groups are the
+ * The desktop stores the table in renderer settings keyed by SSH host alias,
+ * and falls back to the phone's *no-watched-roots* path when the active host
+ * has no entries — `groupSessionsIntoFolders` — where folder groups are the
  * top level. The sort rules below are the same functions that path uses.
  *
  * ## Three projections over one set of rules (docs/SESSIONLIST.md)
@@ -21,7 +22,7 @@
  * each session runs in.
  *
  * The root level is the phone's *watched-roots* level, and it now works the
- * phone's way: the user REGISTERS roots (`settings.sessionRoots`), and
+ * phone's way: the user REGISTERS roots (`settings.sessionRootsFor(host)`), and
  * whatever falls under none of them goes to `other`. When nothing is
  * registered — the default, and every existing install — roots are still
  * SYNTHESISED from `$HOME`'s children, so the panel looks exactly as it did
@@ -587,10 +588,10 @@ export interface SessionRootFolder {
  *
  * The phone calls these WATCHED ROOTS and stores them per host in a Room table
  * (`project_roots`: `{hostId, label, path}`, ProjectRootEntity.kt:26-32). The
- * desktop stores them app-level, in `stores/settings.ts`, for one reason: a
- * registered root is written home-relative (`~/git`), and `~/git` means the
- * same place on every host the user connects to. A per-host table would make
- * the user re-register the same three roots on each box.
+ * desktop stores them in `stores/settings.ts`, keyed by the SSH config alias.
+ * A root is written home-relative (`~/git`), but that spelling does not mean
+ * the directory exists on every host; the alias is the stable instance
+ * identity that keeps one box's layout out of another's.
  *
  * Matching semantics are ported from FolderTreeProjection.kt verbatim, because
  * that is the behaviour the user already knows from the phone:
@@ -628,9 +629,9 @@ export const SESSION_ROOTS_MAX = 32;
  * not usable as a root at all.
  *
  * Stored roots keep the spelling the user typed — `~/git` stays `~/git`,
- * `/home/alexey/git` stays absolute — because settings are app-level while
- * `$HOME` is per-host, so at write time there is no home to rewrite against.
- * The two spellings are folded together later and per host by
+ * `/home/alexey/git` stays absolute — because `$HOME` is per-host, so at write
+ * time there is no home to rewrite against. The two spellings are folded
+ * together later and per host by
  * {@link resolveRoots}, through `directoryKey`: the same rule that already
  * folds tmux's two spellings of one directory into one node. One rule applied
  * twice, rather than a second normalisation free to drift from it.
@@ -1046,8 +1047,9 @@ function compareDirectories(a: SessionDirectory, b: SessionDirectory): number {
  * @param home the host's `$HOME`, or null — in which case it is inferred from
  *   the paths ({@link inferHome}) rather than surrendering every row to
  *   `other`.
- * @param roots the user's REGISTERED roots (`settings.sessionRoots`), in the
- *   order they were registered. Empty — the default — keeps the original
+ * @param roots the active host's REGISTERED roots
+ *   (`settings.sessionRootsFor(host)`), in the order they were registered.
+ *   Empty — the default — keeps the original
  *   behaviour of deriving roots from `$HOME`'s children, so nothing changes
  *   for a user who has configured nothing.
  *

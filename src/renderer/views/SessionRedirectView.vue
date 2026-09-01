@@ -36,7 +36,8 @@ const sessions = useSessionsStore();
 const settings = useSettingsStore();
 
 /**
- * The folder key holding [name], out of the same grouping the panel renders.
+ * The folder key holding [sessionName], out of the same grouping the panel
+ * renders, using the roots registered for [host].
  *
  * Deriving it from the grouping rather than from the session's raw `path` is
  * what makes the answer agree with the panel in every case the grouping is
@@ -44,9 +45,15 @@ const settings = useSettingsStore();
  * directory together, the pseudo-folder an untracked session gets, and the
  * sibling-inferred path.
  */
-function folderFor(name: string): string | null {
-  for (const root of groupSessionsIntoRoots(sessions.sessions, projects.home, settings.sessionRoots)) {
-    const dir = root.directories.find((d) => d.rows.some((r) => r.session.name === name));
+function folderFor(host: string, sessionName: string): string | null {
+  for (const root of groupSessionsIntoRoots(
+    sessions.sessions,
+    projects.home,
+    settings.sessionRootsFor(host),
+  )) {
+    const dir = root.directories.find((d) =>
+      d.rows.some((r) => r.session.name === sessionName),
+    );
     if (dir) return dir.key;
   }
   return null;
@@ -67,7 +74,7 @@ onMounted(async () => {
     await projects.ensureHome(connectionId);
   }
 
-  const folder = session ? folderFor(session) : null;
+  const folder = session ? folderFor(host, session) : null;
   // `void`: vue-router rejects the returned promise on an aborted or redirected
   // navigation, and neither is an error here.
   if (folder) {

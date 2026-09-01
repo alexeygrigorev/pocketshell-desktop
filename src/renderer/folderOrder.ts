@@ -79,7 +79,7 @@ export type FolderOrder = Record<string, string[]>;
  * Clean a stored order map, or return `undefined` for a blob that cannot be
  * trusted at all.
  *
- * The settings store's convention, followed exactly (`asRootList`,
+ * The settings store's convention, followed exactly (`asRootMap`,
  * `asShortcutOverrides`): only the outermost shape is rejected outright,
  * because it is the one with no salvageable meaning. Inside it, damage costs
  * one ENTRY — a host whose value is not an array of strings loses its

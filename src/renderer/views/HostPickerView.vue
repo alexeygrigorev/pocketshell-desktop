@@ -303,8 +303,9 @@ function onToggleDefault(host: HostEntry): void {
       <p v-if="connectError" class="error">{{ connectError }}</p>
     </main>
 
-    <!-- App-level, so it is reachable here with no connection at all — which
-         is the whole point, since the default-host setting is about startup. -->
+    <!-- Settings remains reachable here with no connection: default-host is
+         about startup, and the project-root section lets the user choose an
+         SSH alias before editing its instance-specific roots. -->
     <OverlayPanel v-if="settingsOpen" title="Settings" size="md" @close="settingsOpen = false">
       <SettingsView />
     </OverlayPanel>

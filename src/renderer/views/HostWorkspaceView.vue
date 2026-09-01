@@ -81,12 +81,12 @@ watch(
 /**
  * Which panel is open as an overlay, if any.
  *
- * `settings` is the odd one out and is here anyway: it is APP-level, not
- * host-level, so it does not belong to this workspace the way Ports and Usage
- * do. But a route would unmount this view and take the terminal's scrollback
- * with it, and the panel has to be reachable from a connected host as well as
- * from the picker. One shared `SettingsView`, two callers, no navigation. See
- * the header comment in views/SettingsView.vue.
+ * `settings` is the odd one out and is here anyway: most settings are app
+ * level, while the project-root section is scoped to this connected host. A
+ * route would unmount this view and take the terminal's scrollback with it,
+ * and the panel has to be reachable from a connected host as well as from the
+ * picker. One shared `SettingsView`, two callers, no navigation. See the
+ * header comment in views/SettingsView.vue.
  */
 const panel = ref<HostPanel | null>(null);
 

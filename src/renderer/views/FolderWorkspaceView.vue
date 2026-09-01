@@ -251,7 +251,11 @@ function writeTabOrder(next: string[]): void {
  */
 const folder = computed(() => {
   const home = projects.home;
-  for (const root of groupSessionsIntoRoots(sessions.sessions, home, settings.sessionRoots)) {
+  for (const root of groupSessionsIntoRoots(
+    sessions.sessions,
+    home,
+    settings.sessionRootsFor(hostAlias.value),
+  )) {
     const match = root.directories.find((dir) => dir.key === folderKey.value);
     if (match) return match;
   }

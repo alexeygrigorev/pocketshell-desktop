@@ -45,7 +45,7 @@ import {
  *      a value that fails it falls back to that key's default and the REST OF
  *      THE BLOB IS STILL HONOURED. Never write a parser that trusts the stored
  *      type; it is user-writable JSON on disk, not a value we produced. If the
- *      value is a collection, degrade per ENTRY too — see `asRootList` — and
+ *      value is a collection, degrade per ENTRY too — see `asRootMap` — and
  *      note that a reference-typed default is copied on the way out
  *      ({@link applyDefault}) so instances are never shared.
  *   3. Render a control for it in `views/SettingsView.vue`.
@@ -78,7 +78,7 @@ import {
  */
 
 /**
- * Every app-level preference, in one shape.
+ * Every renderer-owned preference, in one shape.
  *
  * `typingOpensComposer` and `closeComposerOnSend` are consumed by the prompt
  * composer, which owns its own files; this store only holds the answers. The
@@ -130,21 +130,24 @@ export interface AppSettings {
    */
   zoomPercent: number;
   /**
-   * The top level of the session panel's tree: the project roots the user has
-   * registered, in the order they registered them (`~/git`, `~/tmp`, …).
-   * Sessions under none of them collect in the panel's `other` bucket.
+   * The top level of the session panel's tree, keyed by the SSH config host
+   * alias. Each host owns the project roots the user registered there, in the
+   * order they registered them (`~/git`, `~/tmp`, …). Sessions under none of
+   * that host's roots collect in the panel's `other` bucket.
    *
-   * **Empty is meaningful and is the default.** With no roots registered the
-   * panel derives roots from `$HOME`'s children exactly as it always has, so
-   * an existing install sees no change until somebody configures something —
-   * see `sessionGrouping.groupSessionsIntoRoots`.
+   * **An empty map or an empty host entry is meaningful.** With no roots
+   * registered for the active host, the panel derives roots from that host's
+   * `$HOME` children exactly as it always has, so an existing install sees no
+   * change until somebody configures something — see
+   * `sessionGrouping.groupSessionsIntoRoots`.
    *
-   * App-level rather than per-host, unlike the phone's `project_roots` table,
-   * because a root is written home-relative and `~/git` names the same place
-   * on every host. A per-host list would make the user re-register the same
-   * three roots on each box they connect to.
+   * The host alias is the stable instance identity here. A connection id is a
+   * transient handle minted on every dial, while the alias survives restarts
+   * and is also the key used by `folderOrder`. A home-relative path is not
+   * enough to identify a root: `~/git` can exist on one instance and not on
+   * another, which is why the old app-wide list leaked roots between hosts.
    */
-  sessionRoots: string[];
+  sessionRoots: Record<string, string[]>;
   /**
    * The session panel's HAND-ARRANGED folder order, per host alias.
    *
@@ -160,14 +163,10 @@ export interface AppSettings {
    * empty is: nothing arranged means the panel renders creation order, which is
    * what it does for a user who never drags anything.
    *
-   * PER HOST, keyed on the `~/.ssh/config` alias — unlike `sessionRoots`, which
-   * is deliberately app-level. The two are not inconsistent: a registered root
-   * is written home-relative, so `~/git` names the same place on every box, but
-   * an arrangement is a statement about the folders that are actually THERE,
-   * and no two hosts have the same ones. The alias rather than the connection
-   * id for the reason the tab order gives (§15.3): a connection id is an opaque
-   * handle minted per connect, so an order keyed on it would be a fresh key
-   * every launch and would never survive a restart.
+   * PER HOST, keyed on the `~/.ssh/config` alias. The alias rather than the
+   * connection id for the reason the tab order gives (§15.3): a connection id
+   * is an opaque handle minted per connect, so an order keyed on it would be a
+   * fresh key every launch and would never survive a restart.
    *
    * It lives in this store rather than in `localStorage`, which is where the
    * tab order went. §15.3's rule — "the settings store is for preferences a
@@ -260,20 +259,41 @@ function asHostAlias(raw: unknown): string | null | undefined {
   return trimmed === '' ? null : trimmed;
 }
 
+/** Maximum number of SSH config aliases retained in the root map. */
+export const SESSION_ROOT_HOSTS_MAX = 64;
+
 /**
- * The registered session roots, or `undefined` for a blob this build cannot
- * trust at all.
+ * The registered session roots, keyed by SSH config alias, or `undefined` for
+ * a value whose outer shape this build cannot trust.
  *
- * Only a non-array is rejected outright, because that is the one shape with no
- * salvageable meaning. Inside an array, damage is per ENTRY: `normaliseRootList`
- * drops what is not a usable root path, drops repeats and caps the length, so
- * one hand-edited garbage entry costs that entry and not the user's whole root
- * list. The path rules themselves live in `sessionGrouping.ts` — the module
- * that already owns what a path means — rather than being restated here where
- * they could drift.
+ * Only a non-object (or an array) is rejected outright, because that is the
+ * one shape with no salvageable meaning. Inside the map, damage is per HOST:
+ * a host whose value is not an array loses its roots without costing any other
+ * host, and invalid entries inside a valid array are dropped by
+ * `normaliseRootList`. The path rules themselves live in
+ * `sessionGrouping.ts` — the module that already owns what a path means —
+ * rather than being restated here where they could drift.
  */
-function asRootList(raw: unknown): string[] | undefined {
-  return Array.isArray(raw) ? normaliseRootList(raw) : undefined;
+function asRootMap(raw: unknown): Record<string, string[]> | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [host, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (Object.keys(out).length >= SESSION_ROOT_HOSTS_MAX) break;
+    if (host.trim() === '' || !Array.isArray(value)) continue;
+    const roots = normaliseRootList(value);
+    if (roots.length > 0) {
+      // `__proto__` is a legal JSON object key even though it is not a useful
+      // SSH alias. Define it as data rather than assigning through Object's
+      // legacy setter, so a hand-edited blob cannot change the map's prototype.
+      Object.defineProperty(out, host, {
+        configurable: true,
+        enumerable: true,
+        value: roots,
+        writable: true,
+      });
+    }
+  }
+  return out;
 }
 
 /** The launch dialog's remembered answers. @see AppSettings.agentLaunchDefaults */
@@ -284,7 +304,7 @@ const AGENT_LAUNCH_DEFAULTS: AgentLaunchDefaults = {
 };
 
 /**
- * Degrade the launch defaults per FIELD, the way `asRootList` degrades per
+ * Degrade the launch defaults per FIELD, the way `asRootMap` degrades per
  * entry. A blob whose `kind` is a stale engine the helper dropped must not
  * cost the user their skip-permissions answer too, and it especially must not
  * survive into {@link buildLaunchCommand} — `isLaunchableKind` is the same
@@ -311,7 +331,7 @@ function asAgentLaunchDefaults(raw: unknown): AgentLaunchDefaults | undefined {
 }
 
 /**
- * The keyboard overrides, degraded per ENTRY like `asRootList` and
+ * The keyboard overrides, degraded per ENTRY like `asRootMap` and
  * `asAgentLaunchDefaults` before it.
  *
  * Three ways one entry can be untrustworthy, and each costs only that entry:
@@ -372,8 +392,9 @@ export const SETTING_SPECS: SettingSpecs = {
   // upgrade must change nothing on screen until the user asks it to.
   zoomPercent: { default: ZOOM_PERCENT_DEFAULT, parse: parseZoomPercent },
   // Empty means "derive roots from $HOME", which is what shipped before this
-  // setting existed — the same rule the typography defaults follow.
-  sessionRoots: { default: [], parse: asRootList },
+  // setting existed — the same rule the typography defaults follow. The map
+  // is keyed by SSH config alias so one host's layout cannot leak into another.
+  sessionRoots: { default: {}, parse: asRootMap },
   // Empty means "creation order, as the host reported it", which is what the
   // panel does for a user who has never dragged a row — the same rule every
   // other default here follows.
@@ -407,7 +428,7 @@ function settingKeys(): (keyof AppSettings)[] {
 function applyDefault<K extends keyof AppSettings>(out: Partial<AppSettings>, key: K): void {
   const value = SETTING_SPECS[key].default;
   // `sessionRoots` was the first default that is a REFERENCE rather than a
-  // primitive. Handing out the spec's own array would mean every defaulted
+  // primitive. Handing out the spec's own map would mean every defaulted
   // settings object shares one instance, so a mutation anywhere rewrites the
   // default itself — a bug that would only surface on the second load. Copy on
   // the way out.
@@ -467,6 +488,15 @@ export function coerceSettings(raw: unknown): AppSettings {
   for (const key of settingKeys()) {
     if (!(key in source)) continue;
     applyParsed(out, key, source[key]);
+  }
+  // Before roots were scoped, this key held one array shared by every host.
+  // There is no reliable host identity in that old value, so only migrate it
+  // when the saved default host gives us an explicit owner. Dropping it when
+  // there is no owner is intentional: replaying it for every host would keep
+  // the cross-instance leak this migration is meant to remove.
+  if (Array.isArray(source['sessionRoots']) && out.defaultHost) {
+    const legacyRoots = normaliseRootList(source['sessionRoots']);
+    if (legacyRoots.length > 0) out.sessionRoots = { [out.defaultHost]: legacyRoots };
   }
   return out;
 }
@@ -549,35 +579,60 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /**
-   * Register a session root, returning whether the list changed.
+   * The roots registered for [host], or `[]` when that host has no entry.
+   *
+   * A read helper rather than a bare map lookup keeps every consumer on the
+   * same blank-host behaviour. In particular, a host that has never been
+   * configured must use the session panel's derived-root fallback rather than
+   * accidentally reading another alias' list.
+   */
+  function sessionRootsFor(host: string): string[] {
+    if (host.trim() === '') return [];
+    return Object.prototype.hasOwnProperty.call(values.sessionRoots, host)
+      ? values.sessionRoots[host]!
+      : [];
+  }
+
+  /**
+   * Register a session root for [host], returning whether the list changed.
    *
    * The rules live here rather than in the settings screen so that every route
-   * into the list — the Add field, a suggestion chip, a future import — normalises
-   * and dedupes identically. A rejected value is not an error worth throwing:
-   * the caller shows the field's own validation, and `false` is the whole
-   * report it needs.
+   * into the list — the Add field, a suggestion chip, a future import —
+   * normalises and dedupes identically. A rejected value is not an error worth
+   * throwing: the caller shows the field's own validation, and `false` is the
+   * whole report it needs.
    *
-   * The list is REPLACED rather than pushed to. Nothing depends on that for
-   * reactivity (the watcher is deep), but it also means `applyDefault`'s shared
-   * empty array can never be mutated by this path.
+   * The host's list and the outer map are REPLACED rather than mutated. That
+   * keeps persistence synchronous and makes it impossible for a caller to
+   * mutate the default map through a shared reference.
    */
-  function addSessionRoot(path: string): boolean {
+  function addSessionRoot(host: string, path: string): boolean {
+    if (host.trim() === '') return false;
     const root = normaliseRootPath(path);
     if (root === null) return false;
-    if (values.sessionRoots.includes(root)) return false;
-    if (values.sessionRoots.length >= SESSION_ROOTS_MAX) return false;
-    values.sessionRoots = [...values.sessionRoots, root];
+    const roots = sessionRootsFor(host);
+    if (roots.includes(root)) return false;
+    if (roots.length >= SESSION_ROOTS_MAX) return false;
+    values.sessionRoots = { ...values.sessionRoots, [host]: [...roots, root] };
     return true;
   }
 
   /**
-   * Unregister a root. Matches on the STORED spelling, which is what the
-   * settings list renders — removing `~/git` does not remove a separately
-   * registered `/home/alexey/git`, because those are two entries the user made
-   * two decisions about, even though one host folds them onto one branch.
+   * Unregister a root for [host]. Matches on the STORED spelling, which is
+   * what the settings list renders — removing `~/git` does not remove a
+   * separately registered `/home/alexey/git`, because those are two entries
+   * the user made two decisions about, even though one host folds them onto
+   * one branch.
    */
-  function removeSessionRoot(path: string): void {
-    values.sessionRoots = values.sessionRoots.filter((root) => root !== path);
+  function removeSessionRoot(host: string, path: string): void {
+    if (host.trim() === '') return;
+    const roots = sessionRootsFor(host);
+    const nextRoots = roots.filter((root) => root !== path);
+    if (nextRoots.length === roots.length) return;
+    const next = { ...values.sessionRoots };
+    if (nextRoots.length === 0) delete next[host];
+    else next[host] = nextRoots;
+    values.sessionRoots = next;
   }
 
   /**
@@ -702,6 +757,7 @@ export const useSettingsStore = defineStore('settings', () => {
     zoomIn,
     zoomOut,
     resetZoom,
+    sessionRootsFor,
     addSessionRoot,
     removeSessionRoot,
     folderOrderFor,

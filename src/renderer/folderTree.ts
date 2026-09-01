@@ -109,7 +109,7 @@ export function useFolderTree(): FolderTree {
     // a copy of the row list, or reconciles anything — which is what makes a
     // drag survive the poll instead of racing it.
     applyFolderOrder(
-      groupSessionsIntoRoots(sessions.sessions, home.value, settings.sessionRoots),
+      groupSessionsIntoRoots(sessions.sessions, home.value, settings.sessionRootsFor(host.value)),
       settings.folderOrderFor(host.value),
     ),
   );
