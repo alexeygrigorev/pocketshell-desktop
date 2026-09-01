@@ -62,8 +62,8 @@ const { clearAgentLaunch, parkedAgentLaunch } = await import(
 
 const HOME = '/home/alexey';
 
-async function open(startIn: string | null): Promise<VueWrapper> {
-  useConnectionStore().connectionId = 'conn-1';
+async function open(startIn: string | null, connectionId = 'conn-1'): Promise<VueWrapper> {
+  useConnectionStore().connectionId = connectionId;
   const wrapper = mount(NewSessionDialog, {
     props: { startIn },
     global: { stubs: { OverlayPanel: { template: '<div><slot /></div>' } } },
@@ -138,6 +138,48 @@ describe('NewSessionDialog startIn', () => {
     projects.cwd = `${HOME}/git/dataops`;
     await open(`${HOME}/tmp`);
     expect(projects.cwd).toBe('/home/alexey/tmp');
+  });
+
+  it('re-resolves home and lists the new host after switching connections', async () => {
+    // The projects store is shared by the session panel and this dialog. Before
+    // it was connection-scoped, the second open saw `/home/alexey` and a
+    // non-empty cwd from Hetzner, skipped projects.home(), and asked SFTP on the
+    // Docker host to list a path that does not exist there.
+    home
+      .mockResolvedValueOnce({ ok: true, home: HOME })
+      .mockResolvedValueOnce({ ok: true, home: '/home/testuser' });
+    list.mockImplementation(async (_id, path) =>
+      path === '/home/testuser'
+        ? [
+            { name: 'git', type: 'dir' },
+            { name: 'tmp', type: 'dir' },
+          ]
+        : [{ name: 'old-host-only', type: 'dir' }],
+    );
+
+    const hetzner = await open(null, 'conn-hetzner');
+    expect(useProjectsStore().home).toBe(HOME);
+    expect(useProjectsStore().cwd).toBe(HOME);
+    hetzner.unmount();
+
+    const local = await open(null, 'conn-pocketshell-local');
+
+    expect(home).toHaveBeenCalledTimes(2);
+    expect(useProjectsStore().home).toBe('/home/testuser');
+    expect(useProjectsStore().cwd).toBe('/home/testuser');
+    expect(useProjectsStore().browseError).toBeNull();
+    expect(realPath).toHaveBeenLastCalledWith('conn-pocketshell-local', '/home/testuser');
+    expect(list).toHaveBeenLastCalledWith('conn-pocketshell-local', '/home/testuser');
+    expect(useProjectsStore().dirs.map((entry) => entry.name)).toEqual(['git', 'tmp']);
+    local.unmount();
+  });
+
+  it('passes absolute paths to SFTP after resolving a tilde home', async () => {
+    const wrapper = await open(null, 'conn-pocketshell-local');
+
+    expect(realPath).toHaveBeenCalledWith('conn-pocketshell-local', HOME);
+    expect(realPath).not.toHaveBeenCalledWith('conn-pocketshell-local', '~');
+    wrapper.unmount();
   });
 });
 

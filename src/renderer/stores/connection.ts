@@ -11,6 +11,7 @@ import { MAX_ATTEMPTS, ReconnectBackoff } from '../../shared/reconnectBackoff';
 import { useFilesStore } from './files';
 import { useSessionsStore } from './sessions';
 import { useForwardsStore } from './forwards';
+import { useProjectsStore } from './projects';
 
 /**
  * Connection store: owns the active connection to a host and its bootstrap
@@ -322,6 +323,10 @@ export const useConnectionStore = defineStore('connection', () => {
   }
 
   async function connect(host: HostEntry, privateKeyPath?: string): Promise<boolean> {
+    // Remote homes and SFTP browser paths belong to the connection, not to the
+    // host-picker singleton. Clear them before a new dial so a workspace or
+    // dialog cannot briefly render the previous host while this one connects.
+    useProjectsStore().clear();
     state.value = 'connecting';
     error.value = null;
     activeHost.value = host;
@@ -359,6 +364,7 @@ export const useConnectionStore = defineStore('connection', () => {
       // unmounting, which fired on every tab switch and cost the user their
       // place; disconnect is the event that actually invalidates the state.
       useFilesStore().clear(connectionId.value);
+      useProjectsStore().clear();
       await api.ssh.close(connectionId.value);
     }
     connectionId.value = null;

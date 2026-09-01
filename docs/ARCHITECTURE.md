@@ -205,6 +205,7 @@ Pinia stores in the renderer hold **view state only** — never secrets:
 |---|---|
 | `connection` | active connectionId per host, connection/error state, bootstrap result |
 | `sessions` | per-host `SessionSummary[]`, refresh state |
+| `projects` | active host `$HOME`, SFTP folder browser, and repository loading state; cleared when the connection id changes |
 | `files` | current path, tree cache, open file buffers |
 | `agents` | per-pane detection + current conversation events |
 | `usage` | per-provider quota rows + last-refresh |
@@ -278,4 +279,3 @@ regression test (tests/unit/xtermWriteBuffer.test.ts) drives the real
 `scripts/xterm-fuzz.mjs` is the fuzzer that found the original
 invariant break (seed 32) and is the tool to rerun when upgrading
 xterm.
-

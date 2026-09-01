@@ -34,6 +34,19 @@ import type {
  *    exception it can only print.
  */
 export const useProjectsStore = defineStore('projects', () => {
+  /**
+   * This store is shared by every workspace in the renderer, but its remote
+   * paths are not. A connection id is the boundary: `/home/alexey` from one
+   * host must never become the SFTP path sent to another host.
+   *
+   * The explicit scope also covers callers that replace a connection without
+   * first visiting the picker (and makes the invariant local to this store,
+   * rather than relying on every connection transition to remember a clear).
+   */
+  let scopedConnectionId: ConnectionId | null = null;
+  let scopeGeneration = 0;
+  let browseRequest = 0;
+
   /** Remote `$HOME`: the browse root and the input to name derivation. */
   const home = ref<string | null>(null);
   const homeError = ref<string | null>(null);
@@ -74,6 +87,40 @@ export const useProjectsStore = defineStore('projects', () => {
     () => remoteState.value === 'gh-missing' || remoteState.value === 'gh-unauthenticated',
   );
 
+  /** True while the state still belongs to the connection that started work. */
+  function isCurrent(connectionId: ConnectionId, generation: number): boolean {
+    return scopedConnectionId === connectionId && scopeGeneration === generation;
+  }
+
+  /** Reset renderer-side remote state when a different SSH connection takes over. */
+  function clearState(): void {
+    scopeGeneration += 1;
+    browseRequest += 1;
+    home.value = null;
+    homeError.value = null;
+    cwd.value = '';
+    dirs.value = [];
+    browsing.value = false;
+    browseError.value = null;
+    repos.value = [];
+    reposLoading.value = false;
+    remoteState.value = null;
+    remoteError.value = null;
+    localState.value = null;
+    localError.value = null;
+    cloning.value = null;
+    starting.value = false;
+  }
+
+  /** Enter a connection scope, invalidating any paths/results from another host. */
+  function scopeTo(connectionId: ConnectionId): number {
+    if (scopedConnectionId !== connectionId) {
+      clearState();
+      scopedConnectionId = connectionId;
+    }
+    return scopeGeneration;
+  }
+
   /**
    * Resolve the remote `$HOME` and nothing else.
    *
@@ -95,8 +142,10 @@ export const useProjectsStore = defineStore('projects', () => {
    * be retried by the next caller rather than remembered.
    */
   async function ensureHome(connectionId: ConnectionId): Promise<string | null> {
+    const generation = scopeTo(connectionId);
     if (home.value !== null) return home.value;
     const result = await api.projects.home(connectionId);
+    if (!isCurrent(connectionId, generation)) return null;
     if (!result.ok || !result.home) {
       homeError.value = result.error ?? 'could not resolve $HOME on the host';
       return null;
@@ -108,8 +157,9 @@ export const useProjectsStore = defineStore('projects', () => {
 
   /** Resolve the remote `$HOME` and land the browser there on first open. */
   async function loadHome(connectionId: ConnectionId): Promise<void> {
+    const generation = scopeTo(connectionId);
     const resolved = await ensureHome(connectionId);
-    if (resolved === null) return;
+    if (resolved === null || !isCurrent(connectionId, generation)) return;
     if (!cwd.value) await browse(connectionId, resolved);
   }
 
@@ -127,19 +177,26 @@ export const useProjectsStore = defineStore('projects', () => {
    * the search box swear nothing matched a folder the host demonstrably has.
    */
   async function browse(connectionId: ConnectionId, path: string): Promise<void> {
+    const generation = scopeTo(connectionId);
+    const request = ++browseRequest;
     browsing.value = true;
     browseError.value = null;
     try {
       const resolved = await api.sftp.realPath(connectionId, path);
       const entries = await api.sftp.list(connectionId, resolved);
+      if (!isCurrent(connectionId, generation) || request !== browseRequest) return;
       cwd.value = resolved;
       dirs.value = entries
         .filter((e) => e.type === 'dir')
         .sort((a, b) => a.name.localeCompare(b.name));
     } catch (e) {
-      browseError.value = (e as Error).message;
+      if (isCurrent(connectionId, generation) && request === browseRequest) {
+        browseError.value = (e as Error).message;
+      }
     } finally {
-      browsing.value = false;
+      if (isCurrent(connectionId, generation) && request === browseRequest) {
+        browsing.value = false;
+      }
     }
   }
 
@@ -162,16 +219,18 @@ export const useProjectsStore = defineStore('projects', () => {
    * two are recorded separately and neither clears the local rows.
    */
   async function loadRepos(connectionId: ConnectionId): Promise<void> {
+    const generation = scopeTo(connectionId);
     reposLoading.value = true;
     try {
       const result = await api.projects.reposList(connectionId, { scope: 'both' });
+      if (!isCurrent(connectionId, generation)) return;
       repos.value = result.repos;
       remoteState.value = result.remote?.state ?? null;
       remoteError.value = result.remote?.error ?? null;
       localState.value = result.local?.state ?? null;
       localError.value = result.local?.error ?? null;
     } finally {
-      reposLoading.value = false;
+      if (isCurrent(connectionId, generation)) reposLoading.value = false;
     }
   }
 
@@ -287,17 +346,8 @@ export const useProjectsStore = defineStore('projects', () => {
 
   /** Drop everything on disconnect: none of it is valid for another host. */
   function clear(): void {
-    home.value = null;
-    homeError.value = null;
-    cwd.value = '';
-    dirs.value = [];
-    browseError.value = null;
-    repos.value = [];
-    remoteState.value = null;
-    remoteError.value = null;
-    localState.value = null;
-    localError.value = null;
-    cloning.value = null;
+    scopedConnectionId = null;
+    clearState();
   }
 
   return {
