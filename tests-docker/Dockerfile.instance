@@ -25,7 +25,6 @@ RUN apk add --no-cache \
       py3-pip \
       python3 \
       tmux \
-    && ssh-keygen -A \
     # The Node base image already reserves UID 1000 for its `node` user. Keep
     # the fixture user at the UID used by the original Alpine image so an
     # existing named home volume remains readable after this image upgrade.
@@ -42,12 +41,13 @@ ENV HOME=/home/testuser
 ENV PATH=/home/testuser/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY sshd_config /etc/ssh/sshd_config
+COPY test_host_key /etc/ssh/ssh_host_ed25519_key
 COPY test_key.pub /home/testuser/.ssh/authorized_keys
-# The private key is a fixture used only for the in-container healthcheck and
-# local manual testing. It is not a production credential.
+# These private keys are fixtures used only for this local test instance and
+# its in-container healthcheck; they are not production credentials.
 COPY test_key /root/test_key
 
-RUN chmod 600 /home/testuser/.ssh/authorized_keys /root/test_key \
+RUN chmod 600 /home/testuser/.ssh/authorized_keys /root/test_key /etc/ssh/ssh_host_ed25519_key \
     && chown -R testuser:testuser /home/testuser/.ssh \
     # Alpine's sshd starts the user's shell as a login shell. Keep the helper
     # tools available to both PocketShell and a plain `ssh alias command`.

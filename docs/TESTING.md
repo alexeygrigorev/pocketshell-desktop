@@ -198,6 +198,16 @@ sessions after a container restart. `reset` is deliberately destructive and
 removes that named volume before creating a clean instance. Use reset after
 changing the image or when a test needs a pristine remote filesystem.
 
+The standalone image uses the checked-in `tests-docker/test_host_key` as its
+SSH host identity, so rebuilding or recreating the container does not change
+the entry in `known_hosts`. This key is a local fixture only. If you reset an
+older instance that was built before this stable key was added, remove its old
+entry once:
+
+```bash
+ssh-keygen -R '[127.0.0.1]:3222'
+```
+
 The raw Compose equivalent is:
 
 ```bash
