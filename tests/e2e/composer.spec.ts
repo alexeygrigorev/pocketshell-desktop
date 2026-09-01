@@ -94,7 +94,19 @@ async function openSession(page: Page, name: string): Promise<void> {
   await page.locator('.dir-header').first().click();
   await expect(page.locator('.folder-workspace')).toBeVisible({ timeout: 20_000 });
   try {
-    await page.getByRole('button', { name, exact: true }).click();
+    const tab = page.getByRole('button', { name, exact: true });
+    // The panel and the workspace are fed by the same session store, but a
+    // long serial suite can leave the workspace between projections while a
+    // background listing is landing. One explicit refresh is the same recovery
+    // a user has in the panel, and keeps this helper from turning a transient
+    // render gap into a 30-second failure.
+    try {
+      await expect(tab).toBeVisible({ timeout: 5_000 });
+    } catch {
+      await page.locator('.session-panel .icon-btn[title="Refresh"]').click();
+      await expect(tab).toBeVisible({ timeout: 30_000 });
+    }
+    await tab.click();
   } catch (err) {
     // A tab that never appears is the suite shouting about state it cannot
     // see. Name what IS there - on a remote runner the trace zip is not
