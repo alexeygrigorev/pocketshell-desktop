@@ -302,4 +302,55 @@ describe('Settings — project roots', () => {
     expect(settings.sessionRootsFor('aws')).toEqual(['~/tmp', '~/work']);
     wrapper.unmount();
   });
+
+  it('switches the rendered root list with the active host alias', async () => {
+    const settings = useSettingsStore();
+    const connection = useConnectionStore();
+    settings.sessionRoots = {
+      hetzner: ['~/git', '~/tmp'],
+      'pocketshell-local': [],
+      aws: [],
+    };
+    connection.activeHost = { name: 'hetzner' } as HostEntry;
+
+    const wrapper = mountSettings();
+    expect(wrapper.findAll('.root-path').map((el) => el.text())).toEqual(['~/git', '~/tmp']);
+
+    connection.activeHost = { name: 'pocketshell-local' } as HostEntry;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findAll('.root-path')).toHaveLength(0);
+    expect(wrapper.get('input[aria-label="Add a project root for pocketshell-local"]')).toBeTruthy();
+
+    connection.activeHost = { name: 'aws' } as HostEntry;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findAll('.root-path')).toHaveLength(0);
+    expect(wrapper.get('input[aria-label="Add a project root for aws"]')).toBeTruthy();
+    wrapper.unmount();
+  });
+
+  it('keeps a disconnected host selection scoped when the host list refreshes', async () => {
+    const settings = useSettingsStore();
+    const connection = useConnectionStore();
+    settings.sessionRoots = { hetzner: ['~/git', '~/tmp'], 'pocketshell-local': [], aws: [] };
+    connection.hosts = [
+      { name: 'hetzner' },
+      { name: 'pocketshell-local' },
+    ] as HostEntry[];
+
+    const wrapper = mountSettings();
+    const picker = wrapper.get('#root-host');
+    await picker.setValue('pocketshell-local');
+    expect(wrapper.findAll('.root-path')).toHaveLength(0);
+
+    // Simulate HostPickerView replacing the list after re-reading ~/.ssh/config.
+    connection.hosts = [
+      { name: 'hetzner' },
+      { name: 'pocketshell-local' },
+      { name: 'aws' },
+    ] as HostEntry[];
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('input[aria-label="Add a project root for pocketshell-local"]')).toBeTruthy();
+    expect(wrapper.findAll('.root-path')).toHaveLength(0);
+    wrapper.unmount();
+  });
 });
