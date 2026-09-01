@@ -29,11 +29,13 @@ const sftp = new SftpService(registry);
 const forwards = new ForwardService(ssh, registry);
 const projects = new ProjectsService(ssh, helper);
 const preview = new HtmlPreviewService(sftp);
-// Evict cached per-connection state (SFTP wrapper, forwarders, remote $HOME,
-// live HTML previews) on close.
+// Evict cached per-connection state owned by the application entrypoint (SFTP
+// wrapper, remote $HOME, live HTML previews) on close. ForwardService and
+// ServeService own their own close subscriptions: forwarding needs to
+// distinguish a lost transport from an explicit stop so reconnect can retain
+// the host's auto-forward preference.
 ssh.onCloseConnection((id) => {
   sftp.evict(id);
-  forwards.evict(id);
   projects.evict(id);
   preview.evict(id);
 });

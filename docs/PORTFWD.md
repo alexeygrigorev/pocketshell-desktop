@@ -692,6 +692,21 @@ number. Do not port `ReconnectOverlay` (TUI widget) or the dashboard's flat
 supervisor's cap-then-give-up over the Python's infinite retry so a dead host
 does not spin forever.
 
+### Current Node lifecycle
+
+`ForwardService` owns its `onCloseConnection` subscription. On a transport
+drop it suspends the engine, keeping the host's names, remaps, intents, and
+`autoEnabled` preference; after the renderer receives a new connection id,
+`connection.ts` calls `forwards.init()` and starts the engine again when that
+preference is still on. An explicit stop in the Ports panel is what writes
+`autoEnabled: false`.
+
+The application entrypoint must not also call `forwards.evict()` from its
+generic close handler. That method is an explicit teardown operation and
+clears the persisted preference. A second call there would turn a temporary
+transport loss into a user-requested stop, making forwarding appear to resume
+only after the Ports panel is opened and enabled again.
+
 ---
 
 ## 9. Persistence
