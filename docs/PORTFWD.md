@@ -696,10 +696,11 @@ does not spin forever.
 
 `ForwardService` owns its `onCloseConnection` subscription. On a transport
 drop it suspends the engine, keeping the host's names, remaps, intents, and
-`autoEnabled` preference; after the renderer receives a new connection id,
-`connection.ts` calls `forwards.init()` and starts the engine again when that
-preference is still on. An explicit stop in the Ports panel is what writes
-`autoEnabled: false`.
+`autoEnabled` preference; before the renderer exposes a new connection id,
+`connection.ts` checks that preference and calls `forwards.startAuto()` when it
+is still on. This covers both reconnects and the first connection after an app
+restart; the Ports panel then only takes its initial reading. An explicit stop
+in the Ports panel is what writes `autoEnabled: false`.
 
 The application entrypoint must not also call `forwards.evict()` from its
 generic close handler. That method is an explicit teardown operation and
@@ -1060,13 +1061,17 @@ The forwards store's `autoOn` is the flag the ports panel itself renders — and
 it is only fresh while that panel is MOUNTED: `PortPanelView` subscribes on
 entry and the store `clear()`s on unmount (`stores/forwards.ts`). An indicator
 read off it would say OFF almost all of the time, which is the opposite of an
-indicator. So the workspace owns the value (`HostWorkspaceView.vue`):
+indicator. The connection store restores a persisted ON setting before it
+exposes a newly connected id to the workspace (`stores/connection.ts`), so the
+engine is live before the panel is opened. The workspace owns the value it
+displays (`HostWorkspaceView.vue`):
 
 - whenever the connection or the ports overlay changes, it asks the engine
   directly — `forwards.isAutoEnabled`, which answers "forwarder running, else
-  the persisted per-host flag" (`ForwardService.ts:108`) — so the mount case
-  ("relaunch on a host where I left it on, never opened the panel") is covered
-  by one IPC read;
+  the persisted per-host flag" (`ForwardService.ts:108`) — while the connection
+  store has already restored a persisted ON engine before the new id becomes
+  visible. Opening the overlay therefore reads and displays the existing
+  engine; it is no longer the thing that starts it;
 - while the overlay IS open, the store's live flips are mirrored straight
   through, so the toggle inside the panel reaches the header button without
   waiting for a reopen.

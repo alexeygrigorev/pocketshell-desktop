@@ -69,6 +69,19 @@ const HOST: HostEntry = {
   fromConfig: true,
 };
 
+const HOST_WITH_LOCAL_FORWARD: HostEntry = {
+  ...HOST,
+  localForwards: [
+    {
+      kind: 'local',
+      listenHost: '127.0.0.1',
+      listenPort: 9000,
+      destHost: '127.0.0.1',
+      destPort: 9000,
+    },
+  ],
+};
+
 /** The CURRENT store's onState listener — each test's pinia registers a new one. */
 function stateHandler(): (payload: { connectionId: string; state: string }) => void {
   return onState.mock.calls.at(-1)![0];
@@ -99,6 +112,20 @@ afterEach(() => {
 });
 
 describe('connection store — the automatic reconnect FSM', () => {
+  it('restores persisted auto-forwarding before exposing the initial connection', async () => {
+    fwdIsAutoEnabled.mockResolvedValue(true);
+    const connection = useConnectionStore();
+    fwdStartAuto.mockImplementationOnce(async () => {
+      expect(connection.connectionId).toBeNull();
+    });
+
+    await connection.connect(HOST_WITH_LOCAL_FORWARD, undefined);
+
+    expect(fwdIsAutoEnabled).toHaveBeenCalledWith('conn-1');
+    expect(fwdStartAuto).toHaveBeenCalledWith('conn-1', HOST_WITH_LOCAL_FORWARD.localForwards);
+    expect(connection.connectionId).toBe('conn-1');
+  });
+
   it('schedules the first retry 5s out when the link drops', async () => {
     const connection = useConnectionStore();
     await connection.connect(HOST, undefined);

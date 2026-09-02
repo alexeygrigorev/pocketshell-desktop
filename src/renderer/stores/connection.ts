@@ -10,7 +10,6 @@ import type {
 import { MAX_ATTEMPTS, ReconnectBackoff } from '../../shared/reconnectBackoff';
 import { useFilesStore } from './files';
 import { useSessionsStore } from './sessions';
-import { useForwardsStore } from './forwards';
 import { useProjectsStore } from './projects';
 
 /**
@@ -302,10 +301,9 @@ export const useConnectionStore = defineStore('connection', () => {
    * The sessions refresh is not a courtesy: the panel's last poll against the
    * old id is what left a raw "Unknown connection" rejection on screen, and
    * refreshing against the new id replaces both the stale list and that
-   * message in one move. Forwards get the same treatment the ports panel
-   * gives a fresh connection — the host's remembered auto-forward setting is
-   * restored (and the engine restarted when it was left on), so a drop does
-   * not silently turn off forwarding for everyone who had it on.
+   * message in one move. Forwarding is restored by `connect()` before it
+   * exposes the new connection id, so a drop does not silently turn off
+   * forwarding for everyone who had it on.
    *
    * Bootstrap needs no line here: `connect()` already fires it in the
    * background, and the UI surfaces the result when it lands.
@@ -314,11 +312,36 @@ export const useConnectionStore = defineStore('connection', () => {
     await useSessionsStore()
       .refresh(id, { quiet: true })
       .catch(() => undefined);
-    const host = activeHost.value;
-    if (host) {
-      await useForwardsStore()
-        .init(id, host.localForwards)
-        .catch(() => undefined);
+  }
+
+  /**
+   * Restore the host's remembered auto-forward setting before a new
+   * connection becomes visible to the workspace.
+   *
+   * The ports overlay used to be the only caller of `forwards.init`, so the
+   * header could truthfully read the persisted ON flag while no local tunnel
+   * existed. Keep the check here, at the connection boundary: it covers both
+   * the first connection after an app restart and a reconnect, without making
+   * opening an otherwise unrelated overlay a side effect.
+   *
+   * Forward specs are copied field by field because a host selected from the
+   * Pinia `hosts` ref may be a reactive proxy, which Electron's structured
+   * clone cannot carry through `ipcRenderer.invoke`.
+   */
+  async function restoreAutoForward(id: ConnectionId, host: HostEntry): Promise<void> {
+    try {
+      if (!(await api.forwards.isAutoEnabled(id))) return;
+      const configForwards = host.localForwards.map((forward) => ({
+        kind: forward.kind,
+        listenHost: forward.listenHost,
+        listenPort: forward.listenPort,
+        destHost: forward.destHost,
+        destPort: forward.destPort,
+      }));
+      await api.forwards.startAuto(id, configForwards);
+    } catch {
+      // A successful SSH connection must not be reported as failed because a
+      // best-effort forwarding restore could not be queried or started.
     }
   }
 
@@ -339,6 +362,10 @@ export const useConnectionStore = defineStore('connection', () => {
       tofuDecision: 'accept-always',
     });
     if (result.ok && result.connectionId) {
+      // Do this while the picker still owns the connection attempt. Once the
+      // new id is exposed, HostWorkspaceView can render the persisted ON
+      // indicator knowing the engine has already been asked to resume.
+      await restoreAutoForward(result.connectionId, host);
       connectionId.value = result.connectionId;
       state.value = 'connected';
       // Fire bootstrap in the background; the UI surfaces it when it lands.
