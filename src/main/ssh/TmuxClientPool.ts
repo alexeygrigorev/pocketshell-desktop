@@ -210,6 +210,16 @@ export class TmuxClientPool {
   private readonly tokens = new Map<string, Map<string, string>>();
   /** Ever-increasing stamp handed to a client each time it is used. */
   private useClock = 0;
+  /**
+   * One attach at a time per connection.
+   *
+   * A client is not added to {@link clients} until its PTY has opened. Without
+   * this queue, several TerminalViews mounting in the same renderer turn all
+   * see the same old count, skip eviction, and open their channels together.
+   * That makes the channel budget a statement about completed attaches rather
+   * than the requests actually in flight.
+   */
+  private readonly attachQueues = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly ssh: SshService,
@@ -239,6 +249,28 @@ export class TmuxClientPool {
     sessionName: string,
     opts: AttachSessionOptions,
   ): Promise<AttachSessionResult> {
+    // Keep the capacity decision and the subsequent PTY open atomic with
+    // respect to other attaches on this connection. A rejected attach must not
+    // poison the queue for the request behind it, hence the catch before the
+    // next operation starts.
+    const previous = this.attachQueues.get(connectionId) ?? Promise.resolve();
+    const current = previous
+      .catch(() => undefined)
+      .then(() => this.attachNow(connectionId, sessionName, opts));
+    this.attachQueues.set(connectionId, current);
+    try {
+      return await current;
+    } finally {
+      if (this.attachQueues.get(connectionId) === current) this.attachQueues.delete(connectionId);
+    }
+  }
+
+  /** Perform one attach after this connection's earlier request has finished. */
+  private async attachNow(
+    connectionId: string,
+    sessionName: string,
+    opts: AttachSessionOptions,
+  ): Promise<AttachSessionResult> {
     const held = this.live(connectionId, sessionName);
     log('tmux', 'attach requested', {
       connectionId,
@@ -255,7 +287,7 @@ export class TmuxClientPool {
     }
 
     this.evictDownTo(connectionId, MAX_LIVE_CLIENTS - 1);
-    return this.join(connectionId, sessionName, opts);
+    return this.joinWithCapacityRetry(connectionId, sessionName, opts);
   }
 
   /**
@@ -651,21 +683,53 @@ export class TmuxClientPool {
     const byName = this.clients.get(connectionId);
     if (!byName) return;
     while (this.liveCount(connectionId) > Math.max(0, limit)) {
-      let victim: SessionClient | undefined;
-      for (const held of byName.values()) {
-        if (!this.ssh.shellTracker.get(held.shellId)) continue;
-        if (!victim || held.useOrder < victim.useOrder) victim = held;
-      }
-      if (!victim) return;
-      log('tmux', 'evicting the least recently used client to stay under the channel budget', {
+      if (!this.evictOne(connectionId)) return;
+    }
+  }
+
+  /** Close one live least-recently-used client, if this connection has one. */
+  private evictOne(connectionId: string): boolean {
+    const byName = this.clients.get(connectionId);
+    if (!byName) return false;
+    let victim: SessionClient | undefined;
+    for (const held of byName.values()) {
+      if (!this.ssh.shellTracker.get(held.shellId)) continue;
+      if (!victim || held.useOrder < victim.useOrder) victim = held;
+    }
+    if (!victim) return false;
+    log('tmux', 'evicting the least recently used client to stay under the channel budget', {
+      connectionId,
+      session: victim.session,
+      shellId: victim.shellId,
+      idleMs: Date.now() - victim.lastUsedAt,
+      budget: MAX_LIVE_CLIENTS,
+    });
+    this.ssh.shellClose(victim.shellId);
+    byName.delete(victim.session);
+    return true;
+  }
+
+  /**
+   * Retry one PTY open after freeing a cached client when the SSH server says
+   * its channel ceiling was reached. A single retry is deliberate: it covers
+   * the common lower-MaxSessions/short-lived-channel cases without discarding
+   * every tab when an unrelated server-side policy is refusing PTYs.
+   */
+  private async joinWithCapacityRetry(
+    connectionId: string,
+    sessionName: string,
+    opts: AttachSessionOptions,
+  ): Promise<AttachSessionResult> {
+    try {
+      return await this.join(connectionId, sessionName, opts);
+    } catch (error) {
+      if (!isChannelOpenFailure(error) || !this.evictOne(connectionId)) throw error;
+      log('tmux', 'PTY open hit the SSH channel ceiling; retrying after one eviction', {
         connectionId,
-        session: victim.session,
-        shellId: victim.shellId,
-        idleMs: Date.now() - victim.lastUsedAt,
-        budget: MAX_LIVE_CLIENTS,
+        session: sessionName,
+        error: String(error).slice(0, 200),
       });
-      this.ssh.shellClose(victim.shellId);
-      byName.delete(victim.session);
+      return this.join(connectionId, sessionName, opts);
     }
   }
 
@@ -684,20 +748,20 @@ export class TmuxClientPool {
     opts: AttachSessionOptions,
   ): Promise<AttachSessionResult> {
     const ttyVar = clientTtyVar(this.tokenFor(connectionId, sessionName));
-    // Where is this session's tmux server? The enrichment probe — the same
-    // locator Stop and rename aim with — runs CONCURRENTLY with the join
-    // rather than before it: both are SSH channels against a host the user is
-    // already waiting on for a 1.5-2 s join, and the answer is not needed
-    // until the first redraw or geometry probe, long after either resolves.
-    // Null on ANY failure (probe failed, no helper, tmux predates the
-    // `socket_path` column): the aimed commands degrade to the bare
-    // default-socket spelling, which never made a join worse.
-    const socketLocated = this.helper
-      ? this.helper
-          .locateSession(connectionId, sessionName)
-          .then((located) => (located.status === 'found' ? located.socketPath : null))
-          .catch(() => null)
-      : Promise.resolve(null);
+    // Where is this session's tmux server? Run the optional enrichment probe
+    // BEFORE opening the PTY. It is a short-lived SSH channel, and starting it
+    // concurrently with the shell made the two requests race for the last
+    // MaxSessions slot. A failed probe is only an optimisation failure: the
+    // join continues with the legacy bare-tmux spelling.
+    let socketPath: string | null = null;
+    if (this.helper) {
+      try {
+        const located = await this.helper.locateSession(connectionId, sessionName);
+        if (located.status === 'found') socketPath = located.socketPath;
+      } catch {
+        // The locator is advisory. The PTY join is still useful without it.
+      }
+    }
     // The callbacks need the id of the shell they belong to, and the id only
     // exists once `openTrackedShell` resolves. A `const` captured from the
     // enclosing scope would be in its temporal dead zone for any byte that
@@ -708,26 +772,23 @@ export class TmuxClientPool {
     // loop can deliver the next I/O callback. They are there so the types say
     // so rather than so bytes get dropped.
     let id: ShellId | null = null;
-    const [shellId, socketPath] = await Promise.all([
-      this.ssh.openTrackedShell(connectionId, {
-        command: sessionAttachCommand(sessionName, ttyVar),
-        cols: opts.cols,
-        rows: opts.rows,
-        onData: (data) => {
-          if (id) opts.onData(id, data);
-        },
-        onExit: (exitCode) => {
-          if (!id) return;
-          // The PTY died — the user typed `exit`, the session was killed, the
-          // channel dropped, or this pool evicted it. Drop the record so the
-          // next attach joins rather than handing back a dead client.
-          const byName = this.clients.get(connectionId);
-          if (byName?.get(sessionName)?.shellId === id) byName.delete(sessionName);
-          opts.onExit(id, exitCode);
-        },
-      }),
-      socketLocated,
-    ]);
+    const shellId = await this.ssh.openTrackedShell(connectionId, {
+      command: sessionAttachCommand(sessionName, ttyVar),
+      cols: opts.cols,
+      rows: opts.rows,
+      onData: (data) => {
+        if (id) opts.onData(id, data);
+      },
+      onExit: (exitCode) => {
+        if (!id) return;
+        // The PTY died — the user typed `exit`, the session was killed, the
+        // channel dropped, or this pool evicted it. Drop the record so the
+        // next attach joins rather than handing back a dead client.
+        const byName = this.clients.get(connectionId);
+        if (byName?.get(sessionName)?.shellId === id) byName.delete(sessionName);
+        opts.onExit(id, exitCode);
+      },
+    });
     id = shellId;
     let byName = this.clients.get(connectionId);
     if (!byName) {
@@ -767,4 +828,9 @@ export class TmuxClientPool {
     }
     return token;
   }
+}
+
+/** ssh2's error text for a server-side MaxSessions/channel-open refusal. */
+function isChannelOpenFailure(error: unknown): boolean {
+  return /channel open failure/i.test(error instanceof Error ? error.message : String(error));
 }

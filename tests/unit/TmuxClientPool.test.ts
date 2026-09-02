@@ -31,7 +31,7 @@ interface FakeCall {
   detail: string;
 }
 
-function makeSsh(): {
+function makeSsh(options: { openDelayMs?: number } = {}): {
   ssh: SshService;
   calls: FakeCall[];
   /** Ids handed out by openTrackedShell, in order. */
@@ -44,6 +44,10 @@ function makeSsh(): {
   answerExecWith(result: ExecResult): void;
   /** Make every exec() reject (a dead transport), until overridden. */
   failExecsWith(error: Error): void;
+  /** Make the next PTY open fail with ssh2's channel-ceiling error. */
+  failNextShellOpen(): void;
+  /** Maximum number of PTY opens that overlapped. */
+  peakShellOpens(): number;
 } {
   const calls: FakeCall[] = [];
   const opened: ShellId[] = [];
@@ -51,6 +55,9 @@ function makeSsh(): {
   const execCalls: string[] = [];
   let execResult: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
   let execError: Error | null = null;
+  let shellOpenError: Error | null = null;
+  let shellOpensInFlight = 0;
+  let peakShellOpens = 0;
   let counter = 0;
 
   const ssh = {
@@ -58,11 +65,25 @@ function makeSsh(): {
       get: (id: ShellId) => (liveShells.has(id) ? { id } : undefined),
     },
     openTrackedShell: async (_connectionId: string, o: { command?: string }): Promise<ShellId> => {
-      const id = `shell-${++counter}`;
-      calls.push({ kind: 'open', detail: o.command ?? '' });
-      liveShells.add(id);
-      opened.push(id);
-      return id;
+      if (shellOpenError) {
+        const error = shellOpenError;
+        shellOpenError = null;
+        throw error;
+      }
+      shellOpensInFlight += 1;
+      peakShellOpens = Math.max(peakShellOpens, shellOpensInFlight);
+      try {
+        if (options.openDelayMs !== undefined) {
+          await new Promise<void>((resolve) => setTimeout(resolve, options.openDelayMs));
+        }
+        const id = `shell-${++counter}`;
+        calls.push({ kind: 'open', detail: o.command ?? '' });
+        liveShells.add(id);
+        opened.push(id);
+        return id;
+      } finally {
+        shellOpensInFlight -= 1;
+      }
     },
     shellClose: (id: ShellId): void => {
       calls.push({ kind: 'close', detail: id });
@@ -88,6 +109,10 @@ function makeSsh(): {
     failExecsWith: (error) => {
       execError = error;
     },
+    failNextShellOpen: () => {
+      shellOpenError = new Error('(SSH) Channel open failure: open failed');
+    },
+    peakShellOpens: () => peakShellOpens,
   };
 }
 
@@ -212,6 +237,33 @@ describe('TmuxClientPool', () => {
     expect(pool.liveSessions('c1')).toEqual([]);
     const after = await pool.attach('c1', 'alpha', sink);
     expect(after.switched).toBe(false);
+  });
+
+  it('serializes concurrent attaches so in-flight PTYs count toward the budget', async () => {
+    const harness = makeSsh({ openDelayMs: 5 });
+    const pool = new TmuxClientPool(harness.ssh);
+
+    const results = await Promise.all(
+      ['alpha', 'beta', 'gamma'].map((sessionName) => pool.attach('c1', sessionName, sink)),
+    );
+
+    expect(results.every((result) => !result.switched)).toBe(true);
+    expect(new Set(results.map((result) => result.shellId)).size).toBe(3);
+    expect(harness.peakShellOpens()).toBe(1);
+  });
+
+  it('retries a channel-ceiling failure after evicting one cached tab', async () => {
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh);
+    const first = await pool.attach('c1', 'alpha', sink);
+
+    harness.failNextShellOpen();
+    const second = await pool.attach('c1', 'beta', sink);
+
+    expect(second.switched).toBe(false);
+    expect(second.shellId).not.toBe(first.shellId);
+    expect(closes(harness.calls).map((call) => call.detail)).toEqual([harness.opened[0]]);
+    expect(pool.liveSessions('c1')).toEqual(['beta']);
   });
 });
 

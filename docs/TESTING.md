@@ -31,6 +31,8 @@ transforms bytes → data:
   output parsing (`ss`/`netstat` shapes).
 - Reconnect FSM: given a fake clock + a scripted transport, assert the
   backoff sequence and the `reconnectNow` wake.
+- `TmuxClientPool`: concurrent tab mounts are serialized, and a
+  `Channel open failure` can recover by evicting one cached tab and retrying.
 
 ### Integration
 

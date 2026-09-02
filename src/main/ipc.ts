@@ -87,11 +87,11 @@ export function registerIpcHandlers(deps: {
   // LocalFileReader for why `attachments:readLocal` needs one at all.
   const localFiles = new LocalFileReader();
 
-  // One attached tmux client per connection, so switching sessions is a tmux
-  // operation rather than a fresh SSH channel + login shell + join. The helper
-  // rides along so the pool can locate each session's tmux server at join
-  // time — the aiming its redraw and geometry probe need on hosts where
-  // tmuxctl puts every session on its own server.
+  // One attached tmux client per visited session tab. Returning to a tab is a
+  // renderer visibility change rather than a fresh SSH channel + login shell +
+  // join. The helper rides along so the pool can locate each session's tmux
+  // server at join time — the aiming its redraw and geometry probe need on
+  // hosts where tmuxctl puts every session on its own server.
   const tmuxClients = new TmuxClientPool(ssh, helper);
 
   // Subscribe to forward-state changes and broadcast them to the renderer.
@@ -105,8 +105,8 @@ export function registerIpcHandlers(deps: {
   // nowhere. 'lost' means the transport dropped; 'idle' is a clean
   // disconnect the user asked for.
   ssh.onCloseConnection((connectionId, reason) => {
-    // The shared tmux client dies with its connection; forgetting it here
-    // stops a reconnect that reuses the id from switching a client that is
+    // The pooled tmux clients die with their connection; forgetting them here
+    // stops a reconnect that reuses the id from handing out clients that are
     // no longer on the other end.
     tmuxClients.release(connectionId);
     broadcast(ipc.ssh.state, {

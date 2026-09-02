@@ -113,14 +113,25 @@ maintainer:
 
 1. The session tree is fetched from `pocketshell sessions list --by
    activity` over a normal SSH exec channel (fast, cheap, pollable).
-2. Clicking a session opens an `xterm.js` whose backing SSH **shell**
-   channel runs `tmux attach -t '<name>'`. tmux's real tiled layout renders
-   in the terminal; tmux owns the panes.
-3. Input goes over the PTY (`shell.stdin.write`); resize calls
+2. The first visit to a session mounts an `xterm.js` and opens a tracked SSH
+   **shell** channel. The channel runs the helper-driven tmux join command;
+   tmux's real tiled layout renders in the terminal and owns the panes.
+3. Each visited session tab keeps its own terminal mounted. Switching tabs is
+   therefore a renderer visibility change, not a remote switch or repaint.
+4. Input goes over the PTY (`shell.stdin.write`); resize calls
    `shell.setWindow(cols, rows)`.
-4. For resumable AI conversations, the tree offers `pocketshell sessions
+5. For resumable AI conversations, the tree offers `pocketshell sessions
    resume <id>` which creates a capped tmux session and attaches it the
    same way.
+
+`TmuxClientPool` keeps one tmux client per visited session, keyed beneath the
+SSH connection. Attach requests on one connection are serialized so PTYs that
+are still opening count toward the channel budget. The optional tmux-server
+locator runs before the PTY request, avoiding a race between its short-lived
+exec channel and the shell channel. A connection keeps at most six live tab
+clients and evicts the least-recently-used tab beyond that. If `ssh2` reports a
+channel-open refusal, one LRU client is released and the PTY request is retried
+once; unrelated PTY errors still reach the terminal as errors.
 
 **Why not control mode?** Control mode gives per-pane structured state and
 single-pane rendering — valuable on a phone, less so on a big desktop where
@@ -132,7 +143,8 @@ rewrites.
 
 **PTY contract (matches the Android app):** term `xterm-256color`, initial
 80×24, resized via `setWindow`. The shell channel's stdout → xterm.js
-`write`; xterm.js `onData` → shell stdin.
+`write`; xterm.js `onData` → shell stdin. The six-client ceiling leaves room
+on the same SSH connection for exec, SFTP, and forwarding channels.
 
 ---
 

@@ -172,14 +172,11 @@ const api = {
     /**
      * Show a tmux session in this connection's terminal.
      *
-     * The reply is deliberately NOT a bare ShellId. Main holds one attached
-     * tmux client per connection and moves it between sessions with
-     * `switch-client`, which is about an order of magnitude cheaper than a
-     * second SSH channel plus a login shell plus `tmuxctl` — but it means the
-     * shell that comes back is often the one the caller already has.
-     * `switched: true` says so, and the caller must then leave its terminal
-     * alone: tmux redraws the client itself, and a reset would drop the modes
-     * the still-attached client set.
+     * The reply is deliberately NOT a bare ShellId. Main keeps one attached
+     * tmux client per visited session tab and may hand back the shell that tab
+     * already owns. `switched: true` says that happened, and the caller must
+     * leave its terminal alone: the existing tmux client still owns the screen
+     * and a reset would drop the modes it set.
      */
     attachSession: (payload: {
       connectionId: string;
@@ -194,9 +191,9 @@ const api = {
      *
      * `sessionName` is an optional fence for callers whose write is part of a
      * sequence — pass the session the write is FOR, and main refuses (returns
-     * false) if the shared tmux client has since moved somewhere else. Without
-     * it the bytes go to whatever the shell is showing, which is what a live
-     * keystroke from the focused pane wants.
+     * false) if the pooled shell is no longer associated with that session.
+     * Without it the bytes go to whatever the shell is showing, which is what
+     * a live keystroke from the focused pane wants.
      */
     input: (shellId: ShellId, data: string, sessionName?: string): Promise<boolean> =>
       ipcRenderer.invoke(ipc.shell.input, shellId, data, sessionName),
