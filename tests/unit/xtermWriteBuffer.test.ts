@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import headless from '@xterm/headless';
-import { resumeWriteBufferAfterError } from '../../src/renderer/xtermWriteBuffer';
+import {
+  hasCompleteViewport,
+  repairIncompleteViewport,
+  resumeWriteBufferAfterError,
+} from '../../src/renderer/xtermWriteBuffer';
 
 /**
  * The write-loop recovery, against the REAL xterm internals.
@@ -32,7 +36,7 @@ import { resumeWriteBufferAfterError } from '../../src/renderer/xtermWriteBuffer
 const { Terminal } = headless;
 
 function makeTerminal(): headless.Terminal {
-  return new Terminal({ cols: 40, rows: 6, scrollback: 200, allowProposedApi: true });
+  return new Terminal({ cols: 40, rows: 6, scrollback: 200 });
 }
 
 /**
@@ -120,6 +124,51 @@ describe('resumeWriteBufferAfterError', () => {
 
     await writeParsed(term, 'still alive');
     expect(resumeWriteBufferAfterError(term)).toBe(false); // healthy again
+    term.dispose();
+  });
+});
+
+describe('xterm viewport invariant repair', () => {
+  it('backfills missing lines exposed by a real row-growing resize', async () => {
+    const term = new Terminal({ cols: 39, rows: 18, scrollback: 100 });
+    const core = (term as unknown as {
+      _core: {
+        rows: number;
+        buffers: { active: { ybase: number; y: number; lines: { length: number; get: (row: number) => unknown } } };
+      };
+    })._core;
+    const active = core.buffers.active;
+
+    // This is the masked precondition from xtermjs/xterm.js#6063: the logical
+    // length is shorter than the viewport while stale CircularList backing
+    // slots can still make reads appear valid. The actual resize below is what
+    // takes the broken row-decrement path and leaves the missing viewport.
+    await writeParsed(term, Array.from({ length: 22 }, (_, i) => `line-${i}\r\n`).join('') + '\x1b[4A');
+    expect(active.ybase).toBe(5);
+    expect(active.y).toBe(13);
+    active.lines.length = 18;
+    term.resize(37, 23);
+
+    expect(active.lines.length).toBeLessThan(active.ybase + core.rows);
+    expect(hasCompleteViewport(term)).toBe(false);
+    expect(repairIncompleteViewport(term)).toBe(true);
+    expect(hasCompleteViewport(term)).toBe(true);
+
+    // Backfill preserves the lines already parsed and makes every newly
+    // exposed row safe for the same erase/print sequence that crashed xterm.
+    expect(active.lines.get(0)).toBeDefined();
+    for (let row = 18; row <= 22; row++) {
+      await writeParsed(term, `\x1b[${row + 1};1H\x1b[2Kbottom-${row}`);
+      expect(active.lines.get(row)).toBeDefined();
+    }
+
+    term.dispose();
+  });
+
+  it('leaves a healthy terminal alone', () => {
+    const term = makeTerminal();
+    expect(hasCompleteViewport(term)).toBe(true);
+    expect(repairIncompleteViewport(term)).toBe(false);
     term.dispose();
   });
 });

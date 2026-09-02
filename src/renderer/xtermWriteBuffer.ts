@@ -60,6 +60,104 @@ function internals(term: TermLike): WriteBufferInternals | null {
   return w as unknown as WriteBufferInternals;
 }
 
+interface CoreBufferInternals {
+  lines: {
+    length: number;
+    push: (line: unknown) => void;
+  };
+  ybase: number;
+  getBlankLine: (attr: unknown) => unknown;
+  getNullCell: () => unknown;
+}
+
+interface CoreBufferState {
+  buffer: CoreBufferInternals;
+  rows: number;
+}
+
+/** Read the private core buffer facts needed to validate xterm's invariant. */
+function coreBufferState(term: TermLike): CoreBufferState | null {
+  const core = (term as { _core?: unknown } | null | undefined)?.['_core'];
+  if (typeof core !== 'object' || core === null) return null;
+
+  const value = core as {
+    rows?: unknown;
+    buffers?: { active?: unknown };
+  };
+  const active = value.buffers?.active;
+  if (typeof active !== 'object' || active === null) return null;
+
+  const rawBuffer = active as Record<string, unknown>;
+  const lines = rawBuffer['lines'];
+  const getBlankLine = rawBuffer['getBlankLine'];
+  const getNullCell = rawBuffer['getNullCell'];
+  const length = (lines as { length?: unknown } | null)?.length;
+  const ybase = rawBuffer['ybase'];
+  if (
+    typeof value.rows !== 'number' || !Number.isInteger(value.rows) || value.rows < 1 ||
+    typeof ybase !== 'number' || !Number.isInteger(ybase) || ybase < 0 ||
+    typeof length !== 'number' || !Number.isInteger(length) || length < 0 ||
+    typeof lines !== 'object' || lines === null ||
+      typeof (lines as { push?: unknown }).push !== 'function' ||
+    typeof getBlankLine !== 'function' || typeof getNullCell !== 'function'
+  ) {
+    return null;
+  }
+
+  return {
+    rows: value.rows,
+    // Keep the real Buffer as the receiver for getNullCell/getBlankLine;
+    // those methods use other private fields on `this` when constructing a
+    // line. The cast is safe only after the shape checks above.
+    buffer: rawBuffer as unknown as CoreBufferInternals,
+  };
+}
+
+/**
+ * Whether xterm has a live line backing every row of the active viewport.
+ *
+ * This reads `_core.buffers.active` instead of `term.buffer.active`: xterm
+ * 6.0.0 gates the latter behind `allowProposedApi`, which the renderer does not
+ * enable. The logical length matters here rather than `lines.get()`:
+ * CircularList can expose stale backing-array entries beyond that logical
+ * length, which is how xterm 6.0.0 hides the broken state until a later scroll
+ * operation.
+ */
+export function hasCompleteViewport(term: TermLike): boolean {
+  const state = coreBufferState(term);
+  return state !== null && state.buffer.lines.length >= state.buffer.ybase + state.rows;
+}
+
+/**
+ * Backfill a terminal whose active buffer invariant is already broken.
+ *
+ * xterm 6.0.0's row-growing resize can consume scrollback by decrementing
+ * `ybase` without pushing replacement lines. Recreate the same blank-line
+ * construction used by xterm's own resize path until every viewport row has a
+ * logical line. This preserves parser state and existing screen contents; no
+ * terminal reset or remote repaint is needed.
+ */
+export function repairIncompleteViewport(term: TermLike): boolean {
+  const state = coreBufferState(term);
+  if (!state || state.buffer.lines.length >= state.buffer.ybase + state.rows) return false;
+
+  try {
+    const nullCell = state.buffer.getNullCell.call(state.buffer);
+    const targetLength = state.buffer.ybase + state.rows;
+    while (state.buffer.lines.length < targetLength) {
+      const oldLength = state.buffer.lines.length;
+      const blankLine = state.buffer.getBlankLine.call(state.buffer, nullCell);
+      if (blankLine === null || blankLine === undefined) return false;
+      state.buffer.lines.push(blankLine);
+      if (state.buffer.lines.length <= oldLength) return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return hasCompleteViewport(term);
+}
+
 /**
  * Try to restart a wedged write loop.
  *

@@ -47,7 +47,10 @@ import { isTypingKey } from '../../shared/composerText';
 import { isShortcut } from '../../shared/shortcuts';
 import { ParseStallMonitor, type ParseStallReport } from '../parseStall';
 import { recordDiagDetail, msSinceLastUnhandledError } from '../diag';
-import { resumeWriteBufferAfterError } from '../xtermWriteBuffer';
+import {
+  repairIncompleteViewport,
+  resumeWriteBufferAfterError,
+} from '../xtermWriteBuffer';
 import type { ConnectionId, GeometryProbe, ShellId } from '../../shared/types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -282,6 +285,37 @@ function plausibleGrid(size: { cols: number; rows: number } | undefined): boolea
   return size.cols >= MIN_REMOTE_COLS && size.rows >= MIN_REMOTE_ROWS;
 }
 
+/**
+ * Fit only a pane-sized grid, then repair xterm's active buffer if the resize
+ * exposed its 6.0.0 missing-line state.
+ *
+ * `FitAddon.fit()` eventually calls `Terminal.resize()`. In the shipped xterm
+ * 6.0.0 a row-growing resize can leave the active buffer's logical line list
+ * shorter than `ybase + rows`, which makes a later tmux reverse-index/scroll
+ * throw `start argument out of range`. Keep the repair at the app's single fit
+ * boundary so every resize route gets the same guard.
+ */
+function fitTerminal(): void {
+  if (!term || !fitAddon) return;
+  const proposed = fitAddon.proposeDimensions();
+  if (!plausibleGrid(proposed)) return;
+  fitAddon.fit();
+  repairTerminalBufferIfNeeded();
+}
+
+/**
+ * Repair xterm's 6.0.0 missing-viewport state before it can parse more output.
+ *
+ * The helper reads xterm's private core buffer because xterm 6.0.0 gates
+ * `term.buffer.active` behind `allowProposedApi`, which the renderer does not
+ * enable. It only appends the missing blank lines, preserving parser state and
+ * the existing screen; no reset or remote repaint is needed.
+ */
+function repairTerminalBufferIfNeeded(): void {
+  if (!term) return;
+  repairIncompleteViewport(term);
+}
+
 /** True between mousedown inside the terminal and the mouse-up that ends it. */
 let selecting = false;
 
@@ -434,6 +468,7 @@ function bindShellStream(): void {
  */
 function paneWrite(data: string | Uint8Array): void {
   if (!term) return;
+  repairTerminalBufferIfNeeded();
   stallMonitor?.write(term, data);
 }
 
@@ -543,7 +578,7 @@ function unbindShellStream(): void {
  */
 async function showTarget(): Promise<void> {
   if (!term || !containerEl.value) return;
-  fitAddon?.fit();
+  fitTerminal();
   const cols = term.cols;
   const rows = term.rows;
 
@@ -631,7 +666,7 @@ async function showTarget(): Promise<void> {
   // `redraw` because this is an edge where the size may legitimately not have
   // moved — the same PTY handed back for a tab that is already up — and tmux
   // repaints nothing in that case, including any band it had stopped owning.
-  fitAddon?.fit();
+  fitTerminal();
   pushGeometry({ redraw: true });
   term.focus();
 }
@@ -896,7 +931,7 @@ onMounted(async () => {
     }),
   );
   term.open(containerEl.value!);
-  fitAddon.fit();
+  fitTerminal();
 
   // Output bytes are observed from here on: one monitor per terminal, for the
   // terminal's whole life, across session re-points (it watches `term`, which
@@ -999,7 +1034,7 @@ function scheduleFit(): void {
     }
     const wasHidden = paneHidden;
     paneHidden = false;
-    fitAddon?.fit();
+    fitTerminal();
     // Coming back to a tab whose PTY the pool evicted to stay under the channel
     // budget. Re-joining on this EDGE rather than on the exit itself is what
     // keeps it from fighting the user: a session they exited on purpose stays
@@ -1150,7 +1185,7 @@ watch(
  * drifted from the grid.
  */
 function resyncDisplay(): void {
-  fitAddon?.fit();
+  fitTerminal();
   sent = null;
   pushGeometry({ redraw: true });
 }

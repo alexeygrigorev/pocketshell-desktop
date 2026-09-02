@@ -250,10 +250,11 @@ The renderer's unhandled errors reach the desktop log through
 `diag.log` (renderer/diag.ts), but one failure class needs more than a
 stack trace: xterm's write loop is a `setTimeout` queue, and when a byte
 sequence makes the parser throw — an xterm-internal buffer invariant,
-broken by the remote's region/scroll-heavy TUI output, not by our code —
-the throw kills the loop and every pane fed by it silently stops
-rendering. The thrown error lands in the log, but with no pane, no
-bytes, and no hint that anything but a one-off glitch happened.
+exposed by region/scroll-heavy TUI output arriving while the terminal is
+being fitted — the xterm 6.0.0 `Buffer.resize`/write ordering bug behind
+`start argument out of range` — the throw kills the loop and the pane fed by
+it silently stops rendering. The thrown error lands in the log, but with no
+pane, no bytes, and no hint that anything but a one-off glitch happened.
 
 So every byte a `TerminalView` feeds xterm goes through
 `ParseStallMonitor` (renderer/parseStall.ts), which wraps each chunk
@@ -265,6 +266,16 @@ session and connection, the terminal's buffer state (line count, baseY,
 cursor), the exact stalled bytes in printable and hex form, and how
 much output was queued behind them. The same report drives the diag
 banner, so a frozen pane says so instead of just stopping.
+
+Every fit and every incoming chunk also checks the active core buffer's
+`lines.length >= ybase + core.rows` invariant. If xterm has already exposed an
+incomplete viewport, `renderer/xtermWriteBuffer.ts` appends the same blank lines
+that xterm's own resize path uses before another chunk can parse. The helper
+uses `_core.buffers.active` rather than the proposed `term.buffer` API, so it
+does not require `allowProposedApi`; it preserves parser state and needs no
+reset or remote repaint. The focused resize regression lives in
+`tests/unit/xtermWriteBuffer.test.ts`; the fixed-seed stress reproducer remains
+`scripts/xterm-fuzz.mjs`.
 
 Recovery (renderer/xtermWriteBuffer.ts): a stall with a thrown
 unhandled error just before it is a parser death, and
