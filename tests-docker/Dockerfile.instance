@@ -9,9 +9,6 @@ FROM node:22-alpine3.20
 
 ARG POCKETSHELL_VERSION=0.4.44
 ARG TMUXCTL_VERSION=0.3.5
-ARG INSTALL_REAL_AGENTS=false
-ARG CODEX_VERSION=latest
-ARG CLAUDE_CODE_VERSION=latest
 
 RUN apk add --no-cache \
       bash \
@@ -51,36 +48,35 @@ RUN chmod 600 /home/testuser/.ssh/authorized_keys /root/test_key /etc/ssh/ssh_ho
     && chown -R testuser:testuser /home/testuser/.ssh \
     # Alpine's sshd starts the user's shell as a login shell. Keep the helper
     # tools available to both PocketShell and a plain `ssh alias command`.
-    && printf '%s\n' 'export PATH="/home/testuser/.local/bin:$PATH"' >> /etc/profile
+    # The real provider CLIs are optional and live in a separate named volume;
+    # make that volume's bin directory visible to login shells only when the
+    # opt-in flag is enabled. The default image must continue to use stubs.
+    && printf '%s\n' \
+      'case "${POCKETSHELL_REAL_AGENTS:-false}" in' \
+      '  true|1|yes|TRUE|YES) export PATH="/home/testuser/.agent-tools/bin:/home/testuser/.local/bin:$PATH" ;;' \
+      '  *) export PATH="/home/testuser/.local/bin:$PATH" ;;' \
+      'esac' >> /etc/profile
 
 COPY fixtures/ /opt/pocketshell-fixtures/
 COPY traffic-server.py /usr/local/bin/ps-traffic-server
 COPY helper-entrypoint.sh /usr/local/bin/pocketshell-helper-entrypoint
 COPY instance-entrypoint.sh /usr/local/bin/pocketshell-instance-entrypoint
+COPY install-real-agents.sh /usr/local/bin/pocketshell-install-real-agents
 
-COPY agent-bin/ /opt/pocketshell-agent-stubs/
+COPY agent-bin/ /usr/local/bin/
 
 # Keep the default image deterministic and credential-free. A local developer
-# can opt into the real provider CLIs at build time; they are installed after
-# the stubs so their commands are the ones on PATH in that mode.
-RUN install -m 0755 /opt/pocketshell-agent-stubs/opencode /usr/local/bin/opencode \
-    && install -m 0755 /opt/pocketshell-agent-stubs/quse /usr/local/bin/quse \
-    && case "$INSTALL_REAL_AGENTS" in \
-         true|1|yes) \
-           npm install --global --no-fund --no-audit \
-             "@openai/codex@${CODEX_VERSION}" \
-             "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" ;; \
-         *) \
-           install -m 0755 /opt/pocketshell-agent-stubs/claude /usr/local/bin/claude \
-           && install -m 0755 /opt/pocketshell-agent-stubs/codex /usr/local/bin/codex ;; \
-       esac
-
+# opts into the real provider CLIs at runtime; their npm package tree belongs
+# to the named agent volume, so image rebuilds cannot discard it.
 RUN chmod +x \
+      /usr/local/bin/claude \
+      /usr/local/bin/codex \
       /usr/local/bin/opencode \
       /usr/local/bin/quse \
       /usr/local/bin/ps-traffic-server \
       /usr/local/bin/pocketshell-helper-entrypoint \
-      /usr/local/bin/pocketshell-instance-entrypoint
+      /usr/local/bin/pocketshell-instance-entrypoint \
+      /usr/local/bin/pocketshell-install-real-agents
 
 EXPOSE 22 8021
 

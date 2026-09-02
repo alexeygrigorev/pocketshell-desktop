@@ -24,19 +24,22 @@ services:
       args:
         POCKETSHELL_VERSION: ${POCKETSHELL_VERSION:-0.4.44}
         TMUXCTL_VERSION: ${TMUXCTL_VERSION:-0.3.5}
-        INSTALL_REAL_AGENTS: ${POCKETSHELL_REAL_AGENTS:-false}
-        CODEX_VERSION: ${POCKETSHELL_CODEX_VERSION:-latest}
-        CLAUDE_CODE_VERSION: ${POCKETSHELL_CLAUDE_CODE_VERSION:-latest}
     image: pocketshell-test:instance
     environment:
       PS_TRAFFIC_PORT: ${PS_TRAFFIC_PORT:-8021}
+      POCKETSHELL_REAL_AGENTS: ${POCKETSHELL_REAL_AGENTS:-false}
+      POCKETSHELL_CODEX_VERSION: ${POCKETSHELL_CODEX_VERSION:-latest}
+      POCKETSHELL_CLAUDE_CODE_VERSION: ${POCKETSHELL_CLAUDE_CODE_VERSION:-latest}
     ports:
       - "${POCKETSHELL_SSH_PORT:-3222}:22"
     volumes:
       - instance-home:/home/testuser
+      - instance-agents:/home/testuser/.agent-tools
     healthcheck:
       <<: *ssh-healthcheck
 
 volumes:
   instance-home:
     name: pocketshell-test-instance-home
+  instance-agents:
+    name: pocketshell-test-instance-agents

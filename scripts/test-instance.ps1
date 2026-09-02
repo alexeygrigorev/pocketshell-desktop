@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('build', 'start', 'stop', 'reset', 'status', 'logs', 'shell')]
+    [ValidateSet('build', 'start', 'update-agents', 'stop', 'reset', 'status', 'logs', 'shell')]
     [string]$Action = 'start'
 )
 
@@ -28,6 +28,9 @@ switch ($Action) {
     }
     'start' {
         Invoke-Compose up -d --build --wait instance
+    }
+    'update-agents' {
+        Invoke-Compose exec --user testuser instance /usr/local/bin/pocketshell-install-real-agents --force
     }
     'stop' {
         Invoke-Compose stop instance

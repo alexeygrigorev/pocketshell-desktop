@@ -8,12 +8,13 @@ COMPOSE=(docker compose --project-name pocketshell-local --file "$COMPOSE_FILE")
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/test-instance.sh <build|start|stop|reset|status|logs|shell>
+Usage: bash scripts/test-instance.sh <build|start|update-agents|stop|reset|status|logs|shell>
 
   build   Build pocketshell-test:instance.
   start   Build if needed, start the instance, and wait for SSH health.
+  update-agents  Refresh real Codex and Claude CLIs in the agent volume.
   stop    Stop the instance but keep its /home/testuser volume.
-  reset   Remove the instance and its named home volume, then start clean.
+  reset   Remove the instance and its named state volumes, then start clean.
   status  Show container and health status.
   logs    Follow the instance logs (Ctrl-C to stop following).
   shell   Open a shell as testuser inside the instance.
@@ -32,6 +33,9 @@ case "$action" in
     ;;
   start)
     "${COMPOSE[@]}" up -d --build --wait instance
+    ;;
+  update-agents)
+    "${COMPOSE[@]}" exec --user testuser instance /usr/local/bin/pocketshell-install-real-agents --force
     ;;
   stop)
     "${COMPOSE[@]}" stop instance

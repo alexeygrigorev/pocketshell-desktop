@@ -149,7 +149,7 @@ needed by the stubs.
 
 The default image intentionally keeps `codex` and `claude` as deterministic
 stubs so normal tests never make provider requests. To install the real CLIs
-in the standalone development instance, rebuild it with the opt-in flag:
+in the standalone development instance, start it with the opt-in flag:
 
 ```bash
 POCKETSHELL_REAL_AGENTS=true bash scripts/test-instance.sh start
@@ -162,9 +162,28 @@ $env:POCKETSHELL_REAL_AGENTS = 'true'
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-instance.ps1 start
 ```
 
-The Compose build also accepts `POCKETSHELL_CODEX_VERSION` and
+The packages are installed at first boot into the named
+`pocketshell-test-instance-agents` volume, mounted at
+`/home/testuser/.agent-tools`. They are not part of the image layer, so a
+container recreation or image rebuild does not discard the installed CLIs.
+The Compose environment also accepts `POCKETSHELL_CODEX_VERSION` and
 `POCKETSHELL_CLAUDE_CODE_VERSION`; leave them at `latest` for a local demo or
-set explicit versions when you need a repeatable image. Check the result with:
+set explicit versions when you need a repeatable install. A normal `start`
+installs a missing or changed requested version. To force-refresh both
+packages (including a newer `latest`), run:
+
+```bash
+bash scripts/test-instance.sh update-agents
+```
+
+PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-instance.ps1 update-agents
+```
+
+Keep `POCKETSHELL_REAL_AGENTS=true` in the same shell when running either
+command. Check the result with:
 
 ```bash
 ssh pocketshell-local 'node --version; codex --version; claude --version'
@@ -177,10 +196,13 @@ ssh -t pocketshell-local codex
 ssh -t pocketshell-local claude
 ```
 
-Complete each CLI's own sign-in flow. The named `/home/testuser` volume keeps
-the resulting user-scoped configuration across `stop`/`start`; `reset` removes
-it. Real CLIs need internet access and the relevant OpenAI/Anthropic account or
-API billing. The normal test fleet continues to use its credential-free stubs.
+Complete each CLI's own sign-in flow. The named
+`pocketshell-test-instance-home` volume keeps the resulting user-scoped
+configuration (`~/.codex`, `~/.claude`, and npm's cache) across `stop`/`start`,
+while the agent volume keeps the installed package tree. `reset` removes both
+volumes. Real CLIs need internet access and the relevant OpenAI/Anthropic
+account or API billing. The normal test fleet continues to use its
+credential-free stubs.
 
 ### Stop, reset, and inspect
 
@@ -188,15 +210,17 @@ API billing. The normal test fleet continues to use its credential-free stubs.
 bash scripts/test-instance.sh stop    # stop; preserve the remote home
 bash scripts/test-instance.sh shell   # open /bin/sh as testuser
 bash scripts/test-instance.sh logs    # follow sshd/fixture logs
-bash scripts/test-instance.sh reset   # delete the home volume and start clean
+bash scripts/test-instance.sh reset   # delete state volumes and start clean
 ```
 
 The PowerShell wrapper accepts the same actions (`stop`, `shell`, `logs`, and
-`reset`). The Compose volume `pocketshell-test-instance-home` preserves files
-and helper state across `stop`/`start`; the entrypoint recreates the seed tmux
-sessions after a container restart. `reset` is deliberately destructive and
-removes that named volume before creating a clean instance. Use reset after
-changing the image or when a test needs a pristine remote filesystem.
+`reset`). The Compose volumes `pocketshell-test-instance-home` and
+`pocketshell-test-instance-agents` preserve files, accounts, helper state and
+the opt-in agent installs across `stop`/`start`; the entrypoint recreates the
+seed tmux sessions after a container restart. `reset` is deliberately
+destructive and removes both named volumes before creating a clean instance.
+Use reset after changing the image or when a test needs a pristine remote
+filesystem.
 
 The standalone image uses the checked-in `tests-docker/test_host_key` as its
 SSH host identity, so rebuilding or recreating the container does not change
