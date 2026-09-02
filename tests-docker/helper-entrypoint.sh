@@ -16,6 +16,13 @@ su testuser -c '
   fi
 '
 
+# The standalone local instance supplies an overlay after the server exists.
+# The normal helper fixture leaves this unset, so its deterministic defaults
+# and tests are unchanged.
+if [ -n "${POCKETSHELL_TMUX_OVERLAY:-}" ]; then
+  su -m testuser -c "tmux source-file '$POCKETSHELL_TMUX_OVERLAY'"
+fi
+
 # Start the deterministic traffic responder (inherited from the :ssh layer).
 # This image replaces that layer's CMD, so without this line the helper — the
 # image the E2E screenshots come from — would keep showing "0 B" for every

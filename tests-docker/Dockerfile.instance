@@ -62,6 +62,7 @@ COPY traffic-server.py /usr/local/bin/ps-traffic-server
 COPY helper-entrypoint.sh /usr/local/bin/pocketshell-helper-entrypoint
 COPY instance-entrypoint.sh /usr/local/bin/pocketshell-instance-entrypoint
 COPY install-real-agents.sh /usr/local/bin/pocketshell-install-real-agents
+COPY tmux.conf /opt/pocketshell-tmux.conf
 
 COPY agent-bin/ /usr/local/bin/
 

@@ -22,4 +22,10 @@ case "${POCKETSHELL_REAL_AGENTS:-false}" in
     ;;
 esac
 
+# Ask the shared helper entrypoint to overlay the local-test defaults after it
+# has created the first tmux server and its seed sessions. This keeps the
+# user's config intact while making wheel scrolling and a useful history limit
+# reliable on every container start.
+export POCKETSHELL_TMUX_OVERLAY=/opt/pocketshell-tmux.conf
+
 exec /usr/local/bin/pocketshell-helper-entrypoint

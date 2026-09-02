@@ -145,6 +145,15 @@ responder. The entrypoint creates `~/git` and `~/tmp`, then starts the `main`
 and `build` tmux sessions. No provider credentials or network access are
 needed by the stubs.
 
+### Tmux scrolling
+
+The standalone instance applies `tests-docker/tmux.conf` whenever it starts:
+mouse mode is enabled, so the wheel scrolls the tmux pane history, and
+`history-limit` is set to 100,000 lines. The overlay is applied after any
+existing `~/.tmux.conf` without replacing that file, so local customisations
+remain in the home volume. Recreate or restart the instance after changing the
+checked-in config.
+
 ### Optional real Codex and Claude
 
 The default image intentionally keeps `codex` and `claude` as deterministic
