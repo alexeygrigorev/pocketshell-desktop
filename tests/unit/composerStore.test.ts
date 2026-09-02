@@ -79,6 +79,18 @@ describe('draft lifecycle', () => {
     expect(composer.states[OTHER]?.draft).toBe('draft for build');
   });
 
+  it('moves all session records when reconnect replaces the connection id', () => {
+    composer.setDraft(KEY, 'half-written prompt');
+    composer.recordSent(OTHER, 'previous prompt');
+
+    composer.rekeyConnection('conn-1', 'conn-2');
+
+    expect(composer.states[KEY]).toBeUndefined();
+    expect(composer.states[OTHER]).toBeUndefined();
+    expect(composer.states['conn-2/main']?.draft).toBe('half-written prompt');
+    expect(composer.states['conn-2/build']?.history).toEqual(['previous prompt']);
+  });
+
   it('a session that was never touched has an empty draft', () => {
     composer.setDraft(KEY, 'only in main');
     expect(composer.ensure(OTHER).draft).toBe('');

@@ -312,7 +312,7 @@ export const useComposerStore = defineStore('composer', () => {
   // Access
   // -------------------------------------------------------------------------
 
-  /** The key a composer record lives under. Mirrors `"$hostId/$sessionName"`. */
+  /** The key a composer record lives under: `"$connectionId/$sessionName"`. */
   function targetKey(connectionId: string | null, sessionName: string): string {
     return `${connectionId ?? 'none'}/${sessionName}`;
   }
@@ -544,6 +544,15 @@ export const useComposerStore = defineStore('composer', () => {
     }
   }
 
+  /** Remove a batch by identity, even if reconnect moved its key. */
+  function removeBatch(batch: Batch): void {
+    for (const [key, current] of batches) {
+      if (current !== batch) continue;
+      batches.delete(key);
+      return;
+    }
+  }
+
   /**
    * The body of {@link stage}, split out so the promise the batch publishes can
    * be settled in one `finally` rather than at each of the five ways staging
@@ -569,7 +578,7 @@ export const useComposerStore = defineStore('composer', () => {
       composerTiming.uploadTimeoutMs,
     );
 
-    if (batches.get(key) === batch) batches.delete(key);
+    removeBatch(batch);
     // Cancelled batches land silently: no tiles, no banner. See `Batch`.
     if (batch.cancel !== null) return;
     s.uploadingCount = 0;
@@ -788,6 +797,44 @@ export const useComposerStore = defineStore('composer', () => {
   }
 
   /**
+   * Carry every session record from a dead transport handle to its replacement.
+   *
+   * A connection id is deliberately part of the persisted key so two hosts
+   * with a session called `main` can never share a draft. It is not, however,
+   * the identity of the session itself: reconnect mints a new id for the same
+   * host. Move the whole connection prefix before the connection store exposes
+   * the replacement, so the mounted composer never renders a blank record in
+   * between.
+   *
+   * Staging batches move with their state as well. The IPC request may still be
+   * completing against the old transport; keeping its batch under the new key
+   * means Send continues to wait for that result instead of racing it.
+   */
+  function rekeyConnection(fromConnectionId: ConnectionId, toConnectionId: ConnectionId): void {
+    if (fromConnectionId === toConnectionId) return;
+
+    const fromPrefix = `${fromConnectionId}/`;
+    const toPrefix = `${toConnectionId}/`;
+    const stateEntries = Object.entries(states.value).filter(([key]) => key.startsWith(fromPrefix));
+    const batchEntries = [...batches.entries()].filter(([key]) => key.startsWith(fromPrefix));
+    if (stateEntries.length === 0 && batchEntries.length === 0) return;
+
+    const next = { ...states.value };
+    for (const [key, sessionState] of stateEntries) {
+      delete next[key];
+      next[`${toPrefix}${key.slice(fromPrefix.length)}`] = sessionState;
+    }
+    states.value = next;
+
+    for (const [key, batch] of batchEntries) {
+      if (batches.get(key) !== batch) continue;
+      batches.delete(key);
+      batches.set(`${toPrefix}${key.slice(fromPrefix.length)}`, batch);
+    }
+    schedulePersist();
+  }
+
+  /**
    * Drop a session's record entirely — the session it belonged to is GONE
    *
    *
@@ -914,6 +961,7 @@ export const useComposerStore = defineStore('composer', () => {
     seedAttachment,
     removeAttachment,
     rekey,
+    rekeyConnection,
     forget,
     canSend,
     composedPayload,

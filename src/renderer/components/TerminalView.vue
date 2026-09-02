@@ -168,6 +168,25 @@ const containerEl = ref<HTMLDivElement | null>(null);
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let shellId: ShellId | null = null;
+
+/**
+ * Re-attaching a PTY must not redirect a keystroke from another surface.
+ *
+ * A reconnect can finish after the prompt composer has taken focus, and the
+ * old unconditional `term.focus()` then made the next character land in the
+ * terminal. Only restore focus for a visible pane when it already owns focus,
+ * or when the document has no meaningful focused control (the initial mount).
+ */
+function mayRestoreTerminalFocus(): boolean {
+  const container = containerEl.value;
+  if (!container || container.clientWidth <= 0 || container.clientHeight <= 0) {
+    return false;
+  }
+  const active = document.activeElement;
+  if (active && container.contains(active)) return true;
+  return active === null || active === document.body || active === document.documentElement;
+}
+
 /**
  * Watches every byte this component feeds xterm, so a parser death is a
  * REPORT (which pane, which bytes, what buffer state) instead of a pane that
@@ -668,7 +687,7 @@ async function showTarget(): Promise<void> {
   // repaints nothing in that case, including any band it had stopped owning.
   fitTerminal();
   pushGeometry({ redraw: true });
-  term.focus();
+  if (mayRestoreTerminalFocus()) term.focus();
 }
 
 /** Message text for a thrown value, however it was thrown. */

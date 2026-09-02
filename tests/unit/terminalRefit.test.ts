@@ -30,6 +30,8 @@ import { nextTick } from 'vue';
 
 /** Every `fit()` the component asks for, in order. */
 let fits = 0;
+/** Every `focus()` the component asks xterm for. */
+let focuses = 0;
 /** The live options object of the mounted terminal, so writes can be read. */
 let termOptions: Record<string, unknown> = {};
 /** Pending animation-frame callbacks, run by hand so timing is deterministic. */
@@ -49,7 +51,9 @@ vi.mock('@xterm/xterm', () => ({
     }
     loadAddon(): void {}
     open(): void {}
-    focus(): void {}
+    focus(): void {
+      focuses++;
+    }
     reset(): void {}
     write(): void {}
     dispose(): void {}
@@ -161,6 +165,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   localStorage.clear();
   fits = 0;
+  focuses = 0;
   termOptions = {};
   frames = [];
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback): number => {
@@ -284,5 +289,21 @@ describe('the terminal re-fits when the cell or the viewport changes', () => {
     // The option is still applied, so the fit that follows on re-show measures
     // the right cell.
     expect(termOptions['fontSize']).toBe(24);
+  });
+
+  it('does not steal focus from another input when reconnect reattaches the pane', async () => {
+    const wrapper = await mountTerminal();
+    const composerInput = document.createElement('textarea');
+    document.body.appendChild(composerInput);
+    composerInput.focus();
+    const focusesBeforeReconnect = focuses;
+
+    await wrapper.setProps({ connectionId: 'conn-2' });
+    for (let i = 0; i < 10; i++) await nextTick();
+
+    expect(focuses).toBe(focusesBeforeReconnect);
+    expect(document.activeElement).toBe(composerInput);
+    composerInput.remove();
+    wrapper.unmount();
   });
 });

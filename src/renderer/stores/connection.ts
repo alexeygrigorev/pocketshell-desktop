@@ -11,6 +11,7 @@ import { MAX_ATTEMPTS, ReconnectBackoff } from '../../shared/reconnectBackoff';
 import { useFilesStore } from './files';
 import { useSessionsStore } from './sessions';
 import { useProjectsStore } from './projects';
+import { useComposerStore } from './composer';
 
 /**
  * Connection store: owns the active connection to a host and its bootstrap
@@ -66,6 +67,12 @@ export const useConnectionStore = defineStore('connection', () => {
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let countdownTimer: ReturnType<typeof setInterval> | null = null;
   /**
+   * The old id while a reconnect is replacing it. The explicit close emits an
+   * `idle` state asynchronously; ignore that stale event while the workspace
+   * is still mounted on the old id, or it can hide the reconnect banner.
+   */
+  let replacingConnectionId: ConnectionId | null = null;
+  /**
    * Bumped on every cancellation, so a dial that was already in flight when
    * the user disconnected (or hit Retry now) cannot finish into state that no
    * longer wants it — the same generation guard the auto-connect latch uses.
@@ -96,7 +103,12 @@ export const useConnectionStore = defineStore('connection', () => {
    * and this must outlive any individual view.
    */
   api.ssh.onState((payload) => {
-    if (payload.connectionId !== connectionId.value) return;
+    if (
+      payload.connectionId !== connectionId.value ||
+      payload.connectionId === replacingConnectionId
+    ) {
+      return;
+    }
     state.value = payload.state;
     if (payload.state === 'lost') {
       error.value = 'Connection lost';
@@ -267,14 +279,16 @@ export const useConnectionStore = defineStore('connection', () => {
     // attempt position: a user pressing the button 4s into a 5s wait is saying
     // "now", not "start the curve over" — the schedule only resets on success.
     cancelPendingRetryTimer();
-    if (connectionId.value) {
+    const previousConnectionId = connectionId.value;
+    if (previousConnectionId) {
+      replacingConnectionId = previousConnectionId;
       // Best-effort: main has usually torn the record down already, and a
       // close on an unknown id must not stop the re-dial.
-      await api.ssh.close(connectionId.value).catch(() => undefined);
-      connectionId.value = null;
+      await api.ssh.close(previousConnectionId).catch(() => undefined);
     }
-    const ok = await connect(host, lastKeyPath.value);
+    const ok = await connect(host, lastKeyPath.value, previousConnectionId ?? undefined);
     if (ok && connectionId.value) {
+      replacingConnectionId = null;
       backoff?.reset();
       backoff = null;
       autoRetry.value = null;
@@ -345,7 +359,11 @@ export const useConnectionStore = defineStore('connection', () => {
     }
   }
 
-  async function connect(host: HostEntry, privateKeyPath?: string): Promise<boolean> {
+  async function connect(
+    host: HostEntry,
+    privateKeyPath?: string,
+    preserveComposerFrom?: ConnectionId,
+  ): Promise<boolean> {
     // Remote homes and SFTP browser paths belong to the connection, not to the
     // host-picker singleton. Clear them before a new dial so a workspace or
     // dialog cannot briefly render the previous host while this one connects.
@@ -366,6 +384,9 @@ export const useConnectionStore = defineStore('connection', () => {
       // new id is exposed, HostWorkspaceView can render the persisted ON
       // indicator knowing the engine has already been asked to resume.
       await restoreAutoForward(result.connectionId, host);
+      if (preserveComposerFrom && preserveComposerFrom !== result.connectionId) {
+        useComposerStore().rekeyConnection(preserveComposerFrom, result.connectionId);
+      }
       connectionId.value = result.connectionId;
       state.value = 'connected';
       // Fire bootstrap in the background; the UI surfaces it when it lands.
@@ -395,6 +416,7 @@ export const useConnectionStore = defineStore('connection', () => {
       await api.ssh.close(connectionId.value);
     }
     connectionId.value = null;
+    replacingConnectionId = null;
     state.value = 'idle';
     bootstrap.value = null;
     activeHost.value = null;

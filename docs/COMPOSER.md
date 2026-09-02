@@ -810,6 +810,13 @@ restart, replacing `SavedStateHandle` (`:2544`, `:2558`) — and, unlike Android
 persist the attachment list too (Android loses it on process death because only
 `KEY_DRAFT` is saved).
 
+The connection id is a transport handle, not the identity of the session. When
+the SSH link reconnects, the renderer keeps the composer mounted and moves every
+`<oldConnectionId>/<sessionName>` record to the replacement id before exposing
+it. Terminal re-attachment also leaves focus alone when the composer (or another
+control) already owns it, so a reconnect cannot send the next typed character
+to the terminal.
+
 ## 13. Files and component tree
 
 ```

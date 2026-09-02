@@ -256,6 +256,14 @@ components render.
   owners on the new connection (same contract as Android — tail does not
   self-heal).
 
+During replacement, the renderer keeps the workspace mounted on the old
+connection id. Before publishing the new id, the composer store rekeys all
+session records, so drafts and history survive the transport swap without a
+blank intermediate composer. Terminal re-attachment restores focus only when
+its visible pane already owns focus (or the document has no focused control),
+so a reconnect cannot redirect the next character from the prompt composer
+into xterm.
+
 ### 9.1 Terminal parse stalls
 
 The renderer's unhandled errors reach the desktop log through

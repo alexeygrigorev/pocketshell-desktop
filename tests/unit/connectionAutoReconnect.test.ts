@@ -142,6 +142,33 @@ describe('connection store — the automatic reconnect FSM', () => {
     expect(sshConnect).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the old connection id while the replacement dial is in flight', async () => {
+    const connection = useConnectionStore();
+    await connection.connect(HOST, undefined);
+
+    let resolveConnect!: (result: { ok: boolean; connectionId?: string }) => void;
+    sshConnect.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveConnect = resolve;
+      }),
+    );
+    const reconnect = connection.reconnect();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(connection.state).toBe('connecting');
+    expect(connection.connectionId).toBe('conn-1');
+    // Closing the old transport reports `idle`; it must not overwrite the
+    // replacement attempt while the mounted workspace is still using its id.
+    stateHandler()({ connectionId: 'conn-1', state: 'idle' });
+    expect(connection.state).toBe('connecting');
+
+    resolveConnect({ ok: true, connectionId: 'conn-2' });
+    await reconnect;
+    expect(connection.connectionId).toBe('conn-2');
+    expect(connection.state).toBe('connected');
+  });
+
   it('a successful retry revives the connection and the surfaces keyed by the NEW id', async () => {
     const connection = useConnectionStore();
     await connection.connect(HOST, undefined);
