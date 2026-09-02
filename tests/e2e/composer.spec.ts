@@ -97,24 +97,37 @@ async function openSession(page: Page, name: string): Promise<void> {
     const tab = page.getByRole('button', { name, exact: true });
     // The panel and the workspace are fed by the same session store, but a
     // long serial suite can leave the workspace between projections while a
-    // background listing is landing. One explicit refresh is the same recovery
-    // a user has in the panel, and keeps this helper from turning a transient
-    // render gap into a 30-second failure.
-    try {
-      await expect(tab).toBeVisible({ timeout: 5_000 });
-    } catch {
-      await page.locator('.session-panel .icon-btn[title="Refresh"]').click();
-      await expect(tab).toBeVisible({ timeout: 30_000 });
+    // background listing is landing. A listing can also be incomplete on a
+    // loaded runner even though the fixture session is still alive. Refresh
+    // through the same user-visible recovery a bounded number of times rather
+    // than turning one unlucky response into a 30-second failure.
+    const refresh = page.locator('.session-panel .icon-btn[title="Refresh"]');
+    let lastError: unknown;
+    let opened = false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        await expect(tab).toBeVisible({ timeout: attempt === 0 ? 5_000 : 7_500 });
+        await tab.click();
+        opened = true;
+        break;
+      } catch (err) {
+        lastError = err;
+      }
+      if (attempt < 3) {
+        await expect(refresh).toBeEnabled({ timeout: 15_000 });
+        await refresh.click();
+      }
     }
-    await tab.click();
+    if (!opened) throw lastError;
   } catch (err) {
     // A tab that never appears is the suite shouting about state it cannot
     // see. Name what IS there - on a remote runner the trace zip is not
     // always the first thing a reader opens.
     const bar = await page.locator('.folder-bar nav.tabs').innerText().catch(() => '(no tab bar)');
     const rows = await page.locator('.dir-header').allInnerTexts().catch(() => []);
+    const cause = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `could not open session "${name}"; tabs: [${bar.replace(/\n/g, " | ")}] panel rows: [${rows.join(" | ")}]\n${dumpFixtureSessionState()}`,
+      `could not open session "${name}"; tabs: [${bar.replace(/\n/g, " | ")}] panel rows: [${rows.join(" | ")}]\n${cause}\n${dumpFixtureSessionState()}`,
       { cause: err as Error },
     );
   }  // The composer is hidden until summoned - typing opens it, and so does
