@@ -393,8 +393,10 @@ const api = {
     /**
      * Read a remote file as raw bytes — what `readFile` cannot do, since
      * UTF-8 decoding turns every non-ASCII byte of a PNG into U+FFFD.
-     * For images to annotate or preview, not for bulk transfer: capped at
-     * 32 MiB, and a file over it rejects rather than truncating.
+     * For images to annotate or preview, not for bulk transfer: main caps it
+     * at 128 MiB (MAX_SFTP_READ_BYTES) however large a maxBytes the caller
+     * passes — the 32 MiB default below is the DoodleCanvas-sized read — and
+     * a file over the cap rejects rather than truncating.
      *
      * Rejects on a missing path, a non-regular file, or an oversized one.
      *

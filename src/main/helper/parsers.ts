@@ -389,13 +389,6 @@ function splitPathPair(middle: string[]): [string, string] {
 }
 
 /**
- * Fold the companion probe's data into the bare rows from `sessions list`.
- *
- * A session with no enrichment entry keeps its bare defaults — the probe
- * degrading (no tmux, non-zero exit, a tmux too old for `#{@…}`) must never
- * cost us the list itself, only the grouping metadata.
- */
-/**
  * Put back the sessions the helper's table omitted but the enrichment probe
  * SAW.
  *
@@ -482,6 +475,10 @@ export function mergeSessionEnrichment(
   sessions: SessionSummary[],
   enrichment: Map<string, SessionEnrichment>,
 ): SessionSummary[] {
+  // Fold the companion probe's data into the bare rows from `sessions list`.
+  // A session with no enrichment entry keeps its bare defaults — the probe
+  // degrading (no tmux, non-zero exit, a tmux too old for `#{@…}`) must never
+  // cost us the list itself, only the grouping metadata.
   const merged = sessions.map((session) => {
     const extra = findEnrichment(enrichment, session.name);
     if (!extra) return session;

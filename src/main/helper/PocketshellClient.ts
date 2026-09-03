@@ -357,19 +357,6 @@ export class PocketshellClient {
   }
 
   /**
-   * Write one log line for every session the probe failed to place.
-   *
-   * Silent when everything placed, which is the normal case and must stay
-   * free. When it is not free, this is the only way to tell the three causes
-   * apart from a screenshot: a session in the wrong place looks identical
-   * whether the probe skipped it, reported it with empty path columns, or had
-   * its key dropped by the drop-on-collision rule (see
-   * {@link diagnoseSessionPaths}). The user is asked to paste these lines; the
-   * `unplaced` array is the whole answer.
-   *
-   * The list is returned unchanged - this observes, it never decides.
-   */
-  /**
    * Fill in {@link SessionSummary.repoRoot} for sessions running in a linked
    * git worktree.
    *

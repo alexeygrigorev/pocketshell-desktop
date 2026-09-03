@@ -1219,11 +1219,6 @@ watch(
 );
 
 /**
- * Lets the workspace hand focus back to the pane — the Escape ladder's third
- * rung blurs the composer draft and returns the user to the terminal
- * (docs/COMPOSER.md §12.2).
- */
-/**
  * Put the pane and the far end back in agreement, on demand.
  *
  * `sent = null` forgets what the far end was TOLD, so the size is sent again

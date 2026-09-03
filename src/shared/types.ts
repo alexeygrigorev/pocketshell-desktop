@@ -120,7 +120,8 @@ export interface EnvVarRow {
 }
 
 /** A tmux session row from `pocketshell sessions list`. */
-export interface SessionSummary {  name: string;
+export interface SessionSummary {
+  name: string;
   /** Epoch seconds of creation. */
   created: number;
   /** Epoch seconds of last activity. */

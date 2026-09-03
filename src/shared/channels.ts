@@ -50,9 +50,9 @@ export const ipc = {
     /**
      * Show a tmux session in this connection's terminal. Distinct from
      * `shell:open` because it is NOT necessarily a new PTY: main keeps one
-     * attached tmux client per connection and moves it with `switch-client`,
-     * so the reply can carry the SAME shellId the renderer already holds.
-     * See src/main/ssh/TmuxClientPool.ts.
+     * attached tmux client per SESSION TAB (src/main/ssh/TmuxClientPool.ts),
+     * so attaching to a tab whose client is still alive reuses it and the
+     * reply carries the SAME shellId the renderer already holds.
      */
     attachSession: 'shell:attachSession',
     input: 'shell:input', // write bytes to a shell's stdin
@@ -74,8 +74,9 @@ export const ipc = {
      * failure starts when ANOTHER client of a shared session becomes
      * `window-size latest` and moves the window while nothing changes here,
      * and what cannot change locally cannot be noticed locally — so the
-     * renderer asks. Resolves null whenever there is no answer (a bare shell,
-     * an evicted tab): that is normal, not an error.
+     * renderer asks. A shell with no tmux behind it answers `{ kind: 'bare' }`
+     * and an evicted tab `{ kind: 'dead' }` — both normal, not errors (see
+     * `GeometryProbe` in shared/types.ts).
      */
     windowSize: 'shell:windowSize',
     close: 'shell:close', // close a shell

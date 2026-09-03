@@ -722,7 +722,6 @@ export const useFilesStore = defineStore('files', () => {
       // flight; its own refresh will paint `entries`, so committing here
       // would describe a directory the pane has already left.
       if (ticket !== navTicket) return;
-      // Sort: dirs first, then files, alphabetically.
       listed.sort((a, b) => {
         if (a.type === 'dir' && b.type !== 'dir') return -1;
         if (a.type !== 'dir' && b.type === 'dir') return 1;

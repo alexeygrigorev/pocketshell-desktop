@@ -52,8 +52,11 @@ import { resolve } from 'node:path';
  * doodle editor will realistically be handed, and a file above it is not
  * an image someone meant to annotate.
  *
- * `sftp:readBinary` shares this ceiling: the bytes land in the renderer
- * exactly the same way, so the same reasoning fixes the same number.
+ * `sftp:readBinary` is the cousin, not a copy: its ceiling lives in
+ * `ipc.ts` (`MAX_SFTP_READ_BYTES`, 128 MiB — a remote document may
+ * legitimately be bigger than any photo) but defaults to this number
+ * when the renderer does not ask for a cap, because the bytes land in
+ * the renderer exactly the same way.
  *
  * It bounds the READ-BACK path only, and it is worth being explicit
  * about what that excludes, because the obvious reading is wrong.

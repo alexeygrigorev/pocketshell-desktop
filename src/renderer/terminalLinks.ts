@@ -126,7 +126,9 @@ const MAX_SCAN_CHARS = 2048;
  * direction. xterm's own `isWrapped` chain is left uncapped because it is a
  * fact the terminal recorded; a reconstruction is a guess, and a guess that
  * chained down a screenful of gutter-prefixed rows would spend a whole buffer
- * walk on a hover. Three rows is the longest either user report needed.
+ * walk on a hover. Eight is headroom above the longest joined run the repair
+ * reports needed (see WRAP_SHORTFALL's derivation below); the rule's own
+ * guards, not this cap, are what keep normal prose from gluing together.
  */
 const MAX_JOIN_ROWS = 8;
 

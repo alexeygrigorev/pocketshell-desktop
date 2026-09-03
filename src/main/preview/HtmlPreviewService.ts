@@ -138,7 +138,7 @@ export interface PreviewStats {
 /**
  * Per-asset ceiling.
  *
- * Deliberately far below `sftp:readBinary`'s 32 MiB document ceiling, because
+ * Deliberately far below `sftp:readBinary`'s ceiling (`MAX_SFTP_READ_BYTES` in ipc.ts, 128 MiB), because
  * the unit is different: that one bounds ONE file the user asked for by
  * clicking it, this one bounds each of up to {@link MAX_REQUESTS} files that
  * a remote document asked for without anybody clicking anything. 8 MiB clears
