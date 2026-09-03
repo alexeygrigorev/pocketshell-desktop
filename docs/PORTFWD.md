@@ -1,804 +1,265 @@
-# Port Forwarding — behaviour spec ported from `ssh-auto-forward`
+# Port forwarding — decision record and current behaviour
 
-This document extracts the behaviour of the user's Python tool
-**`ssh-auto-forward`** (local clone `C:\Users\alexey\git\ssh-auto-forward`,
-v0.0.4, published to PyPI) so it can be **reimplemented** in
-`src/main/portfwd/`.
+The behaviour of the user's Python tool **`ssh-auto-forward`**
+(`C:\Users\alexey\git\ssh-auto-forward`, v0.0.4, PyPI) has been **fully
+reimplemented** in `src/main/portfwd/`, and the §16–§19 UI features are built
+and tested. This document is no longer a port to-do list: it records the
+decisions taken during the port and the behaviour the code has today.
+`forwarder.py` / `dashboard.py` references are **provenance** — the Python
+tool is not in this repo and nothing here remains to be ported from it.
 
 ## The decision this document implements
 
 The Python tool is not embedded, shelled out to, or shipped. It opens its own
-paramiko connection per host; PocketShell already holds exactly **one
-authenticated `ssh2` connection per host** and that property is load-bearing
-(one auth, one keepalive, one TOFU prompt, one reconnect FSM). So the
-*behaviour* is ported onto the existing connection and the Python process,
-its `uv` runtime, and its stdout are never involved.
-
-Everything below is therefore phrased as: **what the Python does (with
-`file:line`) → what `src/main/portfwd/` does today → the diff-ready change.**
+paramiko connection per host; PocketShell holds exactly **one authenticated
+`ssh2` connection per host** and that property is load-bearing (one auth, one
+keepalive, one TOFU prompt, one reconnect FSM). So the *behaviour* was ported
+onto the existing connection; the Python process, its `uv` runtime, and its
+stdout are never involved.
 
 ## Source map
 
 | Role | File |
 |---|---|
-| Python core (scan, filter, tunnel, reconnect, persistence) | `ssh_auto_forward/forwarder.py` (1236 ln) |
-| Python TUI (display derivation, remap/name UX, reconnect countdown) | `ssh_auto_forward/dashboard.py` (1267 ln) |
-| Python CLI flags + defaults | `ssh_auto_forward/cli.py` (137 ln) |
-| Python unit tests (encode the edge cases) | `tests/test_cli.py` |
-| Python integration tests (Docker sshd) | `tests_integration/test_auto_forward.py`, `test_dashboard.py` |
-| Target: scan loop + policy | `src/main/portfwd/AutoForwarder.ts` |
-| Target: one forward rule (-L/-R/-D) | `src/main/portfwd/Forwarder.ts` |
-| Target: remote scan orchestration | `src/main/portfwd/scanRemotePorts.ts` |
-| Target: pure `ss`/`netstat` parsers | `src/main/portfwd/PortScanner.ts` |
-| Target: per-connection manager + IPC surface | `src/main/portfwd/ForwardService.ts` |
-| Target: reconnect FSM (currently orphaned) | `src/main/portfwd/AutoForwarderSupervisor.ts` |
-| Target: UI | `src/renderer/views/PortPanelView.vue`, `src/renderer/stores/forwards.ts` |
+| Scan loop + policy | `src/main/portfwd/AutoForwarder.ts` |
+| One forward rule (-L/-R/-D) | `src/main/portfwd/Forwarder.ts` |
+| Remote scan orchestration + pure `ss`/`netstat` parsers | `src/main/portfwd/scanRemotePorts.ts`, `src/main/portfwd/PortScanner.ts` |
+| Per-connection manager + IPC surface | `src/main/portfwd/ForwardService.ts` |
+| Persistence | `src/main/portfwd/PortfwdStore.ts` |
+| Reconnect schedule (shared with the renderer) | `src/shared/reconnectBackoff.ts` |
+| UI | `src/renderer/views/PortPanelView.vue`, `src/renderer/stores/forwards.ts` |
 | Rides on this engine: "Serve this folder" | `src/main/portfwd/ServeService.ts`, **`docs/SERVE.md`** |
-| Already-built SSH config parser (models `LocalForward`) | `src/main/ssh-config/SshConfigParser.ts` |
 
-One feature is built ON this engine rather than described by this spec:
-**"Serve this folder"** (`docs/SERVE.md`) starts a static HTTP server on the
-host's *loopback*, and then does nothing special — the scan finds the port like
-any other listener and a `force-on` intent opens the tunnel. It is worth knowing
-about here for two reasons: a `served` row in the panel has a remote process
-behind it, so its toggle and remove buttons are deliberately disabled in favour
-of `stop`; and it is the first caller that starts the engine as a *side effect*
-of an action taken in another tab.
+**Serve** starts a static HTTP server on the host's loopback; the scan finds
+the port like any other listener and a `force-on` intent opens the tunnel —
+see `docs/SERVE.md`.
 
-The lineage: the Android engine came from
-`ssh-auto-forward-android`, **local (`-L`) forwards only**; the desktop added
-`-R` and `-D` net-new. Nothing in this spec
-touches `-R`/`-D` semantics — auto-forwarding is `-L`-only in Python, in
-Android, and here. `-R`/`-D` stay manual-only and keep working; they simply
-share the key, state, and persistence model defined below.
+Lineage: the Android engine (`ssh-auto-forward-android`) was **local (`-L`)
+forwards only**; desktop added `-R` and `-D` net-new. Auto-forwarding is
+`-L`-only everywhere; `-R`/`-D` stay manual-only and share the key, state,
+and persistence model below.
 
 ---
 
-## 0. Behaviour inventory (the gap at a glance)
+## 0. What still differs from the Python
 
-| # | Behaviour | Python | Node today | Verdict |
-|---|---|---|---|---|
-| 1 | Scan command | `ss -tlnp`→`netstat -tlnp`→`ss -tln`→`netstat -tln`, first non-empty wins | `ss -tln` (+ `netstat -tln` fallback) then enrich from `ss -tlnp` | **differs, Node's order is better** |
-| 1 | Scan interval | 5s (`-i`), dashboard hardcodes 5s | 10s | differs (align to 5s) |
-| 1 | Non-blocking | background thread + single-flight guard | async, **no single-flight guard** | gap |
-| 2 | Skip well-known | ports **0–999** (1000 forwarded) | ports **0–1023** | differs — pick one, document it |
-| 2 | `--skip` list | unions with the default set | absent | gap |
-| 2 | Max auto port | 10000, **inclusive** | 10000, inclusive | matches |
-| 2 | Above-max ports | shown, manually forwardable | not shown, not forwardable | gap |
-| 3 | Process name | `ss`/`netstat` proc column → `_parse_process_info` | `ss -tlnp` regex only | partial |
-| 3 | PID + working folder | `readlink /proc/$pid/cwd` per PID | **absent** | gap (distinctive feature) |
-| 4 | Local port choice | remap → mirror → `+1…+999` → sweep 3000+ | remap → mirror → 3000–3999 (own-forwards check only) | gap (no `+1` retry, no OS bind check) |
-| 4 | Remap range | `-p 3000:10000` is **dead config** | `[3000, 3999]` | Node closer to intent |
-| 5 | Friendly names | `~/.ssh-auto-forward/port-names.json`, per host alias | **absent** | gap |
-| 6 | Auto-start on new port | yes, every scan | yes | matches |
-| 6 | Auto-stop on vanished port | yes, **no debounce**; kills manual tunnels too | yes, keeps manual ports | Node better, both need debounce |
-| 6 | Empty-scan protection | `if not remote_ports: return` | **none — tears down everything** | **Node bug** |
-| 7 | SSH config `LocalForward` | parsed, excluded from auto, shown read-only ("Auto (SSH Config)") | parsed in `SshConfigParser`, never reaches `AutoForwarder` | gap |
-| 8 | Reconnect | CLI 5→10→20→40→60s; TUI flat 5s countdown; tunnels dropped, rebuilt by next scan | `AutoForwarderSupervisor` (5→60s, 10 attempts) but **orphaned and opens its own connection** | needs rework |
-| 9 | Persistence | port names only | **nothing** | gap |
+Everything the inventory once listed as a Node gap is implemented. What
+remains different is deliberate:
+
+- Skip threshold **1024**, not Python's 1000 (§2).
+- Scan order inverted: `ss -tln` authoritative, `-tlnp` only enriches (§1).
+- Config `LocalForward`s are **opened**, not merely reported (§7).
+- Failed-port memory **expires** (60s TTL); Python's never does (§2).
+- Reconnect **gives up after 10 attempts**; the Python CLI retries forever
+  (§8).
+- Names, remaps, and intents **survive a restart**; only the Python's port
+  names do, and its remaps do not even survive that (§9).
 
 ---
 
 ## 1. Port discovery
 
-### What the Python does
+One `exec`, one round trip: `LISTENER_SCAN_COMMAND`
+(`scanRemotePorts.ts:49-55`) emits `ss -tln`, `ss -tlnp`, `netstat -tlnp`,
+`netstat -tln`, each behind a sentinel, and `PortScanner.ts` splits the
+sections. The authoritative port list comes from **`ss -tln`**, because
+non-root `ss -tlnp` *drops* rows whose process it cannot read instead of
+blanking the name column; process names and PIDs are merged in afterwards by
+port number from the `-tlnp` outputs (`mergeScanSections`,
+`scanRemotePorts.ts:81-122`). Attribution costs at most one further exec —
+the `/proc/<pid>/cwd` probe (§3).
 
-`SSHAutoForwarder.get_remote_listening_ports()` — `forwarder.py:779-859`.
-Returns `Dict[int, str]` (remote port → process name).
-
-Primary commands, tried in order; the **first that yields a non-empty dict
-wins** (`forwarder.py:783-825`):
-
-```
-ss -tlnp      2>/dev/null | awk 'NR>1 {print $4, $7}'
-netstat -tlnp 2>/dev/null | awk 'NR>1 && /LISTEN/ {print $4, $7}'
-```
-
-A command whose stderr contains `permission denied` (case-insensitive) is
-skipped outright (`:793-794`). Parsing (`:798-815`): split on whitespace,
-require ≥2 fields, `parts[0]` must contain `:`, the substring after the **last**
-`:` must be all digits (`str.isdigit()`) — so `*:8080`, `[::]:8080`, and
-`0.0.0.0:8080` all work and `*:*` is dropped. `parts[1]` is the process blob.
-
-Fallback commands, only if both primaries produced nothing (`:828-851`):
-
-```
-ss -tln      2>/dev/null | awk 'NR>1 {print $4}'
-netstat -tln 2>/dev/null | awk 'NR>1 && /LISTEN/ {print $4}'
-```
-
-Process name becomes `""`, and `process_pids` / `process_working_dirs` are
-cleared (`:849-850`).
-
-**Interval.** `-i/--interval`, default **5** seconds (`cli.py:42`). The CLI
-loop sleeps `scan_interval` between scans (`forwarder.py:1165`).
-
-**Non-blocking.** Only the dashboard needs this. `_start_background_refresh`
-(`dashboard.py:930-943`) takes `_refresh_lock`, refuses to start if
-`_refresh_in_progress`, then runs the scan on a daemon thread and marshals the
-result back with `call_from_thread`. Overlapping scans are **dropped, not
-queued** (`:936-938`).
-
-### What Node does
-
-`scanRemotePorts.ts:21-53` deliberately **inverts the priority**: `ss -tln`
-first (full port list), then enrich with process names from `ss -tlnp`,
-because `ss -tlnp` as non-root *filters out* rows whose process it cannot
-read rather than blanking the name. That comment (`scanRemotePorts.ts:15-19`,
-repeated at `AutoForwarder.ts:168-171`) is **correct and the Python gets this
-wrong** — see §10. Keep it.
-
-Cost: 2–3 sequential `exec`s per scan, each a full SSH channel round trip.
-`AutoForwarder.start()` (`AutoForwarder.ts:61-65`) fires `setInterval` with no
-in-flight guard, so on a slow link scans can overlap and interleave their
-teardown decisions.
-
-### Recommendation — `scanRemotePorts.ts`
-
-1. **Collapse the round trips.** One `exec` emitting all candidate outputs
-   with sentinels, then split in `PortScanner.ts`:
-
-   ```ts
-   const SCAN_CMD = [
-     "echo '<<<PS_SS_TLN>>>';   ss -tln       2>/dev/null;",
-     "echo '<<<PS_SS_TLNP>>>';  ss -tlnp      2>/dev/null;",
-     "echo '<<<PS_NETSTAT>>>';  netstat -tlnp 2>/dev/null;",
-     "echo '<<<PS_END>>>'",
-   ].join(' ');
-   ```
-   Keep the existing merge policy: full port list from `ss -tln` (or
-   `netstat` if empty), process names merged in by port number from
-   `ss -tlnp` / `netstat -tlnp`.
-2. **Single-flight the loop** in `AutoForwarder`:
-   ```ts
-   private scanning = false;
-   private async scanAndForward(): Promise<void> {
-     if (this.scanning) return;   // Python dashboard.py:936-938
-     this.scanning = true;
-     try { /* ... */ } finally { this.scanning = false; }
-   }
-   ```
-3. **Default `scanIntervalSec` 10 → 5** (`AutoForwarder.ts:30`) to match
-   `cli.py:42`, and make it user-settable.
-
----
+Interval: **5s** (`AutoForwarder.ts:72`; the Python's `cli.py:42` default is
+also 5). The loop is **single-flight** (`AutoForwarder.ts:125-126,
+357-402`): an overlapping scan is dropped, not queued, as in the Python
+dashboard (`dashboard.py:936-938`).
 
 ## 2. Filtering
 
-### Exact rules
+Decision record — implemented as `AutoForwardConfig`
+(`AutoForwarder.ts:43-79`), applied by `shouldForward`
+(`:512-542`):
 
-| Rule | Python | Boundary |
-|---|---|---|
-| Well-known skip | `DEFAULT_SKIP_PORTS = set(range(0, 1000))` — `forwarder.py:19` | **0–999 skipped; port 1000 IS forwarded.** Asserted by `tests/test_cli.py:310-319` (`len == 1000`) |
-| `--skip` | `skip_ports = DEFAULT_SKIP_PORTS.copy(); skip_ports.update(extra)` — `cli.py:95-99` | **Adds to** the default set; never replaces it |
-| Max auto port | `if port <= self.max_auto_port` — `forwarder.py:1051`, default 10000 (`forwarder.py:21`, `cli.py:62`) | **Inclusive** — 10000 is auto-forwarded |
-| Above max | shown in the table, **not** auto-forwarded (`forwarder.py:1053`); a manual toggle forwards it and marks it `manual_tunnels` (`:957-958`) | `forward_port` itself never checks `max_auto_port` |
+- **`skipPortsBelow: 1024` — a deliberate, documented divergence.** The
+  Python skips 0–999 (`DEFAULT_SKIP_PORTS`, `forwarder.py:19`), an arbitrary
+  round number; 1024 is the real privileged-port boundary and matches the
+  Android engine. The only ports affected are 1000–1023. Do not "fix" it to
+  1000.
+- **`maxAutoPort: 10_000`, inclusive** — 10000 is auto-forwarded.
+- **`skipPorts` unions** with the range; it never replaces it
+  (`forwarder.py:95-99`).
+- **Failed ports expire after `failedPortTtlMs: 60_000`.** The Python's
+  `failed_ports` never expires, so one transient bind failure blacklists a
+  port for the process lifetime (`forwarder.py:931-933` vs `:983`); Android
+  used a 60s TTL.
+- Ports **above** `maxAutoPort` are surfaced, not forwarded: they appear as
+  discovered rows (`discovered()`, `AutoForwarder.ts:301-314`) and a
+  `force-on` intent forwards them.
 
-`forward_port` (`forwarder.py:900-943`) applies five further exclusions, in
-order:
-
-1. already in `self.tunnels` → returns **True** (idempotent no-op) — `:909-910`
-2. in `skip_ports` → False — `:912-914`
-3. in `config_local_forwards` → False (SSH itself owns it) — `:916-922`
-4. the remote port number is **already in use as one of our own local listen
-   ports** → False — `:924-929`. Prevents mirroring a port that would collide
-   with a tunnel we already opened.
-5. in `failed_ports` → False — `:931-933`. Sticky: `failed_ports` is only
-   cleared in `stop_forwarding_port` (`:983`), which only runs for ports that
-   are *in* `tunnels` — a port that failed never got there. So a failure is
-   **permanent for the process lifetime** unless a reconnect wipes state
-   (`_clear_stale_state`, `:1106`). Android used a 60s TTL.
-
-### Node today
-
-`shouldForward` (`AutoForwarder.ts:145-149`): `manual` set wins, else
-`port >= skipPortsBelow && port <= maxAutoPort` with `skipPortsBelow: 1024`
-(`:31`). No `--skip` list, no failed-port memory, no config-forward exclusion,
-no own-local-port guard.
-
-### Recommendation — `AutoForwarder.ts`
-
-```ts
-export interface AutoForwardConfig {
-  scanIntervalSec: number;          // 5
-  maxAutoPort: number;              // 10_000 (inclusive)
-  skipPortsBelow: number;           // 1024 — see note
-  /** Extra ports never auto-forwarded (the Python `--skip` list). */
-  skipPorts: number[];              // []
-  localPortRange: [number, number]; // [3000, 65535] — sweep bound, see §4
-  /** Retry a port that failed to bind after this long. Android: 60s. */
-  failedPortTtlMs: number;          // 60_000
-  /** Scans a port may be missing before its tunnel is torn down. */
-  missingScansBeforeStop: number;   // 2
-}
-```
-
-- **Keep `skipPortsBelow: 1024`, do not move it to 1000.** 1024 is the real
-  privileged-port boundary, matches Android, and the
-  Python's 1000 is an arbitrary round number. This is a deliberate,
-  documented divergence — the only ports affected are 1000–1023.
-- Add `skipPorts` to the union: `if (this.config.skipPorts.includes(p)) return false;`
-- Add a `failedPorts: Map<number, number>` (port → epoch ms) checked and
-  expired against `failedPortTtlMs`, cleared when the port disappears from a
-  scan. Without it, every failed bind is retried every 5s forever.
-- Add the own-local-port guard (Python rule 4): skip a remote port that equals
-  a `listenPort` we already hold, unless it is that forward's own mirror.
-- Ports **above** `maxAutoPort` must still reach the UI (see §3/§7 —
-  `ForwardState` needs discovered-but-not-forwarded rows) so the user can
-  toggle them on.
-
----
+Order inside `shouldForward` matters: ssh-config ownership and a live recent
+failure both beat an explicit `force-on`.
 
 ## 3. Process and folder attribution
 
-This is the tool's most distinctive feature and Node has **none** of it.
+The scan's most distinctive feature, now implemented: `RemotePort` carries
+`process`, `pid`, `cwd` (`PortScanner.ts:24-32`). Process blobs parse through
+`parseProcessInfo` (`PortScanner.ts:51`), a port of `forwarder.py:59-78` with
+one correction — net-tools truncates `PID/Program name` to 20 chars
+(`1/sshd: /usr/sbin/s`), so the name is cut at the first space or colon
+rather than taken after the last `/`. The cwd probe is one exec over all
+discovered PIDs (`procCwdCommand`, `scanRemotePorts.ts:60-76`). Two rules to
+keep:
 
-### Process name — `_parse_process_info` (`forwarder.py:59-78`)
-
-```
-name: first  /"([^"]+)"/  group                       -> "python3"
-      else if "/" in blob: blob.split("/")[-1].split(",")[0]  -> "12345/node" -> "node"
-      else "unknown"
-pid:  /pid=(\d+)/  else  /^(\d+)\//  else  /\/(\d+)(?:\/|$)/
-```
-
-Covered by `tests/test_cli.py:91-100`: `users:(("python",pid=12345,fd=7))` →
-`("python", 12345)`; `12345/node` → `("node", 12345)`.
-
-### Working folder — `_get_remote_process_cwds` (`forwarder.py:754-777`)
-
-One shell command over all discovered PIDs:
-
-```sh
-for pid in 123 456 789; do
-  cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) && printf "%s\t%s\n" "$pid" "$cwd";
-done
-```
-
-Parsed as `pid<TAB>cwd`, requiring a digit PID and a non-empty cwd
-(`:772-777`). Mapped port → cwd via the port→PID table (`:820-824`). Ports
-that disappear have their PID and cwd evicted (`:1064-1067`).
-
-Reality check: `readlink /proc/<pid>/cwd` only succeeds for **your own
-processes or as root**. The Docker fixture (`docker/Dockerfile`) runs sshd as
-root, so the tests never exercise the non-root case. Expect `cwd` to be `null`
-for most ports on a real shared box — the UI must degrade to `-`, exactly as
-`_compact_path` does for an empty string (`dashboard.py:66-67`).
-
-### Display derivation (`dashboard.py`)
-
-- Process: `_compact_text(name, 14)` (`:222`) — `<=14` chars verbatim, else
-  first `max-3` chars + `...` (`:53-59`). Empty → dim `unknown`.
-- Name: `_compact_text(name, 16)` (`:224`). Empty → dim `-`.
-- Folder: `_compact_path(cwd, max_chars=18, tail_parts=2)` (`:62-82`):
-  1. normalise `\`→`/`, strip trailing `/`; empty → `-`
-  2. join the **last 2** path segments; prefix `.../` if more than 2 existed
-  3. if that is `<= 18` chars, done — `/home/alexey/projects/client/web-api`
-     → `.../client/web-api` (`tests_integration/test_dashboard.py:360-365`)
-  4. else try `.../{basename}`
-  5. else `"..." + basename[-(max-3):]`
-
-### Recommendation
-
-`PortScanner.ts` — widen the row:
-
-```ts
-export interface RemotePort {
-  port: number;
-  process: string | null;   // compact name, already parsed
-  pid: number | null;       // NEW
-  cwd: string | null;       // NEW, filled by the second exec
-}
-```
-
-Port `_parse_process_info` verbatim as a pure exported function
-`parseProcessInfo(blob: string): { name: string | null; pid: number | null }`
-and unit-test it against the two strings in `tests/test_cli.py:91-100`.
-
-`scanRemotePorts.ts` — after the listener scan, one extra exec for cwds:
-
-```ts
-const pids = ports.map(p => p.pid).filter((n): n is number => Number.isInteger(n));
-// SECURITY: pids are parsed from remote output and interpolated into a shell
-// command. Filter to integers (above) — never pass the raw token through.
-if (pids.length) {
-  const cmd = `for pid in ${pids.join(' ')}; do ` +
-    `cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) && printf '%s\\t%s\\n' "$pid" "$cwd"; done`;
-  // NOTE: pathAwareCommand() single-quote-escapes; verify the \t survives the
-  // /bin/sh -lc wrapper against a real host before trusting it.
-}
-```
-
-Keep `_compact_text` / `_compact_path` **out of the main process** — they are
-presentation. Ship raw `process` and `cwd` over IPC and put the truncation in
-`PortPanelView.vue` (which owns CSS-based truncation anyway). Port
-`_compact_path`'s *segment* logic (last two segments, `.../` prefix) if the
-renderer wants it; the char-budget arithmetic is a TUI artifact.
+- `readlink /proc/<pid>/cwd` only succeeds for **your own processes or as
+  root**, so on a shared box most ports have no cwd. The UI must degrade to
+  `-`.
+- **SECURITY:** PIDs are remote-sourced and interpolated into a shell
+  command. Filter to positive integers at the call site; `procCwdCommand`
+  asserts the same thing again. Never pass a raw token through.
 
 ---
 
 ## 4. Local port allocation
 
-### What the Python does
+Resolution order (`AutoForwarder.ts:548-608`):
 
-`find_available_local_port(preferred)` — `forwarder.py:879-898`:
+1. user remap — always wins (persisted per host, §9)
+2. mirror — the remote port itself, if bindable
+3. `preferred+1 .. preferred+999`
+4. linear sweep of `localPortRange` `[3000, 65535]`
+5. `null` — recorded as a failed port and retried after the TTL, never
+   thrown
 
-1. `preferred` if available
-2. else `preferred+1 … preferred+999`, stopping at 65535 (`:886-891`)
-3. else a linear sweep `3000 … 65534` (`:894-896`)
-4. else `None` → the caller records the port in `failed_ports` (`:940-943`)
-
-`is_local_port_available(port)` — `:861-877`: `False` if the port is already a
-value in `local_port_map`; otherwise **actually binds** `127.0.0.1:port` with
-`SO_REUSEADDR` and reports success. The `SO_REUSEADDR` detail is deliberate
-(`:867-870`): without it a port in `TIME_WAIT` from a just-closed forwarded
-connection reads as busy and the tool needlessly remaps to `port+1`. That is a
-fixed bug preserved in a comment — do not lose it.
-
-`preferred` is the remote port itself, so the default is **mirror**
-(`forward_port`, `:936-939`: explicit `local_port` → `port_remappings` →
-`find_available_local_port(remote_port)`).
-
-**`--port-range` is dead.** `-p MIN:MAX` (default `3000:10000`) is parsed
-(`cli.py:88-89`), stored as `self.port_range` (`forwarder.py:521`), used to
-seed `self.next_alt_port` (`:533`) — and `next_alt_port` is never read again.
-The sweep is hardcoded `range(3000, 65535)`. `tests/test_cli.py:137-149` sets
-`port_range` and only ever asserts 3000. Do not port the flag as-is.
-
-**User remap.** `set_port_remapping(remote, local)` (`:1008-1031`): validates
-availability, stores in `port_remappings`, and if a tunnel is live, stops and
-restarts it preserving the manual flag. `clear_port_remapping` (`:1033-1035`)
-just drops the entry — the dashboard is what restarts the tunnel afterwards
-(`dashboard.py:1150-1161`). Remaps survive reconnects (`forwarder.py:1108`
-explicitly keeps `port_remappings` and `port_names` in `_clear_stale_state`)
-but **not process restarts** — despite the docstring calling them
-"persistent" (`:1009`).
-
-### What Node does
-
-`resolveLocalPort` (`AutoForwarder.ts:151-158`) + `allocateLocalPort`
-(`:160-165`): remap wins, in-range ports mirror, out-of-range allocate the
-first port in `3000..3999` not used by *our own* forwards. It never asks the
-OS. A collision surfaces as `Forwarder.start()` resolving `false`
-(`Forwarder.ts:114`), the forward is silently dropped, and the next scan
-retries identically — an infinite quiet failure loop.
-
-### Recommendation — `AutoForwarder.ts`
-
-```ts
-private async resolveLocalPort(remotePort: number): Promise<number | null> {
-  const remap = this.remappings.get(remotePort);
-  if (remap !== undefined) return remap;          // user choice always wins
-  return this.findAvailableLocalPort(remotePort); // mirror, then +1.., then sweep
-}
-
-/** Port of forwarder.py:861-898. */
-private async findAvailableLocalPort(preferred: number): Promise<number | null> {
-  if (await this.isLocalPortAvailable(preferred)) return preferred;
-  for (let off = 1; off < 1000 && preferred + off <= 65535; off++) {
-    if (await this.isLocalPortAvailable(preferred + off)) return preferred + off;
-  }
-  const [lo, hi] = this.config.localPortRange;
-  for (let p = lo; p <= hi; p++) if (await this.isLocalPortAvailable(p)) return p;
-  return null;
-}
-
-/** In-use by one of our forwards, or unbindable. SO_REUSEADDR is the point. */
-private isLocalPortAvailable(port: number): Promise<boolean> {
-  if ([...this.forwards.values()].some(f => f.spec.listenPort === port)) {
-    return Promise.resolve(false);
-  }
-  return new Promise(resolve => {
-    const s = createServer();
-    s.once('error', () => resolve(false));
-    s.listen({ port, host: '127.0.0.1', exclusive: false }, () => s.close(() => resolve(true)));
-  });
-}
-```
-
-`exclusive: false` is Node's `SO_REUSEADDR` equivalent; keep the Python's
-comment about `TIME_WAIT` so the next reader does not "simplify" it away.
-There is an inherent TOCTOU between probe and bind — that is fine, the bind
-failure path still exists; the probe just makes the common case pick a working
-port on the first try instead of never.
-
-Set `localPortRange` default to `[3000, 65535]` (the sweep the Python
-actually performs), not `[3000, 3999]` — the 999-port window is exhaustible on
-a busy box and `allocateLocalPort` currently **throws** when it runs out
-(`AutoForwarder.ts:164`) inside an un-awaited `void this.scanAndForward()`,
-i.e. an unhandled rejection. Return `null` and record a failed port instead.
-
-**A user remap must persist across restarts** (§9) — this is the one place the
-Node app should be strictly better than the Python.
-
----
-
-## 5. Friendly names
-
-### What the Python does
-
-- Path: `~/.ssh-auto-forward/port-names.json` (`forwarder.py:27`).
-- Schema: `{ "<host alias>": { "<remote port>": "<name>" } }` — verified by
-  the round-trip test `tests/test_cli.py:103-109`.
-- Load (`:30-46`): missing file → `{}`; non-dict → `{}`; per-host dicts
-  coerced to `str→str`, empty names dropped; JSON/OS errors swallowed.
-  At construction, filtered to this host and keys parsed to `int`, dropping
-  non-numeric keys (`:537-542`).
-- Save (`:49-56`): atomic — write `<path>.tmp`, `indent=2`, `sort_keys=True`,
-  trailing newline, then `os.replace`.
-- `set_port_name` trims; an empty name **deletes** the entry (`:985-992`).
-  `_save_port_names` (`:999-1006`) re-reads the whole file first, so two
-  concurrent host sessions do not clobber each other, and removes the host key
-  entirely when its last name is cleared.
-- Keyed by the **SSH config host alias** (`self.host_alias`), not by
-  hostname/IP — two aliases pointing at the same box keep separate name sets.
-
-### Recommendation
-
-Node has nothing here. Use `electron-store` (already a dependency,
-`package.json:27`, currently unused anywhere in `src/`) — see §9 for the full
-schema. Two wrinkles:
-
-1. **There is no host alias in the main process.** `ipc.ssh.connect`
-   (`src/main/ipc.ts:76-101`) takes `{host, port, user, ...}` and
-   `ConnectionRecord` (`ConnectionRegistry.ts:12-23`) stores
-   `host/port/user/label` — the `~/.ssh/config` `Host` name is dropped at the
-   IPC boundary even though the renderer has it on `HostEntry.name`. Add an
-   optional `hostAlias?: string` to `ConnectOptions`/`ConnectionRecord` and
-   pass `HostEntry.name` through. *(That file is owned by another agent —
-   flag it, don't edit it.)*
-2. Until then, derive `hostKey = rec.hostAlias ?? \`${rec.user}@${rec.host}:${rec.port}\``
-   in one exported helper so the fallback and the real key never diverge.
-
-`electron-store` writes atomically already, so the tmp+replace dance is free.
+The bind probe uses `exclusive: false`, Node's `SO_REUSEADDR` equivalent:
+without it a port left in TIME_WAIT by a just-closed forwarded connection
+reads as busy and the allocator needlessly remaps to `port+1` — see the
+comment at `AutoForwarder.ts:579-588` before "simplifying" the probe away.
+The Python's `-p/--port-range` was dead config (`forwarder.py:533` vs
+`:894`) and was not ported; the *concept* survives as `localPortRange`.
 
 ---
 
 ## 6. Lifecycle: start, stop, and flap protection
 
-### What the Python does — `scan_and_forward` (`forwarder.py:1037-1070`)
+One tri-state intent per remote port drives everything
+(`PortIntent` in `PortfwdStore.ts:22-23`,
+`AutoForwarder.ts:109-110`): **absent** = follow the auto policy,
+**`force-on`**, **`force-off`**. The intents persist per host (§9), so a
+user who silenced a noisy port expects it silent tomorrow.
 
-```python
-remote_ports = self.get_remote_listening_ports()
-if not remote_ports:
-    return                                   # <-- :1041-1042
-self.all_remote_ports = remote_ports.copy()
-for port, proc in remote_ports.items():
-    if port <= self.max_auto_port:
-        self.forward_port(port, proc)        # idempotent
-closed = set(self.tunnels) - set(remote_ports)
-for port in closed:
-    self.stop_forwarding_port(port)          # <-- no grace period
-```
+Two scan-loop rules (`AutoForwarder.ts:371-380, 457-486`):
 
-Two things matter:
-
-- **`if not remote_ports: return` is the only flap protection there is.** A
-  scan that fails entirely (transport hiccup, `ss` missing, permission error)
-  returns `{}` and the loop leaves every tunnel alone. There is **no
-  per-port debounce**: one scan in which a port is genuinely absent tears its
-  tunnel down immediately.
-- **Manual tunnels are torn down too.** `closed` is computed from
-  `self.tunnels` without consulting `manual_tunnels`, so a hand-forwarded high
-  port dies the moment its process stops listening — even though the user
-  explicitly asked for it.
-
-`stop_forwarding_port` (`:972-983`) closes the listener and evicts the port
-from `tunnels`, `local_port_map`, `process_names`, `process_pids`,
-`process_working_dirs`, `manual_tunnels`, and `failed_ports` (so a port that
-comes back is retried).
-
-### What Node does — `scanAndForward` (`AutoForwarder.ts:113-143`)
-
-Same shape, two differences:
-
-- It **keeps manually-toggled ports alive** across a disappearance
-  (`:138`) — better than the Python, do not regress it.
-- It has **no empty-scan guard**. `scanRemotePorts` returns `[]` on any exec
-  failure (`scanRemotePorts.ts:38`), so a single failed scan makes
-  `activeRemote` empty and stops *every* non-manual forward. Mid-download,
-  silently. **This is the most damaging bug in the current Node code.**
-
-`togglePort` (`AutoForwarder.ts:99-107`) is also semantically wrong for the
-UI: toggling a port that policy already forwards adds it to `manual` (no
-visible change); toggling again removes it from `manual` but policy
-immediately re-forwards it. There is no "user disabled this port" state, so
-the panel's toggle cannot turn an in-policy port off.
-
-### Recommendation — `AutoForwarder.ts`
-
-```ts
-private missing = new Map<number, number>();   // remotePort -> consecutive misses
-private disabled = new Set<number>();          // user said "off" (survives scans)
-
-private async scanAndForward(): Promise<void> {
-  const ports = await this.scan();
-  if (ports.length === 0) return;              // forwarder.py:1041-1042
-  // ... start pass ...
-  for (const [key, f] of this.forwards) {
-    if (f.spec.kind !== 'local' || f.origin === 'manual') continue;
-    const seen = activeRemote.has(f.spec.destPort);
-    const misses = seen ? 0 : (this.missing.get(f.spec.destPort) ?? 0) + 1;
-    this.missing.set(f.spec.destPort, misses);
-    if (misses >= this.config.missingScansBeforeStop) { await f.stop(); /* ... */ }
-  }
-}
-```
-
-`missingScansBeforeStop: 2` at a 5s interval means a service must be gone for
-~10s before its tunnel drops — enough to ride out a `systemctl restart` or a
-dev server reload, which is precisely the flap the Python thrashes on. Reset
-the counter to 0 whenever the port reappears.
-
-Replace `togglePort` with an explicit tri-state so the UI toggle is honest:
-
-```ts
-/** User intent for one remote port. Absent = follow the auto policy. */
-type PortIntent = 'force-on' | 'force-off';
-private readonly intents = new Map<number, PortIntent>();
-```
-
-`shouldForward` = `intent === 'force-on'` → true; `'force-off'` → false; else
-the range policy. Persist `force-off` per host (§9) — a user who silenced a
-noisy port expects it silent tomorrow.
-
----
+- **The empty-scan guard.** `scanRemoteListeners` returns `ok: false` when
+  the scan failed (`scanRemotePorts.ts:15-27`); a failed scan — and an empty
+  one, which is indistinguishable and equally harmless — leaves every tunnel
+  alone. Reading a failed scan as "nothing is listening any more" is what
+  once tore down every live tunnel mid-transfer.
+- **The teardown debounce.** A policy-forwarded port must be missing from
+  `missingScansBeforeStop: 2` consecutive scans before its tunnel drops —
+  ~10s at the 5s interval, enough to ride out a `systemctl restart` or a
+  dev-server reload. **Manual and ssh-config forwards are never torn down
+  here**: the user asked for them explicitly.
 
 ## 7. SSH config `LocalForward`
 
-### What the Python does
+The deliberate divergence: the Python only *reports* config forwards because
+OpenSSH is a separate process there. **PocketShell is the SSH client** —
+nothing else will establish them — so the app **opens** the host's
+`HostEntry.localForwards` on connect as ordinary `-L` forwards tagged
+`origin: 'ssh-config'` (`startConfigForwards`,
+`AutoForwarder.ts:317-342`). Their `destPort`s are excluded from the auto
+policy: SSH itself owns that local port (`forwarder.py:916-922`).
 
-Parsed inside its own hand-rolled config reader
-(`_load_ssh_config`, `forwarder.py:604-625`) into
-`config["local_forwards"]: Dict[remote_port, local_port]`:
-
-- form `LocalForward [bind:]localPort host:remotePort`
-- the local port is the token after the last `:` of field 1, so
-  `127.0.0.1:8080` → `8080` (`:611-615`, test `tests/test_cli.py:396-408`)
-- field 2 **must** contain `:`, otherwise the line is dropped (`:619-620`)
-- keyed **remote → local**, so `LocalForward 8081 localhost:8080` stores
-  `{8080: 8081}` (test `:410-423`)
-
-Interactions:
-
-1. `forward_port` refuses any port in `config_local_forwards` (`:916-922`) —
-   SSH itself owns that local port, so auto-forwarding it would collide.
-2. The dashboard merges them into the table even when the remote scan did not
-   see them, with process name `"SSH Config"` (`dashboard.py:158-160`), a
-   cyan status dot (`:204`), the configured local port, a clickable URL, and
-   no traffic stats. The README calls this the **"Auto (SSH Config)"** status
-   — that literal string does not exist in the code, only the cyan dot does.
-3. Toggling such a row is refused with
-   *"Port N is forwarded via SSH config - cannot toggle here"*
-   (`dashboard.py:268-272`, `:345-350`).
-4. `--include-configs` / `include_config_ports` is threaded from `cli.py:71-75`
-   all the way into `TunnelDataTable.__init__` (`dashboard.py:111`) and **never
-   read**. Dead flag; do not port it.
-
-### What Node has
-
-`SshConfigParser.ts:171-175` already parses `LocalForward`/`RemoteForward`
-into `ForwardSpec[]` on `HostEntry.localForwards` / `.remoteForwards`
-(`types.ts:29-30`), handling `[::1]:8080`, `host:port`, and bare-port forms
-(`splitHostPort`, `:235-248`). This is strictly better than the Python parser.
-It just never reaches `AutoForwarder`.
-
-### Recommendation — and one deliberate divergence
-
-Pass the host's `localForwards` into the forwarder:
-
-```ts
-constructor(
-  ssh, connectionId, registry,
-  config = DEFAULT_AUTO_CONFIG,
-  remappings: Record<number, number> = {},
-  configForwards: ForwardSpec[] = [],   // NEW: HostEntry.localForwards
-)
-```
-
-- **Exclude** every `destPort` in `configForwards` from the auto policy
-  (Python rule 3, `forwarder.py:916-922`).
-- **Surface** them as rows with `origin: 'ssh-config'` so the panel can render
-  the "Auto (SSH Config)" status and disable the remove/toggle button.
-
-The divergence: in the Python's world the user separately runs
-`ssh -L …` from OpenSSH, so those local ports really are bound by another
-process and the tool is only *reporting*. **PocketShell is the SSH client.**
-Nothing else establishes those forwards. So the desktop should actually
-**open them** on connect as ordinary `-L` forwards tagged
-`origin: 'ssh-config'` — the config said "I want this forward" and we are the
-one connection that can honour it. If the bind fails with `EADDRINUSE`
-(because the user *does* have a real `ssh -L` running), mark the row
-`active: false, origin: 'ssh-config'` and **do not retry it** — that is
-exactly the Python's read-only view, arrived at honestly.
-
-`RemoteForward` entries exist on `HostEntry` too and can be established the
-same way through the already-working `-R` path (`Forwarder.ts:137-164`).
+If the bind fails (`EADDRINUSE` — the user really does have an `ssh -L`
+running), the row is kept in the map with `active: false` and the failure is
+recorded with `Number.POSITIVE_INFINITY` as its timestamp (`:336`) — **never
+retried**. That lands on exactly the Python's read-only view, arrived at
+honestly. `RemoteForward` entries are established the same way through the
+`forwardIn` path. The Python's `--include-configs` flag was dead
+(`cli.py:71-75`) and is not ported.
 
 ---
 
 ## 8. Reconnect
 
-### CLI path — `forwarder.py:1082-1143`
+The supervisor that opened its own second connection is gone; the schedule
+survives as the pure value object `src/shared/reconnectBackoff.ts` —
+5 → 10 → 20 → 40 → 60s (capped), giving up after `MAX_ATTEMPTS = 10` so a
+dead host does not spin forever. That keeps the Python CLI's curve
+(`forwarder.py:1141`) and drops both the CLI's infinite retry and the TUI's
+flat 5s hammering (`dashboard.py:1036-1038`). The countdown belongs in the
+renderer, which ticks toward `retryAtEpochMs`.
 
-`_is_connected()` (`:1082-1091`): transport non-null and active, then a
-`transport.send_ignore()` probe. Checked once per loop iteration, before each
-scan (`:1167`).
-
-`_reconnect()` (`:1110-1143`): close the client, `_clear_stale_state()`, then
-backoff **5 → 10 → 20 → 40 → 60s (capped)**, `delay = min(delay*2, 60)`
-(`:1141`), sleeping in 1-second increments so `Ctrl+C` stays responsive
-(`:1128-1131`). **Retries forever** while `self.running`.
-
-`_clear_stale_state()` (`:1093-1108`) stops every tunnel and clears `tunnels`,
-`local_port_map`, `process_names`, `process_pids`, `process_working_dirs`,
-`manual_tunnels`, `failed_ports`, `all_remote_ports` — and explicitly
-**keeps `port_remappings` and `port_names`** (`:1108`). So across a reconnect:
-names and remaps survive; manual toggles and failed-port memory do not; every
-tunnel is rebuilt from scratch by the next scan, and a mirrored port can land
-on a *different* local port if something else grabbed it meanwhile.
-
-### TUI path — `dashboard.py:983-1038`
-
-Different, and inconsistent with the CLI: `_start_reconnect` →
-`_reconnect_countdown(5)` ticks once per second showing
-`"Connection lost\n\nReconnecting in N..."` (`:408-411`), then
-`"Reconnecting..."` and a background reconnect thread. On failure it restarts
-the countdown at **5 again — flat, no backoff** (`:1036-1038`), hammering a
-down host every ~5s forever.
-
-### What Node has
-
-`AutoForwarderSupervisor.ts` implements the Android FSM: 5s→60s exponential,
-`MAX_ATTEMPTS = 10` then state `lost`. But it is **not wired to anything** —
-`ForwardService.ts:13-15` says the supervisor is "deferred to Phase 3.5", and
-nothing constructs it. Worse, `connectAndRun` (`:91-111`) calls
-`this.ssh.connect(this.connectOpts)` — **it opens its own second connection**,
-which is exactly what the single-connection decision rules out.
-
-### Recommendation
-
-**Delete `AutoForwarderSupervisor.ts`, or reduce it to a pure backoff-timer
-helper.** The app already owns connection lifecycle: `SshService` emits
-`onCloseConnection(connectionId, reason)` with `reason: 'user' | 'lost'`
-(`SshService.ts:91-94`, fired from `'error'`/`'close'` at `:132-133`).
-
-`ForwardService` should:
-
-```ts
-constructor(ssh: SshService, registry: ConnectionRegistry) {
-  ssh.onCloseConnection((id, reason) => {
-    const fwd = this.forwarders.get(id);
-    if (!fwd) return;
-    fwd.suspend();            // stop listeners + timer, KEEP intents/remaps/names
-    if (reason === 'lost') this.emitState(id, 'reconnecting');
-    else this.evict(id);
-  });
-}
-```
-
-and, when the app re-establishes the connection (new `connectionId`), rebuild
-the forwarder seeded from persisted state. Concretely, mirror
-`_clear_stale_state`'s split:
+`ForwardService` owns its `onCloseConnection` subscription
+(`ForwardService.ts:41-52`). On a transport drop it suspends the engine,
+keeping the host's names, remaps, intents, and `autoEnabled` preference;
+before the renderer exposes a new connection id, `connection.ts` checks that
+preference and calls `forwards.startAuto()` when it is still on
+(`restoreAutoForward`, `stores/connection.ts:345-360`). This covers both
+reconnects and the first connection after an app restart; the Ports panel
+then only takes its initial reading. An explicit stop in the Ports panel is
+what writes `autoEnabled: false`.
 
 | Survives a reconnect | Dropped |
 |---|---|
-| friendly names, remaps, `force-on`/`force-off` intents | live `Forwarder` objects, byte counters, failed-port memory, PID/cwd cache |
-
-The countdown belongs in the renderer — main emits
-`{ state: 'reconnecting', retryAtEpochMs }` and the panel renders the ticking
-number. Do not port `ReconnectOverlay` (TUI widget) or the dashboard's flat
-5s retry (a bug); keep the CLI's exponential 5→60s, and prefer the
-supervisor's cap-then-give-up over the Python's infinite retry so a dead host
-does not spin forever.
-
-### Current Node lifecycle
-
-`ForwardService` owns its `onCloseConnection` subscription. On a transport
-drop it suspends the engine, keeping the host's names, remaps, intents, and
-`autoEnabled` preference; before the renderer exposes a new connection id,
-`connection.ts` checks that preference and calls `forwards.startAuto()` when it
-is still on. This covers both reconnects and the first connection after an app
-restart; the Ports panel then only takes its initial reading. An explicit stop
-in the Ports panel is what writes `autoEnabled: false`.
+| friendly names, remaps, `force-on`/`force-off` intents, `autoEnabled` | live `Forwarder` objects, byte counters, failed-port memory, discovered-port cache |
 
 The application entrypoint must not also call `forwards.evict()` from its
 generic close handler. That method is an explicit teardown operation and
 clears the persisted preference. A second call there would turn a temporary
 transport loss into a user-requested stop, making forwarding appear to resume
-only after the Ports panel is opened and enabled again.
+only after the Ports panel is opened and enabled again. The entrypoint's
+close handler evicts only the state it owns (sftp, projects, preview) —
+`index.ts:33-41`.
 
 ---
 
 ## 9. Persistence
 
-### What the Python persists
-
-**Exactly one thing:** `~/.ssh-auto-forward/port-names.json` (§5). Nothing
-else outlives the process — remaps, manual toggles, failed ports, and the
-auto-forward on/off state are all in-memory, per run.
-
-### Recommendation — `electron-store` schema
-
-`electron-store@10.0.1` is in `package.json:27` and used nowhere in `src/`.
-Add a single namespaced store (suggested new file
-`src/main/portfwd/PortfwdStore.ts`):
+Implemented in `PortfwdStore.ts` over `electron-store`; schema
+(`PortfwdStore.ts:26-44`):
 
 ```ts
-/** All port-forward state that outlives a run, keyed by host. */
-export interface PortfwdState {
-  /** Friendly names. Port keys are decimal strings (JSON object keys). */
-  names: Record<string, string>;          // "8080" -> "admin UI"
-  /** User-chosen local ports. Python keeps these only in memory. */
-  remaps: Record<string, number>;         // "19840" -> 3000
-  /** Ports the user explicitly forced on (above maxAutoPort) or off. */
-  forceOn: number[];
-  forceOff: number[];
-  /** Whether auto-forward was left running for this host. */
-  autoEnabled: boolean;
+interface PortfwdState {           // per host
+  names:  Record<string, string>;  // "8080" -> "admin UI"
+  remaps: Record<string, number>;  // "19840" -> 3000
+  forceOn: number[];               // user-forced ports (e.g. above maxAutoPort)
+  forceOff: number[];              // user-silenced ports
+  autoEnabled: boolean;            // engine left running for this host
 }
-
-export interface PortfwdSchema {
-  /** hostKey -> state. hostKey = ssh-config alias, else `user@host:port`. */
-  hosts: Record<string, PortfwdState>;
-  /** Schema version so a later shape change can migrate rather than guess. */
-  version: 1;
-}
-
-const store = new Store<PortfwdSchema>({
-  name: 'portfwd',
-  defaults: { hosts: {}, version: 1 },
-});
+// PortfwdSchema = { hosts: Record<hostKey, PortfwdState>, version: 1 }
 ```
 
 Rules ported from `_load_port_names` / `_save_port_names`
 (`forwarder.py:30-56`, `:999-1006`):
 
-- Corrupt or non-object data → treat as empty, never throw (`:44-46`).
-- Drop non-numeric port keys and empty names on read (`:40-42`, `:538-542`).
-- Setting an empty name **deletes** the entry (`:988-991`); a host whose
-  state becomes fully empty is removed from `hosts` (`:1005`).
-- Read-modify-write the whole document on save so two windows on different
-  hosts don't clobber each other (`:1001`). `electron-store` reads from disk
-  per `get`, so this is the default behaviour — just don't cache the document.
+- Corrupt or non-object data is treated as empty, never thrown.
+- Non-numeric port keys and empty names are dropped on read.
+- Setting an **empty name deletes** the entry; a host whose state becomes
+  fully empty is removed from `hosts`.
+- **Read-modify-write the whole document** on save, so two windows on
+  different hosts cannot clobber each other. Never cache the document.
+
+Hosts are keyed by `hostKeyFor` (`PortfwdStore.ts:100-120`): the
+**SSH config host alias** when there is one (`ConnectionRecord.hostAlias`,
+`ConnectionRegistry.ts:28` — two aliases pointing at the same box keep
+separate name sets), else `user@host:port` for a manually-entered host. The
+desktop is deliberately better than the Python here: its remaps were
+documented "persistent" (`forwarder.py:1009`) but died with the process;
+names, remaps, and intents all survive a restart here.
 
 ---
 
-## 10. Parsers need real captured output, not assumed formats
+## 10. Parsers are pinned to captured fixtures, never assumed formats
 
-The helper contract this project
-assumed drifted badly from reality (`--json` flags that don't exist, envelopes
-where arrays were expected, padding rules that break naive column slicing).
-The same hazard applies here, and the Python contains a live example of it:
-
-> `ss -tlnp 2>/dev/null | awk 'NR>1 {print $4, $7}'` (`forwarder.py:784`)
-
-`ss -tlnp` emits six columns —
-`State Recv-Q Send-Q Local:Port Peer:Port users:(("name",pid=N,fd=M))` — so
-the process blob is **`$6`, not `$7`**. With `$7` empty, awk prints
-`"addr "`, the Python's `len(parts) >= 2` check fails (`:803`), the dict comes
-back empty, and the code silently falls through to `netstat -tlnp`. On a host
-with `iproute2` but no `net-tools` (most modern minimal images), that means no
-process names, no PIDs, and therefore **no working-folder column at all** —
-the feature quietly degrades to the `ss -tln` fallback. The Docker fixture
-(`docker/Dockerfile`) installs *both* `iproute2` and `net-tools` and runs as
-root, so no test ever catches it.
-
-**Do not port the awk trick.** `PortScanner.ts` already parses whole lines and
-takes `tokens.slice(5)` for the process blob (`PortScanner.ts:34-36`), which
-is the correct column. Keep that.
-
-Before touching any of these parsers:
-
-1. Capture real `ss -tln`, `ss -tlnp`, `netstat -tln`, `netstat -tlnp`, and
-   `readlink /proc/*/cwd` output from at least (a) the project's Docker sshd
-   fixture as root, (b) a real host as a non-root user, and check them in as
-   fixture files.
-2. Assert the parsers against those bytes, including the header variants
-   (`State`/`Netid` for `ss`, `Proto`/`Active Internet connections` for
-   `netstat`), IPv6 `[::]:PORT`, `*:PORT`, and the non-root `ss -tlnp` case
-   where rows are **missing entirely** rather than blank.
-3. Only then wire the merge policy.
+Every parser in `PortScanner.ts` is tested against real captured output in
+`tests/unit/fixtures/portscan-*.txt` (Alpine root + non-root, Debian
+iproute2, BusyBox netstat, net-tools netstat, nginx) — see the header comment
+at `PortScanner.ts:6-18`. The cautionary example is the Python's
+`awk '{print $4, $7}'` on `ss -tlnp`: the process blob is column **6**, so
+the `ss` path silently never produced process info at all — a bug its own
+Docker fixture (root, both toolsets installed) could never catch. Do not port
+the awk trick, and do not write a parser from a format you assumed.
 
 ---
 
@@ -806,408 +267,190 @@ Before touching any of these parsers:
 
 | Python behaviour | Why not |
 |---|---|
-| Textual TUI: `DashboardApp`, `TunnelDataTable`, `LogPanel`, `InputScreen`, `ReconnectOverlay`, key bindings `X/O/N/M/R/L/Q` (`dashboard.py:696-1180`) | The app has a real UI. The *actions* (name, remap, toggle, open URL) port; the widgets and keymap do not. |
-| `HostSelectorScreen` / `HostSelectorApp` / `run_host_selector` (`dashboard.py:510-694`, `:1247-1267`) | PocketShell already has a host picker with a real config parser. |
-| Hiding hosts that have `LocalForward` from the picker, plus the "▶ Show hosts with local forwards" toggle row (`forwarder.py:358-503`) | An artifact of the tool's single-purpose framing. Hiding a host from the desktop's picker because it has a forward directive would be actively wrong. |
-| `_find_ssh_config`, `_load_ssh_config`, `_host_matches`, `get_ssh_hosts*` (`forwarder.py:340-503`, `:557-641`) | `SshConfigParser.ts` is a better parser (Include, globs, multi-name Host lines, IPv6, RemoteForward). The Python's `break`-on-second-match loop (`:589-590`) mis-handles multiple matching blocks. |
-| All paramiko connection management: `connect`, `_load_keys`, `_get_agent_keys`, `_find_identity_keys`, `AutoAddPolicy` (`forwarder.py:643-752`) | The app owns one authenticated connection with real known_hosts/TOFU. `AutoAddPolicy` (`:707`) accepts any host key — never bring that in. |
-| `_update_terminal_title` ANSI escape (`forwarder.py:1072-1080`) | Writes `\033]0;…\007` to stdout. Meaningless in Electron; in a packaged app it would corrupt whatever is reading stdout. |
-| `LogHandler` + `_log_buffer` (`dashboard.py:85-102`) | Logging plumbing for a TUI that hijacks stdout. |
-| `--include-configs` / `include_config_ports` (`cli.py:71-75`) | Dead — threaded through and never read. |
-| `-p/--port-range` as specified | Dead — see §4. Port the *concept* (a bounded sweep range), not the flag's advertised meaning. |
-| `ssh_auto_forward/pipe.py` (`bidirectional_pipe`) | Dead module: nothing in `ssh_auto_forward/` imports it; only `tests/test_pipe.py` does. The live implementation is `SSHTunnel._pipe` (`forwarder.py:168-301`). |
-| `SSHTunnel._pipe`'s thread choreography, `SO_LINGER`, half-close, `SSH_FORWARD_IDLE_TIMEOUT` (`forwarder.py:168-301`) | This is Python solving a Python problem: blocking sockets + GIL + two threads per connection. Node's `socket.pipe(channel)` (`Forwarder.ts:208-209`) gets half-close and backpressure from the stream layer for free. **But** see §12 — the *idle-timeout* idea is worth keeping. |
+| Textual TUI widgets, keymap (`dashboard.py:696-1180`) | The app has a real UI. The *actions* (name, remap, toggle, open URL) ported; the widgets did not. |
+| `HostSelectorScreen` / host hiding for `LocalForward` hosts | PocketShell has a host picker with a real config parser. Hiding a host because it has a forward directive would be actively wrong. |
+| `_find_ssh_config` / `_load_ssh_config` / `_host_matches` | `SshConfigParser.ts` is a better parser (Include, globs, multi-name `Host`, IPv6, `RemoteForward`); the Python's break-on-second-match loop mis-handles multiple matching blocks. |
+| All paramiko connection management, incl. **`AutoAddPolicy`** | The app owns one authenticated connection with real known_hosts/TOFU. `AutoAddPolicy` accepts any host key — **never bring it in**. |
+| `_update_terminal_title` ANSI escape | Would corrupt a packaged app's stdout. |
+| `LogHandler` + `_log_buffer` | Logging plumbing for a TUI that hijacks stdout. |
+| `--include-configs` | Dead in the Python — threaded through and never read. |
+| `-p/--port-range` as specified | Dead in the Python (§4); only the sweep-range concept was ported. |
+| `pipe.py` | Dead module; only its test imports it. |
+| `SSHTunnel._pipe`'s thread choreography, `SO_LINGER`, half-close | Python solving a Python problem; `socket.pipe(channel)` gets it all from the stream layer. **But** the idle-timeout idea was kept — §12. |
 
 ---
 
-## 12. Where the Node implementation is already better — do not regress
+## 12. Do not regress
 
-1. **Scan strategy order.** `scanRemotePorts.ts:15-19` gets right what the
-   Python gets wrong: `ss -tlnp` as non-root *drops* rows it cannot attribute,
-   so the full list must come from `ss -tln` and process names are an
-   enrichment. Keep it.
-2. **`-R` and `-D`.** `Forwarder.ts` implements remote forwards via
-   `forwardIn` (`:137-164`) and a SOCKS5 dynamic forward (`:229-279`). Neither
-   Python nor Android has these. Nothing in this
-   spec may drop them.
-3. **Manual forwards survive a port disappearing** (`AutoForwarder.ts:138`).
-   The Python kills them (§6).
-4. **Streams instead of threads.** No 2 threads + 2 timeouts + an
-   `error_queue` per connection.
-5. **`SshConfigParser`** handles `Include`, globs, multi-name `Host` lines,
-   IPv6, and `RemoteForward` (§7).
-6. **One connection.** The Python opens one paramiko client per host *and*
-   `AutoForwarderSupervisor` would open a second one here. Neither is
-   acceptable; `Forwarder` resolving its client from the registry per
-   operation (`Forwarder.ts:184-186`) is the right shape.
+Behaviours that are better than the Python and must stay that way:
 
-Two things from the Python that Node dropped and probably should not have:
+1. **Scan order** — `ss -tln` authoritative, `-tlnp` enrichment (§1).
+2. **`-R` and `-D`** — net-new here (`forwardIn` and SOCKS5); neither the
+   Python nor Android has them. Nothing may drop them.
+3. **Manual forwards survive a port disappearing** (§6).
+4. **Streams instead of threads** — no per-connection thread pairs and error
+   queues.
+5. **`SshConfigParser`** (Include, globs, IPv6, `RemoteForward`).
+6. **One connection** — `Forwarder` resolves its client from the registry
+   per operation; no component may open a second SSH connection.
 
-- **The idle-connection reaper.** `SSH_FORWARD_IDLE_TIMEOUT`, default 3600s,
-  `0` disables (`forwarder.py:26`, `:201-203`, `:246-247`): a forwarded
-  connection silent in *both* directions for an hour is torn down, so an
-  abandoned keep-alive socket cannot leak a channel forever. Node's
-  `Forwarder` has no such reaper. Worth adding as
-  `idleTimeoutMs: 3_600_000` with the same both-directions-silent rule.
-- **Byte counters that distinguish direction.** `Forwarder.ts:210-216`
-  increments `bytesIn` from the **local socket** and `bytesOut` from the
-  channel — i.e. `bytesIn` is upload and `bytesOut` is download, the opposite
-  of the Python's `bytes_sent`/`bytes_received` (`forwarder.py:96-97`) and of
-  what the column headers "In"/"Out" in `PortPanelView.vue:98` imply. Fix the
-  naming while you are in there. Also port `get_stats()`'s rate calculation
-  (`forwarder.py:303-326`): deltas since the previous snapshot divided by
-  elapsed monotonic time, which is what makes the dashboard's live speed
-  column possible.
+Things the Python had that Node initially dropped and now has:
+
+- **The idle-connection reaper** (`SSH_FORWARD_IDLE_TIMEOUT`, 1h, 0
+  disables): a proxied connection silent in **both** directions for the
+  window is torn down (`Forwarder.ts:79`, `armIdleReaper` `:354-378`), so an
+  abandoned keep-alive socket cannot leak an SSH channel.
+- **Directional byte counters and rates.** `bytesIn` is download (channel),
+  `bytesOut` is upload (local socket) — `Forwarder.ts:330-339`, fixed after
+  being swapped; rates are delta/elapsed per snapshot (`:164-173`). The key
+  string has one source, `forwardKey` (`:67-69`), shared by main and
+  renderer; inbound `-R` channels are dispatched by one per-client
+  dispatcher, not a listener per forward (`:274`, `:390-446`).
+
+Current behaviour, not a bug: a **basic `-R` inbound connection stays
+byte-count-only** (`onRemoteConnection`, `Forwarder.ts:285-296`) — the
+channel is kept open and counted; there is no local destination for a
+bare `-R`.
 
 ---
 
-## 13. Diff-ready summary by file
+## 15. Bugs found while reading
 
-### `src/main/portfwd/PortScanner.ts`
-- `RemotePort` gains `pid: number | null` and `cwd: string | null` (§3).
-- Export `parseProcessInfo(blob)` — port of `forwarder.py:59-78`; unit-test
-  against `users:(("python",pid=12345,fd=7))` and `12345/node`.
-- Parse PIDs in `parseSsTlnp` / `parseNetstatTlnp`; carry them through
-  `dedupe` (which today discards everything but `process`).
-- Add fixture-backed tests before changing anything (§10).
+In `ssh-auto-forward` — kept for provenance; all are recorded in code
+comments and the §11 table:
 
-### `src/main/portfwd/scanRemotePorts.ts`
-- One sentinel-delimited exec for all listener commands (§1).
-- Second exec for `/proc/<pid>/cwd`, PIDs filtered to integers (§3).
-- Return `RemotePort[]` with `process`, `pid`, `cwd` populated.
+1. `awk $7` reads the wrong `ss -tlnp` column; no process info from `ss` (§10).
+2. `failed_ports` never expires (§2).
+3. `-p/--port-range` dead config (§4).
+4. `--include-configs` threaded and never read (§7, §11).
+5. Dashboard ignores `--interval` (hardcoded 5s), and its reconnect has no
+   backoff while the CLI retries forever (§8).
+6. `scan_and_forward` tears down **manual** tunnels (§6 keeps manual alive).
+7. Remaps documented "persistent", survive only a reconnect (§9).
+8. Config parse stops at the second `Host` match; wildcard matching unanchored (§11).
+9. `pipe.py` dead behind a 214-line test file (§11).
+10. Byte totals drift under load (`+=` across two threads).
 
-### `src/main/portfwd/AutoForwarder.ts`
-- `AutoForwardConfig`: `scanIntervalSec` 10→5, add `skipPorts`,
-  `failedPortTtlMs`, `missingScansBeforeStop`; `localPortRange` → `[3000, 65535]` (§2, §4).
-- `if (ports.length === 0) return;` — the empty-scan guard (§6). **Highest value single line in this document.**
-- Single-flight guard on the scan (§1).
-- `missing: Map<number, number>` debounce before teardown (§6).
-- Replace the `manual: Set<number>` with `intents: Map<number, 'force-on'|'force-off'>` (§6).
-- `findAvailableLocalPort` with `+1…+999` then sweep, and a real
-  `SO_REUSEADDR` bind probe (§4).
-- `failedPorts: Map<number, number>` with TTL (§2).
-- Accept `configForwards: ForwardSpec[]`; exclude and surface them (§7).
-- Never `throw` from inside the interval callback (`:164` today).
-
-### `src/main/portfwd/Forwarder.ts`
-- `ForwardState` gains `key`, `origin: 'auto'|'manual'|'ssh-config'`,
-  `name: string | null`, `process`, `cwd`, `remapped: boolean`,
-  `rateIn`/`rateOut` (§3, §12). Export one `forwardKey(spec)` helper — the key
-  string is currently rebuilt independently in `AutoForwarder.ts:120`, `:176`
-  and `PortPanelView.vue:48-50`, which is a divergence waiting to happen.
-- Optional idle reaper, default 1h (§12).
-- Fix the `bytesIn`/`bytesOut` direction naming (§12).
-
-### `src/main/portfwd/PortfwdStore.ts` (new)
-- `electron-store` wrapper implementing the §9 schema, plus
-  `hostKeyFor(rec: ConnectionRecord): string`.
-
-### `src/main/portfwd/ForwardService.ts`
-- Own the store; seed each `AutoForwarder` with that host's names, remaps and
-  intents; write back on change.
-- Subscribe to `ssh.onCloseConnection` for suspend/evict (§8).
-- New IPC verbs: `setName`, `setRemap`, `clearRemap`, `setIntent`, and a
-  `discovered` list (ports seen but not forwarded, including above
-  `maxAutoPort`) so the panel can show and toggle them.
-
-### `src/main/portfwd/AutoForwarderSupervisor.ts`
-- Delete, or strip to a pure backoff-timer utility. It must not call
-  `ssh.connect` (§8).
-
-### Not this document's files
-- `src/main/ssh/SshService.ts` + `src/main/ipc.ts`: add an optional
-  `hostAlias` to connect options so per-host persistence can key on the SSH
-  config alias like the Python does (§5). *Owned by another agent.*
-- `src/renderer/views/PortPanelView.vue`: name/remap/toggle affordances, the
-  discovered-ports rows, `Process`/`Folder` columns, the "Auto (SSH Config)"
-  status, and the reconnect countdown. *Owned by another agent.*
-
----
-
-## 14. If only three things get done
-
-1. **The empty-scan guard + teardown debounce** (§6) —
-   `if (ports.length === 0) return;` plus `missingScansBeforeStop`. Today one
-   failed scan silently kills every live tunnel mid-transfer. It is one line
-   plus a counter, and it is the difference between the feature being
-   trustworthy and being a liability.
-2. **Real local-port allocation** (§4) — the `+1…+999` fallback and the
-   `SO_REUSEADDR` bind probe. Without it, any port collision is a permanent
-   silent no-op that retries identically forever. This is the single most
-   visible behaviour of the Python tool
-   (`✓ Forwarding remote port 19840 -> local port 3000`).
-3. **Persistence + friendly names + remaps** (§5, §9) — the `electron-store`
-   schema and the name/remap plumbing. It is the feature the user built and
-   kept, it survives restarts (which the Python's remaps do *not*), and it is
-   what makes a wall of anonymous port numbers usable.
-
-Next after those: process/folder attribution (§3), then the SSH-config
-forwards (§7), then the reconnect rework (§8).
-
----
-
-## 15. Bugs and sharp edges found while reading
-
-**In `ssh-auto-forward` (Python):**
-
-1. `ss -tlnp … awk '{print $4, $7}'` reads the wrong column; the `ss` path
-   silently never produces process info (`forwarder.py:784`). §10.
-2. `failed_ports` never expires — one transient bind failure blacklists a port
-   for the life of the process (`forwarder.py:931-933` vs `:983`). §2.
-3. `-p/--port-range` is parsed, stored, and never used; the sweep is hardcoded
-   `range(3000, 65535)` (`forwarder.py:533` vs `:894`). §4.
-4. `--include-configs` is threaded through three layers and never read
-   (`cli.py:74` → `dashboard.py:111`). §7.
-5. The dashboard's refresh timer is hardcoded to 5s and ignores `--interval`
-   (`dashboard.py:791`, `:857` vs `cli.py:42`).
-6. The dashboard's reconnect has **no backoff** — flat 5s forever
-   (`dashboard.py:1036-1038`) — while the CLI has 5→60s exponential
-   (`forwarder.py:1141`). Two different behaviours for the same failure.
-7. `scan_and_forward` tears down **manual** tunnels when their port stops
-   listening, ignoring `manual_tunnels` (`forwarder.py:1055-1062`).
-8. `port_remappings` are documented as "persistent" (`forwarder.py:1009`) but
-   only survive reconnects, never a restart.
-9. `_load_ssh_config` breaks out of the parse loop at the *second* `Host` line
-   after a match (`:589-590`), so a later, more specific block for the same
-   alias is never seen; and its wildcard→regex conversion is unanchored, so
-   `Host dev` would regex-match `dev-prod` in `_load_ssh_config`'s inline
-   `re.match` path (`:594`) even though `_host_matches` (`:630-641`) demands
-   an exact match for literals. Two different matching rules in one class.
-10. `pipe.py` is dead code with a 214-line test file behind it
-    (`tests/test_pipe.py`), giving false coverage confidence.
-11. `SSHTunnel` counts bytes from non-atomic `+=` across two threads — the
-    displayed totals can drift under load (`forwarder.py:227`, `:259`).
-
-**In `pocketshell-electron` (Node):**
-
-1. **A failed scan tears down every forward** — `scanRemotePorts` returns `[]`
-   on exec failure and `scanAndForward` treats that as "nothing is listening"
-   (`scanRemotePorts.ts:38` → `AutoForwarder.ts:133-141`). §6.
-2. `allocateLocalPort` **throws** when `3000..3999` is exhausted
-   (`AutoForwarder.ts:164`), inside `void this.scanAndForward()` — an
-   unhandled promise rejection that kills the scan loop.
-3. `togglePort` cannot turn *off* a port the auto policy forwards
-   (`AutoForwarder.ts:99-107`). §6.
-4. A `Forwarder.start()` that returns `false` is discarded silently
-   (`AutoForwarder.ts:131`) with no user-visible error and no backoff.
-5. `AutoForwarderSupervisor` opens a second SSH connection
-   (`AutoForwarderSupervisor.ts:94`) — contradicts the single-connection
-   decision. It is also unreferenced, so this is latent, not live.
-6. `Forwarder.onRemoteConnection` (`Forwarder.ts:166-181`) accepts every
-   inbound `-R` channel and just counts bytes into `bytesIn`, never piping to
-   a local destination — so `-R` is byte-count-only today. It also registers a
-   `client.on('tcp')` handler **per remote forward** on the shared client, so
-   N remote forwards means every inbound channel is handled N times.
-7. `bytesIn`/`bytesOut` are swapped relative to their column labels
-   (`Forwarder.ts:210-216` vs `PortPanelView.vue:98`). §12.
-8. The forward key is constructed in three places with two different formats —
-   `AutoForwarder.ts:120` (`local:${localPort}->${rp.port}`, no host) vs
-   `AutoForwarder.ts:176` and `PortPanelView.vue:48-50`
-   (`${kind}:${listenPort}->${destHost}:${destPort}`). An auto-created forward
-   therefore **cannot be removed from the UI** — the renderer computes a key
-   the map does not contain. Fixing this is nearly free and is a real,
-   user-visible bug.
-9. `PortPanelView.vue` fetches `remotePorts` into the store and never renders
-   them, so discovered-but-unforwarded ports are invisible
-   (`forwards.ts:33`, `PortPanelView.vue:101`).
+In `pocketshell-electron`: the nine defects this section once recorded are
+**all fixed**. Two are still cited by number from tests, so their names are
+kept. **§15.6** — a `client.on('tcp')` handler was registered per `-R`
+forward on the shared client, so every inbound channel was handled N times;
+fixed by the per-client `RemoteChannelDispatcher` (`Forwarder.ts:390-446`),
+pinned by `tests/unit/Forwarder.test.ts`. **§15.7** — `bytesIn`/`bytesOut`
+were swapped relative to the panel's In/Out headers; fixed at
+`Forwarder.ts:330-339`, pinned by an asymmetric-traffic test in
+`tests/integration/ForwardService.integration.test.ts`.
 
 ---
 
 ## 16. Seeing that it is on from the outside
 
-> "if auto-forward is on I want to see an indicator e.g. in the panel with
-> icons — like a border around it or something like that"
-
-The panel with icons is the session header's strip, and the glyph that stands
-for this feature is the Ports button (`arrow-right-left`). While the engine
-runs for the connected host, that button now carries the state on its face:
-the fill tints `--accent-soft`, a 1px ring in `--accent-dim` goes around it,
-the glyph recolours `--accent`, and a 5px dot with a soft glow sits in the
-corner (`HostPanelButtons.vue`). The register is not new — it is the same
-three tokens the panel's own `Auto-forward: ON` toggle words the state with
-(`.toggle.on`, PortPanelView.vue) — so "on" reads the same way in both places.
-The dot is the half the ring cannot say: a ring alone could be read as
-"selected"; a glowing dot says "running".
-
-Both surfaces that render the buttons — the session header and the collapsed
-rail — mark identically, because they always rendered from one component and
-the indicator is just one more prop. The tooltip grows a suffix while the
-indicator is up ("Port forwarding — auto-forward on"), which matters more than
-it looks: the `title` is the button's entire accessible name, so the word must
-keep travelling with the mark (§5.3e's rule, applied to state as well as
-identity). The ring is an inset box-shadow rather than a border so the glyph
-does not shift half a pixel inside the fixed square when the state flips.
-
-> "when I enable port forwarding I want some indicator that it's enabled and
-> also show how many ports"
-
-The dot answers the second half the moment ports are live: it grows into a
-count pill — the same corner, the same accent, now solid `--accent` with
-`--on-accent` digits (`HostPanelButtons.vue`'s `.auto-count`) — so the button
-says "on, and how many" in one mark and never shows dot and pill at once.
-Live ports outrank the bare engine flag, which is why the stronger register
-wins: the pill means forwards exist to click through to, while the dot stays
-the "running, nothing caught yet" state between enabling the engine and the
-first scan beat that opens something. The tooltip's suffix carries the count's
-word too ("Port forwarding — auto-forward on, 2 ports", pluralised, capped at
-"99+" so a three-digit count cannot turn the mark into a label). The count is
-of LIVE forwards — auto, manual, and ssh-config alike, exactly what the
-panel's table renders — not of discovered ports, most of which are
-deliberately not forwarded (§2).
+While the engine runs for the connected host, the Ports button
+(`arrow-right-left`) in the session header and the collapsed rail carries
+the state on its face (`HostPanelButtons.vue`): an accent ring and a glowing
+corner dot when the engine is running. Once ports are live the dot grows
+into a **count pill** — solid accent with digit count, capped at "99+", and
+the tooltip gains the state and the count ("Port forwarding — auto-forward
+on, 2 ports"). The count is of **LIVE forwards** — auto, manual, and
+ssh-config alike, what the panel's table renders — not of discovered ports,
+most of which are deliberately not forwarded (§2). The ring uses the same
+"on" register as the panel's own `Auto-forward: ON` toggle, so one state
+reads one way in both places.
 
 ### Where the state lives, and why it is not the store's `autoOn`
 
-The forwards store's `autoOn` is the flag the ports panel itself renders — and
-it is only fresh while that panel is MOUNTED: `PortPanelView` subscribes on
-entry and the store `clear()`s on unmount (`stores/forwards.ts`). An indicator
-read off it would say OFF almost all of the time, which is the opposite of an
-indicator. The connection store restores a persisted ON setting before it
-exposes a newly connected id to the workspace (`stores/connection.ts`), so the
-engine is live before the panel is opened. The workspace owns the value it
-displays (`HostWorkspaceView.vue`):
+The forwards store's `autoOn` is the flag the ports panel itself renders —
+and it is only fresh while that panel is MOUNTED: `PortPanelView` subscribes
+on entry and the store `clear()`s on unmount (`stores/forwards.ts`). An
+indicator read off it would say OFF almost all of the time, which is the
+opposite of an indicator. The connection store restores a persisted ON
+setting before it exposes a newly connected id to the workspace
+(`stores/connection.ts`), so the engine is live before the panel is opened.
+The workspace owns the value it displays (`HostWorkspaceView.vue`):
 
 - whenever the connection or the ports overlay changes, it asks the engine
   directly — `forwards.isAutoEnabled`, which answers "forwarder running, else
-  the persisted per-host flag" (`ForwardService.ts:108`) — while the connection
-  store has already restored a persisted ON engine before the new id becomes
-  visible. Opening the overlay therefore reads and displays the existing
-  engine; it is no longer the thing that starts it;
+  the persisted per-host flag" (`ForwardService.ts:108`);
 - while the overlay IS open, the store's live flips are mirrored straight
   through, so the toggle inside the panel reaches the header button without
   waiting for a reopen.
 
-The count lives in the same place for the same reason, and it needs no new
-verb: the engine already BROADCASTS every state change (`forwards:states`,
-`ipc.ts`), and that broadcast includes an empty array on engine stop and on a
-dropped link — the two transitions that must empty the badge. So the
-workspace subscribes once per connection, filters by connection id, and takes
-one initial snapshot (`forwards.list`, a main-process map read) to cover the
-gap before the engine's next scan beat. A push with live forwards also raises
-the ring's flag: a manual add or a forced port starts the engine outside the
-panel, and the button must not say "off" while its badge counts forwards.
+The count lives in the same place for the same reason, and needs no new verb:
+the engine already BROADCASTS every state change (`ipc.forwards.states`,
+`ipc.ts:99`), including an empty array on engine stop and on a dropped link —
+the two transitions that must empty the badge. The workspace subscribes once
+per connection, filters by connection id, and takes one initial snapshot
+(`forwards.list`) to cover the gap before the engine's next scan beat. A push
+with live forwards also raises the ring's flag: a manual add or a forced port
+starts the engine outside the panel, and the button must not say "off" while
+its badge counts forwards. A late answer for a replaced connection is dropped
+— reconnect mints a new id, and the old flag is about a dead link.
 
-A late answer for a connection that has since been replaced is dropped rather
-than written — reconnect mints a new id, and the old flag is about a dead
-link. Tested in `tests/unit/autoForwardIndicator.test.ts` (mount, plain-OFF,
-reconnect, live mirror; pushed count, snapshot count, empty push, dead
-connection's push) and `tests/unit/SessionTree.test.ts` (the relay of both
-props, and that Usage — the sibling button — is never marked).
+Tests: `tests/unit/autoForwardIndicator.test.ts`, `tests/unit/SessionTree.test.ts`.
 
 ---
 
 ## 17. One-click open in the browser
 
-> "for port forwarding I want to open the port in the browser with one click —
-> like I do it with ssh-auto-forward or in the Android app"
-
-A forwarded port is a URL, and the commonest thing to do with a URL is look at
-it. The LOCAL column now opens it: every row with a live LOCAL tunnel has an
-`external-link` button beside the port number, which opens
-`http://127.0.0.1:<listenPort>/` in the system browser
-(`PortPanelView.vue`, `localUrlOf`/`openLocal`). The open belongs to the local
-end — the URL IS that number — so the mark sits next to the port it names,
-reading as "this number, in a browser", while the actions column keeps the row
-verbs (stop, toggle, auto, remove).
-
-Where the button appears is the whole design, because a forwarded port is only
-a URL when a local tunnel for it exists:
+A forwarded port is a URL; the LOCAL column opens it. Every row with a live
+local tunnel has an `external-link` button beside the port number, opening
+`http://127.0.0.1:<listenPort>/` in the system browser (`PortPanelView.vue`,
+`localUrlOf`/`openLocal`). Where the button appears is the whole design,
+because a forwarded port is only a URL when a local tunnel exists:
 
 - **A live local forward gets it, at the tunnel's LISTEN port** — not the
   remote port. They differ whenever a pin or an allocation moved the local
-  end (`remap`), and a URL naming the remote port would reach whatever else
-  happens to sit there.
-- **A `-R` forward does not.** Its listener is on the HOST; a browser on this
-  machine reaches nothing there.
-- **A discovered-but-not-forwarded port does not.** There is no tunnel, and a
-  button that opens an error page teaches the user it lies.
-- **The served row keeps its own open** — it has been this feature for one
-  special row since SERVE landed, its URL carries the trailing slash the
-  directory index needs, and "stop" is the other half of that pair. It does
-  not get a second button.
+  end, and a URL naming the remote port would reach whatever else sits there.
+- **A `-R` forward does not.** Its listener is on the HOST; a browser here
+  reaches nothing.
+- **A discovered-but-not-forwarded port does not.** No tunnel; a button that
+  opens an error page teaches the user it lies.
+- **The served row keeps its single open** — it has been this feature for
+  that one row since SERVE landed, and `stop` is the other half of that pair.
 
-Two consistency decisions ride along. The served row's open mark was
-`arrow-right` while the new one is Feather's `external-link` — two glyphs for
-one action in one column was drift, so both now carry `external-link`
-(AppIcon.vue). And the URL host is the loopback unless the forward bound a
-specific interface on purpose (`listenHost` passed through verbatim); a
-listen host of "any" (`0.0.0.0`, `::`, empty) maps to `127.0.0.1` rather than
-putting `0.0.0.0` in an address bar. `serveUrl` (serveCommand.ts) words the
-same URL for served folders.
-
-The open itself is `window.open(url, '_blank', 'noopener,noreferrer')` — not
-an IPC verb — because main's `setWindowOpenHandler` already allow-lists
-http(s) into `shell.openExternal` (index.ts), and that is the route every
-other in-app link takes. The tooltip names the exact URL, which is the one
-fact the click needs to be predictable.
-
-Tests: `tests/unit/portPanelOpen.test.ts` — the URL at the listen port, the
-verbatim interface host, the wide-host mapping, no button on `-R`, none on
-unforwarded, and the served row keeping its single open.
+The URL host is the loopback unless the forward bound a specific interface on
+purpose (`listenHost` verbatim); a wide host (`0.0.0.0`, `::`, empty) maps to
+`127.0.0.1` rather than putting `0.0.0.0` in an address bar. The open itself
+is `window.open(url, '_blank', 'noopener,noreferrer')` — not an IPC verb —
+because main's `setWindowOpenHandler` already allow-lists http(s) into
+`shell.openExternal` (`index.ts`); that is the one route every in-app link
+must take, and new open affordances go through it, not around it. Tests:
+`tests/unit/portPanelOpen.test.ts`.
 
 ---
 
 ## 18. Arranging the panel: the face is the live table
 
-> "let's also arrange the elements there" — with Scan and the manual-add form
-> struck out, and a brace around the not-forwarded rows: "collapse under …
-> (or 'show more')"
-
 A host with auto-forward on has a dozen passive listeners for every forward
-it actually opens, and the table sorted by port — so the ports 22, 53, 80,
-631 of a normal box led the list while the rows the user opened the panel
-for started half a screen down. The arrangement now follows the panel's
-point (`PortPanelView.vue`):
+actually opened, so the arrangement follows the panel's point
+(`PortPanelView.vue:29`):
 
-- **The live table leads.** Forwarded rows first, then the tail, each group
-  in port order. The merge on remote port is unchanged; only the display
-  order moved.
-- **The tail folds under a count.** One disclosure row — "N not forwarded",
-  this app's chevron — sits at the table's foot, and the folded rows keep
-  their cells behind a `v-show`, so expanding costs no fetch and no re-render
-  of the live rows. The fold carries the auto-range story the hint used to
-  point at ("anything outside 1024–10000 waits under not forwarded and can be
-  forced on from there"), which is where a force-on is still one toggle away.
+- **The live table leads**: forwarded rows first, then the tail, each group
+  in port order. The merge on remote port is unchanged; only display order
+  moved.
+- **The tail folds under a count**: one "N not forwarded" disclosure row at
+  the foot; folded rows keep their cells behind a `v-show`, so expanding
+  costs no fetch and no re-render of the live rows. Force-on for an
+  out-of-range port is still one toggle away inside the fold.
 - **Scan moved to the overlay header**, into the `#actions` seat beside the
-  close control (`HostWorkspaceView.vue`) — the same seat Usage's refresh
-  occupies, worded the same way ("Scan the host's ports now"). The engine
-  rescans on its own every few seconds, so an always-visible button spent
-  the panel's best row on a thing you almost never open the panel to do.
-  It still means one policy-APPLYING pass (`forwards.scan` → `refresh`),
-  and the spinner is still `forwards.loading`.
-- **The add form hides behind "Add forward"** — a ghost expander at the end
-  of the panel bar, accent while open. Adding a forward is a now-and-then
-  act; a form for it must not hold the top row hostage. It folds itself away
-  after a successful add (the forward is in the live table, so the form's
-  job is done) and stays open on a failure, beside the error line.
+  close control (`HostWorkspaceView.vue:574`) — the engine rescans on its own
+  every few seconds, and a press still means one policy-APPLYING pass.
+- **The add form hides behind "Add forward"**, a ghost expander that folds
+  after a successful add and stays open on a failure, beside the error line.
 
-Nothing was removed. Every control the panel had is one click away; the
-crossed-out rows in the ask were read as "not at rest", not "not at all".
-
-Tests: `tests/unit/portPanelOpen.test.ts`, describe "arranged live-first" —
-forwarded lead and the tail's fold count, no Scan button in the body with the
-add form closed by default, and the form folding away after a made forward.
-
----
+Nothing was removed; every control is one click away. Tests:
+`tests/unit/portPanelOpen.test.ts`, describe "arranged live-first".
 
 ## 19. The actions column: one mark per verb
 
-> "the x are kind of redundant so let's remove them. the badge 'local' also
-> isn't needed"
-
-Right on both counts, and for the same reason: the × named an operation the
-toggle beside it already performs. Engine-side, `remove` is `stop` + a
-`force-off` intent (`AutoForwarder.ts`) — exactly what toggle-off does — so
-on every row the toggle can act on (anything with a remote port), the two
-marks were two spellings of one verb. The × now survives only on `-R`/`-D`
-rows, whose listener is on the host and which have no remote port for the
-toggle to key on: there it is not redundant but the ONLY action. (Served
-rows lost nothing — their × was already disabled in favour of `stop`.)
-
-The `local` badge fell for the adjacent reason: with the auto policy opening
-nothing but `-L` tunnels, the chip labelled the default on every row and
-read as noise. `-R` and `-D` keep theirs — rare shapes, real information,
-and the one place the mark now appears is the place it says something.
-
-Tests: `tests/unit/portPanelOpen.test.ts` — no remove and no `local` badge
-on a keyed row with the toggle intact; remove and the `remote` badge present
-on a `-R` row.
+Engine-side, `remove` is `stop` + a `force-off` intent (`AutoForwarder.ts:
+223-233`) — exactly what toggle-off does — so on every row the toggle can
+act on (anything with a remote port) the × was a second spelling of one verb
+and is gone. The × **survives only on `-R`/`-D` rows**, whose listener is on
+the host and which have no remote port for the toggle to key on: there it is
+not redundant but the ONLY action. Served rows lost nothing — their × was
+already disabled in favour of `stop`. The `local` badge is gone with the same
+reasoning: auto opens nothing but `-L`, so it labelled every row; `-R`/`-D`
+keep theirs, the one place the mark says something. Tests:
+`tests/unit/portPanelOpen.test.ts` — no remove and no `local` badge on a
+keyed row; remove and the `remote` badge on a `-R` row.
