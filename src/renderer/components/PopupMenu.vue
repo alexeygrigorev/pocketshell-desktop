@@ -170,7 +170,7 @@ onBeforeUnmount(() => {
   background: var(--surface-3);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  box-shadow: 0 8px 24px var(--scrim);
+  box-shadow: var(--shadow-popover);
 }
 /* The item register, published here so both call sites get one menu rather
    than two that drift. `:deep` because the items arrive through the slot and

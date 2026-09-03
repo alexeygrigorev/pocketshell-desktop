@@ -256,11 +256,11 @@ onMounted(load);
   white-space: nowrap;
 }
 .muted {
-  color: var(--text-muted);
+  color: var(--fg-muted);
 }
 .error {
   margin: 0;
-  color: var(--text-error);
+  color: var(--error);
 }
 .empty-line {
   margin: 0;
@@ -294,14 +294,14 @@ onMounted(load);
   padding: 0 var(--sp-1);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  color: var(--text-muted);
+  color: var(--fg-muted);
 }
 .file-badge.envrc {
   color: var(--accent);
 }
 .unset {
   font-size: var(--fs-200);
-  color: var(--text-muted);
+  color: var(--fg-muted);
   font-style: italic;
 }
 .row-edit {
@@ -318,7 +318,7 @@ onMounted(load);
   padding: var(--sp-1) var(--sp-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: var(--surface-sunken);
+  background: var(--surface-2);
   color: inherit;
 }
 .save-btn,
@@ -331,7 +331,7 @@ onMounted(load);
   cursor: pointer;
 }
 .save-btn:disabled {
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
   cursor: default;
 }
 .panel-actions {

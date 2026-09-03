@@ -52,7 +52,7 @@ const emit = defineEmits<{
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   padding: var(--sp-1);
-  box-shadow: 0 8px 24px var(--scrim);
+  box-shadow: var(--shadow-popover);
 }
 .slash-row {
   display: grid;

@@ -1782,10 +1782,6 @@ defineExpose({ focusDraft, openComposer, typeInto, pasteFromSystemClipboard });
   background: var(--accent);
   box-shadow: 0 0 0 2px var(--surface-2);
 }
-.rail:hover {
-  background: var(--surface-2);
-  color: var(--fg-secondary);
-}
 
 /* ---- resize grips -------------------------------------------------------
  * Overlays on the card's edges, NOT rows in its flex column: an edge strip that

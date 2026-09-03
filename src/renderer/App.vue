@@ -248,6 +248,7 @@ onBeforeUnmount(() => {
      theme cannot use them — black at half opacity on white reads as a hole,
      not a lift — so shadows are tokens now and each theme sets its own. */
   --shadow-overlay: 0 16px 48px rgba(0, 0, 0, 0.5);
+  --shadow-popover: 0 8px 24px var(--scrim); /* menus, dropdowns — scrim-tinted */
   --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.5);
   --focus-ring: var(--accent);
   --focus-ring-width: 2px;
