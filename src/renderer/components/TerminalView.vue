@@ -439,8 +439,8 @@ function pushGeometry(opts: { redraw?: boolean } = {}): void {
     // that lands first would redraw the OLD size into a grid already reflowed
     // to the new one. Ordering them costs nothing: the resize IPC resolves
     // only after `setWindow` ran.
-    if (opts.redraw === true) void pushed.then(() => api.shell.redraw(id));
-    else void pushed;
+    if (opts.redraw === true) forget(pushed.then(() => api.shell.redraw(id)));
+    else forget(pushed);
   } else if (opts.redraw === true) {
     // The redraw is NOT conditional on the size having moved, and that is the
     // whole point of asking for one. The case it exists for is precisely the
@@ -453,7 +453,7 @@ function pushGeometry(opts: { redraw?: boolean } = {}): void {
     // drag-resize produces a run of pushes and tmux repaints itself on each one;
     // asking again would be an SSH exec per frame for no visible difference. It
     // is the EDGES that need it — hidden to visible, and a freshly adopted PTY.
-    void api.shell.redraw(id);
+    forget(api.shell.redraw(id));
   }
 }
 
@@ -571,11 +571,12 @@ function rejoinAfterParseDeath(id: ShellId): void {
   lastRepairAt = Date.now();
   driftRepaintDone = false;
   paneWrite('\r\n\x1b[90m[PocketShell] parser crashed — rejoining for a clean slate…\x1b[0m\r\n');
-  void (async () => {
-    await api.shell.close(id);
-    if (id !== shellId || !term) return; // the pane moved on meanwhile
-    await showTarget();
-  })();
+  forget(
+    api.shell.close(id).then(() => {
+      if (id !== shellId || !term) return; // the pane moved on meanwhile
+      return queueShowTarget();
+    }),
+  );
 }
 
 function unbindShellStream(): void {
@@ -587,6 +588,36 @@ function unbindShellStream(): void {
     unsubscribeExit();
     unsubscribeExit = null;
   }
+}
+
+/**
+ * Fire-and-forget IPC on paths that tolerate the shell dying underneath them:
+ * the rejection IS the race the caller already expects (an evicted channel, a
+ * pane unmounted mid-write), not news — and an uncaught one would only page
+ * the diag banner for a shell this component has already given up on.
+ */
+function forget(p: Promise<unknown>): void {
+  p.catch(() => undefined);
+}
+
+/**
+ * `showTarget` has five independent triggers — the mount, the two watchers,
+ * the hidden-to-visible re-join and the two repair rejoins — and a join is
+ * seconds long, so two invocations can overlap and adopt their targets in
+ * RESOLUTION order rather than trigger order, with the loser's PTY handed
+ * back (or leaked against the MaxSessions budget) on the way out. Calls are
+ * SERIALIZED instead: each runs to completion before the next starts, and
+ * since every trigger reads the props that are current when its turn comes,
+ * the last one queued wins with the state that is actually current.
+ */
+let showTargetChain: Promise<void> = Promise.resolve();
+
+function queueShowTarget(): Promise<void> {
+  const run = showTargetChain.then(showTarget);
+  // showTarget writes its own failures into the pane; this catch only keeps
+  // the chain alive for the next rider.
+  showTargetChain = run.catch(() => undefined);
+  return run;
 }
 
 /**
@@ -639,7 +670,7 @@ async function showTarget(): Promise<void> {
   // it, we are not going to use it, and leaving it open would leak an SSH
   // channel against a `MaxSessions` budget of ten.
   if (!term) {
-    void api.shell.close(result.shellId);
+    forget(api.shell.close(result.shellId));
     return;
   }
 
@@ -709,7 +740,7 @@ function closeShell(): void {
     registeredKey = null;
   }
   if (shellId) {
-    void api.shell.close(shellId);
+    forget(api.shell.close(shellId));
     shellId = null;
   }
   sent = null;
@@ -963,7 +994,7 @@ onMounted(async () => {
   // xterm -> shell. Bound once, against the terminal's whole lifetime.
   termDisposables = [
     term.onData((data) => {
-      if (shellId) void api.shell.input(shellId, data);
+      if (shellId) forget(api.shell.input(shellId, data));
     }),
     // Through `pushGeometry` rather than straight to `api.shell.resize`, so a
     // resize that fires before a PTY exists is not simply LOST: it records
@@ -994,7 +1025,7 @@ onMounted(async () => {
   containerEl.value?.addEventListener('contextmenu', onTerminalContextMenu);
   document.addEventListener('mouseup', onDocumentMouseUp);
 
-  await showTarget();
+  await queueShowTarget();
 
   // Re-fit on window resize.
   window.addEventListener('resize', onWindowResize);
@@ -1060,7 +1091,7 @@ function scheduleFit(): void {
     // exited, because that pane never became hidden.
     if (wasHidden && shellGone) {
       shellGone = false;
-      void showTarget();
+      void queueShowTarget();
       return;
     }
     // Everything else routes through the one place that knows what the far end
@@ -1156,7 +1187,7 @@ watch(
 watch(
   () => props.sessionKey,
   () => {
-    void showTarget();
+    void queueShowTarget();
   },
 );
 
@@ -1183,7 +1214,7 @@ watch(
 watch(
   () => props.connectionId,
   () => {
-    void showTarget();
+    void queueShowTarget();
   },
 );
 
@@ -1332,6 +1363,12 @@ async function reconcileTick(): Promise<void> {
   let far: GeometryProbe;
   try {
     far = await api.shell.windowSize(id);
+  } catch {
+    // A rejected probe is this tick's answer lost — the shell died between the
+    // guards and the call, the exact race this loop exists to absorb. Skipping
+    // the tick is honest: the next one re-probes, and a genuinely gone shell
+    // starts answering `dead`, which is the path to the rejoin.
+    return;
   } finally {
     probeInFlight = false;
   }
@@ -1369,7 +1406,7 @@ async function reconcileTick(): Promise<void> {
     if (!driftRepaintDone) {
       driftRepaintDone = true;
       lastRepairAt = Date.now();
-      void api.shell.redraw(id);
+      forget(api.shell.redraw(id));
     }
     return;
   }
@@ -1377,7 +1414,7 @@ async function reconcileTick(): Promise<void> {
   // Healthy, and ours. Repaint on the clock: the garble no comparison catches.
   if (Date.now() - lastRepairAt >= HEALTHY_REPAIR_INTERVAL_MS) {
     lastRepairAt = Date.now();
-    void api.shell.redraw(id);
+    forget(api.shell.redraw(id));
   }
 }
 
@@ -1398,14 +1435,15 @@ function scheduleRejoin(id: ShellId): void {
   lastRepairAt = Date.now();
   driftRepaintDone = false;
   paneWrite('\r\n\x1b[90m[PocketShell] lost the tmux client — rejoining…\x1b[0m\r\n');
-  void (async () => {
-    // Closing is what makes the next attach a FRESH JOIN: main drops the
-    // pool record when the channel dies, so `attachSession` cannot answer
-    // with the very client that just proved unreachable.
-    await api.shell.close(id);
-    if (id !== shellId || !term) return; // the pane moved on meanwhile
-    await showTarget();
-  })();
+  // Closing is what makes the next attach a FRESH JOIN: main drops the
+  // pool record when the channel dies, so `attachSession` cannot answer
+  // with the very client that just proved unreachable.
+  forget(
+    api.shell.close(id).then(() => {
+      if (id !== shellId || !term) return; // the pane moved on meanwhile
+      return queueShowTarget();
+    }),
+  );
 }
 
 function startProbing(): void {
