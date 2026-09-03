@@ -76,8 +76,8 @@ import type { SessionAgentKind, SessionSummary } from '../shared/types';
 /** Sentinel path for sessions whose working directory is unknown. */
 export const UNTRACKED_PATH = '::untracked::';
 export const UNTRACKED_LABEL = 'Untracked';
-export const ROOT_LABEL = '/ (root)';
-export const HOME_LABEL = '~ (home)';
+const ROOT_LABEL = '/ (root)';
+const HOME_LABEL = '~ (home)';
 
 /** One folder section: a working directory plus the sessions living in it. */
 export interface SessionFolder {
@@ -123,7 +123,7 @@ export function defaultLabelForPath(path: string): string {
 }
 
 /** Last-activity epoch for a session, falling back to its creation time. */
-export function sessionActivity(session: SessionSummary): number {
+function sessionActivity(session: SessionSummary): number {
   return session.activity || session.created || 0;
 }
 
@@ -143,7 +143,7 @@ export function sessionActivity(session: SessionSummary): number {
  * fixed for the lifetime of the session, so a row ordered by it changes place
  * only when a session is created or killed — which the user did on purpose.
  */
-export function sessionCreated(session: SessionSummary): number {
+function sessionCreated(session: SessionSummary): number {
   return session.created || session.activity || 0;
 }
 

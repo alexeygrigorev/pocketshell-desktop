@@ -615,7 +615,7 @@ watch(
   () => files.reveal,
   (target) => {
     if (target == null) return;
-    if (revealTookItsOwnTab(target)) return;
+    if (openDedicatedRevealTab(target)) return;
     if (activeTab.value?.kind === 'files') return;
     const first = tabs.value.find((tab) => tab.kind === 'files');
     if (first) {
@@ -651,7 +651,7 @@ watch(
  * a parent always lists, and `revealPath` then either opens the file in it or,
  * for a directory, walks the listing on into the directory itself.
  */
-function revealTookItsOwnTab(target: string): boolean {
+function openDedicatedRevealTab(target: string): boolean {
   const root = rootPath.value;
   const abs = absoluteRevealTarget(target);
   // Not knowing where the root is, or where the target is, is not evidence that

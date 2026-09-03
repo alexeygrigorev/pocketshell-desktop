@@ -86,9 +86,9 @@ export const MAX_TEXT_BYTES = 8 * 1024 * 1024;
  * renderer can express today. A podcast past the ceiling gets the binary
  * panel and a download button rather than a stall.
  */
-export const MAX_MEDIA_BYTES = 96 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 96 * 1024 * 1024;
 /** Images and PDFs keep the original ceiling — both decode to much more. */
-export const MAX_DOCUMENT_BYTES = 32 * 1024 * 1024;
+const MAX_DOCUMENT_BYTES = 32 * 1024 * 1024;
 
 /**
  * Kinds that have an editor behind them and can therefore be saved.

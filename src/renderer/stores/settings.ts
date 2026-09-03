@@ -369,7 +369,7 @@ function asShortcutOverrides(raw: unknown): Record<string, string> | undefined {
 }
 
 /** The registry the loader, the defaults and the validator are all generic over. */
-export const SETTING_SPECS: SettingSpecs = {
+const SETTING_SPECS: SettingSpecs = {
   // Both composer defaults are TRUE: typing into a terminal that fronts an
   // agent is far more often the start of a prompt than a shell command, and a
   // composer that clears itself out of the way after sending is what makes the
