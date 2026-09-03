@@ -63,6 +63,15 @@ export interface ExecOptions {
    * it either way, but only stdin keeps it out of every process list.
    */
   stdin?: string;
+  /**
+   * Cap on the whole exec — from the channel-open request to close — in
+   * milliseconds. A channel that never closes would otherwise never settle
+   * the promise, and the single-flight guards upstream (the auto-forward
+   * scan latch, the per-connection attach queue) close for good the first
+   * time that happens. Defaults to {@link EXEC_DEFAULT_TIMEOUT_MS}; `0` opts
+   * out for legitimately unbounded commands (`repos clone`).
+   */
+  timeoutMs?: number;
 }
 
 export interface ShellHandle {
@@ -452,18 +461,58 @@ export function execLogPreview(command: string, limit = 120): string {
   return meat.length <= limit ? meat : `${meat.slice(0, limit)}…`;
 }
 
-function execOnClient(
+/**
+ * Default cap on one exec, generous because a `repos clone` is a legitimate
+ * minutes-long round trip — but finite, because the failure it bounds is not
+ * a slow command, it is a WEDGED CHANNEL: no data, no close, no transport
+ * error, forever. Exported for the timeout tests.
+ */
+export const EXEC_DEFAULT_TIMEOUT_MS = 300_000;
+
+export function execOnClient(
   rec: ConnectionRecord,
   command: string,
   opts: ExecOptions = {},
 ): Promise<ExecResult> {
+  const timeoutMs = opts.timeoutMs ?? EXEC_DEFAULT_TIMEOUT_MS;
   return new Promise((resolve) => {
+    // Exactly one resolution, whichever of close / error / timeout lands
+    // first; the rest become no-ops.
+    let settled = false;
+    let channel: ClientChannel | null = null;
+    let stdout = '';
+    let stderr = '';
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (result: ExecResult): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(result);
+    };
+    // Started at ISSUE, not at channel-open: a wedged transport can leave the
+    // open request itself unanswered, in which case the callback below never
+    // fires at all.
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        const note = `exec timed out after ${Math.round(timeoutMs / 1000)}s`;
+        // Killing the channel is what frees its slot on the host. On a wedged
+        // transport even this may be a no-op, but the RESULT is what unblocks
+        // the callers — the scan latch and the attach queue run again.
+        try {
+          channel?.close();
+        } catch {
+          // nothing to save from a transport in this state
+        }
+        finish({ stdout, stderr: stderr ? `${stderr}\n${note}` : note, exitCode: -1 });
+      }, timeoutMs);
+    }
     rec.client.exec(command, (err, stream) => {
       if (err || !stream) {
         // Translate transport errors into an ExecResult; never reject.
-        resolve({ stdout: '', stderr: err?.message ?? 'exec failed', exitCode: -1 });
+        finish({ stdout: '', stderr: err?.message ?? 'exec failed', exitCode: -1 });
         return;
       }
+      channel = stream;
       if (opts.stdin !== undefined) {
         // `.end(data)` writes and signals EOF in one call — the reader on the
         // far side is often a plain `read`, which terminates on the close.
@@ -472,30 +521,49 @@ function execOnClient(
         try {
           stream.stdin.end(opts.stdin);
         } catch (e) {
-          resolve({ stdout: '', stderr: (e as Error).message, exitCode: -1 });
+          finish({ stdout: '', stderr: (e as Error).message, exitCode: -1 });
           return;
         }
       }
-      let stdout = '';
-      let stderr = '';
       stream.on('data', (chunk: Buffer) => {
         stdout += chunk.toString('utf8');
       });
       stream.stderr.on('data', (chunk: Buffer) => {
         stderr += chunk.toString('utf8');
       });
+      // A channel error mid-run (reset, transport wedge tearing the channel
+      // down) is otherwise an uncaught 'error' event — process-level in the
+      // main process. Settle with whatever output had already arrived.
+      stream.on('error', (streamErr: Error) => {
+        finish({
+          stdout,
+          stderr: stderr ? `${stderr}\n${streamErr.message}` : streamErr.message,
+          exitCode: -1,
+        });
+      });
       stream.on('close', (code: number | null) => {
-        resolve({ stdout, stderr, exitCode: code ?? -1 });
+        finish({ stdout, stderr, exitCode: code ?? -1 });
       });
     });
   });
 }
+
+/** The dial cap, reused for PTY opens: both are "the host answers or it won't". */
+const OPEN_SHELL_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 
 function openShell(
   rec: ConnectionRecord,
   pty: { term: string; cols: number; rows: number },
 ): Promise<ClientChannel> {
   return new Promise((resolve, reject) => {
+    // The PTY open is answered by the same transport that answered (or didn't)
+    // the connect, but a dial cap alone does not cover it: connects are
+    // one-per-dial, while opens are queued per connection behind
+    // `TmuxClientPool`'s single-flight — so one hung open used to stall every
+    // future tab open on that host, not just this one.
+    const timer = setTimeout(() => {
+      reject(new Error(`Opening a shell timed out after ${OPEN_SHELL_TIMEOUT_MS / 1000}s`));
+    }, OPEN_SHELL_TIMEOUT_MS);
     // ssh2 `shell(window, callback)`: the first arg is the PTY options
     // (term/cols/rows). We request a real PTY so tmux/agent CLIs render.
     const window: PseudoTtyOptions = {
@@ -504,6 +572,7 @@ function openShell(
       rows: pty.rows,
     };
     rec.client.shell(window, (err, stream) => {
+      clearTimeout(timer);
       if (err || !stream) {
         reject(err ?? new Error('shell failed'));
         return;

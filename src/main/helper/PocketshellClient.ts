@@ -843,7 +843,16 @@ export class PocketshellClient {
    * folder-first flow can then just start a session in the existing clone.
    */
   async reposClone(connectionId: string, options: ReposCloneOptions): Promise<CloneOutcome> {
-    const res = await this.ssh.exec(connectionId, pathAwareCommand(reposCloneCommand(options)));
+    // `timeoutMs: 0` — a real clone is the one legitimately unbounded exec in
+    // the app (a slow upstream, a big history); the default exec cap would
+    // kill a healthy 6-minute clone at 5. A wedged channel here leaves a
+    // stuck dialog, which the user can see and cancel, rather than a silent
+    // stall in a shared scan latch.
+    const res = await this.ssh.exec(
+      connectionId,
+      pathAwareCommand(reposCloneCommand(options)),
+      { timeoutMs: 0 },
+    );
     if (res.exitCode === 0) {
       const path = res.stdout
         .split(/\r?\n/)
