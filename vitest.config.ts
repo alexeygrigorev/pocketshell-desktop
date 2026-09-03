@@ -29,8 +29,11 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
-      include: ['src/main/**/*.ts'],
-      exclude: ['**/*.d.ts', 'tests/**'],
+      // Renderer and shared code are covered by the unit suite too (stores,
+      // pure modules, mounted components), so the report has to include them
+      // or it would silently claim the whole tree is main-only.
+      include: ['src/main/**/*.ts', 'src/renderer/**/*.ts', 'src/shared/**/*.ts'],
+      exclude: ['**/*.d.ts', 'tests/**', 'src/renderer/env.d.ts'],
     },
   },
   resolve: {

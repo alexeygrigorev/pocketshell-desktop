@@ -18,7 +18,8 @@
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
     "smoke": "bash scripts/smoke.sh",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "test:coverage": "vitest run tests/unit --coverage"
   },
   "//dependencies": "WHAT SHIPS. electron-builder copies production `dependencies` into the installer's node_modules and leaves `devDependencies` behind, so this list means `require()`d from disk at runtime — NOT `import`ed anywhere. Everything the renderer imports is bundled into out/renderer by Vite and belongs below; putting it here duplicates megabytes of already-bundled source into every installer (that was CodeMirror, ~22 MB of package tree). tests/unit/packagedDependencies.test.ts fails if this list grows without a reason being written down.",
   "dependencies": {
@@ -51,6 +52,7 @@
     "@playwright/test": "1.49.1",
     "@types/node": "22.10.5",
     "@vitejs/plugin-vue": "5.2.1",
+    "@vitest/coverage-v8": "^2.1.8",
     "@vue/test-utils": "2.4.11",
     "@vue/tsconfig": "0.7.0",
     "@xterm/addon-fit": "0.11.0",
