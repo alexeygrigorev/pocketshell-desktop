@@ -3,23 +3,27 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   parseSessionsList,
+  parseTmuxListSessionsFallback,
+  parseSessionEnrichment,
+  agentKindFromTmuxOption,
+  SESSION_ENRICHMENT_COMMAND,
+} from '@main/helper/parsers';
+import {
+  mergeSessionEnrichment,
+  restoreUnlistedSessions,
+  applyCachedSessionPaths,
+  inferPathsFromSiblings,
+  diagnoseSessionPaths,
+} from '@main/helper/sessionPathRecovery';
+import { parseUsageNdjson } from '@main/helper/usageParsers';
+import {
+  parseAgentSubcommands,
+  parseCommandV,
   parseEnvVarRow,
   parseTreeGet,
   parseTreeReconcile,
   treeUpsertPayload,
-  parseTmuxListSessionsFallback,
-  parseUsageNdjson,
-  parseAgentSubcommands,
-  parseCommandV,
-  parseSessionEnrichment,
-  mergeSessionEnrichment,
-  restoreUnlistedSessions,
-  applyCachedSessionPaths,
-  agentKindFromTmuxOption,
-  inferPathsFromSiblings,
-  diagnoseSessionPaths,
-  SESSION_ENRICHMENT_COMMAND,
-} from '@main/helper/parsers';
+} from '@main/helper/cliParsers';
 import type { SessionSummary } from '../../src/shared/types';
 
 const FIXTURES = resolve(__dirname, '..', '..', 'tests-docker', 'fixtures');

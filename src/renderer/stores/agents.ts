@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { api } from '../ipc';
 import type { ConnectionId } from '../../shared/types';
-import type { UsageRow } from '../../main/helper/parsers';
+import type { UsageRow } from '../../main/helper/usageParsers';
 import { parseProfileRows, type AgentProfile } from '../../shared/agentLaunch';
 import { errorMessage } from '../../shared/errors';
 

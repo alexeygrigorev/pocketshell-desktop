@@ -12,7 +12,7 @@ import type { SshService } from '../ssh/SshService.js';
 import type { BootstrapResult, ToolState } from '../../shared/types.js';
 import { USER_BIN_PATH } from '../../shared/userBinPath.js';
 import { shellEscapeInsideSingleQuotes } from '../../shared/shellQuote.js';
-import { parseCommandV } from './parsers.js';
+import { parseCommandV } from './cliParsers.js';
 
 /**
  * Wrap a command so it runs under the user's full PATH: source the login

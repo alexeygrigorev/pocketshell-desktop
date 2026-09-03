@@ -11,26 +11,29 @@ import type { SshService } from '../ssh/SshService.js';
 import type { EnvVarRow, ExecResult, SessionSummary } from '../../shared/types.js';
 import {
   firstNonEmptyLine,
-  parseAgentSubcommands,
   parseSessionsList,
   parseTmuxListSessionsFallback,
-  parseUsageNdjson,
-  parseEnvVarRow,
-  parseTreeGet,
-  parseTreeReconcile,
-  treeUpsertPayload,
-  type TreeNodeRecord,
   parseSessionEnrichment,
+  SESSION_ENRICHMENT_COMMAND,
+  SESSION_SOCKET_DIAGNOSTIC_COMMAND,
+  type SessionEnrichment,
+} from './parsers.js';
+import {
   diagnoseSessionPaths,
   mergeSessionEnrichment,
   restoreUnlistedSessions,
   applyCachedSessionPaths,
   findEnrichment,
-  SESSION_ENRICHMENT_COMMAND,
-  SESSION_SOCKET_DIAGNOSTIC_COMMAND,
-  type UsageRow,
-  type SessionEnrichment,
-} from './parsers.js';
+} from './sessionPathRecovery.js';
+import { parseUsageNdjson, type UsageRow } from './usageParsers.js';
+import {
+  parseAgentSubcommands,
+  parseEnvVarRow,
+  parseTreeGet,
+  parseTreeReconcile,
+  treeUpsertPayload,
+  type TreeNodeRecord,
+} from './cliParsers.js';
 import { pathAwareCommand } from './bootstrap.js';
 import { gitRepoProbeCommand, HOME_COMMAND } from '../projects/commands.js';
 import { parseWorktreeRoots } from '../projects/worktrees.js';

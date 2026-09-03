@@ -15,7 +15,7 @@ import { runBootstrap } from './helper/bootstrap.js';
 import { checkForUpdate } from './update/ReleaseChecker.js';
 import { readSshConfig } from './ssh-config/SshConfigParser.js';
 import { KnownHosts } from './ssh-config/KnownHosts.js';
-import type { UsageRow } from './helper/parsers.js';
+import type { UsageRow } from './helper/usageParsers.js';
 import { log } from './log.js';
 import { SftpService, type DirEntry, type FileStat, type TransferProgress } from './sftp/SftpService.js';
 import { ForwardService } from './portfwd/ForwardService.js';

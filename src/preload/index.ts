@@ -14,7 +14,7 @@ import type {
   ShellId,
   StageAttachmentsResult,
 } from '../shared/types.js';
-import type { UsageRow } from '../main/helper/parsers.js';
+import type { UsageRow } from '../main/helper/usageParsers.js';
 import type { DirEntry, FileStat, TransferProgress } from '../main/sftp/SftpService.js';
 import type { RemotePort } from '../main/portfwd/PortScanner.js';
 import type { ForwardState } from '../main/portfwd/Forwarder.js';

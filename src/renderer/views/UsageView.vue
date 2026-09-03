@@ -27,7 +27,7 @@ import { computed, onMounted } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useAgentsStore } from '../stores/agents';
 import AppIcon from '../components/AppIcon.vue';
-import type { UsageRow, UsageWindow } from '../../main/helper/parsers';
+import type { UsageRow, UsageWindow } from '../../main/helper/usageParsers';
 
 const props = defineProps<{
   /**
