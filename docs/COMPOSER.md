@@ -2,8 +2,7 @@
 
 Status: **built.** `src/renderer/components/PromptComposer.vue` +
 `src/renderer/stores/composer.ts` implement Part II. Where the code and this
-document have since diverged, the code won; the sections that were revised
-against it say so inline (§12 and §21 are the two that changed shape).
+document have diverged, the code won.
 
 **Citation convention.** Paths starting `app/` or `core/` are in the Android
 repo at `C:\Users\alexey\git\pocketshell`. Paths starting `src/` or `docs/` are
@@ -58,39 +57,29 @@ swipe-down, system Back (`TmuxSessionScreen.kt:5559` routes Back to
 
 `SheetContent` renders, top to bottom (`PromptComposerSheet.kt:770-1280`):
 
-1. **Slash-command dropdown** (`:780-786`) — floats at the *top* of the column,
-   above the field, so the IME can never occlude it. Only when the leading token
-   is a `/` and the filtered catalog is non-empty.
-2. **Header** — "Prompt Composer" title + a 32dp circular `×` chip (`:802-841`).
-   Hidden entirely when the soft keyboard is up (§3).
-3. **Scroll region** (`:862-877`, `weight(1f, fill = false)` + `verticalScroll`)
-   containing, in order:
-   - **Draft field** (`ComposerDraftField`, `:918-937`): multi-line, placeholder
-     `"Compose prompt…"` (`:2829`), `minHeight` 96dp keyboard-down / 56dp
-     keyboard-up, `maxHeight` 220dp, self-scrolling to keep the caret visible.
-     Test tag `prompt-composer-draft`.
-   - **Error / status banner** (`:944-990`) with an inline **Discard** button
-     whenever there is something to clear
-     (`canDiscard = draft.isNotEmpty() || attachments.isNotEmpty()`, `:951`).
-   - **Attachment upload progress** — `"Uploading N attachment(s)..."` (`:992-1015`).
-   - Saved-audio confirmation, pending-transcription queue banner (voice only —
-     not ported).
-   - **Staged attachment tiles** — `AttachmentTileGrid` (`:1068-1073`, renderer
-     at `:1893`): compact square tiles, image thumbnail or file-type tile, each
-     with an `×` remove control. Tag `prompt-composer-attachment-chips`.
-4. **Connection-lost row** (`:1088-1110`) — deliberately *outside* the scroll
-   region so it is sticky above the Send row. Copy:
+1. **Slash-command dropdown** — floats at the *top* of the column, above the
+   field, so the IME can never occlude it. Only when the leading token is a `/`
+   and the filtered catalog is non-empty.
+2. **Header** — "Prompt Composer" title + a circular `×` chip. Hidden entirely
+   when the soft keyboard is up (§3).
+3. **Scroll region** (`weight(1f, fill = false)` + `verticalScroll`) containing,
+   in order: the **draft field** (multi-line, placeholder `"Compose prompt…"`,
+   self-scrolling to keep the caret visible; the IME size dance is §3.3); an
+   **error / status banner** with an inline **Discard** button whenever there is
+   something to clear; attachment upload progress; the **staged attachment
+   tiles** — compact square tiles, image thumbnail or file-type tile, each with
+   an `×` remove control.
+4. **Connection-lost row** — deliberately *outside* the scroll region so it is
+   sticky above the Send row. Copy:
    `"Connection lost — Send will retry once reconnected."`
-5. **Control row** (`:1130-1280`), sticky:
-   - Left: one rounded pill grouping **📎 attach** (`:1157`), **`{}` snippets**
-     (`:1162`), **`/` slash** (`:1170`). All three disable while transcribing or
-     while an attachment batch is uploading; `/` additionally disables when no
-     agent is detected.
-   - Spacer.
-   - Right: a single primary **Send** button (`:1208`), then the mic disc.
+5. **Control row** (sticky): left, one rounded pill grouping **📎 attach**,
+   **`{}` snippets**, **`/` slash** — all three disable while transcribing or
+   while an attachment batch is uploading; `/` additionally disables when no
+   agent is detected. Right: a single primary **Send** button, then the mic disc.
 
 There is **no** separate "Insert" button and **no** keyboard-raise button — both
-were removed (`:2761-2769`, `:1181-1188`).
+were removed. Every region above has a direct counterpart in
+`PromptComposer.vue` (the mic and its states excepted, §22).
 
 ## 3. Visibility / expand state machine — the important part
 
@@ -231,29 +220,12 @@ activity-scoped instance.** See §12.4 for why the desktop must not port it.
 
 ### 5.1 The composition rule (load-bearing)
 
-`appendAttachmentPaths` — `PromptComposerViewModel.kt:2645-2660`:
-
-```kotlin
-internal fun appendAttachmentPaths(draft: String, paths: List<String>): String {
-    if (paths.isEmpty()) return draft
-    val block = buildString {
-        append("Attached files:")
-        paths.forEach { path -> append('\n'); append("- "); append(path) }
-    }
-    return when {
-        draft.isBlank()            -> block
-        draft.endsWith("\n\n")     -> draft + block
-        draft.endsWith("\n")       -> draft + "\n" + block
-        else                       -> draft + "\n\n" + block
-    }
-}
-```
-
-In words: the staged remote paths are **appended at the end**, never prepended,
-as a `Attached files:` header followed by one `- <remote path>` line per
-attachment, separated from the user's text by **exactly one blank line**. A
-blank draft (whitespace-only counts) is *replaced* by the block, so an
-attachment-only send is legal. Example:
+`appendAttachmentPaths` (`PromptComposerViewModel.kt:2645-2660`): the staged
+remote paths are **appended at the end**, never prepended, as an
+`Attached files:` header followed by one `- <remote path>` line per attachment,
+separated from the user's text by **exactly one blank line**. A blank draft
+(whitespace-only counts) is *replaced* by the block, so an attachment-only send
+is legal. Example:
 
 ```
 what is wrong here
@@ -265,7 +237,7 @@ Attached files:
 
 Called once, at send time only, from `dispatchSendNow` (`:670`). The draft text
 is **never** mutated by attaching — stated at `:301-309`, `:2176-2179`,
-`:407-410`.
+`:407-410`. The TypeScript port is §14.
 
 ### 5.2 Send gating
 
@@ -276,10 +248,7 @@ is **never** mutated by attaching — stated at `:301-309`, `:2176-2179`,
 - ViewModel guards (`:662`, `:672`): no-op if a send is already in flight; no-op
   if the *composed* text is empty.
 - Sending while an attachment batch is still uploading **waits for it**, then
-  sends with the image included. This note used to say the opposite — cancel the
-  upload, send what is staged — citing `:684-688`; the user, who wrote the phone
-  app, says that is not what it does: *"that's not how the phone app works. it
-  waits"*. See §16.3.
+  sends with the image included. §16.0 is the desktop rule and its rationale.
 
 ### 5.3 "Send" vs "Send + Enter"
 
@@ -294,9 +263,9 @@ The `withEnter = false` half survives **only outside the composer**, in the
 snippet picker's explicit `Send` / `Send + ↵` chips
 (`app/src/main/java/com/pocketshell/app/snippets/SnippetPickerSheet.kt:414-440`).
 That is issue #187: the fix was to replace a smart-default tap surface with two
-explicitly-labelled actions, and per **D22** (`docs/decisions.md:30`,
-hard-cuts-only) the legacy row-body smart-default was deleted rather than kept
-behind a flag (`TmuxSessionScreen.kt:2286-2291`).
+explicitly-labelled actions, and per **D22** (hard-cuts-only) the legacy
+row-body smart-default was deleted rather than kept behind a flag
+(`TmuxSessionScreen.kt:2286-2291`).
 
 **Desktop consequence:** the composer has exactly one Send verb, and it submits.
 Do not build an Insert/Send pair.
@@ -325,24 +294,16 @@ where `viewingConversation = detection != null && selectedTab == Conversation`
 | `AgentPayload` | `sendAgentPayloadToPaneResult(paneId, text, agentKind)` | Bracketed paste + a submit-delay before Enter |
 | `RawBytes` | `writeInputToPaneResult(paneId, (withEnter ? text + "\r" : text).toByteArray())` (`:2258-2262`) | — |
 
-### 5.5 Multi-line delivery — bracketed paste (#209). Do not skip this.
+### 5.5 Multi-line delivery — bracketed paste (#209)
 
 Because §5.1 *always* introduces newlines when attachments are staged, and
 because the user can type newlines, the payload is routinely multi-line. Naïve
 delivery would make an agent REPL submit each line as a separate prompt — the
 bug found in daily use on 2026-05-27
 (`app/src/main/java/com/pocketshell/app/tmux/TmuxSessionViewModel.kt:9775-9795`).
-
-Both agent routes and the raw route converge on `sendInputBytesToPane`
-(`TmuxSessionViewModel.kt:9758`), which wraps any input containing a line break
-(or exceeding a chunk size) in **bracketed-paste markers `\e[200~` … `\e[201~`**
-before the submit key (`:9860-9870`,
-`sendAgentPayloadToPaneResult` at `:8760-8781`).
-
-The agent path additionally waits before pressing Enter (issue #526,
-`:8786-8812`): default 150ms (`app/src/main/java/com/pocketshell/app/settings/SettingsModels.kt:271`),
-with a 250ms floor for Codex (`TmuxSessionViewModel.kt:12135`), so Enter cannot
-race the TUI's paste ingestion.
+The phone solves it inside `sendInputBytesToPane` (`:9758`) with bracketed-paste
+markers and a delayed submit; the desktop equivalent, which must implement the
+framing itself, is **§16.2 — the single home for this mechanism**.
 
 ## 6. Attachments in the composer
 
@@ -355,9 +316,8 @@ at `PromptComposerViewModel.kt:2183-2189`, list at `:2245`.
   `ATTACHMENT_UPLOAD_TIMEOUT_MS = 90_000` (`:326`, `:2521`).
 - **Merge**: `mergeStagedPaths` (`:403-427`) de-duplicates by `remotePath` and
   appends in order.
-- **Partial failure (#570)**: a `PartialAttachmentUploadException` carries the
-  paths that *did* upload; those are attached **and** the error is shown
-  (`:355-373`). Never discard survivors.
+- **Partial failure (#570)**: paths that *did* upload are attached **and** the
+  error is shown — never discard survivors (§17 has the desktop contract).
 - **Display name**: last path segment only, never the full remote path —
   `attachmentDisplayName` (`:2675-2679`).
 - **Removal**: `removeAttachment(remotePath)` (`:528-546`) — identity is the
@@ -377,7 +337,7 @@ immediately after attaching.
 
 ## 7. Slash commands
 
-Per issue #787 / D22 the standalone `AgentCommandSheet` palette and the bottom
+Per issue #787 the standalone `AgentCommandSheet` palette and the bottom
 `/ commands` chip were **deleted**; slash entry now lives *only* in the composer
 (`TmuxSessionScreen.kt:2324-2330`).
 
@@ -397,22 +357,12 @@ Pure logic in `app/src/main/java/com/pocketshell/app/composer/SlashCommandAutoco
 
 Catalog source: `app/src/main/java/com/pocketshell/app/agentcommands/AgentCommandCatalog.kt:83`
 — an **app-shipped, per-agent curated list** (30 `AgentCommand` entries across
-Claude Code / Codex / OpenCode), deliberately *not* user CRUD. `commandsFor` at
-`:257`, substring `filter` over command + label + description at `:268-277`.
+Claude Code / Codex / OpenCode), deliberately *not* user CRUD.
 
-Renderer: `SlashCommandDropdown` (`PromptComposerSheet.kt:1297-1370`) — one
-command per row, mono accent token leading, inline `<arg>` hint, ≤2-line wrapping
-description, height-capped at 196dp (`:2915`) and self-scrolling. The duplicate
-right-side badge was a D22 hard-cut (`:1306-1310`).
-
-The `/` **button** (`:1170-1174`, handler `:650-656`) is not a second picker: it
-seeds a leading `/` into the field and focuses it, which makes `slashQueryFor`
-non-null with a blank query — the same dropdown.
-`PromptComposerSlashButtonTest.kt:111-157` proves the button opens the full
-catalog and picking a row inserts it; `:158-170` proves the button is *disabled*
-on a shell pane. `PromptComposerSlashDropdownImeContainmentProofTest.kt:44-62`
-proves the dropdown filters (`/comp` shows `/compact`, hides `/clear`) and stays
-fully inside the window.
+The `/` **button** is not a second picker: it seeds a leading `/` into the field
+and focuses it, which makes `slashQueryFor` non-null with a blank query — the
+same dropdown. Desktop deltas (the ported catalog, keyboard navigation,
+agent-kind gating) are §18.
 
 ## 8. Snippets
 
@@ -450,13 +400,10 @@ is the single source of truth.
 
 ## 10. Voice (documented for completeness — not ported)
 
-Roughly two thirds of `PromptComposerViewModel.kt` is dictation: a three-state
-FSM `Idle / Recording / Transcribing` (`:2150`), Whisper and Android-speech
-providers (`:856-1060`), an amplitude sampler and silence watchdog
-(`:1062-1130`), a swipe-up mic lock (`:621-639`), a pending-transcription retry
-queue (`:1780-1960`), an API-key vault dialog, keep-screen-on, and a
-`Send`-while-recording queue (`requestSend`, `:605-618`). None of it has a
-desktop analogue. See §22.
+Roughly two thirds of `PromptComposerViewModel.kt` is dictation — a three-state
+FSM, Whisper and Android-speech providers, a mic lock, a pending-transcription
+retry queue, an API-key vault — and none of it has a desktop analogue. The full
+inventory of what is deliberately not ported is §22.
 
 ---
 
@@ -464,72 +411,30 @@ desktop analogue. See §22.
 
 ## 11. Where the composer lives in the new navigation
 
-**Position: the composer is per-session, owned by the session workspace shell,
-and shared by the Terminal and Conversation tabs. It is not rendered on Files,
-Ports, or Usage.**
+**Position: the composer is per-session, owned by the folder workspace shell,
+and follows the active session tab. It is not rendered on a Files tab.**
 
-Justification, grounded in the phone:
-
-1. The phone hosts the composer on the **session screen**, above the tab body —
-   `TmuxSessionScreen.kt:2194`. One instance spans both tabs.
-2. The Terminal/Conversation choice changes only the **send route**, never the
-   composer (`:2184-2186`, `:3163-3179`). If the composer were per-tab, that
-   branch would not need to exist.
-3. The draft's identity is the **session**: `"$hostId/$sessionName"` (`:2207`).
-   Not the tab, not the host.
-4. The phone's Files surface does **not** host a composer. It offers "Attach to
-   current session", which seeds the session's composer draft and navigates back
-   (`PromptComposerViewModel.seedDraftPrompt`, `:482-497`, wired at
-   `TmuxSessionScreen.kt:629-633`). Desktop Files should mirror this with a
-   "Send to composer" / "Attach to composer" action per file, not a second
-   composer.
-
-> **Revised again.** `SessionWorkspaceView` no longer
-> exists: the right pane is a FOLDER workspace whose tab bar carries one tab per
-> tmux session, then Files tabs, and the Conversation tab has been deleted
-> outright. Every rule below survives the move unchanged — the
-> composer is still mounted once outside the tab body, still `v-show` rather
-> than `v-if`, still hidden on a Files tab, and still keyed per session. What
-> changed is only WHICH session it is handed: the active SESSION TAB rather than
-> the route's `:session` param. Read `SessionWorkspaceView` as
-> `FolderWorkspaceView` and `.session-body` as `.workspace-body` throughout this
-> section; the file/line citations are historical.
-
-The navigation restructure has already landed and left the slot open. The mount
-point is `.session-body` in `src/renderer/views/SessionWorkspaceView.vue`, a
-column whose tab content flexes. **Revised (§21.1):** the composer does not dock
-*below* that content as originally specified — it floats *over* it, out of a
-`.composer-dock` positioned against `.session-body`, and the column reserves a
-constant strip at the bottom instead of giving up a flex row. Route:
-`/host/:name/session/:session`
-(`src/renderer/router.ts:23-27`); session identity is
-`route.params['session']` (`SessionWorkspaceView.vue:28`).
+`FolderWorkspaceView` — a workspace whose tab bar carries one tab per tmux
+session and then Files tabs; there is no Conversation tab — mounts
+`<PromptComposer/>` **once**, outside the tab body, and keeps it alive across
+tab switches (`v-show`, never `v-if`) so the draft, caret and scroll position
+survive a tab change; it is shown only while the active tab is a session tab
+(`src/renderer/views/FolderWorkspaceView.vue:1981-1998`). Which session the
+composer holds is the active SESSION TAB, not a route param. The dock floats
+*over* the tab content rather than docking below it (§21.1).
 
 ```
-SessionWorkspaceView                      (src/renderer/views/SessionWorkspaceView.vue)
-├── header (session name, close)
-├── tabs  [Terminal] [Conversation] [Files]
-├── .tab-body                     ← flex: 1, min-height: 0
-│     ├── TerminalView            v-show (stays mounted — :76-84)
-│     ├── ConversationView        v-if   (:86-90)
-│     └── FilesView               v-if   (:92)
-└── <PromptComposer/>             ← flex: none; NEW, at the :94 slot
+FolderWorkspaceView                (src/renderer/views/FolderWorkspaceView.vue)
+├── tab bar    one tab per tmux session, then Files tabs
+├── tab body   TerminalView per session (v-show) / FilesView
+└── .composer-dock   <PromptComposer/>, v-show on session tabs only
 ```
 
-The composer must be **mounted once** at the workspace level, outside
-`.tab-body`, and kept alive across tab switches (never `v-if` on the tab) so the
-draft, caret, and scroll position survive a tab change. Render it only when
-`tab !== 'files'`; use `v-show` for that toggle, not `v-if`.
-
-Note that vue-router reuses the `SessionWorkspaceView` instance when only the
-`:session` param changes, so the composer component is **not** remounted on a
-session switch. That is fine and in fact desirable — the store is keyed by
-session (§15), so a `watch` on `sessionName` is all that is needed to swap which
-record the component reads.
-
-Because the user wants the composer to be the primary surface, the workspace
-should **focus the composer draft on mount** when the session's persisted mode is
-`docked` or `expanded`.
+Route: `/host/:name/folder/:folder` with the active tab as the `?tab=` query
+parameter (`src/renderer/router.ts:41-44`). vue-router reuses the
+`FolderWorkspaceView` instance, so the component is **not** remounted; a `watch`
+on `sessionName` swaps which per-session record it reads and restores that
+record's caret and focus (`PromptComposer.vue:258-264`).
 
 ## 12. Visibility state machine (desktop)
 
@@ -550,30 +455,28 @@ the composer entirely when closed, so a preserved "Not sent" draft becomes
 invisible (issue #695's complaint class). A persistent rail costs 32px and
 guarantees a stale draft is always discoverable.
 
-**Revised — the mode is not per session.** It was, and the bug that produced
-was immediate: a session the composer had never been opened on started from
-`blankState()`, whose mode is `docked`, so closing the panel and selecting
-another session brought it straight back. Open/closed/maximized is a
-**preference about the tool**; the draft, its attachments, the caret and the
-dragged height are **facts about a session**. Only the second group is keyed by
-`targetKey`. `lastOpenMode` moved with the mode, so closing and re-opening still
-restores docked-vs-maximized — it just does so once for the app rather than once
-per session.
+**The mode is not per session.** Open/closed/maximized is a **preference about
+the tool**; the draft, its attachments, the caret and the dragged height are
+**facts about a session**. Only the second group is keyed by `targetKey` (§15).
+A dismissal remembers the mode, so re-opening restores docked-vs-maximized —
+once for the app rather than once per session.
 
 ### 12.1 Transitions
 
 | From | Trigger | To |
 | --- | --- | --- |
-| `hidden` | click the fixed toggle / `Ctrl+\`` / `Ctrl+Shift+K` / `Ctrl+Shift+↑` | the last open mode, draft focused |
-| `hidden` | a seed action (slash command tapped in the terminal, "send to composer" from Files, paste-to-attach) | `docked`, draft focused |
+| `hidden` | click the fixed toggle / `Ctrl+\`` / `Ctrl+Shift+K` | the last open mode, draft focused |
+| `hidden` | `Ctrl+Shift+↑` | `docked` (grow) |
+| `hidden` | a seed action (slash command tapped in the terminal, "send to composer" from Files, paste-to-attach) | the last open mode, draft focused |
 | `docked` | click the **same** fixed toggle / `Ctrl+\`` / `Ctrl+Shift+K` / `Ctrl+Shift+↓` | `hidden` |
-| `docked` | `Ctrl+Shift+↑` / drag the top handle above threshold / double-click the handle | `expanded` |
-| `expanded` | `Ctrl+Shift+↓` / `Escape` (see §12.2) / drag the handle down | `docked` |
-| any | **successful** send | the last open mode (never `hidden` — see §12.3) |
+| `docked` | `Ctrl+Shift+↑` / the header's maximize button / double-click the header | `expanded` |
+| `expanded` | `Ctrl+Shift+↓` / the header's restore button | `docked` |
+| any non-hidden | `Escape` (§12.2) | `hidden`, draft kept, focus to the terminal |
+| any | **successful** send | unchanged — the card stays open and focused (§12.3); with `closeComposerOnSend` (§26.2), `hidden`, from which typing re-opens the last open mode |
 | any | failed send | unchanged, banner shown |
-| any | session switch | **unchanged.** The panel does not open or close because you changed session; only which draft it shows changes (revised — see §12) |
+| any | session switch | **unchanged.** The panel does not open or close because you changed session; only which draft it shows changes |
 
-### 12.2 Escape closes it — and what that costs
+### 12.2 Escape closes it
 
 **Escape closes the composer.** The user asked for the plain meaning of the key:
 *"esc should close the prompt composer."* Two rungs, first match wins:
@@ -586,34 +489,7 @@ per session.
 **Escape never clears the draft.** That is Discard's job and Discard's alone
 (§4.3), and it survives every close.
 
-#### What the ladder used to be, and why it changed
-
-It had four rungs, and two of them existed to NOT close:
-
-```
-1. slash dropdown open   -> close the dropdown
-2. expanded              -> docked            (restore from maximized)
-3. draft focused         -> blur to the pane, composer STAYS OPEN
-4. not focused           -> hidden
-```
-
-Rung 3 was doing a second job. `typingOpensComposer` (§26.1) only intercepts
-while the composer is CLOSED, so "blur to the pane and leave it open" was the
-only way to get a plain terminal with that setting on — an escape hatch that
-cost no new chord and fell out of the ladder for free. It was a nice piece of
-design and it is why Escape did not close.
-
-It was also, from the user's side, Escape not doing what Escape does. So the
-hatch became **explicit** instead of emergent — first as a suppression armed by
-a dismissal, then by a press in the terminal, and finally (§12.2, §26.1) it was
-removed outright at the user's report. The rungs standing between Escape and
-closing went with it either way. Restoring from maximized is still
-`Ctrl+Shift+↓` and the header button, and a dismissal remembers the mode, so
-re-opening a maximized composer gets it back maximized.
-
-#### Clicking outside closes it — but only when it is empty
-
-*"if composer is empty click outside of composer closes it."* Implemented with
+**Clicking outside closes it — but only when it is empty.** Implemented with
 three guards, each of which is the whole safety of the feature:
 
 - **Empty only.** Empty means no draft text, no staged attachments, no failure
@@ -632,70 +508,17 @@ three guards, each of which is the whole safety of the feature:
   would close on its press and let its own click re-open, which reads as
   nothing happening.
 
-It does **not** suppress the typing intercept — nothing does, any more (§26.1).
-A click elsewhere is incidental — the user reached for the terminal, not against
-the composer — and the composer was empty, so nothing was lost; typing
-afterwards almost certainly means they want it back. The rule that falls out,
-and the one to keep in mind when adding any future dismissal:
+It does **not** suppress the typing intercept — nothing does (§26.1). A click
+elsewhere is incidental — the user reached for the terminal, not against the
+composer — and the composer was empty, so nothing was lost; typing afterwards
+almost certainly means they want it back. The rule that falls out, and the one
+to keep in mind when adding any future dismissal:
 
 > **A dismissal — click or key — only puts the view away. It never also speaks
 > for the next keystroke.**
 
-It does not move focus either: the click already decided where focus goes.
-
-##### SUPERSEDED — the press that dismissed it does not also arm the hatch
-
-That paragraph guarded against one `mousedown` meaning two things: the composer's
-capture-phase handler dismissed the empty card, and the same press went on to arm
-the then-existing plain-terminal hatch, so the user's next prompt went into the
-shell from a screen with no composer on it. The fix was to hand the press object
-to both handlers and let the store decline an already-answered one.
-
-The guard is gone because its subject is gone: **the hatch itself was removed**
-(§12.2, §26.1). No press arms anything any more, so there is no second meaning
-for a dismissing press to collide with — a click-outside dismissal is just a
-close, and typing afterwards re-opens the composer carrying the character. The
-rule it enforced is now true by construction:
-
-> **One press, one meaning — and the only meaning is close.**
-
-> **SUPERSEDED — the plain-terminal hatch is gone entirely.**
->
-> What is written below is kept for the record. The user hit the hatch exactly
-> the way this section predicted nobody would: not as a considered gesture —
-> "click, therefore shell" — but as the ordinary static of working in a
-> terminal-centric app. Clicking into the terminal is how you focus the window,
-> scroll output, select a path — and every one of those clicks silently disarmed
-> `typingOpensComposer`, so the next prompt went into the shell with nothing on
-> screen saying why. Reported as: *"when I start typing it stopped showing the
-> prompt composer and instead I type directly to the terminal."*
->
-> The report is the same rejection as the Escape one that moved the hatch here:
-> a close — of the panel, of a selection, of anything — must never carry a
-> durable instruction about the NEXT keystroke. Nothing suppresses the intercept
-> now. Its only conditions are the setting and `mode === 'hidden'`, both visible
-> on screen. See §26.1 for how a plain terminal is reached without it.
-
-#### The plain-terminal hatch is now a PRESS IN THE TERMINAL
-
-#### SUPERSEDED — "closed is two states, not one"
-
-This section said that closing the composer YOURSELF suppressed the typing
-intercept, so the next keystroke reached the shell, while a send-close did not.
-The user reported the consequence:
-
-> "I start typing, prompt composer opens, I click esc, continue typing and now
-> the input goes to the terminal"
-
-That was the design working exactly as written, and the report is a rejection of
-the design rather than of the code. It is right to reject. Escape's job is to
-put the panel away; reading a second, durable instruction into it — "and also
-do not come back when I type" — is the old rung 3 returning in disguise, where
-Escape did something other than close because the intercept needed a hatch. The
-hatch was moved rather than the key overloaded again.
-
-The superseded table is kept because the DISTINCTION it drew is still real; only
-the right-hand column changed:
+It does not move focus either: the click already decided where focus goes. One
+press, one meaning — and the only meaning is close.
 
 | Closed by | Means | Next keystroke |
 |---|---|---|
@@ -705,80 +528,12 @@ the right-hand column changed:
 All four user-close routes behave identically, which is the point: a user who
 dismisses three different ways must not get three different results.
 
-**The two paths stay distinct in the model even though they now agree.**
+**The two paths stay distinct in the model even though they agree.**
 `dismiss()` still exists as its own action — it is where the user-close path can
 be given behaviour again without hunting down four call sites, and the two
 closes are different facts about the world even when they produce the same
-state. Collapsing them into one boolean is precisely what the earlier design was
-avoiding, and what would make them cancel each other out again the next time one
-of them needs to differ.
-
-#### The plain-terminal hatch is now a PRESS IN THE TERMINAL
-
-`typingSuppressedKeys` survives, and now means what its name says: the user is
-typing at the shell, so withhold the intercept. It is armed by a `mousedown`
-inside a terminal pane and by nothing else — and not by one that has already
-been answered as a dismissal (above).
-
-The model is that **the intent follows the pointer** — you type where you last
-pointed. That is a better home for the meaning than Escape, and not only because
-the user asked: pressing Escape is a statement about the PANEL, whereas pointing
-at the terminal is a statement about where you intend to type. It is also the
-gesture a user performs before typing at a shell anyway, so the hatch costs
-nothing to reach and needs no chord in an already-full map.
-
-It composes with the close, and the composition is the reason the hatch works:
-click into the terminal, then press Escape, and typing still goes to the shell —
-because Escape no longer re-arms anything. Escape ALSO hands focus back to the
-pane, so every non-printable key (Ctrl-C, the arrows, Enter, tmux's prefix)
-reaches the shell immediately whatever the flag says; only a printable one is at
-stake.
-
-The rule the previous revision drew still holds, with its second half rewritten:
-
-> **A click dismisses the view. A click INTO THE TERMINAL dismisses the intent.**
-
-`TerminalView` reports the press as a fact (`pressed`) and the workspace decides
-what it means — the same division `typed` and `paste-into-composer` already use,
-so the pane goes on knowing nothing about the composer. It reports the press
-*itself*, which is not a leak of DOM detail across that boundary but the press's
-identity: see "one press, one meaning" above.
-
-**It is ONE ENTRY PER PANE, not one flag for the app.** "I am typing at the
-shell" is a statement about the pane you pressed in — the same class of fact as a
-draft, and drafts are keyed for the same reason (§12.4). As a single boolean it
-was too big a hatch for what it says: a press in `main` decided what the next
-keystroke did in `build`, and it outlived the pane that made it, because the
-workspace re-mounts on a route change, on a folder change and on a reconnect
-while an app-level store does not. Keyed, those leaks close by construction, and
-`forget`/`rekey` carry the entry with the record it belongs to — so a killed
-session cannot hand its suppression to the next session of that name, which
-`sessions create` produces routinely.
-
-**What lifts the suppression:**
-
-- **any opening.** `Ctrl+\`` (the summons the user explicitly endorsed —
-  *"ctrl + ` is okay"*), the toggle, `Ctrl+Shift+K`, `Ctrl+Shift+↑`, a seed
-  action, an explicit Ctrl+V. `setMode` clears **every** pane's entry whenever it
-  opens the panel, so no caller has to remember to: the panel is app-level, so
-  summoning it is a statement about the tool rather than about one session.
-- **a press INSIDE the composer**, the exact counterpart of the press that armed
-  it. The pointer moved, so the intent moved. That session's pane only.
-- **A session switch.** A decision about where you are typing spoke for the pane
-  you were in; another session is a different job and very often a different
-  intent. The destination's entry is cleared, so coming *back* to a pane starts
-  unsuppressed too — the behaviour this had as one app-wide flag.
-- **arriving at a workspace** — app start, a reload, coming back from Settings or
-  the host picker, or a folder-to-folder navigation. Every one of those replaces
-  the panes, and a user who has been driving the app's chrome is not mid-sentence
-  at a shell.
-
-It is not persisted — it is a statement about this moment, not a preference.
-
-Enter is deliberately **not** bound to open the composer. It was asked for and
-retracted in the same breath (*"enter should open" — "okay let's not do
-enter"*), and it could not have worked anyway: Enter at a shell prompt has to
-stay Enter, which is exactly why `isTypingKey` rejects it (§26.1).
+state. Collapsing them into one boolean is precisely what would make them cancel
+each other out the next time one of them needs to differ.
 
 ### 12.3 A successful send does not hide the composer
 
@@ -821,27 +576,31 @@ to the terminal.
 
 ```
 src/shared/
-  composerText.ts            pure: appendAttachmentPaths, slashQueryFor,
-                             filteredCommands, insertCommandText, attachmentDisplayName
-  agentCommands.ts           ported AgentCommandCatalog (data + filter)
-  types.ts                   += StagedAttachment, ComposerMode, ComposerSendRoute
+  composerText.ts          appendAttachmentPaths, slashQueryFor, insertCommandText,
+                           attachmentDisplayName, isTypingKey, insertAtCaret, railToggle
+  composerSend.ts          ComposerSendRoute, sendRoute, the bracketed-paste framing,
+                           deliverPayload, composerTiming
+  composerAttachments.ts   staging list helpers: dedupe, replaceStagedAttachment
+  composerGeometry.ts      the geometry arithmetic (§21.1)
+  doodleGeometry.ts        the doodle arithmetic (§27.5)
+  agentCommands.ts         per-agent command catalog (data + filter)
 
 src/renderer/stores/
-  composer.ts                Pinia store, keyed by session target
+  composer.ts              the Pinia store, keyed by session target;
+                           ComposerMode and StagedAttachment live here
+  shells.ts                sessionKey -> ShellId registry (§25.2)
 
 src/renderer/components/
-  PromptComposer.vue         the whole composer; owns layout + shortcuts
-  ComposerDraftField.vue     <textarea> + placeholder + autosize (optional split)
+  PromptComposer.vue       the whole composer; owns layout + shortcuts
   ComposerAttachmentTiles.vue
   SlashCommandDropdown.vue
+  DoodleCanvas.vue         the annotate surface (§27)
 
 src/renderer/views/
-  SessionWorkspaceView.vue   (owned by the navigation agent) mounts <PromptComposer/>
+  FolderWorkspaceView.vue  mounts <PromptComposer/> once, outside the tab body (§11)
 ```
 
-All components `<script setup lang="ts">`, matching
-`src/renderer/views/ConversationView.vue:1` and
-`src/renderer/components/TerminalView.vue:1`, with a top-of-file block comment
+All components `<script setup lang="ts">`, with a top-of-file block comment
 explaining the component's job, as every existing file does.
 
 ## 14. Pure helpers (`src/shared/composerText.ts`)
@@ -919,7 +678,7 @@ export interface ComposerSessionState {
 Keyed by `targetKey = `${connectionId}/${sessionName}``, mirroring the phone's
 `"$hostId/$sessionName"` (`TmuxSessionScreen.kt:2207`).
 
-**Not keyed** (revised, §12): `mode`, `lastOpenMode` and `geometry` are plain refs
+**Not keyed** (§12): `mode`, `lastOpenMode` and `geometry` are plain refs
 on the store, persisted under `pocketshell.composer.visibility.v1` — a second key
 rather than a version bump of `pocketshell.composer.v1`, so the drafts already on
 disk survive the change and an old blob's per-session `mode`/`height` are simply
@@ -964,17 +723,10 @@ Copy the strings exactly:
 
 ### 16.0 An upload in flight is waited for, not abandoned
 
-> "If I'm uploading an image and hit enter, I wait till image is uploaded and
-> then send the prompt" — and, on the old rule citing the phone: "that's not how
-> the phone app works. it waits"
-
-The desktop used to mark the in-flight batch cancelled and deliver whatever was
-already staged. The user attaches an image and then writes a prompt ABOUT that
-image, so what went out was not a smaller version of what they asked for: it was
-a question with its subject missing, to an agent that answered it anyway, having
-never seen the picture.
-
-Four things make the wait safe rather than a hang:
+Sending while an attachment batch is still uploading waits for it, then sends
+with the image included. The user attaches an image and then writes a prompt
+ABOUT that image, so cancelling the batch would deliver a question with its
+subject missing. Four things make the wait safe rather than a hang:
 
 - **`sendInFlight` goes up BEFORE the wait.** The Send button reads it, so it
   disables; the single-flight guard reads it, so a second Enter is a no-op
@@ -984,7 +736,7 @@ Four things make the wait safe rather than a hang:
 - **The batch always settles.** `Batch.done` resolves on every exit including a
   throw, and the upload's own `uploadTimeoutMs` bounds the wait.
 - **The payload is composed AFTER the wait.** Reading it first is precisely how
-  the old rule managed to send a prompt about an image with the image missing.
+  a prompt about an image gets sent with the image missing.
 - **A failed upload does not send.** The banner and the intact draft are what
   every other refusal in this store leaves behind, and the user can retry
   without retyping.
@@ -994,7 +746,7 @@ Four things make the wait safe rather than a hang:
 1. Compose: `payload = appendAttachmentPaths(draft, attachments.map(a => a.remotePath))`.
 2. Guard: return if `payload === ''` or `sendInFlight` (`:662`, `:672`).
 3. If an upload is in flight, **wait for it** and compose the payload
-   afterwards (§16.3).
+   afterwards (§16.0).
 4. `sendInFlight = true`, `error = null`. **Leave the draft and the tiles on
    screen** — this is #745 and it is the single most user-visible send rule.
 5. Deliver (§16.2) with a 12 000 ms timeout (`SEND_TIMEOUT_MS`, `:2535`).
@@ -1007,22 +759,18 @@ Four things make the wait safe rather than a hang:
 
 The desktop writes into a PTY running `tmux attach` via
 `api.shell.input(shellId, data)`
-(`src/preload/index.ts:70`, channel `shell:input` at `src/shared/channels.ts:21`).
+(`src/preload/index.ts:198`, channel `shell:input` at `src/shared/channels.ts:58`).
 There is no tmux control-mode client here, so **the renderer must apply the
 bracketed-paste framing itself** — the Android side gets it for free inside
 `sendInputBytesToPane` (`TmuxSessionViewModel.kt:9758-9800`, `:9860-9870`).
 
 ```ts
-const BP_START = '\x1b[200~';
-const BP_END   = '\x1b[201~';
-
-async function deliver(shellId: ShellId, payload: string): Promise<boolean> {
-  const needsPaste = payload.includes('\n') || payload.includes('\r');
-  const body = needsPaste ? BP_START + payload + BP_END : payload;
-  const wrote = await api.shell.input(shellId, body);
-  if (!wrote) return false;
-  if (submitDelayMs > 0) await sleep(submitDelayMs);   // #526
-  return api.shell.input(shellId, '\r');
+export async function deliverPayload(payload: string, opts: DeliverOptions): Promise<boolean> {
+  const delay = opts.submitDelayMs ?? composerTiming.submitDelayMs;
+  const wrote = await opts.write(frameForPaste(payload)); // BP_START…BP_END when multi-line
+  if (!wrote) return false;                               // a dead channel never leaves a half-typed prompt
+  if (delay > 0) await sleep(delay);                      // #526
+  return opts.write(SUBMIT_KEY);                          // '\r', separately, after
 }
 ```
 
@@ -1034,32 +782,37 @@ Rules, each from the Kotlin:
   wrong makes each line of an attachment block a separate agent prompt.
 - Send the submit `\r` **separately, after** the paste block, never inside it
   (`:8777-8780`).
-- Wait between the body and the Enter: default 150 ms
-  (`SettingsModels.kt:271`), floor 250 ms for Codex
-  (`TmuxSessionViewModel.kt:12135`). Until desktop has agent detection, use
-  250 ms unconditionally — it is the safe end of the range.
+- Wait between the body and the Enter: the desktop takes 250 ms for **every**
+  send (`composerTiming.submitDelayMs`, `src/shared/composerSend.ts:47`) — the
+  safe end of the Android range (default 150 ms, `SettingsModels.kt:271`; 250 ms
+  floor for Codex, `TmuxSessionViewModel.kt:12135`). It is imperceptible, and
+  Enter must never race the TUI's paste ingestion.
 - Programs that do not enable bracketed paste render the markers literally; the
   Kotlin accepts that degradation explicitly (`:9793-9795`). Do the same.
 
 ### 16.3 Routing
 
-Port the enum shape now, with only the raw arm implemented, so the agent-aware
-arms can be filled in without reshaping the call site:
-
 ```ts
-export type ComposerSendRoute = 'agent-conversation' | 'agent-payload' | 'raw';
+export type ComposerSendRoute = 'agent-payload' | 'raw';
 ```
 
-Decision function mirroring `tmuxComposerSendRoute` (`TmuxSessionScreen.kt:3163`):
-`viewingConversation → 'agent-conversation'`; `liveAgent === 'codex' →
-'agent-payload'`; `liveAgent → 'raw'`; `presumedAgent → 'agent-payload'`; else
-`'raw'`. Today the desktop has no agent detection (`src/main/helper/parsers.ts`
-knows engine names only for log reading), so `liveAgent`/`presumedAgent` are
-`null` and every send takes `'raw'`. Keep the function pure and unit-test it
-against the five cases exactly as `TmuxSessionScreenTest.kt:687-748` does.
+Decision function, `sendRoute` (`src/shared/composerSend.ts:155`), mirroring the
+phone's `tmuxComposerSendRoute` (`TmuxSessionScreen.kt:3163`): `withEnter &&
+liveAgent === 'codex' → 'agent-payload'`; `liveAgent → 'raw'`; `presumedAgent →
+'agent-payload'`; else `'raw'`.
 
-`'agent-conversation'` additionally requires echoing an optimistic user turn into
-the conversation view; defer it until the Conversation tab has a live transcript.
+**The Codex arm is live.** `liveAgent` is fed from the host-recorded
+`@ps_agent_kind` tmux option via `agentKindFromTmuxOption`
+(`src/main/helper/parsers.ts:216`) narrowed by `composerAgentKind`
+(`src/shared/composerSend.ts:110`), arriving as the composer's `agentKind` prop.
+`presumedAgent` has no desktop source yet — nothing infers an engine from
+history.
+
+The phone's third arm, `'agent-conversation'`, is gone rather than merely
+unreachable: it existed for the Conversation tab, which is deleted, and it never
+did anything the `'raw'` arm did not — it only short-circuited ahead of the
+Codex arm, giving codex panes the short submit delay. Keep `sendRoute` pure and
+unit-test it against the four cases (`tests/unit/composerSend.test.ts`).
 
 ### 16.4 Only one Send verb
 
@@ -1069,14 +822,15 @@ surface outside the composer, per #187.
 
 ## 17. Attachments (composer side)
 
-The upload backend is another agent's work (`src/main/attachments/AttachmentStager.ts`,
-IPC `attachments:stage` / `attachments:pickFiles` at `src/shared/channels.ts:56-59`,
-typed at `src/preload/index.ts:224-242`). The composer only consumes it.
+The upload backend lives in `src/main/attachments/AttachmentStager.ts`; the IPC
+is `attachments:stage` / `attachments:pickFiles`
+(`src/shared/channels.ts:195-196`), typed in `src/preload/index.ts:695-728`.
+The composer only consumes it.
 
 - Call `api.attachments.stage({ connectionId, scopeKey, sources })` where
   `scopeKey` is the session name (the phone scopes per session —
   `PromptAttachmentStager.kt:47-49`).
-- `StageAttachmentsResult` (`src/shared/types.ts:133`) already encodes the #570
+- `StageAttachmentsResult` (`src/shared/types.ts:214`) already encodes the #570
   partial-failure contract: **when `ok === false` but `paths` is non-empty,
   attach those paths anyway and show `error`.** Do not throw the survivors away.
 - Build tiles with `attachmentDisplayName(path)` — the file name, never the full
@@ -1092,7 +846,7 @@ typed at `src/preload/index.ts:224-242`). The composer only consumes it.
 
 Sources: `{ kind: 'file', path }` for the picker and drag-and-drop;
 `{ kind: 'bytes', data, name, mimeType }` for clipboard paste
-(`src/shared/types.ts:107-124`).
+(`src/shared/types.ts:188-201`).
 
 ## 18. Slash commands
 
@@ -1118,12 +872,16 @@ Sources: `{ kind: 'file', path }` for the picker and drag-and-drop;
   closes the dropdown only. This is a desktop addition — the phone is tap-only.
 - The `/` toolbar button seeds a leading `/` and focuses the field; it is not a
   separate palette (`:650-656`).
-- Disabled when no agent kind is known (`:1170-1174`,
-  `SlashCommandAutocomplete.kt:68-70`). **Until desktop has agent detection the
-  `/` button is permanently disabled and the dropdown never opens** — build the
-  plumbing, gate it on a `agentKind: AgentKind | null` prop, and let the
-  detection work light it up. Do not invent a desktop-only fallback catalog;
-  that would violate the "never offer an unavailable command" rule.
+- **Agent-kind gating.** The `/` button is disabled and the dropdown never opens
+  when no agent kind is known (`:1170-1174`,
+  `SlashCommandAutocomplete.kt:68-70`). Desktop detection exists: the host
+  records `@ps_agent_kind` per session, `agentKindFromTmuxOption`
+  (`src/main/helper/parsers.ts:216`) maps it, `composerAgentKind` narrows it to
+  the four engines, and the workspace hands the result to the composer as its
+  `agentKind` prop — the same prop that gates the button and feeds `liveAgent`
+  in §16.3. A shell pane (or `probing`/`exited`) gets `null`. Do not invent a
+  desktop-only fallback catalog; that would violate the "never offer an
+  unavailable command" rule.
 
 ## 19. Snippets — deferred
 
@@ -1168,25 +926,22 @@ terminal keys and must keep reaching the pane.
 
 `Enter`-sends is the correct default here because the phone's single Send always
 submits (§5.3) and the composer's whole purpose is submitting prompts. Do **not**
-add a settings toggle for "Enter inserts a newline" — D22 (`docs/decisions.md:30`)
-forbids settings flags for alternate behaviours; `Shift+Enter` is the escape
-hatch.
+add a settings toggle for "Enter inserts a newline" — D22 forbids settings flags
+for alternate behaviours; `Shift+Enter` is the escape hatch.
 
 ## 21. Styling and geometry
 
-**Superseded palette.** This section originally named the Catppuccin values
-(`#1e1e2e` / `#cdd6f4` / `#89b4fa` …) and the literal `#181825` panel fill. The
-app has since moved to the token set in `docs/DESIGN.md` §4.3, and
-`tests/unit/designGates.test.ts` now fails any raw hex outside `App.vue`. The
-mapping is: panel chrome `var(--surface)`, draft-box fill `var(--bg)`, draft
-border `var(--border-strong)` (WCAG 1.4.11 — an input's boundary must be ≥3:1),
-accent `var(--accent)`, muted text `var(--fg-secondary)`.
+Colour is the token set in `docs/DESIGN.md` §4.3 — panel chrome
+`var(--surface)`, draft fill `var(--bg)`, draft border `var(--border-strong)`
+(WCAG 1.4.11 — an input's boundary must be ≥3:1), accent `var(--accent)`, muted
+text `var(--fg-secondary)` — enforced by `tests/unit/designGates.test.ts`,
+which fails any raw hex outside `App.vue`.
 
 ### 21.1 The composer FLOATS, and the user places it
 
-The composer is not a docked row, not a full-bleed strip, and no longer even
-fixed to a corner. It is a card the user can drag anywhere in the session body
-and resize from any edge.
+The composer is not a docked row, not a full-bleed strip, and not fixed to a
+corner. It is a card the user can drag anywhere in the session body and resize
+from any edge.
 
 ```
  .session-body            position: relative
@@ -1197,12 +952,9 @@ and resize from any edge.
          └── .rail        the fixed toggle (§21.4), pinned to the corner
 ```
 
-`.composer-root` is the WHOLE dock. It used to be a `.composer-stage` that
-excluded a strip along the bottom, because the toggle lived in a band reserved
-out of the terminal. With that band gone (§21.2) the card gets the whole pane,
-and the only thing it must still clear is the toggle's own box — expressed as
-`PaneBox.keepOut` rather than as a wall, so a card parked to the LEFT of the
-toggle may sit on the pane's floor.
+`.composer-root` is the WHOLE dock. The only thing the card must clear is the
+toggle's own box — expressed as `PaneBox.keepOut` rather than as a wall, so a
+card parked to the LEFT of the toggle may sit on the pane's floor.
 
 **The dock is INSET, not padded.** An absolutely positioned child resolves its
 offsets against its containing block's *padding* box, so padding on the dock
@@ -1245,31 +997,22 @@ had, exactly like dragging a maximized OS window restores it under the cursor.
 
 ### 21.2 The terminal-never-resizes guarantee
 
-**The composer reserves nothing.** `.tab-body` used to carry
-`padding-bottom: calc(var(--composer-rail-h) + var(--composer-inset))` — about
-two terminal rows, given up permanently whether the composer was open or shut,
-so that the collapsed toggle could sit *below* the last row instead of on top of
-it. The user asked for those rows back: *"prompt composer thing should be flying
-so it shouldn't be taking space from the terminal it should be an overlay."*
+**The composer reserves nothing.** An earlier design gave the tab body a
+permanent padding strip for the toggle; the user asked for those rows back: the
+composer is an overlay and must not take space from the terminal.
 
-**The guarantee survives the change.** It never depended on the padding being
-44px, only on its being a **constant**: the terminal is sized by the pane, and
-no composer state can change it. Zero is a constant. Opening, closing, moving
-and resizing the card still cause no SSH window-change and no remote tmux
-reflow — the guarantee simply settles at a larger row count. The dock is an
-absolutely positioned overlay and takes no part in the tab body's layout in any
-state, which is the mechanism, and it is unchanged.
+The guarantee never depended on the padding, only on its being a **constant**:
+the terminal is sized by the pane, and no composer state can change it. Zero is
+a constant. Opening, closing, moving and resizing the card cause no SSH
+window-change and no remote tmux reflow — the dock is absolutely positioned and
+takes no part in the tab body's layout in any state. What the overlay costs is
+stated in §21.4: the toggle floats over the bottom-right of the terminal, where
+tmux paints the right end of its status line.
 
-What the change costs is stated plainly in §21.4: the toggle now floats over
-the bottom-right of the terminal, where tmux paints the right end of its status
-line.
-
-`--composer-inset` is declared on `.session-workspace` in
-`SessionWorkspaceView.vue` rather than in `App.vue`'s `:root`: it describes that
-pane's relationship with the composer, and custom properties inherit, so
-PromptComposer reads it without being handed it. `--composer-rail-h` sat beside
-it to size the reserved strip and is **gone** with the strip; the toggle sizes
-itself from `--control-h-sm`.
+`--composer-inset` is declared on the workspace in `FolderWorkspaceView.vue`
+rather than in `App.vue`'s `:root`: it describes that pane's relationship with
+the composer, and custom properties inherit, so PromptComposer reads it without
+being handed it.
 
 ### 21.3 Inside the card
 
@@ -1281,17 +1024,13 @@ That last one is why the card is *not* `overflow: hidden`, which in turn is why
 `.sash` closes the card's top corners itself.
 
 `<style scoped>` per component, matching every existing view.
+
 ### 21.4 One toggle, one position — the control that never moves
 
-Opening and closing used to be two different controls in two different places:
-the collapsed rail *was* the opener, and the card's header carried a close
-button. So the user reached for one spot to put the panel away and a different
-spot to bring it back, and the control they had just clicked was no longer under
-the cursor. The user's words: *"I want the button that minimizes it — on the
-same place — so when I click on it it goes down, and then if I want to hide it
-I just click on the same thing."*
-
-**There is exactly one open/close control, and it is anchored to the PANE.**
+**There is exactly one open/close control, and it is anchored to the PANE**, not
+to the card: pinned `right: 0; bottom: 0` of the dock, identical in every state
+— open, closed, card dragged elsewhere, card maximized. The card itself moves
+(§21.1), so a control riding on it has no fixed position to offer.
 
 ```
  .composer-dock          the session body, inset on all sides
@@ -1302,94 +1041,35 @@ I just click on the same thing."*
 
 | | |
 |---|---|
-| Position | pinned `right: 0; bottom: 0` of the dock. Identical in every state — open, closed, card dragged elsewhere, card maximized |
 | Both states | open — chevron **down**, the direction the panel will travel. Closed — chevron **up** |
-| Size | a 28px (`--control-h`) round button around a **16px** mark — the icon default scale, not a dense one, which is right for a primary affordance |
-| Surface | opaque `--surface-2`, a `--border-strong` edge and the card's elevation shadow. Not a taste call: DESIGN.md §4.2 requires `--border-strong` (4.12:1) wherever a boundary is the only thing identifying a control, and here it is the only thing separating the chip from the terminal behind it |
-| Inset | a further `--sp-3` inside the dock's own corner, so it visibly floats ON the terminal rather than hugging the pane's edge — and clears almost the whole tmux status row instead of sitting in it |
+| Size / surface | a 28px (`--control-h`) round button around a **16px** mark; opaque `--surface-2`, a `--border-strong` edge and the card's elevation shadow. DESIGN.md §4.2 requires the strong border (4.12:1) wherever a boundary is the only thing identifying a control, and here it is the only thing separating the chip from the terminal behind it |
+| Inset | a further `--sp-3` inside the dock's own corner, so it visibly floats ON the terminal rather than hugging the pane's edge — and clears almost the whole tmux status row |
 | Never covered | `PaneBox.keepOut` (§21.1) is the toggle's measured box; `clampGeometry` lifts any card that would span it. A **corner hole in the card's placement**, not a band carved out of the pane |
-| Click target | the whole button. It is pinned, so it is never dragged: a click is unambiguously a click |
-
-It could not have lived on the card. The card moves — that is §21.1 — so
-any control riding on it has no fixed position to offer.
-
-**Why it is a bare icon.** It began as a rail spelling out a `PROMPT` label, the
-waiting draft's first line, an attachment count and the `Ctrl+\`` hint. That was
-right while the composer owned a reserved strip below the terminal. Once it
-became a pure overlay (§21.2) everything it drew sat on top of terminal output,
-which made the *quietest* state the most intrusive one. An icon is the least
-that still offers the affordance. The user: *"let's make it smaller and an
-icon."*
-
-Nothing the rail answered was simply deleted:
-
-| Was | Now |
-|---|---|
-| `PROMPT` label | the tooltip and the `aria-label` |
-| `Ctrl+\`` hint | the tooltip, in both states |
-| draft's first line, attachment count | a 6px accent **pip** on the button's corner, plus `— unsent draft` in the tooltip. `railToggle(open, unsent)` owns that copy |
-| the `Compose prompt…` placeholder | **deleted.** It was never an answer to anything — a label for a button that already has a chevron and a tooltip |
-
-The pip is a CSS circle, not a glyph, so it does not
-scale with font metrics, ringed in the panel surface so it reads against
-whatever terminal output is behind it.
-
-**Small but not shy — superseding this section's own first answer.** The button
-began at 24px and `opacity: 0.55`, on the reasoning that an overlay drawing over
-tmux's status line should defer to it until wanted. The user, running it: *"the
-^ icon should be an overlay over the terminal not hiding in the corner it's
-almost invisible."*
-
-They were right, and the mistake was one of category. Deference is the correct
-instinct for decoration; this is the ONLY way to summon the composer once it is
-closed, so a control nobody can find is not subtle, it is broken. The fix was
-**contrast and placement, not size** — the user liked the compact icon and
-asked for it (*"let's make it smaller and an icon"*), so the old wide rail did
-not come back. It is now an opaque chip with a strong edge and real elevation,
-inset far enough to read as floating, at full opacity in every state.
-
-Hover and focus step the fill up the elevation ladder (`--surface-2` —
-`--surface-3`) and brighten the mark; a **waiting draft** brightens the mark
-too, so the pip is not carrying the news alone.
-
-**The card has a close button too — superseding this section's own earlier
-decision.** For one revision it did not: the header carried maximize/restore
-alone, on the reasoning that a second closer, on a surface the user can drag
-anywhere, was the "the control moved" problem all over again. That was a fair
-reading of the complaint as it stood, and it is recorded here rather than
-deleted because the reversal is the interesting part.
-
-What it got wrong is that OPENING and CLOSING are not symmetric acts. Closing is
-something you do to a surface you are already looking at, at the point of
-attention — the conventional — gesture, which needs no fixed address because
-you are looking straight at it. Opening is a summons issued from somewhere else
-entirely, and *that* is what needs one unmoving pixel. The user, having used the
-result: *"the button on the top right of prompt composer should be x — I want
-it to close the composer (i.e. minify)."*
-
-So the header is `[ PROMPT ——— maximize/restore ] [ close ]`: the
-conventional window order, dismissal last so it is not what the cursor lands on
-by accident. Maximize keeps its button rather than retreating into the header's
-double-click — that gesture still works, and so do `Ctrl+Shift+↑`/`↓`, but a
-primary affordance should not live only behind an undiscoverable one.
-
-Both closers run the same `hideComposer()`, so `lastOpenMode` carries
-docked-vs-maximized across the round trip whichever is used, and the pinned
-toggle's fixed-position invariant is untouched: it is an ADDITIONAL way to
-close, not a replacement. The other ways out are unchanged and all end in the
-same visible state: `Ctrl+\``, `Ctrl+Shift+K`, `Ctrl+Shift+↓`, and rung 4 of the
-Escape ladder (§12.2).
-
-**Closing always hands the keyboard back to the terminal.** Every path — the
-pinned toggle, the card's close, Escape rung 4, the chords, close-on-send —
-routes through one `hideComposer()` that focuses the pane. That is not a
-nicety: the typing intercept of §26 lives on the terminal's own textarea, so a
-close that left focus on a button would leave the next keystroke going nowhere
-and the whole feature looking broken.
+| Waiting draft | a 6px accent **pip** on the button's corner — a CSS circle, not a glyph, ringed in the panel surface so it reads against any terminal output — plus `— unsent draft` in the tooltip. `railToggle(open, unsent)` owns that copy |
 
 The chevron mapping and the unsent copy are a pure function (`railToggle` in
-`src/shared/composerText.ts`), tested in `tests/unit/composerText.test.ts`; the
-coordinate invariance is asserted end-to-end in `tests/e2e/composer.spec.ts`.
+`src/shared/composerText.ts`), tested in `tests/unit/composerText.test.ts`.
+
+**The card has a close button too.** The header is
+`[ PROMPT ——— maximize/restore ] [ close ]` — the conventional window order,
+dismissal last so it is not what the cursor lands on by accident. Opening and
+closing are not symmetric acts: closing is something you do to a surface you are
+already looking at, at the point of attention, which needs no fixed address;
+opening is a summons issued from somewhere else entirely, and *that* is what
+needs one unmoving pixel. Maximize keeps its button rather than retreating into
+the header's double-click — that gesture still works, and so do
+`Ctrl+Shift+↑`/`↓`, but a primary affordance should not live only behind an
+undiscoverable one.
+
+**Closing always hands the keyboard back to the terminal.** Every path — the
+pinned toggle, the card's close, Escape, the chords, close-on-send — routes
+through one `hideComposer()` that focuses the pane. That is not a nicety: the
+typing intercept of §26 lives on the terminal's own textarea, so a close that
+left focus on a button would leave the next keystroke going nowhere and the
+whole feature looking broken. `lastOpenMode` carries docked-vs-maximized across
+the round trip whichever closer is used; the pinned toggle is an ADDITIONAL way
+to close, not a replacement. The coordinate invariance is asserted end-to-end in
+`tests/e2e/composer.spec.ts`.
 
 ## 22. Deliberately NOT ported
 
@@ -1398,7 +1078,7 @@ coordinate invariance is asserted end-to-end in `tests/e2e/composer.spec.ts`.
 | **Voice / Whisper dictation** — the mic button, the `Idle/Recording/Transcribing` FSM (`PromptComposerViewModel.kt:2150`), the amplitude waveform (`PromptComposerSheet.kt:2231`), the mm:ss timer, the silence watchdog (`:1062-1130`), the swipe-up mic lock (`:621-639`), `Insert`/`Send` stop actions (`:1225-1275`), keep-screen-on (`:585-590`) | The desktop has no audio-capture dependency, no OpenAI key vault, and no permission flow. This is ~60% of the Kotlin ViewModel and ~40% of the sheet. Dropping it removes the *entire reason* `requestSend` has a queue-until-transcription branch (`:605-618`) — desktop `send()` is a straight-line call. |
 | **Pending-transcription queue** — banner, per-item retry/discard/save-as-audio, foreground-resume auto-retry (`:1780-1960`, `PromptComposerSheet.kt:2386-2600`) | Exists only to salvage failed Whisper round-trips. |
 | **API-key entry dialog** (`PromptComposerSheet.kt:2684`) | Whisper-only. |
-| **Everything IME** — the `keyboardUp` chrome variant (§3.3), the header-drop at `:802`, the 96↔56dp draft floor swap at `:932`, the `maxHeight - (ime - navBars)` room formula at `:735-741`, the `weight(1f, fill = false)` squish arithmetic at `:869`, `contentWindowInsets` at `:392-397`, and the six regression tests (`PromptComposerImeSquishProofTest`, `PromptComposerImeTightScreenSquishProofTest`, `PromptComposerImeEmptyDraftDeadSpaceProofTest`, `PromptComposerImeLayoutRegressionTest`, `PromptComposerSheetImeReachabilityTest`, `PromptComposerLongDraftCaretVisibleTest`) | A desktop window has no soft keyboard, so there is no dead space, no squish, and no IME-resized window. The composer is a flex child of a fixed-height column. **Do not port any reserve constant, any height cap keyed on an inset, or any "hide the header when …" rule.** The one durable lesson to keep is the invariant those tests were protecting: the Send row must always be reachable and a long draft must scroll *within* the composer instead of pushing the controls out of view — which on desktop is `overflow-y: auto` on the draft plus `flex: none` on the control row. |
+| **Everything IME** — the `keyboardUp` chrome variant (§3.3), the header-drop at `:802`, the 96↔56dp draft floor swap at `:932`, the `maxHeight - (ime - navBars)` room formula at `:735-741`, the `weight(1f, fill = false)` squish arithmetic at `:869`, `contentWindowInsets` at `:392-397`, and the six IME regression tests | A desktop window has no soft keyboard, so there is no dead space, no squish, and no IME-resized window. The composer is a flex child of a fixed-height column. **Do not port any reserve constant, any height cap keyed on an inset, or any "hide the header when …" rule.** The one durable lesson to keep is the invariant those tests were protecting: the Send row must always be reachable and a long draft must scroll *within* the composer instead of pushing the controls out of view — which on desktop is `overflow-y: auto` on the draft plus `flex: none` on the control row. |
 | **`TextFieldValue` composing-region handling** (#491, `UnifiedComposer.kt:42-60`, `PromptComposerSheet.kt:597-613`) | A DOM `<textarea>`'s `.value` is always the visible text; there is no uncommitted composing region to miss. Read `.value` directly. (IME composition for CJK still exists in the DOM — guard Enter-to-send with `event.isComposing` and that is the whole of it.) |
 | **`SavedStateHandle` mirroring + the #746 owner stamp** (`:2544`, `:2558`, `:813-840`) | Replaced by a per-session map in Pinia persisted through `electron-store` — see §12.4. |
 | **Modal bottom sheet, scrim, drag anchors, swipe-to-dismiss, `BackHandler`** (`PromptComposerSheet.kt:366`, `TmuxSessionScreen.kt:5543-5564`) | The desktop composer floats but is never modal: no scrim, the terminal behind it stays live and clickable. Escape replaces Back; the chevron and the shortcuts replace the swipe. |
@@ -1423,97 +1103,49 @@ coordinate invariance is asserted end-to-end in `tests/e2e/composer.spec.ts`.
 6. **Draft persistence across app restarts** — Android persists only the draft
    text and only until the process is recreated; desktop should persist draft +
    attachments + mode per session to `electron-store`.
-7. **A drag handle on the composer's top edge** to resize `docked`/`expanded`,
-   persisted per session — the desktop analogue of the sheet's drag anchors,
-   without any of the anchor arithmetic.
+7. **Drag/resize everywhere** — realised as the fully draggable, edge-resizable
+   card of §21.1 with app-level geometry (§12), not the per-session top-edge
+   drag handle first specced here.
 
 ## 24. Test plan
 
-Pure unit (Vitest) — port the Kotlin's own contracts:
+The contracts live in `tests/unit/`: `composerText.test.ts` (the pure helpers,
+with the case lists of §14 — blank/whitespace/`\n`/`\n\n` drafts, caret-in-token,
+token replacement), `composerSend.test.ts` (routing and framing, §16.2–16.3),
+`composerAttachments.test.ts` (dedupe, replace-in-place), `composerGeometry.test.ts`
+(§21.1), `composerStore.test.ts` (draft/tiles/error state rules, per-session
+isolation, `closeComposerOnSend`), `composerOutsideClick.test.ts` (the §12.2
+guards), `composerClipboardPaste.test.ts`, `composerAttachmentTiles.test.ts`,
+`composerHistoryRecall.test.ts` (§28), `DoodleCanvas.test.ts` and
+`doodleGeometry.test.ts` (§27); `designGates.test.ts` fences the tokens (§21).
+`tests/e2e/composer.spec.ts` drives the composed surface.
 
-- `appendAttachmentPaths`: empty paths; blank draft; whitespace-only draft;
-  draft ending `\n`; draft ending `\n\n`; normal draft; multiple paths and their
-  order.
-- `slashQueryFor`: `/` → `''`; `/comp` → `'comp'`; `/comp arg` with the caret
-  after the space → `null`; caret at 0 → `''`; text not starting with `/` →
-  `null`.
-- `insertCommandText`: replaces an existing leading token, preserves the trailing
-  text, prepends when there is no leading token, caret position.
-- `sendRoute`: the five branches, mirroring `TmuxSessionScreenTest.kt:687-748`.
-
-Component (Vue Test Utils) — port the instrumented tests' assertions:
-
-- **Send/dismiss** (`PromptComposerSendDismissE2eTest.kt`): a successful send
-  clears the draft and the tiles; a failed send keeps the composer open with the
-  payload restored and the "Not sent." banner; attach-then-type shows both; a
-  failed send keeps the attachment path inside the restored draft; the resend
-  still carries it.
-- **Discard** (`PromptComposerDiscardE2eTest.kt:160-226`): the banner exposes a
-  Discard control; tapping it clears draft + attachments + banner and leaves the
-  composer open.
-- **Per-session isolation** (the desktop replacement for
-  `:231-276`): a draft authored in session A is absent when session B is
-  selected, **and present again** when A is re-selected.
-- **Compactness** (`ComposerPartialExpandE2eTest.kt:154-179`): in `docked` mode
-  the card occupies the bottom-right of the workspace body, inset from its edges,
-  and the tab content behind it remains rendered. Assert the *terminal's* box is
-  unchanged between open and closed — that is the guarantee (§21.2), and it is
-  what a docked panel could not give.
-- **Slash** (`PromptComposerSlashButtonTest.kt:111-170`): the `/` button opens
-  the full catalog on an agent session and is disabled with no agent; typing
-  `/comp` shows `/compact` and hides `/clear`.
-- **Escape ladder** (§12.2), each rung, asserting the draft survives every one.
-
-Integration (Docker `tmux`/`helper` fixtures, per `docs/TESTING.md`): compose a
-two-line prompt with one staged attachment, send it, and assert with
+Integration invariant (Docker `tmux`/`helper` fixtures, per `docs/TESTING.md`):
+compose a two-line prompt with one staged attachment, send it, and assert with
 `tmux capture-pane` that the pane received **one** submission containing both
 lines and the `Attached files:` block — the bracketed-paste proof (§16.2).
 
 ## 25. Conflicts and dependencies with in-flight work
 
-1. **Resolved — session identity.** The restructure landed while this spec was
-   being written. `SessionWorkspaceView` derives the session from the route
-   (`:28`), so the composer's target key is
-   `` `${connection.connectionId}/${route.params['session']}` `` with no new
-   store plumbing needed. The dock slot is already reserved at `:94`.
-2. **BLOCKER — `shellId` is not reachable from outside `TerminalView`.** It is a
-   module-local `let` (`components/TerminalView.vue:48`), never returned or
-   `defineExpose`d, and the shell is opened inside the component
-   (`:67-72`). The composer has nothing to write to. Fix one of two ways, both
-   acceptable:
-   (a) `defineExpose({ shellId })` on `TerminalView` and hold a template ref in
-   `SessionWorkspaceView`; or, better,
-   (b) move shell ownership into `stores/sessions.ts` as a
-   `Map<sessionName, ShellId>`, so the composer, the terminal, and any future
-   surface all address the same shell. **This is the one hard dependency and it
-   must be agreed with whoever owns `TerminalView`.**
-   Related: `TerminalView` re-opens its shell whenever `sessionKey` changes
-   (`:26`), so whatever the composer reads must be reactive, not captured once.
-3. **`ConversationView.vue` still owns a session-id text input** (`:53-58`)
-   even though the workspace now passes `sessionId` as a prop (`:10-13`,
-   `SessionWorkspaceView.vue:87`). Once the composer docks below it, that input
-   should go: two text boxes on one screen, one of which is not the prompt
-   composer, is exactly the confusion the user is asking to avoid.
-4. **Ports and Usage no longer have a home.** `SessionWorkspaceView` exposes
-   only Terminal / Conversation / Files (`:25`); the old host-level Ports and
-   Usage tabs (`HostWorkspaceView.vue:22` before the restructure) are
-   host-scoped and cannot become session tabs. Wherever they land, they must not
-   be siblings of the composer — the composer belongs to the session workspace
-   only (§11).
-5. **Agent detection does not exist.** `src/main/helper/parsers.ts:130` knows
-   engine names for log reading only; nothing detects which engine is live in a
-   pane. Consequences: slash commands stay disabled (§18), and every send takes
-   the `'raw'` route (§16.3). Both are gated behind one `agentKind` prop, so the
-   detection work can enable them without touching the composer.
-6. **Attachments backend contract is already settled** and the composer should
-   consume it as-is: `attachments:stage` / `attachments:pickFiles`
-   (`src/shared/channels.ts:56-59`), `StageAttachmentsResult`
-   (`src/shared/types.ts:133-142`). Its partial-failure semantics already match
-   Android #570; do not re-litigate them.
+1. **Resolved — session identity.** The restructure landed; the composer follows
+   the active session tab of `FolderWorkspaceView` (§11).
+2. **Resolved — `shellId` reachability.** The one hard dependency is closed:
+   `src/renderer/stores/shells.ts:74-98` keeps a `register` / `unregister` /
+   `shellIdFor` registry keyed by session, so the composer writes to the same
+   shell the terminal shows.
+3. **Stale.** The `ConversationView.vue` session-id input this item asked to
+   remove left with the Conversation tab itself.
+4. **Ports and Usage are host-scoped** and must not become siblings of the
+   composer — the composer belongs to the session workspace only (§11).
+5. **Stale.** An earlier revision declared desktop agent detection nonexistent;
+   it exists — see §16.3 and §18.
+6. **The attachments backend contract is settled** — `attachments:stage` /
+   `attachments:pickFiles` (`src/shared/channels.ts:195-196`),
+   `StageAttachmentsResult` (`src/shared/types.ts:214`). Its partial-failure
+   semantics already match Android #570; consume as-is, do not re-litigate.
 7. **No decision here changes `docs/DESIGN.md`.** If the composer's placement
-   (§11) contradicts what that document says about tab ownership, this spec's
-   §11 justification should be reconciled by whoever owns that file — flagged,
-   not edited.
+   (§11) contradicts what that document says about tab ownership, reconcile
+   there — flagged, not edited.
 
 ## 26. Two behaviours the user drives from Settings
 
@@ -1540,7 +1172,7 @@ Where it is decided:
 |---|---|
 | Predicate | `isTypingKey` in `src/shared/composerText.ts`, unit-tested. Pure, so the line it draws is checkable rather than buried in an event handler |
 | Intercept | `TerminalView.vue`'s existing `attachCustomKeyEventHandler`, which already owns the clipboard chords. Returning `false` stops xterm turning the key into input bytes |
-| Condition | `SessionWorkspaceView.vue` computes `settings.typingOpensComposer && composer.mode === 'hidden' && tab !== 'files'` and hands TerminalView the answer as `interceptTyping`. The terminal knows nothing about the composer or the settings; the composer knows nothing about the terminal's key handling |
+| Condition | `FolderWorkspaceView.vue` computes `settings.typingOpensComposer && composer.mode === 'hidden' && the active tab is a session tab` and hands TerminalView the answer as `interceptTyping`. The terminal knows nothing about the composer or the settings; the composer knows nothing about the terminal's key handling |
 | Delivery | TerminalView emits `typed`; the workspace calls the composer's `typeInto(char)`, which opens on `lastOpenMode` and splices the character in at the remembered caret (`insertAtCaret`) |
 
 **Where the line is drawn, exactly.** `isTypingKey` returns false — so the key
@@ -1558,11 +1190,11 @@ goes straight to the shell — for:
 - **a key mid-IME-composition.** The composing text belongs to whatever already
   has focus; stealing it half-written would drop it.
 
-**The keypress latch.** xterm consults the handler for keydown *and* keypress,
-and it is the keypress it turns into a byte. Swallowing only the keydown would
-still let the character through — and by keypress time the condition has gone
-false, because the composer we just opened is no longer closed. So the decision
-is latched on the keydown and spent on the keypress.
+**One decision per keystroke.** TerminalView handles the keydown and
+`preventDefault()`s it — that is the feature, not a precaution: cancelling the
+native path is what stops xterm *and* suppresses the DOM keypress event, so the
+character cannot reach the draft a second time on top of the copy `typeInto`
+planted.
 
 **How to get a plain terminal**, which is the question this feature has to have
 an answer to:
@@ -1573,34 +1205,18 @@ an answer to:
    out of the way as a floating panel; type into it whenever you want it back.
 2. **The setting**, for turning the behaviour off entirely.
 
-This has been in FOUR places. First there was no explicit hatch: Escape's third
-rung blurred the draft and left the composer OPEN, and since the intercept only
-fires while it is closed, that bought a plain terminal for free. It was neat and
-it depended on Escape not doing what Escape does everywhere else, so the user
-asked for the plain meaning of the key. The hatch then moved ONTO Escape — a
-dismissal suppressed the intercept — and that is what the user hit and reported:
-"I click esc, continue typing and now the input goes to the terminal". Escape
-had stopped meaning "close" and started meaning "close, and speak for my next
-keystroke".
-
-So it moved off the keyboard onto the POINTER: a press in the terminal armed a
-suppression that withstood every keystroke until the user summoned the composer.
-That was the design working as written, and the user rejected the design too:
-*"when I start typing it stopped showing the prompt composer and instead I type
-directly to the terminal."* The flaw was the same each time, and it was not
-where the hatch lived but THAT it lived: arming it was invisible, and in an app
-where the terminal fills the window, "click into the terminal" is not a
-considered declaration of shell intent — it is how you focus the window, scroll
-output, select a path. The clicks that disarmed the intercept were the ordinary
-static of using the app, so from the user's side typing opened the composer
-sometimes and betrayed them the rest, with nothing on screen saying which.
-
-**Nothing suppresses the intercept now.** Its only conditions are the setting
-and `mode === 'hidden'`, both of which are visible on screen. The cost is real
-and accepted: with the setting on and the panel closed, every printable
-keystroke opens the composer, so a shell command always starts with a summons
-(`Ctrl+\``, or the toggle) or with opening the card first — option 1 above. The
-user types prompts for a living here and chose that trade in as many words.
+**Nothing suppresses the intercept.** Earlier designs armed a suppression from a
+dismissal and then from a press in the terminal; the user hit both as ordinary
+static — in a terminal-centric app, clicking into the terminal is how you focus
+the window, scroll output and select a path, not a declaration of shell intent —
+and reported typing opening the composer "sometimes" with nothing on screen
+saying why. So the hatch was removed outright: the intercept's only conditions
+are the setting and `mode === 'hidden'`, both visible on screen, and a close
+only puts the view away (§12.2). The cost is real and accepted: with the setting
+on and the panel closed, every printable keystroke opens the composer, so a
+shell command always starts with a summons (`Ctrl+\``, or the toggle) or with
+opening the card first — option 1 above. The user types prompts for a living
+here and chose that trade in as many words.
 
 ### 26.2 `closeComposerOnSend`
 
@@ -1612,10 +1228,8 @@ it back (§26.1). This is the phone's rhythm, asked for explicitly.
   is back in the draft and the "Not sent" banner is showing, and closing over
   the top of that would hide both, leaving an invisible unsent prompt and no
   explanation.
-- A **partial attachment failure** (#570) happens at STAGE time, not send time.
-  Its survivors are attached and its error shown; if the user then sends, the
-  send either lands or it does not, and the earlier error has no say in whether
-  the panel closes.
+- A **partial attachment failure** (#570) happens at STAGE time, not send time;
+  it has no say in whether the panel closes (§17).
 - The rule lives in the store's `send(key, deliver, { closeOnDelivery })` rather
   than in the component, so the failure case is testable without a settings
   fixture. The component passes the setting in and, on a delivered-and-closed
@@ -1741,34 +1355,23 @@ pixels are not CSS pixels. `--fs-300` text on a phone screenshot would be
 13/2048 of the image width and about four screen pixels tall on the sheet. Size
 follows the selected mark weight instead — 8x, with a 36px floor so the lightest
 weight stays legible once the sheet is shrunk to about a third — so a caption
-and the arrow pointing at it read as one hand.
-
-The ratio was 4x, borrowed from the arrowhead, and that borrowing was the bug a
-user reported as "for annotations font size is too small": an arrowhead is a
-SHAPE and survives being shrunk, type does not, and this sheet is always shrunk
-(an `md` overlay is ~700 CSS px over a backdrop worked at up to 2048). At 4x the
-three weights reached the eye at 4 / 8 / 16 CSS px — two of them, the default
-among them, below the 11px `--fs-100` this app never goes under. The ratio and
-the floor are named constants in the pure module, and the test asserts what
-REACHES THE EYE (`textFontSize(w) * (700/2048) >= 11`) rather than asserting the
-constants against themselves.
+and the arrow pointing at it read as one hand. (The ratio was 4x, borrowed from
+the arrowhead, and that borrowing was a reported bug: an arrowhead is a shape
+and survives shrinking, type does not.) The ratio and the floor are named
+constants in the pure module, and the test asserts what REACHES THE EYE
+(`textFontSize(w) * (700/2048) >= 11`) rather than asserting the constants
+against themselves.
 
 ### 27.7 Annotating an image that is already attached
 
-The request was "when I attached an image I want to be able to annotate on it",
-clarified as *on an already-attached image*. That is a different act from the
-four source-chooser routes, and the difference is entirely on the way out: the
-others produce a NEW tile, this one **replaces** an existing one.
-
-**The affordance.** A pencil appears on image tiles only, decided by
-`classifyByName(remotePath)` — the same classifier the Files tab uses. Not by
+**The affordance.** A pencil appears on image tiles only — sitting *before* the
+`×`, so the destructive control keeps the corner muscle memory expects — decided
+by `classifyByName(remotePath)`, the same classifier the Files tab uses. Not by
 "does the tile have a thumbnail": a tile only carries a preview when it came
 from a paste or a drop, so that rule would offer annotation on a dropped
 screenshot and refuse it on the identical file attached through the paperclip
 (which stages by path and never mints one), or on either after a restart
-(previews are deliberately not persisted). The remote name always survives. The
-pencil sits *before* the `×`, so the destructive control keeps the corner
-muscle memory expects.
+(previews are deliberately not persisted). The remote name always survives.
 
 **Where the pixels come from.** Staging is EAGER — the bytes are uploaded when
 the file is attached, not when the prompt is sent (§17) — so the host always
@@ -1779,45 +1382,37 @@ actually hit (a screenshot pasted five seconds ago) the same bytes are already
 in the renderer behind the tile's object URL. So the local preview is tried
 first: instant, and it works with the connection down. Only tiles with no
 preview pay for the read, behind a `loading` step that also gives a failed read
-somewhere to be reported that is not the source chooser.
+somewhere to be reported.
 
-**Replace, not keep alongside.** "Annotate it" is a sentence about one image.
-Keeping both would double every attachment anyone marks up and hand the agent a
-clean copy and a scribbled copy of the same screenshot with nothing to say which
-to believe. The swap is **in place**, and that is the load-bearing detail: paths
-are folded into the prompt in tile order at send time (§5.1), so a draft that
-says "compare the first screenshot with the second" is a statement about the
-list's ordering. Remove-then-reattach — the only thing the store's existing
-actions can express between them — would silently move the image to the end.
-`replaceStagedAttachment()` in `src/shared/composerAttachments.ts` is the
-ordering rule, pure and unit-tested; it reports `null` rather than appending
-when the target is gone, because re-adding an attachment the user has since
-removed is worse than losing the drawing.
+**Replace, not keep alongside — and the ordering rule is load-bearing.**
+"Annotate it" is a sentence about one image; keeping both would double every
+attachment anyone marks up and hand the agent a clean copy and a scribbled copy
+of the same screenshot with nothing to say which to believe. The swap is **in
+place**, and that is the load-bearing detail: paths are folded into the prompt
+in tile order at send time (§5.1), so a draft that says "compare the first
+screenshot with the second" is a statement about the list's ordering, and
+remove-then-reattach — the only thing the store's existing actions can express
+— would silently move the image to the end. `replaceStagedAttachment()` in
+`src/shared/composerAttachments.ts` is the ordering rule, pure and unit-tested;
+it reports `null` rather than appending when the target is gone, because
+re-adding an attachment the user has since removed is worse than losing the
+drawing.
 
-The original on the host is left where it is. Nothing references it, and
+The original on the host is left where it is: nothing references it, and
 `AttachmentRetentionPolicy` already owns the lifetime of everything under
 `~/.pocketshell/attachments`. Deleting eagerly would mean a new privileged IPC
 channel that removes remote files, to reclaim one screenshot from a directory
 that prunes itself.
 
-**Re-annotating works, and starts from the flattened result.** That is the
-honest behaviour: the second pass draws on the PNG the first pass produced, not
-on its vector items, which are not persisted anywhere. The visible cost is the
-filename, which by then carries this surface's `annotated-…-<stamp>` and the
-stager's own `<stamp>-<ordinal>-` prefix; `doodleAttachmentName()` strips both
-before it adds one of each, so the name is stable under any number of passes
-instead of growing a decoration per pass.
+**Re-annotating works, and starts from the flattened result** — the second pass
+draws on the PNG the first pass produced, not on its vector items, which are not
+persisted anywhere. The visible cost is the filename; `doodleAttachmentName()`
+strips the previous decoration before adding one of each, so the name is stable
+under any number of passes instead of growing one per pass.
 
 ### 27.8 Cancelling no longer destroys the drawing
 
-Every route out of the sheet except Attach used to discard silently: the Cancel
-button, the overlay's `✕`, a click on the backdrop, and Escape. Backdrop clicks
-against a modal are the easiest mouse error there is, and the undo stack that
-would otherwise be the recovery (§27.4) lives *inside* the component the close
-unmounts. On a blank sheet that is an annoyance; on a screenshot the user
-attached and then spent a minute marking up it is the loss of all of it.
-
-So `DoodleCanvas` owns the decision now and the parent routes every dismissal
+`DoodleCanvas` owns the close decision, and the parent routes every dismissal
 through `requestClose()`, exposed for exactly that. An empty sheet still closes
 on one Escape — a doodle opened by mistake must not argue. A sheet with work on
 it raises a confirmation in its own footer, replacing the action row rather than
@@ -1869,12 +1464,11 @@ resends it; the resend is the dedupe above keeping the list honest. Any manual
 edit ends the browse (the text on screen is the user's from then on), as do
 Discard, a delivered send and a failed send's restore.
 
-The chord, not the bare arrows, is a deliberate change (2026-08-29): plain ↑/↓
-must stay caret keys for editing a draft — a multi-line compose is unreadable
-if ↑ yanks the draft out from under the cursor. Because the chord is an
-explicit history request, the old caret-position gates (first line to recall
-older, last line to recall newer, no selection) went with it. The keystrokes
-are intercepted in `PromptComposer.onDraftKeydown`:
+The chord, not the bare arrows: plain ↑/↓ must stay caret keys for editing a
+draft — a multi-line compose is unreadable if ↑ yanks the draft out from under
+the cursor — so the old caret-position gates (first line to recall older, last
+line to recall newer, no selection) went with the chord. The keystrokes are
+intercepted in `PromptComposer.onDraftKeydown`:
 
 - the slash dropdown owns the arrows while it is open (§18) — chord or not;
 - not while an IME composition is in flight.
@@ -1885,10 +1479,10 @@ dropdown rather than opening it: the text was not typed, so it is not a query.
 ### 28.3 Persistence
 
 `history` and `recallSaved` join the per-session blob under
-`pocketshell.composer.v1` (§23.6). The browse cursor itself does not survive a
-restart — it is a gesture, like the slash dropdown's dismissal — so a draft
-parked in `recallSaved` when the app went away is restored as THE draft: the
-saved text is the only one that can come back.
+`pocketshell.composer.v1` (§15, §12.4). The browse cursor itself does not
+survive a restart — it is a gesture, like the slash dropdown's dismissal — so a
+draft parked in `recallSaved` when the app went away is restored as THE draft:
+the saved text is the only one that can come back.
 
 Tests: `tests/unit/composerStore.test.ts` (the state rules) and
 `tests/unit/composerHistoryRecall.test.ts` (the keystrokes, mounted).
