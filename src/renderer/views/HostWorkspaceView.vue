@@ -53,6 +53,7 @@ import PortPanelView from './PortPanelView.vue';
 import SettingsView from './SettingsView.vue';
 import UsageView from './UsageView.vue';
 import type { SessionDirectory } from '../sessionGrouping';
+import { usePaneWidth } from '../usePaneWidth';
 
 const route = useRoute();
 const router = useRouter();
@@ -182,21 +183,14 @@ const panelCollapsed = ref(false);
 const MIN_PANEL_WIDTH = 232;
 const MAX_PANEL_WIDTH = 560;
 const DEFAULT_PANEL_WIDTH = 280;
-const PANEL_WIDTH_KEY = 'pocketshell.sessionPanelWidth';
-
-/**
- * Restore the dragged width. It used to reset to 280 on every mount, so the
- * resize was a per-visit chore rather than a setting. Clamped on read as well
- * as on write: the stored value predates any change to the clamp, and a
- * hand-edited or corrupt entry must not be able to strand the panel offscreen.
- */
-function loadPanelWidth(): number {
-  const stored = Number.parseInt(window.localStorage.getItem(PANEL_WIDTH_KEY) ?? '', 10);
-  if (Number.isNaN(stored)) return DEFAULT_PANEL_WIDTH;
-  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, stored));
-}
-
-const panelWidth = ref(loadPanelWidth());
+// usePaneWidth owns the restore/clamp/drag/write mechanics that the Files
+// tree's splitter used to duplicate line for line.
+const { width: panelWidth, onDragStart } = usePaneWidth({
+  storageKey: 'pocketshell.sessionPanelWidth',
+  min: MIN_PANEL_WIDTH,
+  max: MAX_PANEL_WIDTH,
+  defaultWidth: DEFAULT_PANEL_WIDTH,
+});
 
 /**
  * The lost-link banner's own memory of the re-dial it started.
@@ -427,26 +421,6 @@ function onWindowKeydown(e: KeyboardEvent): void {
 
 onMounted(() => window.addEventListener('keydown', onWindowKeydown, { capture: true }));
 onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown, { capture: true }));
-
-function onDragStart(): void {
-  document.addEventListener('mousemove', onDragMove);
-  document.addEventListener('mouseup', onDragEnd);
-}
-
-function onDragMove(e: MouseEvent): void {
-  panelWidth.value = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, e.clientX));
-}
-
-function onDragEnd(): void {
-  document.removeEventListener('mousemove', onDragMove);
-  document.removeEventListener('mouseup', onDragEnd);
-  // Written once per drag, not per mousemove: this is a preference, and a
-  // localStorage write on every pointer sample is a synchronous disk touch
-  // inside the drag loop.
-  window.localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth.value));
-}
-
-onBeforeUnmount(onDragEnd);
 
 function onBack(): void {
   void router.push({ name: 'hosts' });

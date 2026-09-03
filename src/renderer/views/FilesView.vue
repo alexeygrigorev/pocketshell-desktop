@@ -16,7 +16,7 @@
 // `worker-src` falls back to it), which is exactly what Monaco's language
 // services need — the dev-works/packaged-dies failure. See the header of
 // components/CodeEditor.vue for the probe output.
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useFilesStore, hasPreview, isEditable } from '../stores/files';
 import { formatBytes } from '../../shared/byteSize';
@@ -26,6 +26,7 @@ import { isShortcut } from '../../shared/shortcuts';
 import FileTree from '../components/FileTree.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import EnvPanelView from './EnvPanelView.vue';
+import { usePaneWidth } from '../usePaneWidth';
 
 /**
  * Loaded on demand. CodeMirror is ~680 KB of the renderer, and a workspace
@@ -99,53 +100,22 @@ const connId = computed(() => connection.connectionId);
 const MIN_TREE_WIDTH = 180;
 const MAX_TREE_WIDTH = 640;
 const DEFAULT_TREE_WIDTH = 260;
-const TREE_WIDTH_KEY = 'pocketshell.filesTreeWidth';
-
-function loadTreeWidth(): number {
-  const stored = Number.parseInt(window.localStorage.getItem(TREE_WIDTH_KEY) ?? '', 10);
-  if (Number.isNaN(stored)) return DEFAULT_TREE_WIDTH;
-  return Math.min(MAX_TREE_WIDTH, Math.max(MIN_TREE_WIDTH, stored));
-}
-
-const treeWidth = ref(loadTreeWidth());
-
-/**
- * `flex: 0 0 <n>px` and not `width`, because the tree is a flex item: a `width`
- * would still be overridden by `flex-shrink` the moment the editor beside it
- * wanted room, and the pane would go back to moving on its own.
- */
-const treeStyle = computed(() => ({ flex: `0 0 ${treeWidth.value}px` }));
-
-/** Left edge of the splitter, in viewport coords — the drag's origin. */
-let dragOrigin = 0;
-
-function onTreeDragStart(e: MouseEvent): void {
-  // Measured from the pane's own left edge rather than from `clientX` directly:
-  // this view is inside the workspace, which is inside the session panel's
-  // splitter, so `clientX` is not the tree's width. HostWorkspaceView can use
-  // `clientX` because its panel really does start at x=0.
-  const paneLeft = (e.currentTarget as HTMLElement).parentElement?.getBoundingClientRect().left ?? 0;
-  dragOrigin = paneLeft;
-  document.addEventListener('mousemove', onTreeDragMove);
-  document.addEventListener('mouseup', onTreeDragEnd);
-}
-
-function onTreeDragMove(e: MouseEvent): void {
-  treeWidth.value = Math.min(
-    MAX_TREE_WIDTH,
-    Math.max(MIN_TREE_WIDTH, e.clientX - dragOrigin),
-  );
-}
-
-function onTreeDragEnd(): void {
-  document.removeEventListener('mousemove', onTreeDragMove);
-  document.removeEventListener('mouseup', onTreeDragEnd);
-  // Written once per drag, not per mousemove: a localStorage write on every
-  // pointer sample is a synchronous disk touch inside the drag loop.
-  window.localStorage.setItem(TREE_WIDTH_KEY, String(treeWidth.value));
-}
-
-onBeforeUnmount(onTreeDragEnd);
+// The origin is measured at drag START from the pane's own left edge rather
+// than from `clientX` directly: this view is inside the workspace, which is
+// inside the session panel's splitter, so `clientX` is not the tree's width.
+// HostWorkspaceView can use `clientX` because its panel starts at x=0.
+const { style: treeStyle, onDragStart: onTreeDragStart } = usePaneWidth({
+  storageKey: 'pocketshell.filesTreeWidth',
+  min: MIN_TREE_WIDTH,
+  max: MAX_TREE_WIDTH,
+  defaultWidth: DEFAULT_TREE_WIDTH,
+  measureOrigin: (e) =>
+    (e.currentTarget as HTMLElement).parentElement?.getBoundingClientRect().left ?? 0,
+});
+// `flex: 0 0 <n>px` (the composable's style) and not `width`, because the tree
+// is a flex item: a `width` would still be overridden by `flex-shrink` the
+// moment the editor beside it wanted room, and the pane would go back to
+// moving on its own.
 
 onMounted(async () => {
   if (connId.value) await files.open(connId.value, props.startPath, props.sessionKey);
