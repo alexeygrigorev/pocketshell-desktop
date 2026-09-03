@@ -220,3 +220,39 @@ describe('ForwardState identity', () => {
     expect(s.origin).toBe('manual');
   });
 });
+
+describe('stop() with a live connection', () => {
+  it('ends a live proxied connection instead of waiting it out', async () => {
+    const channel = new FakeChannel();
+    const f = new Forwarder(registryWithChannel(channel), 'c1', {
+      kind: 'local',
+      listenHost: '127.0.0.1',
+      listenPort: 8463,
+      destHost: '127.0.0.1',
+      destPort: 80,
+    });
+    started.push(f);
+    expect(await f.start()).toBe(true);
+
+    // The keep-alive case: a connection the client never closes. `server.close()`
+    // waits for every live connection to end on its own, and with the idle
+    // reaper's hour as the only other exit, `stop()` used to hang for exactly
+    // that long behind one of these — a stopPass inside a scan pass, a
+    // stopAuto on disconnect.
+    const client: Socket = await new Promise((resolve) => {
+      const s = connect({ port: 8463, host: '127.0.0.1' }, () => resolve(s));
+    });
+    const clientClosed = new Promise<void>((resolve) => client.once('close', resolve));
+
+    const timeout = (ms: number): Promise<'pending'> =>
+      new Promise((r) => setTimeout(() => r('pending'), ms));
+    const settled = await Promise.race([
+      f.stop().then(() => 'stopped' as const),
+      timeout(250),
+    ]);
+    expect(settled).toBe('stopped');
+    // And the connection itself was ended by the stop, not left hanging.
+    await clientClosed;
+    client.destroy();
+  });
+});

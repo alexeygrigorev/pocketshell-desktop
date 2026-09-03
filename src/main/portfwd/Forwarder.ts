@@ -101,6 +101,10 @@ export class Forwarder {
   private readonly idleTimeoutMs: number;
   private meta: ForwardMeta = { name: null, process: null, cwd: null, remapped: false };
   private unregisterRemote: (() => void) | null = null;
+  // Live proxied connections, so `stop()` can end them instead of waiting for
+  // each one to end itself (see `adopt` / `stop`).
+  private readonly inbound = new Set<Socket>();
+  private readonly channels = new Set<{ destroy(): void }>();
   // Rate sampling state (see RATE_SAMPLE_MIN_MS).
   private lastSampleAt = Date.now();
   private lastBytesIn = 0;
@@ -193,6 +197,23 @@ export class Forwarder {
   /** Tear down the forward (idempotent). */
   async stop(): Promise<void> {
     if (this.server) {
+      // `close()` stops LISTENING, but its callback waits for every live
+      // connection to end on its own — and with the idle reaper's hour as the
+      // only other exit, one keep-alive connection could hold this await (a
+      // stopPass inside a scan pass, a stopAuto in the disconnect path) for
+      // up to that hour. The forward is being discarded: end its connections
+      // now. The ssh2 channels are destroyed explicitly, because a destroyed
+      // local socket never sends the EOF that would otherwise close them.
+      for (const socket of this.inbound) socket.destroy();
+      this.inbound.clear();
+      for (const channel of this.channels) {
+        try {
+          channel.destroy();
+        } catch {
+          // already gone
+        }
+      }
+      this.channels.clear();
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));
       this.server = null;
     }
@@ -214,7 +235,10 @@ export class Forwarder {
   private startLocal(): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let settled = false;
-      const server = createServer((socket) => this.pipeForwardOut(socket));
+      const server = createServer((socket) => {
+        this.adopt(socket);
+        this.pipeForwardOut(socket);
+      });
       server.on('error', () => {
         if (!settled) {
           settled = true;
@@ -236,9 +260,10 @@ export class Forwarder {
   private startDynamic(): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let settled = false;
-      const server = createServer((socket) =>
-        handleSocks5(socket, (host, port) => this.forwardOutTo(socket, host, port)),
-      );
+      const server = createServer((socket) => {
+        this.adopt(socket);
+        handleSocks5(socket, (host, port) => this.forwardOutTo(socket, host, port));
+      });
       server.on('error', () => {
         if (!settled) {
           settled = true;
@@ -284,6 +309,7 @@ export class Forwarder {
 
   private onRemoteConnection(accept: () => Socket): void {
     const remote = accept();
+    this.adopt(remote);
     // For a basic -R without a local destination we keep the channel open and
     // count bytes. Data arriving from the server is inbound (download).
     remote.on('data', (d: Buffer) => {
@@ -298,6 +324,16 @@ export class Forwarder {
   // --- shared helpers -----------------------------------------------------
   private client(): Client | undefined {
     return this.registry.get(this.connectionId)?.client;
+  }
+
+  /**
+   * Track an inbound socket for the lifetime of its connection. `stop()`
+   * destroys what this set holds; without it, `server.close()`'s wait and the
+   * idle reaper's hour are the only things that ever end a connection.
+   */
+  private adopt(socket: Socket): void {
+    this.inbound.add(socket);
+    socket.on('close', () => this.inbound.delete(socket));
   }
 
   private pipeForwardOut(socket: Socket): void {
@@ -342,6 +378,11 @@ export class Forwarder {
         channel.on('error', () => socket.destroy());
         socket.on('close', done);
         channel.on('close', done);
+        // Remembered so `stop()` can destroy the channel: a destroyed local
+        // socket never sends the EOF that would close it, and the forward's
+        // SSH connection outlives the forward.
+        this.channels.add(channel);
+        channel.on('close', () => this.channels.delete(channel));
         this.armIdleReaper(socket, channel);
       },
     );
