@@ -139,9 +139,16 @@ export const useForwardsStore = defineStore('forwards', () => {
     connectionId: ConnectionId,
     configForwards: ForwardSpec[] = [],
   ): Promise<void> {
-    autoOn.value = await api.forwards.isAutoEnabled(connectionId);
-    if (autoOn.value) await api.forwards.startAuto(connectionId, configForwards);
-    await sync(connectionId);
+    try {
+      autoOn.value = await api.forwards.isAutoEnabled(connectionId);
+      if (autoOn.value) await api.forwards.startAuto(connectionId, configForwards);
+      await sync(connectionId);
+    } catch (e) {
+      // The panel calls this from `onMounted`; a rejection here used to be an
+      // unhandled rejection paging the diag banner while the panel rendered as
+      // if nothing had been asked of it. Route it into the panel's error slot.
+      error.value = (e as Error).message;
+    }
   }
 
   /**
@@ -154,6 +161,8 @@ export const useForwardsStore = defineStore('forwards', () => {
     try {
       await api.forwards.refresh(connectionId);
       await sync(connectionId, { quiet: true });
+    } catch (e) {
+      error.value = (e as Error).message;
     } finally {
       loading.value = false;
     }
@@ -163,20 +172,36 @@ export const useForwardsStore = defineStore('forwards', () => {
     connectionId: ConnectionId,
     configForwards: ForwardSpec[] = [],
   ): Promise<void> {
-    if (autoOn.value) {
-      await api.forwards.stopAuto(connectionId);
-      autoOn.value = false;
-    } else {
-      await api.forwards.startAuto(connectionId, configForwards);
-      autoOn.value = true;
+    try {
+      if (autoOn.value) {
+        await api.forwards.stopAuto(connectionId);
+        autoOn.value = false;
+      } else {
+        await api.forwards.startAuto(connectionId, configForwards);
+        autoOn.value = true;
+      }
+      await sync(connectionId);
+    } catch (e) {
+      // `autoOn` is only flipped after the engine agreed, so a rejection
+      // leaves it truthfully on the old side — the toggle reads as a no-op
+      // unless the failure is shown. This is the template's click handler; an
+      // escape here would otherwise be a silent one.
+      error.value = (e as Error).message;
     }
-    await sync(connectionId);
   }
 
   async function addManual(connectionId: ConnectionId, spec: ForwardSpec): Promise<boolean> {
-    const ok = await api.forwards.addManual(connectionId, spec);
-    await sync(connectionId);
-    return ok;
+    try {
+      const ok = await api.forwards.addManual(connectionId, spec);
+      await sync(connectionId);
+      return ok;
+    } catch (e) {
+      // The add form folds on `true`, so a rejection reports as `false`: the
+      // form stays up over the error instead of the rejection vanishing into
+      // an unhandled promise.
+      error.value = (e as Error).message;
+      return false;
+    }
   }
 
   /**
@@ -185,8 +210,12 @@ export const useForwardsStore = defineStore('forwards', () => {
    * which is precisely why auto-created forwards could not be removed.
    */
   async function remove(connectionId: ConnectionId, key: string): Promise<void> {
-    await api.forwards.remove(connectionId, key);
-    await sync(connectionId);
+    try {
+      await api.forwards.remove(connectionId, key);
+      await sync(connectionId);
+    } catch (e) {
+      error.value = (e as Error).message;
+    }
   }
 
   /** Set or clear a remote port's friendly name. Blank deletes it. */
