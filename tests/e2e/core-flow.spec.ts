@@ -68,7 +68,7 @@ test.describe('core terminal flow (host -> tree -> terminal)', () => {
   let page: Page;
 
   test.beforeAll(async () => {
-    ensureHelperUp();
+    await ensureHelperUp();
     // Back up + seed the ssh config.
     originalConfig = existsSync(SSH_CONFIG) ? readFileSync(SSH_CONFIG, 'utf8') : '';
     mkdirSync(dirname(SSH_CONFIG), { recursive: true }); // ~/.ssh may not exist yet (fresh CI runners).

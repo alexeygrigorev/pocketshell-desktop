@@ -152,7 +152,7 @@ test.describe('prompt composer panel', () => {
   let page: Page;
 
   test.beforeAll(async () => {
-    ensureHelperUp();
+    await ensureHelperUp();
     originalConfig = existsSync(SSH_CONFIG) ? readFileSync(SSH_CONFIG, 'utf8') : '';
     mkdirSync(dirname(SSH_CONFIG), { recursive: true }); // ~/.ssh may not exist yet (fresh CI runners).
     appendFileSync(SSH_CONFIG, `\n${SEED_BLOCK}\n`);

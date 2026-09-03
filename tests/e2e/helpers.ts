@@ -1,4 +1,5 @@
 import { execFileSync, execSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { Page } from '@playwright/test';
 import { resolve } from 'node:path';
 
@@ -32,7 +33,7 @@ export function isHelperUp(): boolean {
 }
 
 /** Start the helper compose service (idempotent). Throws if it won't come up. */
-export function ensureHelperUp(deadlineMs = 60_000): void {
+export async function ensureHelperUp(deadlineMs = 60_000): Promise<void> {
   if (isHelperUp()) return;
   execSync(`docker compose -f "${COMPOSE_FILE}" up -d --build --wait helper`, {
     stdio: 'inherit',
@@ -40,7 +41,10 @@ export function ensureHelperUp(deadlineMs = 60_000): void {
   });
   const start = Date.now();
   while (!isHelperUp() && Date.now() - start < deadlineMs) {
-    execSync('sleep 1', { stdio: 'ignore' });
+    // `setTimeout`, NOT `execSync('sleep 1')`: on win32 that shell string goes
+    // through cmd.exe, where `sleep` does not exist — the same trap the
+    // `execInFixture` comment below records for command strings generally.
+    await delay(1_000);
   }
   if (!isHelperUp()) throw new Error('helper container did not become reachable');
 }
