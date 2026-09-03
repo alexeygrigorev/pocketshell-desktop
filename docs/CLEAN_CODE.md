@@ -153,6 +153,22 @@ doc landed in; the classes and what was done:
 
 **Known deviations, recorded on purpose:**
 
+- **Large files, first round split (2026-09-03), rest filed.** The pure-TS
+  giants split along their section seams: `parsers.ts` (1098) into the
+  session core plus `sessionPathRecovery.ts` / `usageParsers.ts` /
+  `cliParsers.ts`; `sessionGrouping.ts` (1180) into the row model plus
+  `sessionRoots.ts` (registered-roots path algebra) and `sessionTree.ts`
+  (the panel's tree assembly); `shortcuts.ts` (1225) into the engine plus
+  `shortcutTable.ts` (the registry as data); `ipc.ts` (913) into a composer
+  plus `ipc/` per-domain registrars sharing an `IpcContext`. Still over the
+  line, filed for their own passes: the nine components listed below; the
+  `files` store (1301 — its pure helpers want a `fileModel.ts`); the preload
+  (758 — wants per-domain api builders behind one bridge object); and
+  `PocketshellClient.ts` (1046, whose helper verbs could group by feature).
+  Components split along extraction seams, not line counts: the composer's
+  doodle orchestration (~370 lines) → `useDoodleSheet`, TerminalView's
+  geometry reconcile loop → a module, SettingsView's chord capture →
+  `useChordCapture`, FileTree's roving tabindex → `useRovingList`.
 - `env.d.ts` declares every `.vue` import as an `any`-typed
   `DefineComponent` (the repo's only `any`). Consequence: component props
   are unchecked at call sites, and seven call sites hand-write structural
