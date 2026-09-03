@@ -24,6 +24,7 @@ import type { SshService } from '../ssh/SshService.js';
 import type { PocketshellClient } from '../helper/PocketshellClient.js';
 import type { CreateSessionVia } from '../helper/PocketshellClient.js';
 import { pathAwareCommand } from '../helper/bootstrap.js';
+import { firstNonEmptyLine, lastNonEmptyLine } from '../helper/parsers.js';
 import {
   HOME_COMMAND,
   directoryExistsCommand,
@@ -387,20 +388,28 @@ export class ProjectsService {
     const { home } = await this.home(connectionId);
     const folder = request.folder.trim();
 
+    // One builder for the failure exits below — the seven-field result spelled
+    // out per branch was the shape a new branch would copy wrong.
+    const failed = (
+      code: StartSessionFailure,
+      error: string | null,
+      opts: { folder?: string | null; via?: CreateSessionVia | null } = {},
+    ): StartSessionResult => ({
+      ok: false,
+      sessionName: null,
+      folder: opts.folder ?? null,
+      reused: false,
+      via: opts.via ?? null,
+      error,
+      code,
+    });
+
     const exists = await this.ssh.exec(
       connectionId,
       pathAwareCommand(directoryExistsCommand(folder)),
     );
     if (exists.exitCode !== 0) {
-      return {
-        ok: false,
-        sessionName: null,
-        folder: null,
-        reused: false,
-        via: null,
-        error: `Start folder does not exist on the host: ${folder}`,
-        code: 'folder-missing',
-      };
+      return failed('folder-missing', `Start folder does not exist on the host: ${folder}`);
     }
     // Canonicalise AFTER the existence check so `~` and symlinked paths derive
     // the same name as the folder the user browsed to.
@@ -413,18 +422,13 @@ export class ProjectsService {
     if (policy === 'unique') {
       const free = await this.freeSessionName(connectionId, base);
       if (free === null) {
-        return {
-          ok: false,
-          sessionName: null,
-          folder: canonical,
-          reused: false,
-          via: null,
-          error:
-            `Could not ask the host for a free session name, so nothing was created. ` +
+        return failed(
+          'name-unavailable',
+          `Could not ask the host for a free session name, so nothing was created. ` +
             `Starting another session here would have re-opened "${base}" instead of ` +
             `making a new one.`,
-          code: 'name-unavailable',
-        };
+          { folder: canonical },
+        );
       }
       name = free;
     } else {
@@ -452,15 +456,7 @@ export class ProjectsService {
 
     const created = await this.helper.createSession(connectionId, { name, cwd: canonical });
     if (!created.ok) {
-      return {
-        ok: false,
-        sessionName: null,
-        folder: canonical,
-        reused: false,
-        via: created.via,
-        error: created.error,
-        code: 'create-failed',
-      };
+      return failed('create-failed', created.error, { folder: canonical, via: created.via });
     }
     // The helper echoes the resolved name and we normally trust it over ours
     // (../helper/PocketshellClient.ts). Under `unique` that trust has to be
@@ -471,18 +467,13 @@ export class ProjectsService {
     // greets would put its greeting here — and answering with that would be
     // worse than answering with nothing.
     if (policy === 'unique' && created.name !== name) {
-      return {
-        ok: false,
-        sessionName: null,
-        folder: canonical,
-        reused: false,
-        via: created.via,
-        error:
-          `Asked the host for a new session called "${name}" and it answered with ` +
+      return failed(
+        'name-unavailable',
+        `Asked the host for a new session called "${name}" and it answered with ` +
           `"${created.name ?? ''}", so it is not clear a new session was made. Nothing ` +
           `here has been selected; check the host before trying again.`,
-        code: 'name-unavailable',
-      };
+        { folder: canonical, via: created.via },
+      );
     }
     // The durable tree registry (SESSIONLIST.md §11): record the new session's
     // folder so a future refresh whose cwd probe has gone quiet can place it
@@ -719,11 +710,7 @@ export class ProjectsService {
       pathAwareCommand(freeSessionNameCommand(base)),
     );
     if (probe.exitCode !== 0) return null;
-    const lines = probe.stdout
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-    return lines[lines.length - 1] ?? null;
+    return lastNonEmptyLine(probe.stdout);
   }
 
   /** `cd … && pwd -P`, falling back to the input when it cannot be resolved. */
@@ -733,11 +720,7 @@ export class ProjectsService {
       pathAwareCommand(resolveDirectoryCommand(path)),
     );
     if (res.exitCode !== 0) return path;
-    const line = res.stdout
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .find((l) => l.length > 0);
-    return line ?? path;
+    return firstNonEmptyLine(res.stdout) ?? path;
   }
 }
 

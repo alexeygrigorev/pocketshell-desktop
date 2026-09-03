@@ -41,6 +41,31 @@ const SESSION_TIMESTAMP_RE = /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*$/;
  * Returns sessions in document order (the helper already sorts by activity
  * when `--by activity` is passed). Unknown/blank output -> empty list.
  */
+/**
+ * The first non-empty line of [text], trimmed — or null when there is none.
+ *
+ * The shape every "the CLI echoes its answer on stdout" call site used to
+ * re-derive: createSession's echoed name, reposClone's printed path,
+ * `canonicalise`'s resolved directory.
+ */
+export function firstNonEmptyLine(text: string): string | null {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+/** The last non-empty line of [text], trimmed — or null when there is none. */
+export function lastNonEmptyLine(text: string): string | null {
+  const lines = text.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const trimmed = lines[i]!.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
 export function parseSessionsList(stdout: string): SessionSummary[] {
   const out: SessionSummary[] = [];
   for (const rawLine of stdout.split(/\r?\n/)) {

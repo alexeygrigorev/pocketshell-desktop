@@ -10,6 +10,7 @@
 import type { SshService } from '../ssh/SshService.js';
 import type { EnvVarRow, ExecResult, SessionSummary } from '../../shared/types.js';
 import {
+  firstNonEmptyLine,
   parseAgentSubcommands,
   parseSessionsList,
   parseTmuxListSessionsFallback,
@@ -769,10 +770,7 @@ export class PocketshellClient {
     );
     if (res.exitCode === 0) {
       // The helper echoes the resolved name on stdout; trust it over ours.
-      const printed = res.stdout
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .find((l) => l.length > 0);
+      const printed = firstNonEmptyLine(res.stdout);
       return { ok: true, name: printed ?? opts.name, via: 'helper', error: null };
     }
     const output = `${res.stdout}\n${res.stderr}`;
@@ -841,10 +839,7 @@ export class PocketshellClient {
       { timeoutMs: 0 },
     );
     if (res.exitCode === 0) {
-      const path = res.stdout
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .find((l) => l.length > 0);
+      const path = firstNonEmptyLine(res.stdout);
       if (path) return { ok: true, path, alreadyExists: false, error: null };
       return { ok: false, path: null, alreadyExists: false, error: 'clone printed no path' };
     }

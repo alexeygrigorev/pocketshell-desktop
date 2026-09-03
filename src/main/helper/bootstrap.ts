@@ -11,6 +11,7 @@
 import type { SshService } from '../ssh/SshService.js';
 import type { BootstrapResult, ToolState } from '../../shared/types.js';
 import { USER_BIN_PATH } from '../../shared/userBinPath.js';
+import { shellEscapeInsideSingleQuotes } from '../../shared/shellQuote.js';
 import { parseCommandV } from './parsers.js';
 
 /**
@@ -22,7 +23,7 @@ import { parseCommandV } from './parsers.js';
  * here — see src/shared/userBinPath.ts for why the two must not drift.
  */
 export function pathAwareCommand(command: string): string {
-  return `/bin/sh -lc 'export PATH="${USER_BIN_PATH}:$PATH"; ${command.replace(/'/g, "'\\''")}'`;
+  return `/bin/sh -lc 'export PATH="${USER_BIN_PATH}:$PATH"; ${shellEscapeInsideSingleQuotes(command)}'`;
 }
 
 /** Probe one tool: `command -v <binary>` under the path-aware shell. */

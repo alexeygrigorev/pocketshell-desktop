@@ -15,9 +15,18 @@
  * so a folder called `wei'rd $(touch /tmp/PWNED)` is passed through as data.
  */
 
+/**
+ * Escape a value for embedding INSIDE a string that is already single-quoted —
+ * the primitive {@link shellQuote} wraps. For wrappers that supply the
+ * surrounding quotes themselves (`/bin/sh -lc 'export …; ${escaped}'`).
+ */
+export function shellEscapeInsideSingleQuotes(value: string): string {
+  return value.replace(/'/g, "'\\''");
+}
+
 /** Quote an arbitrary value as a single POSIX sh word. */
 export function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
+  return `'${shellEscapeInsideSingleQuotes(value)}'`;
 }
 
 /**

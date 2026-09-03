@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  clientTtyVar,
-  sessionAttachCommand,
-  shellSingleQuote,
-} from '../../src/shared/attachCommand';
+import { clientTtyVar, sessionAttachCommand } from '../../src/shared/attachCommand';
+import { shellQuote } from '../../src/shared/shellQuote';
 import { USER_BIN_DIRS } from '../../src/shared/userBinPath';
 
 /**
@@ -154,7 +151,7 @@ describe('sessionAttachCommand', () => {
     // What must never happen is it appearing at top level, so the property to
     // assert is that every `'` originating in the name arrives as the POSIX
     // close-escape-reopen dance `'\''` rather than as a bare closing quote.
-    const escaped = shellSingleQuote(payload);
+    const escaped = shellQuote(payload);
     // Round-trip through the inverse of POSIX single-quoting: a quoted word is
     // a concatenation of '...' segments and \-escapes. If unquoting yields the
     // original name exactly, the shell will pass it as ONE argument and none of
@@ -192,17 +189,17 @@ describe('sessionAttachCommand with a cached socket path', () => {
   });
 });
 
-describe('shellSingleQuote', () => {
+describe('shellQuote (as attachCommand uses it)', () => {
   it('wraps a plain value', () => {
-    expect(shellSingleQuote('main')).toBe("'main'");
+    expect(shellQuote('main')).toBe("'main'");
   });
 
   it('escapes an embedded quote by closing, escaping, and reopening', () => {
-    expect(shellSingleQuote("a'b")).toBe("'a'\\''b'");
+    expect(shellQuote("a'b")).toBe("'a'\\''b'");
   });
 
   it('leaves every other shell metacharacter to the quotes', () => {
-    expect(shellSingleQuote('$(id) `id` && rm')).toBe("'$(id) `id` && rm'");
+    expect(shellQuote('$(id) `id` && rm')).toBe("'$(id) `id` && rm'");
   });
 });
 

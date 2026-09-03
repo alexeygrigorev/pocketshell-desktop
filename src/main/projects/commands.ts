@@ -59,6 +59,20 @@ export function mkdirCommand(path: string): string {
 }
 
 /**
+ * The `-S` argument that aims a tmux command at the server OUR session lives
+ * on — the convention every aimed builder here shares, and the one
+ * TmuxClientPool's `aimedTmux` imports rather than re-spelling. The helper's
+ * ecosystem runs one tmux SERVER per session (`tmuxctl-*` sockets beside the
+ * legacy shared one), and `pocketshell sessions list` sweeps every socket — so
+ * a session the panel shows can live on a server a bare `tmux` has never heard
+ * of. A null/absent socket keeps the bare default-socket spelling, which is
+ * the only query available when the caller does not know where to aim.
+ */
+export function tmuxServerArg(socketPath: string | null | undefined): string {
+  return socketPath ? `-S ${shellQuote(socketPath)} ` : '';
+}
+
+/**
  * Does a tmux session named exactly [name] exist? Exit 0 yes.
  *
  * The `=` prefix forces tmux's EXACT match. Without it tmux falls back to
@@ -69,20 +83,16 @@ export function mkdirCommand(path: string): string {
  *
  * ## The [socketPath] argument, and when it is absent
  *
- * A name alone no longer locates a session. The helper's ecosystem runs one
- * tmux SERVER per session (`tmuxctl-*` sockets beside the legacy shared one),
- * and `pocketshell sessions list` sweeps every socket — so a session the panel
- * shows can live on a server a bare `tmux` has never heard of. The user's Stop
- * spent days answering "already gone" for a session that was alive on its own
- * server because both halves of this operation probed the default socket only.
- * When the caller knows the session's server (from the enrichment probe's
- * `socket_path` column), the command is aimed there with `-S`; when it does not
- * — an older probe without the column, or a sweep that could not run — a null
- * keeps the bare default-socket spelling, which is the only query available.
+ * A name alone no longer locates a session — see {@link tmuxServerArg} for
+ * the per-session-server world that makes the aiming necessary, and for the
+ * user-visible bug (Stop answering "already gone" for a session alive on its
+ * own server) that produced the convention. When the caller knows the
+ * session's server (from the enrichment probe's `socket_path` column), the
+ * command is aimed there; when it does not, null degrades to the default
+ * socket, which was the whole answer before aiming existed.
  */
 export function sessionExistsCommand(name: string, socketPath?: string | null): string {
-  const server = socketPath ? `-S ${shellQuote(socketPath)} ` : '';
-  return `tmux ${server}has-session -t ${shellQuote(`=${name}`)} 2>/dev/null`;
+  return `tmux ${tmuxServerArg(socketPath)}has-session -t ${shellQuote(`=${name}`)} 2>/dev/null`;
 }
 
 /**
@@ -320,8 +330,7 @@ export function renameSessionCommand(
   to: string,
   socketPath?: string | null,
 ): string {
-  const server = socketPath ? `-S ${shellQuote(socketPath)} ` : '';
-  return `tmux ${server}rename-session -t ${shellQuote(`=${from}`)} -- ${shellQuote(to)}`;
+  return `tmux ${tmuxServerArg(socketPath)}rename-session -t ${shellQuote(`=${from}`)} -- ${shellQuote(to)}`;
 }
 
 /**
@@ -395,8 +404,7 @@ export function renameSessionCommand(
  * not learn a socket land here unchanged.
  */
 export function killSessionCommand(name: string, socketPath?: string | null): string {
-  const server = socketPath ? `-S ${shellQuote(socketPath)} ` : '';
-  return `tmux ${server}kill-session -t ${shellQuote(`=${name}`)}`;
+  return `tmux ${tmuxServerArg(socketPath)}kill-session -t ${shellQuote(`=${name}`)}`;
 }
 
 /**

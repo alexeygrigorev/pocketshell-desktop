@@ -97,11 +97,7 @@
  */
 
 import { USER_BIN_PATH } from './userBinPath';
-
-/** Wrap a value for POSIX single quotes, escaping any embedded quote. */
-export function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
+import { shellQuote } from './shellQuote';
 
 /**
  * Build the join command for [sessionName].
@@ -130,8 +126,8 @@ export function sessionAttachCommand(
   ttyVar?: string,
   socketPath?: string | null,
 ): string {
-  const name = shellSingleQuote(sessionName);
-  const target = shellSingleQuote(`=${sessionName}`);
+  const name = shellQuote(sessionName);
+  const target = shellQuote(`=${sessionName}`);
   const failure =
     '\\n[PocketShell] could not join session %s. ' +
     'No tmux server on this host has it, and the helper (tmuxctl) could not join it either.\\n';
@@ -148,7 +144,7 @@ export function sessionAttachCommand(
   const directJoin =
     socketPath === undefined
       ? null
-      : `${socketPath === null ? 'tmux' : `tmux -S ${shellSingleQuote(socketPath)}`} ` +
+      : `${socketPath === null ? 'tmux' : `tmux -S ${shellQuote(socketPath)}`} ` +
         `attach-session -t ${target} 2>/dev/null`;
   const join = directJoin
     ? `(${directJoin}) || (${locate}${locatedJoin})`

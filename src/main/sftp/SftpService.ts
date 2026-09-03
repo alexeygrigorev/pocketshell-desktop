@@ -293,18 +293,22 @@ function stat(sftp: SFTPWrapper, path: string): Promise<StatsLike> {
   });
 }
 
-function toDirEntry(s: StatsLike, name?: string): DirEntry {
-  const type: DirEntry['type'] = s.isDirectory()
+/** The dir/symlink/file/other verdict, asked identically by both stat shapes. */
+function typeOf(s: StatsLike): DirEntry['type'] {
+  return s.isDirectory()
     ? 'dir'
     : s.isSymbolicLink()
       ? 'symlink'
       : s.isFile()
         ? 'file'
         : 'other';
+}
+
+function toDirEntry(s: StatsLike, name?: string): DirEntry {
   return {
     name: name ?? '',
     longname: s.longname ?? '',
-    type,
+    type: typeOf(s),
     size: s.size,
     modifyTime: s.mtime * 1000,
     accessTime: s.atime * 1000,
@@ -319,14 +323,7 @@ function toDirEntry(s: StatsLike, name?: string): DirEntry {
 }
 
 function toFileStat(s: StatsLike): FileStat {
-  const type: DirEntry['type'] = s.isDirectory()
-    ? 'dir'
-    : s.isSymbolicLink()
-      ? 'symlink'
-      : s.isFile()
-        ? 'file'
-        : 'other';
-  return { type, size: s.size, modifyTime: s.mtime * 1000, accessTime: s.atime * 1000 };
+  return { type: typeOf(s), size: s.size, modifyTime: s.mtime * 1000, accessTime: s.atime * 1000 };
 }
 
 function modeToRwx(m: number): string {

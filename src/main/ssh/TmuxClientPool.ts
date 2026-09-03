@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { GeometryProbe, ShellId } from '../../shared/types.js';
 import { clientTtyVar, sessionAttachCommand } from '../../shared/attachCommand.js';
-import { shellQuote } from '../../shared/shellQuote.js';
+import { tmuxServerArg } from '../projects/commands.js';
 import type { PocketshellClient } from '../helper/PocketshellClient.js';
 import type { SshService } from './SshService.js';
 import { pathAwareCommand } from '../helper/bootstrap.js';
@@ -103,16 +103,12 @@ function readTmuxGlobalVar(v: string): string {
 
 /**
  * A `tmux` invocation aimed at the server [socketPath] names, or the bare
- * default-socket spelling when it is null.
- *
- * This is the pool's copy of the convention `sessionExistsCommand` established
- * for Stop and rename: the per-session-server world (tmuxctl 0.3.5+) means the
- * session a tab shows can live on a server a bare `tmux` has never heard of,
- * and every command meant to reach OUR client has to say which server to ask.
+ * default-socket spelling when it is null. The aiming convention lives in
+ * `tmuxServerArg` (../projects/commands.ts); this is the pool's free-form-args
+ * entry to it.
  */
 function aimedTmux(socketPath: string | null, args: string): string {
-  const server = socketPath ? `-S ${shellQuote(socketPath)} ` : '';
-  return `tmux ${server}${args}`;
+  return `tmux ${tmuxServerArg(socketPath)}${args}`;
 }
 
 /** Callbacks for a shell this pool opens. Both carry the id they belong to. */

@@ -233,37 +233,30 @@ export class Forwarder {
 
   // --- local -L -----------------------------------------------------------
   private startLocal(): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const server = createServer((socket) => {
-        this.adopt(socket);
-        this.pipeForwardOut(socket);
-      });
-      server.on('error', () => {
-        if (!settled) {
-          settled = true;
-          resolve(false);
-        }
-      });
-      server.listen(this.spec.listenPort, this.spec.listenHost, () => {
-        this.server = server;
-        this.emit();
-        if (!settled) {
-          settled = true;
-          resolve(true);
-        }
-      });
+    return this.listenAndReport((socket) => {
+      this.adopt(socket);
+      this.pipeForwardOut(socket);
     });
   }
 
   // --- dynamic -D (SOCKS5) ------------------------------------------------
   private startDynamic(): Promise<boolean> {
+    return this.listenAndReport((socket) => {
+      this.adopt(socket);
+      handleSocks5(socket, (host, port) => this.forwardOutTo(socket, host, port));
+    });
+  }
+
+  /**
+   * The one listen-and-settle shape both -L and -D share: bind, resolve true
+   * on listening, false when the port is refused, and hand every inbound
+   * socket to [onConnection]. The kinds differ only in what a connection does
+   * — everything about the server's lifetime is the same.
+   */
+  private listenAndReport(onConnection: (socket: Socket) => void): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let settled = false;
-      const server = createServer((socket) => {
-        this.adopt(socket);
-        handleSocks5(socket, (host, port) => this.forwardOutTo(socket, host, port));
-      });
+      const server = createServer(onConnection);
       server.on('error', () => {
         if (!settled) {
           settled = true;
