@@ -1112,3 +1112,97 @@ describe('normaliseTypedPath', () => {
     expect(normaliseTypedPath('tmp/a.mp3', '')).toBe('tmp/a.mp3');
   });
 });
+
+/**
+ * The race guards.
+ *
+ * cwd/entries and openPath/openContent are single slots shared by every
+ * navigation and every open. Two rapid actions used to race, and whichever
+ * transfer resolved LAST won — file A's bytes under file B's path, or the
+ * listing of a directory the pane had already left. The store now tickets each
+ * pipeline (the same shape as the projects store's `browseRequest`), and a
+ * superseded call commits nothing.
+ *
+ * Each test holds one transfer in flight on a manually-resolved promise,
+ * completes a newer one, then lets the stale transfer land and pins that it
+ * changed nothing.
+ */
+describe('files store race guards', () => {
+  /** A promise the test resolves by hand, to park one store call in flight. */
+  const parked = <T>(): { promise: Promise<T>; resolve: (value: T) => void } => {
+    let resolve: (value: T) => void = () => undefined;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  };
+
+  it('a slow openFile cannot paint its file over a newer one', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: 16 });
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/site');
+
+    const staleRead = parked<Uint8Array>();
+    readBinary.mockImplementation((_c, path) =>
+      path === '/home/u/site/a.txt'
+        ? staleRead.promise
+        : Promise.resolve(new TextEncoder().encode('B')),
+    );
+
+    const stale = files.openFile(CONN, 'a.txt');
+    await files.openFile(CONN, 'b.txt');
+    expect(files.openPath).toBe('/home/u/site/b.txt');
+    expect(files.openContent).toBe('B');
+
+    staleRead.resolve(new TextEncoder().encode('A'));
+    await stale;
+    expect(files.openPath).toBe('/home/u/site/b.txt');
+    expect(files.openContent).toBe('B');
+    // The stale open must not park or clear the spinner out from under the
+    // current one.
+    expect(files.opening).toBe(false);
+  });
+
+  it('a slow cd cannot move cwd after a newer navigation', async () => {
+    const staleResolve = parked<string>();
+    realPath.mockImplementation((_c, p) =>
+      p === '/home/u/slow' ? staleResolve.promise : Promise.resolve(p),
+    );
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/site');
+
+    const stale = files.cd(CONN, '/home/u/slow');
+    await files.cd(CONN, '/home/u/fast');
+    expect(files.cwd).toBe('/home/u/fast');
+
+    staleResolve.resolve('/home/u/slow');
+    await stale;
+    expect(files.cwd).toBe('/home/u/fast');
+    expect(files.error).toBeNull();
+  });
+
+  it('a superseded refresh cannot overwrite the newer listing', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/site');
+
+    const staleList = parked<unknown[]>();
+    let call = 0;
+    list.mockImplementation(() => {
+      call += 1;
+      return call === 1
+        ? staleList.promise
+        : Promise.resolve([{ name: 'fresh.txt', type: 'file' }]);
+    });
+
+    const stale = files.refresh(CONN);
+    await files.refresh(CONN);
+    expect(files.entries).toEqual([{ name: 'fresh.txt', type: 'file' }]);
+
+    staleList.resolve([{ name: 'stale.txt', type: 'file' }]);
+    await stale;
+    expect(files.entries).toEqual([{ name: 'fresh.txt', type: 'file' }]);
+    expect(files.loading).toBe(false);
+  });
+});

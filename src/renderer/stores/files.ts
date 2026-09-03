@@ -333,6 +333,23 @@ export const useFilesStore = defineStore('files', () => {
   /** The key `open()` was last called with, so `stash()` knows whose state it is. */
   let currentKey: string | null = null;
 
+  /**
+   * Request tickets for the two shared async pipelines — directory listing
+   * (`navTicket`: cd/goTo/open/refresh all commit into the same `cwd` +
+   * `entries`) and the open document (`openTicket`: openFile commits into
+   * `openPath`/`openContent`/`openMode`).
+   *
+   * Both pipelines have several awaits between the click and the commit, and
+   * the shared refs are single-slot: without a guard, two rapid clicks race
+   * and whichever transfer resolves LAST wins — file A's bytes rendered under
+   * file B's path, or the listing of a directory the pane has already left.
+   * Every caller increments at entry and re-checks after each await; a
+   * superseded call commits nothing and simply returns. The same shape is
+   * already used by the projects store (`browseRequest` there).
+   */
+  let navTicket = 0;
+  let openTicket = 0;
+
   function positionKey(connectionId: ConnectionId, session: string | undefined): string {
     // The session is identified by its own start directory when the caller
     // has no name to give — which is exactly the identity we want, since two
@@ -468,17 +485,30 @@ export const useFilesStore = defineStore('files', () => {
    * The mode is taken from the open file's kind rather than passed in, so
    * there is exactly one place that decides which converter a preview gets and
    * every caller — open, save, reload, a theme switch — agrees by construction.
+   *
+   * [isSuperseded] lets an `openFile` in flight report that a newer file has since
+   * taken over the pane: the mint then commits nothing, so a slow render for
+   * the old file cannot land under the new one's path.
    */
-  async function mintPreview(connectionId: ConnectionId, path: string): Promise<void> {
+  async function mintPreview(
+    connectionId: ConnectionId,
+    path: string,
+    isSuperseded: () => boolean = () => false,
+  ): Promise<void> {
     try {
       const { token, url } =
         openMode.value === 'markdown'
           ? await api.preview.openMarkdown(connectionId, path, currentPreviewStyle())
           : await api.preview.openHtml(connectionId, path);
+      if (isSuperseded()) {
+        api.preview.release(token);
+        return;
+      }
       previewToken.value = token;
       previewUrl.value = url;
       previewStats.value = { loaded: 0, blocked: 0, missing: 0, capped: false };
     } catch (e) {
+      if (isSuperseded()) return;
       previewToken.value = null;
       previewUrl.value = null;
       previewStats.value = null;
@@ -587,6 +617,7 @@ export const useFilesStore = defineStore('files', () => {
       remembered?.chosen === true ? remembered.cwd : (startPath ?? remembered?.cwd);
     let note: string | null = null;
     let resolved: string;
+    const ticket = ++navTicket;
     try {
       resolved = await api.sftp.realPath(connectionId, stripTilde(wanted));
     } catch (e) {
@@ -599,10 +630,14 @@ export const useFilesStore = defineStore('files', () => {
       } catch (homeErr) {
         // Home itself is unreachable — the connection is not usable for SFTP
         // at all, and there is nothing to fall back to.
+        if (ticket !== navTicket) return;
         error.value = (homeErr as Error).message;
         return;
       }
     }
+    // Another `open` (a second tab click during this resolve) superseded this
+    // one: it owns the pane from here — cwd, the restored buffer, the listing.
+    if (ticket !== navTicket) return;
     cwd.value = resolved;
 
     // Restore the unsaved edit this session was left with, if any. Nothing
@@ -639,7 +674,8 @@ export const useFilesStore = defineStore('files', () => {
       resetOpenFile();
     }
 
-    await refresh(connectionId);
+    await refresh(connectionId, ticket);
+    if (ticket !== navTicket) return;
     rememberResolved();
     // `refresh` clears `error` on entry, so a fallback note is re-applied
     // after it — and only when the listing itself did not fail with something
@@ -667,37 +703,69 @@ export const useFilesStore = defineStore('files', () => {
     }
   }
 
-  async function refresh(connectionId: ConnectionId): Promise<void> {
+  /**
+   * List `cwd` into `entries`. Part of the navigation pipeline: callers that
+   * already hold a nav ticket (cd/goTo/open) pass it so the whole pipeline —
+   * resolve, commit, list, remember — shares one notion of "superseded".
+   * A bare call takes its own ticket.
+   */
+  async function refresh(
+    connectionId: ConnectionId,
+    ticket: number = ++navTicket,
+  ): Promise<void> {
     if (!cwd.value) return;
     loading.value = true;
     error.value = null;
     try {
-      entries.value = await api.sftp.list(connectionId, cwd.value);
+      const listed = await api.sftp.list(connectionId, cwd.value);
+      // A newer navigation superseded this one while the listing was in
+      // flight; its own refresh will paint `entries`, so committing here
+      // would describe a directory the pane has already left.
+      if (ticket !== navTicket) return;
       // Sort: dirs first, then files, alphabetically.
-      entries.value.sort((a, b) => {
+      listed.sort((a, b) => {
         if (a.type === 'dir' && b.type !== 'dir') return -1;
         if (a.type !== 'dir' && b.type === 'dir') return 1;
         return a.name.localeCompare(b.name);
       });
+      entries.value = listed;
     } catch (e) {
+      if (ticket !== navTicket) return;
       error.value = (e as Error).message;
     } finally {
-      loading.value = false;
+      // Only the current request owns the spinner; a superseded one must not
+      // clear it out from under its successor.
+      if (ticket === navTicket) loading.value = false;
     }
   }
 
   async function cd(connectionId: ConnectionId, dir: string): Promise<void> {
+    const ticket = ++navTicket;
     // Resolve relative paths against cwd.
     const next = dir.startsWith('/') ? dir : joinPosix(cwd.value, dir);
-    cwd.value = await api.sftp.realPath(connectionId, next);
-    await refresh(connectionId);
+    try {
+      const resolved = await api.sftp.realPath(connectionId, next);
+      // A newer navigation (another click, a goTo, a tab switch) was issued
+      // while this realPath was in flight — it owns cwd now.
+      if (ticket !== navTicket) return;
+      cwd.value = resolved;
+    } catch (e) {
+      // Same rule on the error path: a stale cd's failure is not the pane's
+      // business any more. Only the current navigation reports.
+      if (ticket !== navTicket) return;
+      throw e;
+    }
+    await refresh(connectionId, ticket);
+    if (ticket !== navTicket) return;
     rememberHere();
   }
 
   /** Jump straight to an absolute directory (the breadcrumb's move). */
   async function goTo(connectionId: ConnectionId, path: string): Promise<void> {
+    const ticket = ++navTicket;
     cwd.value = path;
-    await refresh(connectionId);
+    await refresh(connectionId, ticket);
+    if (ticket !== navTicket) return;
     rememberHere();
   }
 
@@ -713,6 +781,8 @@ export const useFilesStore = defineStore('files', () => {
    */
   async function openFile(connectionId: ConnectionId, path: string): Promise<void> {
     const abs = path.startsWith('/') ? path : joinPosix(cwd.value, path);
+    const ticket = ++openTicket;
+    const superseded = (): boolean => ticket !== openTicket;
     revokeUrl();
     resetOpenFile();
     openPath.value = abs;
@@ -727,6 +797,9 @@ export const useFilesStore = defineStore('files', () => {
         // enforced by the read's own cap rather than up front.
         size = -1;
       }
+      // A second click opened another file while this stat was in flight;
+      // every commit below belongs to the newer file now.
+      if (superseded()) return;
       openSize.value = Math.max(size, 0);
 
       const named = classifyByName(abs);
@@ -749,9 +822,11 @@ export const useFilesStore = defineStore('files', () => {
       let bytes: Uint8Array;
       try {
         bytes = await api.sftp.readBinary(connectionId, abs, cap);
+        if (superseded()) return;
       } catch (e) {
         // Never fall back to the text path on a failed read. The file is
         // whatever it was; all we lost is the ability to show it.
+        if (superseded()) return;
         showBinary(named, (e as Error).message);
         return;
       }
@@ -784,7 +859,7 @@ export const useFilesStore = defineStore('files', () => {
         openMode.value = cls.kind;
         docView.value = 'preview';
         dirty.value = false;
-        await mintPreview(connectionId, abs);
+        await mintPreview(connectionId, abs, superseded);
         return;
       }
       if (cls.kind === 'text') {
@@ -808,7 +883,8 @@ export const useFilesStore = defineStore('files', () => {
       }
       showBinary(cls, 'This is a binary file.');
     } finally {
-      opening.value = false;
+      // A superseded open must not clear the spinner its successor set.
+      if (!superseded()) opening.value = false;
     }
   }
 
