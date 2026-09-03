@@ -96,6 +96,7 @@ import {
   type LaunchChoice,
 } from '../../shared/agentLaunch';
 import { errorMessage } from '../../shared/errors';
+import { useStripDrag } from '../useStripDrag';
 
 const route = useRoute();
 const connection = useConnectionStore();
@@ -725,36 +726,21 @@ function goToTab(id: string): void {
  */
 const TAB_DRAG_TYPE = 'application/x-pocketshell-tab';
 
-/** The tab being dragged, and the gap the drop indicator is sitting in. */
-const dragging = ref<string | null>(null);
+// The drag MECHANICS (payload, midpoint rule, drop-target marking) live in
+// useStripDrag; what stays here is the strip's own policy — when a drag may
+// start, where a tab may land, and what a landed drop commits.
+const { dragging, startDrag, gapFor, markDroppable, endDrag } = useStripDrag({
+  dragType: TAB_DRAG_TYPE,
+  axis: 'x',
+});
+/** The gap the drop indicator is sitting in; null means no indicator. */
 const dropGap = ref<number | null>(null);
 
 function onTabDragStart(tab: WorkspaceTab, e: DragEvent): void {
   // A rename in progress owns the strip; dragging the field would be a drag of
   // a text selection wearing a tab's clothes.
   if (renaming.value !== null) return;
-  dragging.value = tab.id;
-  dropGap.value = null;
-  if (!e.dataTransfer) return;
-  e.dataTransfer.effectAllowed = 'move';
-  // A payload is required — Firefox refuses to start a drag without one — and
-  // the id is the honest thing to carry. It is deliberately NOT what the drop
-  // reads: `dragging` is, because the drop only ever happens inside this same
-  // component and a cross-window drop of a tab id would mean nothing.
-  e.dataTransfer.setData(TAB_DRAG_TYPE, tab.id);
-}
-
-/**
- * Which gap the pointer is in, given the tab it is over.
- *
- * The midpoint of the hovered tab, so the indicator flips to the far side once
- * the cursor is past half of it — the behaviour every tab strip has, and the
- * one that makes the last position in a group reachable without pixel accuracy.
- */
-function gapFor(index: number, e: DragEvent): number {
-  const el = (e.currentTarget as HTMLElement | null)?.getBoundingClientRect();
-  if (!el) return index;
-  return e.clientX >= el.left + el.width / 2 ? index + 1 : index;
+  startDrag(tab.id, e);
 }
 
 function onTabDragOver(index: number, e: DragEvent): void {
@@ -768,18 +754,14 @@ function onTabDragOver(index: number, e: DragEvent): void {
     dropGap.value = null;
     return;
   }
-  // `preventDefault` is what MAKES this a drop target — without it the browser
-  // refuses the drop and plays the snap-back animation, which is the exact
-  // thing the refusal above is trying not to look like.
-  e.preventDefault();
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  markDroppable(e);
   dropGap.value = gap;
 }
 
 function onTabDrop(): void {
   const from = dragging.value;
   const gap = dropGap.value;
-  dragging.value = null;
+  endDrag();
   dropGap.value = null;
   if (from === null || gap === null) return;
   const next = reorderTabs(tabs.value, from, gap);
@@ -789,7 +771,7 @@ function onTabDrop(): void {
 }
 
 function onTabDragEnd(): void {
-  dragging.value = null;
+  endDrag();
   dropGap.value = null;
 }
 

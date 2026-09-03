@@ -80,6 +80,7 @@ import {
 } from '../sessionGrouping';
 import type { SessionAgentKind } from '../../shared/types';
 import { errorMessage } from '../../shared/errors';
+import { useStripDrag } from '../useStripDrag';
 
 const props = defineProps<{
   /**
@@ -471,38 +472,20 @@ function dirTooltip(dir: SessionDirectory): string {
  */
 const FOLDER_DRAG_TYPE = 'application/x-pocketshell-folder';
 
+// The drag MECHANICS (payload, midpoint rule, drop-target marking) live in
+// useStripDrag, the tab bar's composable; the folder list keeps its own
+// indicator shape — root plus gap, because the panel renders one indicator per
+// root — and its own policy in the handlers below.
+const { dragging, startDrag, gapFor, markDroppable, endDrag } = useStripDrag({
+  dragType: FOLDER_DRAG_TYPE,
+  axis: 'y',
+});
 /** The folder key being dragged, and the gap the drop indicator is sitting in. */
-const dragging = ref<string | null>(null);
 const dropTarget = ref<{ root: string; gap: number } | null>(null);
 
 function onRowDragStart(dir: SessionDirectory, e: DragEvent): void {
-  dragging.value = dir.key;
+  startDrag(dir.key, e);
   dropTarget.value = null;
-  if (!e.dataTransfer) return;
-  e.dataTransfer.effectAllowed = 'move';
-  // A payload is required — Firefox refuses to start a drag without one — and
-  // a type nothing else in the window claims is what stops the composer's file
-  // drop zone lighting up as a row passes over it. (The composer's own
-  // `dragover` also tests for `Files` in `dataTransfer.types`, so the two are
-  // independent of each other in both directions.) The id carried here is
-  // deliberately NOT what the drop reads: `dragging` is, because the drop only
-  // ever happens inside this component and a folder key from another window
-  // would name nothing here.
-  e.dataTransfer.setData(FOLDER_DRAG_TYPE, dir.key);
-}
-
-/**
- * Which gap the pointer is in, given the row it is over.
- *
- * The MIDPOINT of the hovered row, vertically — the tab bar's rule with `clientY`
- * where it uses `clientX`. It is what makes the first and last positions of a
- * root reachable without pixel accuracy: past half of the top row means "above
- * it", and past half of the bottom row means "below it".
- */
-function gapFor(index: number, e: DragEvent): number {
-  const box = (e.currentTarget as HTMLElement | null)?.getBoundingClientRect();
-  if (!box) return index;
-  return e.clientY >= box.top + box.height / 2 ? index + 1 : index;
 }
 
 /**
@@ -526,11 +509,7 @@ function onRowDragOver(root: SessionRootFolder, index: number, e: DragEvent): vo
     dropTarget.value = null;
     return;
   }
-  // `preventDefault` is what MAKES this a drop target — without it the browser
-  // refuses the drop and plays the snap-back animation, which is the exact
-  // thing the refusal above is trying not to look like.
-  e.preventDefault();
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  markDroppable(e);
   dropTarget.value = { root: root.key, gap };
 }
 
@@ -550,7 +529,7 @@ function onRowDragOver(root: SessionRootFolder, index: number, e: DragEvent): vo
 function onRowDrop(): void {
   const from = dragging.value;
   const target = dropTarget.value;
-  dragging.value = null;
+  endDrag();
   dropTarget.value = null;
   if (from === null || target === null) return;
   const next = reorderFolders(roots.value, from, target.gap);
@@ -558,7 +537,7 @@ function onRowDrop(): void {
 }
 
 function onRowDragEnd(): void {
-  dragging.value = null;
+  endDrag();
   dropTarget.value = null;
 }
 
