@@ -73,6 +73,14 @@ const MAX_SEGMENT = 255;
 const LEADING_NOISE = new Set(['"', "'", '`', '(', '[', '{', '<', '*']);
 
 /**
+ * Call-like wrappers that can put a path directly after a word (`Write(path)`).
+ * They are considered only when the word before them has not already become a
+ * path segment; this preserves names such as `tmp/report(1).pdf`.
+ */
+const INLINE_OPENERS = new Set(['(', '[', '{', '<']);
+const INLINE_PREFIX = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+
+/**
  * Punctuation that can trail a path without being part of it. The colon is the
  * one that matters most: `preview-1.mp3:` is how ffprobe and half the tools on
  * a box introduce a file before saying something about it, and a link that
@@ -166,7 +174,7 @@ function matchToken(token: string, base: number): PathMatch | null {
   if (token.includes('://')) return null;
 
   let start = 0;
-  let end = token.length;
+  const end = token.length;
 
   // `--output=tmp/a.mp3` — take the value, not the flag. The `=` only counts
   // as an assignment when nothing before it looks like a path, so a file
@@ -176,6 +184,30 @@ function matchToken(token: string, base: number): PathMatch | null {
   if (eq !== -1 && !token.slice(0, eq).includes('/')) start = eq + 1;
 
   while (start < end && LEADING_NOISE.has(token.charAt(start))) start++;
+
+  // Tool output often writes `Write(path)` without a space. Treat the
+  // function-like wrapper as decoration, but only when the prefix is a plain
+  // label and contains no slash. A path's own parenthesised filename remains
+  // whole because its prefix already includes the directory slash.
+  for (let i = start + 1; i < end; i++) {
+    if (!INLINE_OPENERS.has(token.charAt(i))) continue;
+    if (!INLINE_PREFIX.test(token.slice(start, i))) continue;
+    const inline = matchCandidate(token, base, i + 1, end);
+    if (inline !== null) return inline;
+  }
+
+  return matchCandidate(token, base, start, end);
+}
+
+/** Parse one possible path span inside a token. */
+function matchCandidate(
+  token: string,
+  base: number,
+  candidateStart: number,
+  tokenEnd: number,
+): PathMatch | null {
+  const start = candidateStart;
+  let end = tokenEnd;
 
   for (;;) {
     if (end <= start) return null;

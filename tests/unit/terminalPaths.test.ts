@@ -38,6 +38,12 @@ describe('findPaths — the screenshot that started this', () => {
     const line = '\u203a [file] tmp/voice-previews/olya-merin/preview-2.mp3 (222.9KB)';
     expect(paths(line)).toEqual(['tmp/voice-previews/olya-merin/preview-2.mp3']);
   });
+
+  it('strips a call-like writer label attached directly to the path', () => {
+    const line = 'Write(docs/runbooks/production-data-migration.md).';
+    expect(paths(line)).toEqual(['docs/runbooks/production-data-migration.md']);
+    expect(spans(line)).toEqual(['docs/runbooks/production-data-migration.md']);
+  });
 });
 
 describe('findPaths — absolute paths, verbatim from the user', () => {

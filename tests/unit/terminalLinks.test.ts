@@ -306,6 +306,14 @@ describe('pathLinks', () => {
     expect(links[0]?.text).toBe('tmp/a.mp3');
   });
 
+  it('does not include an inline writer label in the clickable range', () => {
+    const term = fakeTerminal(['Write(docs/runbooks/production-data-migration.md).']);
+    const links = pathLinks(term, 1, context);
+
+    expect(links[0]?.range).toEqual({ start: { x: 7, y: 1 }, end: { x: 48, y: 1 } });
+    expect(links[0]?.text).toBe('docs/runbooks/production-data-migration.md');
+  });
+
   it('spans two rows when the path is wrapped across them', () => {
     const term = fakeTerminal(['tmp/voice-p', 'reviews/a.mp3'], [1]);
     const links = pathLinks(term, 1, context);

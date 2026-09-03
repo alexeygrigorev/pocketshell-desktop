@@ -146,6 +146,12 @@ rewrites.
 `write`; xterm.js `onData` → shell stdin. The six-client ceiling leaves room
 on the same SSH connection for exec, SFTP, and forwarding channels.
 
+Paths printed by the remote tool are linkified from the terminal buffer and
+opened in the Files tab. The detector keeps the clickable span to the path
+itself, including when tool output wraps it in call-like punctuation such as
+`Write(docs/runbooks/production-data-migration.md).`; the writer label and
+trailing punctuation are not part of the remote path.
+
 ---
 
 ## 4. SSH service contract
