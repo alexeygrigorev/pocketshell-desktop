@@ -53,7 +53,4 @@ export class ShellTracker {
     }
   }
 
-  list(): ShellRecord[] {
-    return [...this.map.values()];
-  }
 }

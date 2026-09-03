@@ -101,7 +101,6 @@ export async function runBootstrap(
     installer,
     daemonRunning,
     daemonEnabled,
-    resolvedPath: '',
   };
 }
 

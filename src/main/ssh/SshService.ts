@@ -74,21 +74,6 @@ export interface ExecOptions {
   timeoutMs?: number;
 }
 
-export interface ShellHandle {
-  /** Write bytes to the remote PTY stdin. */
-  write(data: string | Buffer): void;
-  /** Resize the remote PTY. */
-  setWindow(cols: number, rows: number): void;
-  /** Close the shell channel. */
-  close(): void;
-  /** Stream of stdout bytes (rendered by xterm.js). */
-  stdout: NodeJS.ReadableStream;
-}
-
-export interface TailHandle {
-  stop(): void;
-}
-
 /** Why a connection closed: an explicit disconnect, or the transport dropping. */
 export type CloseReason = 'user' | 'lost';
 
@@ -126,13 +111,13 @@ export class SshService {
       const client = newClient();
       const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-      const fail = (error: string, unknownHostKey?: ConnectResult['unknownHostKey']) => {
+      const fail = (error: string) => {
         try {
           client.end();
         } catch {
           // ignore
         }
-        resolve({ ok: false, error, unknownHostKey });
+        resolve({ ok: false, error });
       };
 
       const timer = setTimeout(() => {
@@ -235,32 +220,6 @@ export class SshService {
       command: execLogPreview(command),
     });
     return res;
-  }
-
-  /** Spawn a shell with a PTY. Used by the terminal view (Phase 1). */
-  async shell(
-    connectionId: string,
-    opts: { cols?: number; rows?: number; term?: string } = {},
-  ): Promise<ShellHandle> {
-    const rec = this.registry.require(connectionId);
-    const channel = await openShell(rec, {
-      term: opts.term ?? PTY_TERM,
-      cols: opts.cols ?? PTY_DEFAULT_COLS,
-      rows: opts.rows ?? PTY_DEFAULT_ROWS,
-    });
-    return {
-      stdout: channel,
-      write: (data) => channel.write(data),
-      setWindow: (cols, rows) => channel.setWindow(rows, cols, rows, cols),
-      close: () => {
-        try {
-          channel.end();
-          channel.close();
-        } catch {
-          // ignore
-        }
-      },
-    };
   }
 
   /**
@@ -372,42 +331,6 @@ export class SshService {
         // ignore
       }
     }
-  }
-
-  /** Tail a file via `tail -F`; caller re-launches after a transport drop. */
-  tail(
-    connectionId: string,
-    path: string,
-    fromLineExclusive: number,
-    onLine: (line: string) => void,
-  ): TailHandle {
-    const rec = this.registry.require(connectionId);
-    const start = fromLineExclusive >= 0 ? fromLineExclusive + 1 : 0;
-    const cmd = `tail -F -n +${start} '${path.replace(/'/g, "'\\''")}'`;
-    let stopped = false;
-    rec.client.exec(cmd, (err, stream) => {
-      if (err || !stream) {
-        // Swallow transport drops — the reconnect FSM re-launches the tail.
-        return;
-      }
-      let buf = '';
-      stream.on('data', (chunk: Buffer) => {
-        buf += chunk.toString('utf8');
-        let nl: number;
-        while (!stopped && (nl = buf.indexOf('\n')) >= 0) {
-          onLine(buf.slice(0, nl));
-          buf = buf.slice(nl + 1);
-        }
-      });
-      stream.on('close', () => {
-        if (buf && !stopped) onLine(buf);
-      });
-    });
-    return {
-      stop: () => {
-        stopped = true;
-      },
-    };
   }
 
   /**

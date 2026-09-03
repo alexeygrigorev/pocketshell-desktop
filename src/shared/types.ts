@@ -55,15 +55,6 @@ export interface ConnectResult {
   ok: boolean;
   connectionId?: ConnectionId;
   error?: string;
-  /** Host-key verification outcome for an unknown host (TOFU prompt). */
-  unknownHostKey?: HostKeyFingerprint;
-}
-
-/** A host key fingerprint shown to the user for a TOFU accept/reject. */
-export interface HostKeyFingerprint {
-  algorithm: string;
-  /** e.g. SHA256:base64... */
-  fingerprint: string;
 }
 
 /** Bootstrap probe result for a connected host. */
@@ -79,8 +70,6 @@ export interface BootstrapResult {
   installer: 'uv' | 'pipx' | null;
   daemonRunning: boolean | null;
   daemonEnabled: boolean | null;
-  /** Resolved PATH the helper/tools were found under. */
-  resolvedPath: string;
 }
 
 export interface ToolState {

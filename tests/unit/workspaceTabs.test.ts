@@ -12,7 +12,6 @@ import {
   renamedSessionName,
   stripSessionPrefix,
   tabAfterClose,
-  tabIdAtIndex,
   TERMINAL_LABEL,
 } from '../../src/shared/workspaceTabs';
 import { sanitisePart, sessionBaseName } from '../../src/shared/sessionNameParts';
@@ -256,29 +255,6 @@ describe('the bar order the arrows walk', () => {
   it('is built in the order it will be traversed', () => {
     expect(bar.map((t) => t.id)).toEqual(['git-dtc-website', 'git-dtc-website-2', 'f1', 'f2']);
     expect(bar.map((t) => t.label)).toEqual(['Terminal', 'Terminal 2', 'Files', 'Files 2']);
-  });
-});
-
-describe('tabIdAtIndex', () => {
-  const bar = buildWorkspaceTabs(
-    [
-      { name: 'git-dtc-website', created: 100 },
-      { name: 'git-dtc-website-2', created: 200 },
-    ],
-    'git-dtc-website',
-    [{ id: 'f1' }],
-  );
-
-  it('is 0-based, in display order', () => {
-    expect(tabIdAtIndex(bar, 0)).toBe('git-dtc-website');
-    expect(tabIdAtIndex(bar, 2)).toBe('f1');
-  });
-
-  it('does nothing rather than clamping when the bar is not that long', () => {
-    // `Ctrl+7` on a bar of three means "the seventh tab", and there isn't one.
-    expect(tabIdAtIndex(bar, 3)).toBeNull();
-    expect(tabIdAtIndex(bar, -1)).toBeNull();
-    expect(tabIdAtIndex([], 0)).toBeNull();
   });
 });
 

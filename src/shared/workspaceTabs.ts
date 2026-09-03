@@ -281,19 +281,6 @@ export function renamedSessionName(
 // what the surviving tab arrows use, and it CLAMPS rather than wraps: an arrow
 // is a direction, not a cycle.
 
-/**
- * The tab at a 0-based position, or null when there is none.
- *
- * Kept from the `Ctrl+1..9` direct jumps, which are gone; the caller turns the
- * digit into an index and asks whether the bar is that long. Out of range
- * returns null rather than clamping to the last tab — `Ctrl+7` on a bar of
- * three means "the seventh tab", and there isn't one, so the honest answer is
- * to do nothing rather than to move the user somewhere they did not ask for.
- */
-export function tabIdAtIndex(tabs: readonly WorkspaceTab[], index: number): string | null {
-  return tabs[index]?.id ?? null;
-}
-
 // ---------------------------------------------------------------------------
 // Manual tab order
 //

@@ -59,10 +59,6 @@ export class ConnectionRegistry {
     return rec;
   }
 
-  list(): ConnectionRecord[] {
-    return [...this.map.values()];
-  }
-
   clear(): void {
     for (const rec of this.map.values()) {
       try {

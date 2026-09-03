@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { createHmac } from 'node:crypto';
@@ -75,10 +75,6 @@ export class KnownHosts {
     } catch {
       this.entries = []; // no known_hosts -> everything is unknown (TOFU)
     }
-  }
-
-  reload(): void {
-    this.load();
   }
 
   /**
@@ -181,9 +177,5 @@ function hashedHostMatches(token: string, host: string): boolean {
   const hmac = createHmac('sha1', salt);
   hmac.update(host);
   const digest = hmac.digest();
-  return digest.equals(expected) || digest.toString('base64') === expected.toString('base64');
-}
-
-export function isKnownHostsPresent(path?: string): boolean {
-  return existsSync(path ?? defaultKnownHostsPath());
+  return digest.equals(expected);
 }

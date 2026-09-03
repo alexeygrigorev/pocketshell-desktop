@@ -43,14 +43,6 @@ export interface PortfwdSchema {
   version: 1;
 }
 
-export const EMPTY_STATE: PortfwdState = Object.freeze({
-  names: {},
-  remaps: {},
-  forceOn: [],
-  forceOff: [],
-  autoEnabled: false,
-});
-
 /**
  * The minimum a persistence backend must do. Kept as an interface so unit
  * tests (and any non-Electron host process) can run the whole store without

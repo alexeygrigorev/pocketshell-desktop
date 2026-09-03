@@ -9,7 +9,6 @@ import type {
   StageAttachmentsResult,
 } from '../shared/types.js';
 import { SshService } from './ssh/SshService.js';
-import { ConnectionRegistry } from './ssh/ConnectionRegistry.js';
 import { TmuxClientPool } from './ssh/TmuxClientPool.js';
 import { PocketshellClient } from './helper/PocketshellClient.js';
 import { runBootstrap } from './helper/bootstrap.js';
@@ -67,7 +66,6 @@ const MAX_SFTP_READ_BYTES = 128 * 1024 * 1024;
  * to every BrowserWindow via `webContents.send` — keyed by the relevant id.
  */
 export function registerIpcHandlers(deps: {
-  registry: ConnectionRegistry;
   ssh: SshService;
   helper: PocketshellClient;
   sftp: SftpService;
@@ -76,7 +74,7 @@ export function registerIpcHandlers(deps: {
   preview: HtmlPreviewService;
   getWindows: () => BrowserWindow[];
 }): void {
-  const { registry, ssh, helper, sftp, forwards, projects, preview, getWindows } = deps;
+  const { ssh, helper, sftp, forwards, projects, preview, getWindows } = deps;
 
   // Prompt attachments ride the SSH/SFTP services that are already here —
   // no second connection, no shelling out to scp.
@@ -912,5 +910,4 @@ export function registerIpcHandlers(deps: {
   });
 
   // Plumbing: keep references used by the main process bookkeeping.
-  void registry;
 }

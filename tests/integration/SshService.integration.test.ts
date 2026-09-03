@@ -66,25 +66,6 @@ describeDocker('SshService integration', () => {
     expect(res.stderr.trim()).toBe('err');
   });
 
-  it('opens a shell PTY and round-trips bytes', async () => {
-    const shell = await ssh.shell(connectionId!, { cols: 80, rows: 24 });
-    const output = new Promise<string>((resolveP) => {
-      let acc = '';
-      const timer = setTimeout(() => resolveP(acc), 1_500);
-      shell.stdout.on('data', (chunk: Buffer) => {
-        acc += chunk.toString('utf8');
-      });
-      shell.stdout.on('close', () => {
-        clearTimeout(timer);
-        resolveP(acc);
-      });
-    });
-    shell.write('echo hello_from_shell\n');
-    const text = await output;
-    shell.close();
-    expect(text).toContain('hello_from_shell');
-  });
-
   it('pipes ExecOptions.stdin to the command and closes the pipe', async () => {
     // `cat` echoes whatever reaches stdin and exits on EOF — the exact
     // contract `pocketshell env set` relies on for secret values (F16).

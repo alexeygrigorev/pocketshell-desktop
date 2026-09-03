@@ -264,36 +264,12 @@ export interface SessionRow {
    */
   nameHead: string;
   nameTail: string;
-  /**
-   * Whether to render the session name as a secondary field. False when the
-   * name is derivable from the folder — the overwhelmingly common case, and
-   * the whole reason the two-level tree read as duplicated.
-   *
-   * Only {@link flattenSessions} still consumes this. The tree answers the
-   * same question structurally: the directory is said once, by the header, and
-   * every leaf below it is named by its session name.
-   */
-  showName: boolean;
   /** Canonical folder path, or {@link UNTRACKED_PATH}. */
   folderPath: string;
   /** How many sessions share this row's folder. */
   siblings: number;
   /** True when the working directory is unknown. */
   untracked: boolean;
-}
-
-/**
- * Is `name` derivable from `label`?
- *
- * The host joins a folder's home-relative components with `-`, so every
- * derived name ENDS with the sanitised basename: `git-dataops`/`dataops`,
- * `home-alexey`/`alexey`, `var-log`/`log`. A custom name that happens to end
- * the same way is suppressed too — harmless, the tooltip still carries it.
- */
-export function isDerivedName(name: string, label: string): boolean {
-  const base = sanitisePart(label);
-  if (!base) return false;
-  return name === base || name.endsWith(`-${base}`);
 }
 
 /** Split a label so the distinguishing tail survives an overflow. */
@@ -447,29 +423,11 @@ function buildRows(sessions: SessionSummary[]): SessionRow[] {
       ...splitLabel(label),
       nameHead: nameSplit.labelHead,
       nameTail: nameSplit.labelTail,
-      // Siblings share a label, so only the session name separates them —
-      // show it even when it is derivable.
-      showName: !untracked && (siblings > 1 || !isDerivedName(session.name, label)),
       folderPath,
       siblings,
       untracked,
     };
   });
-}
-
-/**
- * Flatten sessions into one row each, with no folder level at all.
- *
- * Retained as the tree's degenerate case and as the row model's direct test
- * surface; the panel itself renders {@link groupSessionsIntoRoots}.
- */
-export function flattenSessions(sessions: SessionSummary[]): SessionRow[] {
-  const rows = buildRows(sessions);
-  disambiguateLabels(rows, (row) => row.folderPath);
-  // Disambiguation may have grown a label after `buildRows` split it — re-split
-  // so the head/tail pair always matches the label that ships beside it.
-  for (const row of rows) Object.assign(row, splitLabel(row.label));
-  return rows;
 }
 
 /* ---------------------------------------------------------------------------

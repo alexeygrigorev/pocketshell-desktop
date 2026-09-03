@@ -135,7 +135,7 @@ export class ParseStallMonitor {
 }
 
 function byteLength(data: string | Uint8Array): number {
-  return typeof data === 'string' ? data.length : data.length;
+  return data.length;
 }
 
 /** Printable preview; control bytes become codes so the preview stays one line. */

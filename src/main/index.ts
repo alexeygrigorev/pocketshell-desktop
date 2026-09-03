@@ -308,7 +308,6 @@ if (!gotLock) {
       });
 
       registerIpcHandlers({
-        registry,
         ssh,
         helper,
         sftp,
