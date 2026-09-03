@@ -1,74 +1,51 @@
 # PocketShell Desktop — Visual Design Spec
 
-Status: **specification only.** Nothing in this document has been applied to
-`src/`. It is written against the *restructured* navigation (session list as
-the default host view; per-session Terminal/Conversation/Files tabs; Usage and
-Ports as header buttons), which is what the screenshots below already show.
+Status: **implemented.** This document is the design spec and the decision
+record for what shipped — the tokens and primitives in `App.vue`, the type
+system in `fonts.ts`, the terminal options in `TerminalView.vue`, the theme
+records in `themes.ts`, the host panel header strip — not a wishlist. It
+describes the *restructured* navigation (session list as the default host
+view; per-session Terminal/Conversation/Files tabs; Ports and Usage as icons
+in the host panel's header strip). Where a later change overtook a section,
+the section carries a **Revised** note rather than a rewrite.
 
-Every recommendation here is grounded in one of four sources, cited inline:
+Every decision here is grounded in one of four sources, cited inline:
 
 | Source | What it grounds |
 |---|---|
-| Screenshots captured locally from the running app (see §1 — local-only reference, `docs/screenshots/` is gitignored) | the "before" state |
+| Screenshots captured locally from the running app (§1 — local-only, `docs/screenshots/` is gitignored) | the "before" state |
 | `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json` + Windows Terminal 1.24.11911.0 `defaults.json` | every terminal value in §3 |
 | The Android app at `C:\Users\alexey\git\pocketshell` (v0.4.8) — `shared/ui-kit/.../theme/{Color,Type,Shape,Spacing}.kt`, `FolderListScreen.kt`, `mockups/tree/index.html` | the token values and component geometry in §4–§5 |
 | WCAG 2.1 relative-luminance math, computed per pair | every contrast number stated |
 
 ---
 
-## 1. Current state — captured screenshots
+## 1. Captured screenshots
 
-Captured by driving the **built** app (`npm run build` → `out/main/index.js`)
-with Playwright's `_electron.launch`, against the deterministic Docker fixture
-(`tests-docker/docker-compose.yml`, service `helper`, port 3205, committed
-`test_key`). Viewport 1280×800, matching `BrowserWindow`'s default size in
-`src/main/index.ts`.
+Screenshots are **local-only reference, never committed** — `docs/screenshots/`
+is gitignored. Recapture by driving the **built** app (`npm run build` →
+`out/main/index.js`) with Playwright's `_electron.launch`, viewport 1280×800
+(`BrowserWindow`'s default in `src/main/index.ts`); passes are diffable
+against each other by prefix (`01`…`08`, `after-*`, `composer-*`,
+`polish-01`…`16`). The driver runs against an isolated fake profile so the
+user's real `~/.ssh/config` is never touched — and that fake profile directory
+**must contain an `AppData\Roaming` subtree**, or Electron fails to resolve
+`app.getPath('appData')`, `requestSingleInstanceLock()` returns false and the
+app exits silently with code 3. Documented nowhere else.
 
-**Captures are local-only reference and never committed** — `docs/screenshots/`
-is gitignored. The August 24 sets that grounded this document were deleted when
-the folder-workspace re-architectures outdated them; the capture recipe and the
-naming scheme below remain for the next recapture. The passes, diffable
-against each other by prefix:
+**Known gap:** the Conversation tab was never photographed populated — the
+fixture seeds `~/.claude/projects/` but the tmux session has no matching agent
+log, so `Load` returns nothing. §5.6 is specified from the component's
+existing CSS and the Android `conversation.html` mockup instead; treat it as
+less grounded than the rest.
 
-| Prefix | Pass |
-|---|---|
-| `01`…`08` | before the token/type/layout work of this document |
-| `after-01`…`after-08` | after it |
-| `composer-*` | the prompt-composer panel's own states |
-| **`polish-01`…`polish-16`** | after the polish pass (§5.8 icons, §5.1 ghost chrome, §5.9 motion) — plus the Files dirty state, four composer states, and the redesigned Usage overlay at 1 / 3 / 6+ providers including null-percentage rows |
-
-**Gap — not captured:** the Conversation tab is shown *empty*. The fixture's
-stub agents seed `~/.claude/projects/` but the tmux session `main` has no
-matching agent log, so `Load` returns nothing. The populated conversation
-state (message bubbles, tool-call blocks, `.message.user` / `.message.assistant`
-styling) is therefore **not** photographed. §5.6 specifies it from the
-component's existing CSS and the Android `conversation.html` mockup rather than
-from a screenshot — treat that one section as less grounded than the rest.
-
-### What the screenshots show
-
-1. **Density is inconsistent.** The topbar is ~42px tall, the session-tab strip
-   ~30px, session rows ~29px, and the host-picker rows ~52px. Four different
-   rhythms in one app.
-2. **The type scale has ~20 distinct sizes.** `grep font-size` across
-   `src/renderer/**/*.vue` returns `0.7 / 0.72 / 0.75 / 0.78 / 0.8 / 0.85 /
-   0.88 / 0.9 / 0.95 / 1.1 / 1.5 rem` plus a `14px` root. Most of these
-   differences are not perceivable and none are intentional.
-3. **Colour has escaped the token set.** `--bg/--fg/--muted/--accent/--error/
-   --border` are the only six tokens, but 30+ raw Catppuccin hexes are
-   hard-coded in component styles (`#181825` panel background in four files,
-   `#a6e3a1` success in four, `#f9e2af` warning in five, `#11111b`, `#cba6f7`,
-   `#bac2de`, …). There is no success or warning token, so every component
-   invents one.
-4. **`rgba(137, 180, 250, …)`** — the accent colour, re-typed by hand as raw
-   RGB in six files at four different alphas (.06/.08/.14/.16) for hover and
-   selection. Any accent change silently breaks all six.
-5. **Primitives are copy-pasted, not shared.** `.icon-btn` is redefined in 7
-   files, `.muted` in 10, `.error` in 5, `.empty` in 5 — each with slightly
-   different padding and size.
-6. **The terminal is visually foreign to the app** — `#1e1e2e` chrome against
-   a `#1e1e2e` terminal, so the most important surface in the product has no
-   edge at all (`03-terminal-attached.png`).
+The before-screenshots are why §2, §4 and §5.1 exist: four different row
+rhythms in one window; ~20 distinct font sizes from `grep font-size`, none
+intentional; 30+ raw Catppuccin hexes hard-coded beside a six-token set with
+no success/warning tokens; the accent colour re-typed as raw `rgba()` at four
+alphas in six files; `.icon-btn`/`.muted`/`.error`/`.empty` copy-pasted across
+5–10 files each with drifting padding; and the terminal on the same `#1e1e2e`
+as its chrome, so the product's most important surface had no edge.
 
 ---
 
@@ -76,88 +53,50 @@ from a screenshot — treat that one section as less grounded than the rest.
 
 ### 2.1 The problem with the current stack
 
-`src/renderer/App.vue` sets:
+The pre-spec stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+sans-serif`) was three dead entries around one real choice — on Windows every
+entry before `'Segoe UI'` is unreachable — and it named the static face where
+the system one is Segoe UI Variable. §2.2 replaced it.
 
-```css
-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-```
+### 2.2 Inter Variable
 
-On this target (Windows 11, Electron 33) every entry before `'Segoe UI'` is
-dead — `-apple-system` and `BlinkMacSystemFont` are macOS-only, `Roboto` is
-never reached. So the app always renders in **Segoe UI**, and the stack is
-three tokens of noise around one real choice. Worse, on Windows 11 the *system*
-UI font is Segoe UI **Variable**, not Segoe UI; naming the static face opts the
-app out of the optical-size axis that makes Windows 11 chrome look current.
+**Inter is the Android client's design font** (`mockups/tree/index.html:24`,
+`docs/mockups/styles.css`), so adopting it makes the two clients one product.
+It is bundled, not fetched (`@fontsource-variable/inter` 5.3.0, OFL-1.1 —
+already a dependency; Vite fingerprints the woff2 into `out/renderer/assets/`,
+which matters because the renderer loads over `file://` with no connectivity
+guarantee). It is hinted for the 11–15px band the app lives in, and it has
+real tabular figures: `font-variant-numeric: tabular-nums` stops the session
+list, Usage meters and Ports table jittering between rows.
 
-### 2.2 Recommendation: bundle Inter Variable
-
-**Package:** `@fontsource-variable/inter` — version 5.3.0, license **OFL-1.1**
-(verified via `npm view`). Self-hosted woff2, no network fetch at runtime,
-which matters because Electron's renderer has no business reaching Google
-Fonts.
-
-Why Inter specifically, rather than "a nicer font":
-
-- **It is already the sibling project's design font.** The Android repo's
-  mockups declare `font-family: Inter, ui-sans-serif, system-ui, …` in
-  `mockups/tree/index.html:24` and `docs/mockups/styles.css`. Adopting Inter on
-  the desktop makes the two clients one product rather than two.
-- **It renders correctly on Windows.** Inter is hinted and was designed for
-  screen UI at 11–15px, which is exactly the range this app lives in (see the
-  scale below). This is the size band where most "designer" fonts fall apart on
-  Windows' greyscale antialiasing.
-- **It has real tabular figures.** The session list, the Usage meters and the
-  Ports table all show columns of numbers that currently jitter between rows
-  because Segoe UI's default figures are proportional. `font-variant-numeric:
-  tabular-nums` fixes that with one declaration — see §5.3.
-
-Install:
-
-```
-npm i @fontsource-variable/inter
-```
-
-and add `import '@fontsource-variable/inter';` to `src/renderer/main.ts`.
-Vite fingerprints and inlines the woff2 into `out/renderer/assets/`.
-
-**Fallback stack** (Inter missing → the best native face on each OS, no dead
-entries):
+Fallback stack — the best native face on each OS, no dead entries:
 
 ```css
 --font-ui: 'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI',
            system-ui, sans-serif;
 ```
 
-If bundling is rejected, the correct zero-dependency fallback is
-`'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif` — drop the two
-Apple aliases and `Roboto` regardless.
+### 2.3 Monospace: Consolas by default, one setting for the whole app
 
-### 2.3 Monospace: Consolas everywhere
-
-The user's Windows Terminal is set to **Consolas** (§3). Use the same face for
-the app's mono chrome — session names, paths, ports, IDs — so the terminal and
-the UI that frames it read as one surface. Consolas ships with every Windows
-install since Vista and with Office on macOS, so no bundling is needed.
+The user's Windows Terminal is set to **Consolas** (§3), so the app's mono
+chrome — session names, paths, ports, IDs — uses the same face, and the
+terminal and the UI framing it read as one surface. Consolas ships with every
+Windows install, so no bundling is needed:
 
 ```css
 --font-mono: Consolas, 'Cascadia Mono', ui-monospace, monospace;
 ```
 
-This deliberately diverges from the Android app, which bundles JetBrains Mono
-(`shared/core-terminal/src/main/assets/fonts/JetBrainsMono-Regular.ttf`).
-Matching the user's own terminal beats matching the phone here — that is the
-explicit ask.
+This deliberately diverges from the Android app, which bundles JetBrains Mono:
+matching the user's own terminal beats matching the phone.
 
-**Revised — the face is now a setting (`src/renderer/fonts.ts`).** The stack
-above is the *default*, not the only value. Settings carries one
-`monospaceFontFamily` for the whole app, and `App.vue` writes it onto `<html>`
-as `--font-mono`, so it moves the terminal, the file editor and every mono
-chrome element together. That "together" is this section's own rule and is why
+**The face is a setting (`src/renderer/fonts.ts`); the stack above is only its
+default.** Settings carries one `monospaceFontFamily` for the whole app, and
+`App.vue` writes it onto `<html>` as `--font-mono`, so it moves the terminal,
+the file editor and every mono chrome element together. That "together" is why
 there is one family setting rather than one per surface: a per-surface family
 would let the user undo, one dropdown at a time, the single-surface effect the
-section exists to create.
-
-Two mechanics matter:
+setting exists to create. Two mechanics matter:
 
 - **The choice is PREPENDED to the stack above, never substituted for it.** A
   family the user does not have installed therefore falls through Consolas →
@@ -168,19 +107,16 @@ Two mechanics matter:
   smuggle in a whole stack and get behind that fallback tail.
 
 The picker is a curated list of common monospace families plus free text, and
-not an enumeration of installed fonts: an Electron renderer has no reliable way
-to obtain one (`queryLocalFonts` is behind a permission Electron does not
-surface, and width-probing misreports on metric-compatible faces). The Settings
-panel renders a sample line in the resolved stack on `--term-bg`, which is the
-honest substitute — if the sample does not change, the font is not installed.
+not an enumeration of installed fonts: an Electron renderer has no reliable
+way to obtain one. The Settings panel renders a sample line in the resolved
+stack on `--term-bg` instead — if the sample does not change, the font is not
+installed.
 
-**Size is two settings, not one** (`terminalFontSize`, `editorFontSize`), and
-neither touches the UI scale in §2.4. The reasons are in `fonts.ts`' header;
-the short form is that the two surfaces ship at different sizes today (16 and
-13) so a single knob would resize one of them on upgrade, and that the
-terminal's size is visible to the remote — it sets the PTY's row/column count —
-while the editor's is not. Both are clamped to 8–32px: the UI ladder tops out
-at 20px because it sizes *chrome*, and this sizes text a user reads all day.
+**Size is two settings, not one** (`terminalFontSize`, `editorFontSize`), both
+clamped to 8–32px, and neither touches the UI scale in §2.4. The two surfaces
+ship at different sizes, so a single knob would resize one of them on upgrade;
+and the terminal's size is visible to the remote — it sets the PTY's
+row/column count — while the editor's is not.
 
 ### 2.4 Type scale
 
@@ -207,7 +143,7 @@ titles (enough to separate a session name from its timestamp without the
 **Do not use 800/900**; the current `h1` at `1.5rem` with browser-default bold
 is the heaviest thing in the app and it is a picker heading.
 
-Two global rules to add alongside the scale:
+Two global rules ride alongside the scale:
 
 ```css
 body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
@@ -247,171 +183,62 @@ user's file, also read from `defaults.json`): `cursorShape: "bar"`,
 `antialiasingMode: "grayscale"`, `snapOnInput: true`,
 `wordDelimiters: " /\\()\"'-.,:;<>~!@#$%^&*|+=[]{}~?│"`.
 
-### 3.2 The one conversion that needs stating
+### 3.2 fontSize: 16 — a default, not a conversion
 
-Windows Terminal's `font.size` is in **points**. CSS/xterm `fontSize` is in
-**px**. At 96 DPI:
+Windows Terminal's `font.size` is in points (16pt = 21.33px at 96 DPI); that
+conversion was worked out and then **not taken** — the user chose to read the
+number literally as pixels, so `TERMINAL_OPTIONS.fontSize` is **16** and
+`--term-font-size` mirrors it. That 16 is now only the *default* of
+`terminalFontSize` (§2.3) and must stay exactly 16: changing it would resize
+the terminal of every existing user on upgrade, silently, which is the one
+thing a default is there to prevent. Anyone who wants 21 sets it in two
+clicks, and nobody gets it by surprise.
 
-```
-16pt × 96/72 = 21.33px  →  fontSize: 21
-```
-
-Sanity check: 21px Consolas in an ~800px-tall pane yields ≈30 rows, and
-Windows Terminal's own `initialRows` default is exactly **30**. The conversion
-is right. Note the current `TerminalView.vue` uses `fontSize: 13` — the new
-value is a large, deliberate jump, which is what "take the config from Windows
-Terminal" means. Expose it as `--term-font-size` so it stays tunable.
-
-**Revised — shipped at 16, and now user-settable (§2.3).** The 21px conversion
-was not taken: the user chose to read Windows Terminal's `16` literally as
-pixels, so `TERMINAL_OPTIONS.fontSize` is **16** and `--term-font-size` mirrors
-it. That number is now only the *default* of `terminalFontSize` in Settings,
-which is why it must stay exactly 16 — changing it would resize the terminal of
-every existing user on upgrade, silently, which is the one thing a default is
-there to prevent. §7.3's open question is settled by that setting: 21 is two
-clicks away for anyone who wants it, and nobody gets it by surprise.
-
-xterm does **not** read the cascade — it rasterises to a canvas from its options
-object — so `--term-font-size` cannot drive it. `TerminalView.vue` assigns
-`term.options.fontFamily/fontSize` from the settings store and then calls
+xterm does **not** read the cascade — it rasterises to a canvas from its
+options object — so `--term-font-size` cannot drive it. `TerminalView.vue`
+assigns `term.options.fontFamily/fontSize` from the settings store and calls
 `fitAddon.fit()`, because a changed cell size changes the row and column count
-and an unfitted terminal reports stale geometry to the remote. The token remains
-the value the rest of the app sizes terminal-adjacent chrome from (the Settings
-sample line, for one).
+and an unfitted terminal reports stale geometry to the remote. The token
+remains what terminal-adjacent chrome sizes from. `lineHeight` stays at
+**1.0**: the user sets no `font.cellHeight`, so Windows Terminal uses
+Consolas' natural cell.
 
-`lineHeight` stays at **1.0**: the user sets no `font.cellHeight`, so Windows
-Terminal uses Consolas' natural cell, whose design line box is ≈1.0em.
+### 3.3 Contrast: `minimumContrastRatio: 3`
 
-### 3.3 Contrast audit of Campbell
+Campbell's dim **blue** (`#0037DA`, **2.38:1**) and **magenta** (`#881798`,
+**2.44:1**) are genuinely unreadable on its own background `#0C0C0C` — a known
+property of the scheme, not a transcription error. (The other fourteen
+colours all clear 3.2:1; foreground/white is 12.18:1.) Rather than editing the
+user's palette, xterm's **`minimumContrastRatio: 3`** lifts only the failing
+pairs at render time and leaves the other colours pixel-identical to Windows
+Terminal. Set it to `1` to disable if byte-exact parity is preferred over
+legibility.
 
-Computed against Campbell's own background `#0C0C0C`:
+### 3.4 The options object (`TERMINAL_OPTIONS`)
 
-| Colour | Hex | Ratio | |
-|---|---|---:|---|
-| foreground / white | `#CCCCCC` | 12.18:1 | AAA |
-| brightWhite | `#F2F2F2` | 17.47:1 | AAA |
-| brightYellow | `#F9F1A5` | 16.91:1 | AAA |
-| brightCyan | `#61D6D6` | 11.27:1 | AAA |
-| brightGreen | `#16C60C` | 8.49:1 | AAA |
-| yellow | `#C19C00` | 7.47:1 | AAA |
-| cyan | `#3A96DD` | 6.14:1 | AA |
-| green | `#13A10E` | 5.71:1 | AA |
-| brightRed | `#E74856` | 5.09:1 | AA |
-| brightBlue | `#3B78FF` | 4.95:1 | AA |
-| brightBlack | `#767676` | 4.31:1 | AA-large |
-| red | `#C50F1F` | 3.23:1 | AA-large |
-| brightMagenta | `#B4009E` | 3.20:1 | AA-large |
-| **magenta** | `#881798` | **2.44:1** | **fail** |
-| **blue** | `#0037DA` | **2.38:1** | **fail** |
+`TerminalView.vue`'s `TERMINAL_OPTIONS` carries everything that is *not*
+themed and *not* user-settable; every option name was verified against
+`node_modules/@xterm/xterm/typings/xterm.d.ts` (6.0.0):
 
-Campbell's dim `blue` and `magenta` are genuinely unreadable on its own
-background — a known property of the scheme, not a transcription error. Rather
-than editing the user's palette, set xterm's
-**`minimumContrastRatio: 3`**, which lifts only the failing pairs at render
-time and leaves the other 14 colours pixel-identical to Windows Terminal.
-(Set it to `1` to disable if byte-exact parity is preferred over legibility.)
+- `fontFamily` — the mono stack of §2.3; overridden at construction by
+  `resolveMonoStack(settings.monospaceFontFamily)`.
+- `fontSize: 16`, `lineHeight: 1.0`, `letterSpacing: 0`, weights 400/700 —
+  fontSize overridden by `settings.terminalFontSize` (§3.2).
+- `cursorStyle: 'bar'`, `cursorBlink: true`, `cursorInactiveStyle: 'outline'`
+  — defaults.json `cursorShape "bar"`; Windows Terminal blinks by default.
+- `scrollback: 9001`, `scrollOnUserInput: true` — defaults.json.
+- `wordSeparator` — the user's `wordDelimiters` string verbatim, so
+  double-click word selection splits paths and punctuation exactly as it does
+  in Windows Terminal.
+- `drawBoldTextInBrightColors: true`; `minimumContrastRatio: 3` (§3.3).
+- **No `theme`.** The palette belongs to the applied theme record:
+  `resolveTheme(settings.theme).terminal` is assigned at construction and
+  re-assigned by the settings watcher (§8). The dark record carries Campbell
+  verbatim, provenance intact (`src/renderer/themes.ts`).
 
-### 3.4 The options object
-
-> **Revised — the `theme` block moved to `src/renderer/themes.ts`.** With
-> themes as data (§8), the Campbell palette below lives verbatim in the `dark`
-> theme record, and TerminalView looks its theme up from the applied theme
-> instead of carrying one inline. Everything else in this options object —
-> font, cursor, scrollback, word delimiters, `minimumContrastRatio` — is not
-> themed and stays exactly as specified here. The provenance note travels with
-> the palette.
-
-Diff-ready replacement for the `TERMINAL_OPTIONS` const in
-`src/renderer/components/TerminalView.vue`. Every option name below was
-verified against `node_modules/@xterm/xterm/typings/xterm.d.ts` (6.0.0).
-
-```ts
-/**
- * Terminal look & feel, transcribed from the user's Windows Terminal config.
- *
- * Source: %LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\
- *         LocalState\settings.json  (font face/size, bellStyle)
- *   plus  Windows Terminal 1.24 defaults.json  (everything the user's file
- *         leaves unset: the Campbell scheme, bar cursor, 8px padding,
- *         9001-line scrollback, grayscale AA, word delimiters).
- * The user's settings.json has "schemes": [] and no `colorScheme` key, so the
- * built-in default scheme — Campbell — is what they actually see.
- */
-const TERMINAL_OPTIONS: ITerminalOptions = {
-  // profiles.defaults.font.face = "Consolas"
-  fontFamily: 'Consolas, "Cascadia Mono", ui-monospace, monospace',
-  // profiles.defaults.font.size = 16 POINTS -> 16 * 96/72 = 21.33 CSS px.
-  fontSize: 21,
-  fontWeight: 400,
-  fontWeightBold: 700,
-  // No `font.cellHeight` override, so Consolas' natural cell (~1.0em).
-  lineHeight: 1.0,
-  letterSpacing: 0,
-
-  // defaults.json: cursorShape "bar". Windows Terminal blinks by default.
-  cursorStyle: 'bar',
-  cursorBlink: true,
-  cursorInactiveStyle: 'outline',
-
-  // defaults.json: historySize 9001, snapOnInput true.
-  scrollback: 9001,
-  scrollOnUserInput: true,
-
-  // defaults.json: wordDelimiters — makes double-click word selection split
-  // paths and punctuation exactly as it does in Windows Terminal.
-  wordSeparator: ' /\\()"\'-.,:;<>~!@#$%^&*|+=[]{}~?\u2502',
-
-  drawBoldTextInBrightColors: true,
-  // Campbell's dim blue (2.38:1) and magenta (2.44:1) are unreadable on its
-  // own background; this lifts only those and leaves the rest untouched.
-  minimumContrastRatio: 3,
-
-  // Built-in "Campbell" scheme, verbatim. Windows Terminal names the
-  // magenta slot "purple"; xterm calls it `magenta`.
-  theme: {
-    background: '#0C0C0C',
-    foreground: '#CCCCCC',
-    cursor: '#FFFFFF',
-    cursorAccent: '#0C0C0C',
-    // Campbell defines no selectionBackground; Windows Terminal falls back to
-    // white drawn at ~50% alpha. Kept translucent so text stays readable.
-    selectionBackground: 'rgba(255, 255, 255, 0.35)',
-    selectionInactiveBackground: 'rgba(255, 255, 255, 0.18)',
-    black: '#0C0C0C',
-    red: '#C50F1F',
-    green: '#13A10E',
-    yellow: '#C19C00',
-    blue: '#0037DA',
-    magenta: '#881798',
-    cyan: '#3A96DD',
-    white: '#CCCCCC',
-    brightBlack: '#767676',
-    brightRed: '#E74856',
-    brightGreen: '#16C60C',
-    brightYellow: '#F9F1A5',
-    brightBlue: '#3B78FF',
-    brightMagenta: '#B4009E',
-    brightCyan: '#61D6D6',
-    brightWhite: '#F2F2F2',
-  },
-};
-```
-
-And the scoped style in the same file, replacing the current `padding: 6px` /
-`background: #1e1e2e`:
-
-```css
-.terminal {
-  width: 100%;
-  height: 100%;
-  /* Windows Terminal defaults.json: padding "8, 8, 8, 8" */
-  padding: 8px;
-  background: var(--term-bg);       /* #0C0C0C — Campbell */
-  overflow: hidden;
-  /* Windows Terminal defaults.json: antialiasingMode "grayscale" */
-  -webkit-font-smoothing: antialiased;
-}
-```
+The `.terminal` element itself: `padding: 8px` (defaults.json), background
+`var(--term-bg)`, `-webkit-font-smoothing: antialiased` (defaults.json
+`antialiasingMode: "grayscale"`).
 
 **Not mappable:** `bellStyle: "none"` has no xterm 6 equivalent (`bellStyle`
 was removed in xterm 5 and no bell is emitted), so the user's setting is
@@ -477,135 +304,30 @@ Non-text pairs:
 
 WCAG 1.4.11 requires 3:1 for boundaries that are the *only* way to identify a
 control. `--border` at 1.49:1 cannot carry a text input; that is why
-`--border-strong` exists and why §5.3 mandates it on inputs and selects.
+`--border-strong` exists and why control boundaries that must self-identify —
+inputs, selects, the composer's at-rest toggle (COMPOSER.md) — are drawn with
+it.
 
-### 4.3 The token block
+### 4.3 The token block — shipped in `App.vue`, one theme of several
 
-> **Revised — this block is now the DARK THEME, not the palette.** When themes
-> became data (§8), every colour-carrying token below was duplicated into the
-> `dark` record in `src/renderer/themes.ts`, and the applied theme's record is
-> written over these as inline custom properties on `<html>`. The block stays
-> in `App.vue` because it is what ships — the no-JS default — and
-> `tests/unit/themes.test.ts` asserts the two copies are identical, so neither
-> can drift. Everything below about WHY these values are what they are stands
-> unchanged; it is the reasoning for one theme of several rather than for the
-> app's only palette.
+The `:root` block in `src/renderer/App.vue` is the shipped token set; this
+section no longer duplicates it. When themes became data (§8), every
+colour-carrying token was copied into the `dark` record in
+`src/renderer/themes.ts`, and the applied theme's record is written over
+`:root` as inline custom properties on `<html>`. `App.vue`'s block stays
+because it is the no-JS default, and `tests/unit/themes.test.ts` asserts the
+two copies are identical, so neither can drift. What is not obvious from the
+values alone:
 
-Ready to paste over the `:root` block in `src/renderer/App.vue`. It is
-additive-compatible: the six existing names (`--bg --fg --muted --accent
---error --border`) are all still defined, so nothing breaks on the first
-commit.
-
-```css
-:root {
-  color-scheme: dark;
-
-  /* ---- Surfaces (elevation 0 -> 3) ----------------------------------- */
-  --bg:            #0D1117;  /* window / page ground */
-  --surface:       #161B22;  /* topbar, side panel, cards, overlay body */
-  --surface-2:     #1C2129;  /* inputs, chips, table heads, menus */
-  --surface-3:     #232A34;  /* popovers / anything above an overlay */
-  --scrim:         rgba(1, 4, 9, 0.72);   /* modal backdrop */
-
-  /* ---- Text ---------------------------------------------------------- */
-  --fg:            #E6EDF3;  /* 16.02:1 on --bg */
-  --fg-secondary:  #8B949E;  /*  6.15:1 — subtitles, timestamps, counts */
-  --fg-muted:      #6E7681;  /*  4.12:1 — >=15px or decorative ONLY */
-
-  /* ---- Lines --------------------------------------------------------- */
-  --border:        #2D333B;  /* default hairline */
-  --border-soft:   #21262D;  /* row separators inside a panel */
-  --border-strong: #6E7681;  /* 4.12:1 — inputs & controls (WCAG 1.4.11) */
-
-  /* ---- Accent -------------------------------------------------------- */
-  --accent:        #22D3EE;  /* 10.47:1 on --bg */
-  --accent-dim:    #0891B2;  /* accent borders, active separators */
-  --accent-soft:   rgba(34, 211, 238, 0.12);  /* selected row fill */
-  --on-accent:     #04101A;  /* 10.62:1 on --accent */
-
-  /* ---- Status -------------------------------------------------------- */
-  --success:       #22C55E;
-  --warning:       #F59E0B;
-  --error:         #EF4444;
-  --agent:         #A78BFA;  /* agent/assistant role, per Android */
-  --success-soft:  rgba(34, 197, 94, 0.12);
-  --warning-soft:  rgba(245, 158, 11, 0.12);
-  --error-soft:    rgba(239, 68, 68, 0.12);
-  --agent-soft:    rgba(167, 139, 250, 0.14);
-
-  /* ---- Motion --------------------------------------------------------- */
-  /* --dur-slow and --ease-out were added for the overlay
-     entrance is the one thing slow enough to want a decelerating curve.
-     --ease stays the default for state changes (hover tints, rotation). */
-  --dur-fast:      150ms;
-  --dur-normal:    200ms;
-  --dur-slow:      280ms;                       /* overlay entrance only */
-  --ease:          cubic-bezier(0.2, 0, 0, 1);
-  --ease-out:      cubic-bezier(0, 0, 0.2, 1);  /* decelerate: things arriving */
-
-  /* ---- Interaction states -------------------------------------------- */
-  /* Neutral lift for hover: tinting every hover cyan (as the app does today
-     with rgba(137,180,250,.08)) makes hover read as selection. */
-  --state-hover:    rgba(230, 237, 243, 0.05);
-  --state-active:   rgba(230, 237, 243, 0.09);
-  --state-selected: var(--accent-soft);
-  --focus-ring:     var(--accent);
-  --focus-ring-width: 2px;
-  --focus-ring-offset: 2px;
-  --disabled-opacity: 0.45;
-
-  /* ---- Terminal (see DESIGN.md §3 — Windows Terminal / Campbell) ------ */
-  --term-bg:        #0C0C0C;
-  --term-fg:        #CCCCCC;
-  --term-font-size: 21px;   /* = 16pt at 96 DPI */
-  --term-padding:   8px;
-
-  /* ---- Typography ---------------------------------------------------- */
-  --font-ui:   'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI',
-               system-ui, sans-serif;
-  --font-mono: Consolas, 'Cascadia Mono', ui-monospace, monospace;
-
-  --fs-100: 11px;  --lh-100: 1.45;
-  --fs-200: 12px;  --lh-200: 1.45;
-  --fs-300: 13px;  --lh-300: 1.3846;  /* = Android bodyDense 13sp/18sp */
-  --fs-400: 15px;  --lh-400: 1.3;
-  --fs-500: 18px;  --lh-500: 1.25;
-  --fs-600: 20px;  --lh-600: 1.2;
-
-  --fw-regular: 400;
-  --fw-medium:  500;
-  --fw-semibold: 600;
-  --fw-bold:    700;
-
-  /* ---- Space (4px grid, per Android Spacing.kt) ----------------------- */
-  --sp-1:  4px;
-  --sp-2:  8px;
-  --sp-3: 12px;
-  --sp-4: 16px;
-  --sp-5: 24px;
-  --sp-6: 32px;
-
-  /* ---- Radii --------------------------------------------------------- */
-  --r-sm: 4px;   /* chips, badges, tags, selected-row band */
-  --r-md: 6px;   /* buttons, inputs, tab segments */
-  --r-lg: 10px;  /* cards, panels */
-  --r-xl: 14px;  /* overlay / modal */
-
-  /* ---- Density ------------------------------------------------------- */
-  --row-h:      28px;  /* list rows: session, file, forward */
-  --row-pad-x:  10px;
-  --row-pad-y:   6px;
-  --control-h:  28px;  /* buttons, inputs, selects */
-  --control-h-sm: 24px;
-  --topbar-h:   40px;
-  --tabbar-h:   32px;
-
-  /* ---- Motion (per Android docs/design-system.md §motion) ------------- */
-  --dur-fast:   150ms;
-  --dur-normal: 200ms;
-  --ease:       cubic-bezier(0.2, 0, 0, 1);
-}
-```
+- **Hover is a neutral lift** (`--state-hover`, ~5% white), not a tint:
+  tinting every hover cyan makes hover read as selection.
+- **`--fg-muted` is ≥15px/decorative only** (§4.2's rule — 4.12:1).
+- **`--term-*` are Campbell**: `--term-bg #0C0C0C`, `--term-fg #CCCCCC`,
+  `--term-padding 8px` (§3).
+- **`--term-font-size: 16px`** — the §3.2 default; must not change silently.
+- **Motion tokens**: `--dur-slow` and `--ease-out` exist for the overlay
+  entrance, the one thing slow enough to want a decelerating curve; `--ease`
+  stays the default for state changes (§5.9).
 
 ---
 
@@ -613,116 +335,49 @@ commit.
 
 ### 5.0 Global rules
 
-```css
-body {
-  font-family: var(--font-ui);
-  font-size: var(--fs-300);
-  line-height: var(--lh-300);
-  -webkit-font-smoothing: antialiased;
-}
+Two body-level rules ship in `App.vue`: the type defaults
+(`--font-ui`/`--fs-300`/`--lh-300` with `-webkit-font-smoothing: antialiased`)
+and `tabular-nums` on every number column — timestamps, ports, percentages,
+file sizes — so figures do not jitter between rows.
 
-/* Numbers must not jitter between rows: timestamps, ports, percentages. */
-.session-time, .fwd-table, .meter-pct, .sz, .host-detail {
-  font-variant-numeric: tabular-nums;
-}
+**The focus ring is the only focus treatment in a keyboard-driven app** —
+without it nothing shows focus except the browser default that the custom
+`background: transparent` buttons largely suppress. Every focusable element
+gets `outline: var(--focus-ring-width) solid var(--focus-ring)` at
+`--focus-ring-offset` — except rows inside `overflow-y: auto` lists
+(`.session-row`, `.entry`, `.folder-header`), which take the **inset**
+variant (`outline-offset: -2px`), because scrolling lists clip a +2px outward
+ring.
 
-/* One focus treatment for the whole app. There is none today. */
-:where(button, a, input, select, textarea, [tabindex]):focus-visible {
-  outline: var(--focus-ring-width) solid var(--focus-ring);
-  outline-offset: var(--focus-ring-offset);
-}
-/* Rows live inside `overflow-y: auto` lists, which clip a +2px offset ring. */
-:where(.session-row, .entry, .folder-header):focus-visible {
-  outline-offset: -2px;
-}
-```
+### 5.1 Shared primitives
 
-The focus rule is not cosmetic — the app is keyboard-driven around a terminal,
-and right now nothing shows focus except the browser default that the custom
-`background: transparent` buttons largely suppress.
+`.icon-btn`, `.muted`, `.error` and `.empty` exist once each, as global
+classes in `App.vue`'s unscoped `<style>` (shipped there; the CSS is not
+repeated here). Extract-then-restyle is the rule: restyling seven hand-copied
+`.icon-btn`s is how the original drift happened.
 
-**Revised.** This rule originally also set `border-radius:
-var(--r-md)`. That declaration is deleted: Chromium already draws the outline
-along the focused element's own corners, so it did not shape the *ring* — it
-mutated the *element*, visibly rounding the square editor textarea the moment
-it took focus. The inset-offset variant above is the second half of the fix.
-
-### 5.1 Shared primitives (extract before restyling)
-
-`.icon-btn` (7 copies), `.muted` (10), `.error` (5), `.empty` (5) should become
-one set of global classes in `App.vue`'s unscoped `<style>`, then be deleted
-from the component `<style scoped>` blocks. Restyling 7 copies of `.icon-btn`
-by hand is how the current drift happened.
-
-**Revised.** The single bordered `.icon-btn` is split in two,
-both *ghost*: invisible at rest, filled on hover, in the VS Code register. The
-old primitive sized itself from `padding + the glyph's advance width`, so two
-adjacent icon buttons were visibly different widths; icon-only buttons are now
-square by construction. Nine bordered rectangles at rest in a 40px topbar were
-the single biggest "unpolished" signal in the before-screenshots.
-
-```css
-/* Ghost SQUARE icon button — toolbars, panel headers, row actions. */
-.icon-btn {
-  width: var(--control-h); height: var(--control-h);
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: var(--r-md);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease),
-              color var(--dur-fast) var(--ease);
-}
-.icon-btn:hover:not(:disabled) { background: var(--state-hover); color: var(--fg); }
-.icon-btn:active:not(:disabled) { background: var(--state-active); }
-.icon-btn:disabled { opacity: var(--disabled-opacity); cursor: default; }
-.icon-btn.sm { width: var(--control-h-sm); height: var(--control-h-sm); }
-
-/* Ghost LABELED button — text actions (Ports, Usage, Disconnect). */
-.btn-ghost {
-  height: var(--control-h);
-  display: inline-flex; align-items: center; gap: var(--sp-1);
-  padding: 0 var(--sp-2);
-  background: transparent;
-  border: none;
-  border-radius: var(--r-md);
-  color: var(--fg-secondary);
-  font-family: var(--font-ui);
-  font-size: var(--fs-300); font-weight: var(--fw-medium); line-height: 1;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease),
-              color var(--dur-fast) var(--ease);
-}
-.btn-ghost:hover:not(:disabled) { background: var(--state-hover); color: var(--fg); }
-.btn-ghost:disabled { opacity: var(--disabled-opacity); cursor: default; }
-
-/* Loading: the icon spins in place rather than being swapped for a bare `…`,
-   which used to change the button's content width mid-action. */
-.spin { animation: icon-spin 900ms linear infinite; }
-@keyframes icon-spin { to { transform: rotate(360deg); } }
-
-.muted { color: var(--fg-secondary); }
-.error { color: var(--error); font-size: var(--fs-200); }
-.empty { color: var(--fg-muted); font-style: italic; padding: var(--sp-4); }
-```
-
-A bordered look now survives **only** where chrome is earned: filled accent
-actions (`Load`, `Add`, `Save`), the stateful `Auto-forward` toggle, the `Scan`
-button that sits beside it in the same form bar, and form controls. Status
-chips keep their tinted borders — they are status, not controls.
-
-**Badge metric.** Every `--r-sm` badge-like — `.chip`, `.tag`,
-`.agent-badge`, `.kind`, `.status`, `.window-tag`, `.resume-chip`,
-`.block-toggle` — uses `padding: 0 var(--sp-1)`, `line-height: var(--lh-100)`,
-and `display: inline-flex; align-items: center; gap: var(--sp-1)`. The
-inline-flex is also what centres an icon against the label once a chip
-contains one.
+- The bordered `.icon-btn` is split in two, both **ghost**: invisible at
+  rest, filled on hover — the VS Code register. Nine bordered rectangles at
+  rest in a 40px topbar were the single biggest "unpolished" signal in the
+  before-screenshots. Icon-only buttons are **square by construction**
+  (`--control-h` / `--control-h-sm`); the old primitive sized itself from
+  padding plus the glyph's advance width, so two adjacent icon buttons were
+  visibly different widths. `.btn-ghost` is the labelled counterpart; the
+  loading state spins the icon in place rather than swapping content widths.
+- A bordered look survives **only** where chrome is earned: filled accent
+  actions (`Load`, `Add`, `Save`), the stateful `Auto-forward` toggle, the
+  `Scan` button beside it in the same form bar, and form controls. Status
+  chips keep their tinted borders — they are status, not controls.
+- **Badge metric.** Every `--r-sm` badge-like — `.chip`, `.tag`,
+  `.agent-badge`, `.kind`, `.status`, `.window-tag`, `.resume-chip`,
+  `.block-toggle` — uses `padding: 0 var(--sp-1)`, `line-height:
+  var(--lh-100)`, and `display: inline-flex; align-items: center; gap:
+  var(--sp-1)`. The inline-flex is also what centres an icon against the
+  label once a chip contains one.
 
 ### 5.2 Host picker (`01-host-picker.png`)
 
-Today: 720px column, 52px rows, `1.5rem` bold `h1`, a `.badge` reading
+Before (§1): 720px column, 52px rows, `1.5rem` bold `h1`, a `.badge` reading
 "select a host".
 
 - Wordmark `PocketShell` → `--fs-600` / `--fw-bold`, colour `--fg`. Drop the
@@ -745,237 +400,70 @@ Today: 720px column, 52px rows, `1.5rem` bold `h1`, a `.badge` reading
 
 ### 5.3 Session list — the default host view (`02`, `08`)
 
-This is now the primary screen, and `src/renderer/sessionGrouping.ts` already
-ports the phone's grouping (`groupSessionsByFolder`, folders sorted by recent
-activity with `Untracked` pinned last — the Android *no-watched-roots* path).
-The visual spec follows Android `FolderListScreen.kt`:
-
 > **Superseded by docs/SESSIONLIST.md (implemented).** The *leaf*-level tree
-> below is gone: on a real host the distribution is 1:1 (11 folders, 11
-> sessions), so every folder header cost a row to say nothing, and the session
-> name is *derived from the folder path*, so the two lines were the same fact
-> twice.
+> this section once tabulated is gone: on a real host the folder/session
+> distribution is 1:1, so every folder header cost a row to say nothing, and
+> the session name is *derived from the folder path*, so the two lines were
+> the same fact twice.
 >
 > The panel is not flat, though. One folder level survives, at the **root** —
 > `$HOME`'s children (`git`, `tmp`, …) plus an `other` catch-all — because
-> that is the level the 1:1 measurement does *not* apply to: all 11 of those
-> sessions live under one `git`. So the header earns its row there, and only
-> there. See SESSIONLIST.md §2–§3 for the current row spec. The `SESSIONS`
-> header row and the chip metric stand; the rest of this table is history.
+> that is the level the 1:1 measurement does *not* apply to: on the real host
+> all sessions live under one `git`. So the header earns its row there, and
+> only there. SESSIONLIST.md §2–§3 owns the current row spec; the `SESSIONS`
+> header row and the chip metric stand.
 
-| Element | Spec |
-|---|---|
-| Panel | `--surface`, `border-right: 1px solid var(--border)`, min-width **200px** (**revised**: 240 contradicted the 200px drag clamp). `container-type: inline-size` |
-| `SESSIONS` header | `--fs-100`/`--fw-semibold`/`--fg-muted`, `letter-spacing: .08em`, uppercase — keep as is, it is already right |
-| `.session-row` | height `--row-h` (28px), padding `0 var(--row-pad-x) 0 var(--sp-2)`, **no child indent** — there is no parent row to align under |
-| `.dot` | 8px; `--fg-muted` detached, `--success` attached (replaces the hard-coded `#a6e3a1`) |
-| `.label` (primary) | folder basename, `--font-ui`/`--fs-300`, `flex: 1 1 auto; min-width: 0`. `--fw-semibold` when attached. End-truncates with the standard `text-overflow: ellipsis` (**revised**: §5's `.label-head`/`.label-tail` middle-truncation span pair is retired — SESSIONLIST §5 Revision 7); the row tooltip carries the full name |
-| `.row-name` (secondary) | session name, `--font-mono`/`--fs-100`/`--fg-secondary`, end-ellipsis. Rendered **only** when the name is not derivable from the label, or the folder holds siblings |
-| `.agent-badge` | unchanged — `--agent` on `--agent-soft`, `--r-sm`, `--fs-100`, the shared chip metric |
-| `.row-time` | **relative** (`now`, `12m`, `3h`, `2d`, then `Aug 12`), `--fs-100`/`--fg-secondary`/`tabular-nums`, right-aligned. Absolute form moved to the row tooltip. Hidden under `@container (width < 230px)` |
-| Row tooltip | three lines: session name, full folder path, absolute time |
-| `.session-row:hover` | `background: var(--state-hover)` |
-| `.session-row.current` | `background: var(--state-selected)`, plus a 2px `--accent` left rail; **remove** the current cyan-tinted hover so hover and selection stop looking alike |
-| Footer | ~~a full-width `New session` button opening the folder-first picker~~ — **deleted, see §5.3d.** Creation moved onto the rows: a `+` per root and a `+` in the header. The bare name field the button itself replaced stays deleted for the original reason: the name is derived from the folder, never typed |
-| Retired | The `attached` text tag (dot + weight + sort position say it) and the absolute `.session-time`. `.folder-header`, `.disclosure` and the 28px child indent were retired with the leaf tree and are back at the root level; `.folder-count` stays retired — the root header carries a bare integer, not a `· N sessions` label |
+### 5.3c–e — Host panel header strip (implemented, after three revisions)
 
-**Gap to flag:** Android sorts agent sessions above plain shells and puts an
-agent badge (`Claude` / `Codex` / `OpenCode`, purple `--agent` on
-`--agent-soft`, `--r-sm`, `--fs-100` mono) on every row. `SessionSummary` in
-`src/shared/types.ts` carries only `{name, created, activity, attached, path}`
-— **no agent kind** — so neither is implementable today. `sessionGrouping.ts`
-already documents this. The badge slot should be laid out now (fixed 72px
-trailing column) so adding the field later is a data change, not a layout
-change.
+The host-level controls reached the panel header in three user-directed
+rounds: into an overflow menu (5.3c), the gear out of the menu as its own
+control and the strip reordered (5.3d), then the menu killed outright — Ports
+and Usage as their own icons (5.3e). The reversal in 5.3e overruled 5.3c's
+"two unlabelled overlay glyphs would be a memory test" at the user's say-so;
+the words survived by moving onto the buttons. The durable decisions:
 
-### 5.3c Host actions move to the panel HEADER (revised again, implemented)
+**Order, left to right — the user's sentence verbatim with its `⋯` expanded:**
+`arrow-left` (leave this host's sessions), `plus` (new session in any folder),
+`arrow-right-left` (Port forwarding), `bar-chart-2` (Provider usage),
+`refresh`, `settings`, `panel-left` (hide the panel). Seven controls; there is
+no eighth slot — the next addition displaces one (the way dropping the
+`SESSIONS` word paid for the first extra control) or moves the panel floor.
 
-> **Partly revised by §5.3d.** The gear was pulled back out of the overflow menu
-> as its own strip control, at the user's request. The argument below is kept
-> because it still decides Ports and Usage, which stay in the menu — see §5.3d
-> for why the gear is the exception rather than a reversal.
->
-> **Then overturned by §5.3e**, which killed the menu and made Ports and Usage
-> icons after all — kept because how that reversal was argued is part of the
-> record now.
+**Words live in tooltips and accessible names, whole** ("Port forwarding",
+"Provider usage") — exactly what the retired `⋯` trigger held for both at
+once. `HOST_PANEL_ITEMS` (`src/renderer/hostPanels.ts`) carries a `label` AND
+an `icon` per entry, and one component (`components/HostPanelButtons.vue`)
+renders both the header strip and the collapsed rail, so the two surfaces
+cannot drift.
 
-The user circled the panel's foot row — Ports, Usage, the gear — and drew an
-arrow up to the header: "we can move this things there."
+**The glyphs:** `arrow-right-left` — forwarding is a symmetric MAPPING between
+a local port and a remote port, so an opposing pair says it better than
+`shuffle`'s crossing paths (which read as randomising); `bar-chart-2` —
+Feather verbatim, the register every tool uses for a meter. `SESSIONS` went
+because it was the cheapest thing in the row: a label for a panel whose
+contents are self-evidently folders, on a window whose title already carries
+host identity.
 
-§5.3b's placement was defensible and is kept above rather than rewritten. What
-it did not anticipate is simply that the user looked at it and wanted the
-controls at the top.
+**Width: the 232px floor.** Seven 28px controls + six 4px gaps = 220, which
+the old 200px floor could not hold, so `MIN_PANEL_WIDTH` in
+`HostWorkspaceView.vue` and `.tree`'s `min-width` moved to 232 together, as
+they have always had to move together. The folder-row label budget at the
+floor improves with it (186px, up from 154).
 
-**The problem is crowding, not location.** The header already holds Back, a
-label, Refresh and the collapse toggle. Adding three more makes seven controls
-in a strip whose panel drags down to a 200px floor. The options were: icon-only
-Ports and Usage (which is exactly the memory test §5.3b refused, and `AppIcon`
-has no unambiguous mark for either); a second header row (which spends the
-vertical space the topbar removal just reclaimed); or an overflow menu.
+**The collapsed rail mirrors the header, never less.** The rail exists
+precisely so host controls are not stranded off-screen, so it must offer
+nothing the expanded panel does not: ports, usage, settings. It gets **no
+`+`**: the rail is an escape hatch, and creating a session is something you do
+while looking at the list you are adding to, which is one click away on its
+top button.
 
-**Chosen: one overflow control, plus dropping the `SESSIONS` word.**
-
-- The three move as a SINGLE `more-horizontal` button opening a menu. That
-  answers §5.3b's objection rather than overriding it — inside a menu Ports and
-  Usage keep their WORDS, and gain fuller ones ("Port forwarding", "Provider
-  usage") than the strip had room for. The strip spends one 14px mark instead
-  of ~150px.
-- `SESSIONS` goes. It is the cheapest thing in the row: a label for a panel
-  whose contents are self-evidently folders, on a window whose title already
-  carries the host identity. Its width pays for the new control outright, and
-  the net change to the strip is one icon.
-
-**The collapsed rail carries the same control.** The rail exists precisely so
-host controls are not stranded off-screen (§5.3b), and moving them from the foot
-to the header would otherwise have taken all three away when the panel is
-hidden. It gets the same overflow button — not three icons, because a 36px rail
-has no room for text and inventing a glyph apiece is the objection again.
-
-The overlays themselves do not move; only their triggers do. Settings stays
+**Session creation reasoning lives in docs/SESSIONLIST.md §0a and §13–13a**
+(the `+`s on rows, the `other` exclusion, the disabled-not-hidden failure
+case, and the chained agent dialog's surviving objections). Settings stays
 independently reachable from the host PICKER, where a user looks for a
 startup-scoped setting.
 
-### 5.3d Session creation on the rows, and the strip's final order (implemented)
-
-> **Partly revised by §5.3e.** The `⋯` row of the order below became its two
-> contents — Ports and Usage as their own icons — the strip grew to seven
-> controls, and the panel floor moved to 232px to hold them. The ordering rule
-> itself survives; read §5.3e alongside this one.
-
-Two user asks, one strip. Kept together because they land on the same six
-controls and the width budget only closes if they are read together.
-
-**Ask 1 — the `+`s.** "a `+` near git, near `tmp` … and just a plus to create a
-random session in any place. then we don't need 'new session' button anymore."
-The full-width foot button is gone; a hover/focus-revealed `+` sits on each root
-row and a persistent `+` leads the header strip. The reasoning, the `other`
-exclusion, the disabled-not-hidden failure case and the decision NOT to chain
-the agent dialog are all in **docs/SESSIONLIST.md §0a and §13** — that file owns
-the panel's row spec, and this section owns only the strip.
-
-**Ask 2 — the order.** "here have ⋯ then refresh then settings then hide." Two
-things follow, and the second partly reverses §5.3c.
-
-1. **Reorder.** The strip reads, left to right:
-
-   | | | |
-   |---|---|---|
-   | `arrow-left` | leading slot | leave this host's sessions |
-   | `plus` | actions, first | new session in any folder |
-   | `more-horizontal` | actions | Port forwarding, Provider usage |
-   | `refresh` | actions | reload the session list |
-   | `settings` | actions | app settings |
-   | `panel-left` | actions, last | hide the panel |
-
-   The last four are the user's order verbatim. The `+` leads the group because
-   it is the panel's primary action and the other four are chrome.
-
-2. **The gear leaves the overflow menu.** §5.3c is *revised, not overturned*.
-   Its argument was never "put these in a menu"; it was "two unlabelled overlay
-   glyphs would be a memory test", and that objection applies to Ports and Usage
-   only. The gear is the one of the three that is already icon-only everywhere
-   in this app — the host picker, the composer's own surfaces — so it is
-   recognised rather than remembered, and it costs one 14px slot instead of a
-   labelled button. **Ports and Usage stay in the menu, with their words.** The
-   menu is now two items and needs no separator: the rule under it existed to
-   set the app-level entry apart from the host-level pair, and the app-level
-   entry is what left.
-
-**The collapsed rail gets its own gear.** While Settings was a menu row, the
-rail reached it for free through its one overflow button. Promoting the gear out
-of the list would otherwise have made the collapsed panel offer strictly less
-than the expanded one — the single failure the rail exists to prevent (§5.3b).
-The rail now mirrors the header: overflow, then gear. It gets **no `+`**: the
-rail is an escape hatch, and creating a session is something you do while
-looking at the list you are adding to, which is one click away on its top
-button.
-
-**Width, at the 200px drag floor — and this strip is now FULL.**
-
-```
-  6 controls × --control-h (28)          = 168
-+ 5 gaps     × --sp-1      (4)           =  20
-                                           ---
-                                           188
-  panel floor                             200
-- padding-left  --sp-2 (8)               =   8
-- padding-right --sp-1 (4)               =   4
-                                           ---
-  content box                             188
-```
-
-It fits exactly, with nothing shrunk and nothing clipped. The asymmetric
-padding is what closes it, and it is independently right: the left end is a
-single arrow whose glyph aligns with the dots and labels below it, while the
-right end is a run of five ghost squares each already carrying ~7px of its own
-optical inset, so a further 8px there is inset on top of inset.
-
-There is no seventh slot. The next control added here has to displace one — the
-way the `SESSIONS` word paid for the overflow mark in §5.3c — or move the panel
-floor, which the drag clamp and `.tree`'s `min-width` both pin at 200.
-
-### 5.3e The kebab is killed — Ports and Usage become their own icons (implemented)
-
-Looking at the strip with its overflow menu open: "I think we can kill the
-kebab here and have two icons instead."
-
-§5.3c built that menu to answer ca79ae2's ruling — "two unlabelled overlay
-glyphs would be a memory test" — and this reverses it at the user's say-so.
-Recorded as an overturning rather than a discovery that the old argument was
-wrong: it wasn't, it was overruled by the person it was protecting. What makes
-the reversal livable is where the words went. They were never deleted; they
-moved onto each button, whole ("Port forwarding", "Provider usage"), as the
-tooltip and the entire accessible name — exactly what the retired `⋯` trigger
-held for both at once ("Ports, Usage"). A hover answers what a click and a
-menu row used to.
-
-**Mechanics.** `HostActionsMenu.vue` and its menu machinery are gone from both
-surfaces. The two buttons are rendered by one new component,
-`components/HostPanelButtons.vue`, fed from `HOST_PANEL_ITEMS`
-(renderer/hostPanels.ts), which now carries a `label` AND an `icon` per entry —
-the same shared-vocabulary trick the menu used, because the header and the
-collapsed rail still must not drift. `more-horizontal` leaves the `AppIcon`
-registry with its last caller; an unused mark would have kept describing a
-trigger nothing has.
-
-**The glyphs, since §5.3c's "AppIcon has no unambiguous mark for either" no
-longer holds and had to be made false rather than argued with:**
-
-| | | |
-|---|---|---|
-| `arrow-right-left` | Port forwarding | Two opposing arrows, each half Feather's own `arrow-right` construction scaled onto a baseline and mirrored. Forwarding is a symmetric MAPPING between a local port and a remote port, so an opposing pair says it better than `shuffle`'s crossing paths (which read as randomising) or a turn-and-leave arrow. |
-| `bar-chart-2` | Provider usage | Feather verbatim. The register every tool uses for a meter. |
-
-**Order.** The user's §5.3d sentence survives intact with its `⋯` expanded:
-the strip reads back, `+`, ports, usage, refresh, settings, hide.
-
-**Width, re-derived — and full again.** Seven controls cannot fit the 200px
-floor six closed exactly, so the floor moves rather than the padding trick:
-
-```
-  7 controls × --control-h (28)          = 196
-+ 6 gaps     × --sp-1      (4)           =  24
-                                           ---
-                                           220
-  panel floor                             232
-- padding-left  --sp-2 (8)               =   8
-- padding-right --sp-1 (4)               =   4
-                                           ---
-  content box                             220
-```
-
-`MIN_PANEL_WIDTH` in HostWorkspaceView.vue and `.tree`'s `min-width` moved
-200 → 232 together, as they have always had to move together. The folder-row
-budget at the floor improves with it (186px of label column, up from 154);
-nothing else on the rows changes, and the <270px container query stands.
-
-**The rail mirrors, as ever.** It gets the same two buttons from the same
-component and keeps its gear: ports, usage, settings — three icons where `⋯`
-and gear stood, none of them a menu. The rail's rule (must offer nothing less
-than the expanded panel) now extends to icons promoted out of menus by hand,
-which is exactly how it got its gear in §5.3d.
-
-### 5.3b Host workspace chrome — NO topbar (revised, implemented)
+### 5.3b Host workspace chrome — NO topbar (implemented)
 
 The host topbar — back, collapse, `hetzner · alexey@135.181.114.209`,
 Ports/Usage/Settings, disconnect — is **gone**. It was a full `--topbar-h` of
@@ -986,22 +474,18 @@ redistributed, none deleted:
 
 | Was in the topbar | Lives now | Why there |
 |---|---|---|
-| Host label (`name · user@hostname`) | **the OS window title** | The native title bar was already spending its row saying the static word "PocketShell". Built by the pure `src/shared/windowTitle.ts`, applied over `win:setTitle`; the renderer drives it because the title mirrors the *view*, not the connection (Back keeps the link alive while the picker shows). Also puts the host in the taskbar and Alt-Tab. |
+| Host label (`name · user@hostname`) | **the OS window title** | Built by the pure `src/shared/windowTitle.ts`, applied over `win:setTitle`; the renderer drives it because the title mirrors the *view*, not the connection (Back keeps the link alive while the picker shows). Also puts the host in the taskbar and Alt-Tab — the native title bar had been spending its row saying the static word "PocketShell". |
 | Back arrow | leading slot of the session panel's `SESSIONS` header | An arrow beside `SESSIONS` reads as "leave this host's sessions". The header row was already paying `--topbar-h`. |
 | Collapse toggle (`panel-left`) | trailing slot of the same header, beside Refresh | The hide control sits on the thing it hides. |
-| Ports / Usage / Settings | **revised — see §5.3c, §5.3d, then §5.3e.** Originally a `.host-actions` row at the panel's **foot**, below "New session": host-scoped controls on the host-scoped surface, bottom-most = most global (the VS Code gear-at-the-bottom register, gear far right). Ports and Usage kept text labels because two unlabeled overlay glyphs would be a memory test. ~150px of controls, fitting the 200px floor. **Now:** Ports and Usage as their own icons, Settings as its own gear beside them — direct triggers, words in the tooltips (§5.3e). |
+| Ports / Usage / Settings | the panel header strip — **§5.3c–e** | Direct triggers; words moved into tooltips and accessible names. |
 | Disconnect | the **host picker**, on the connected host's row | Every disconnect already navigated to the picker; the button now lives at its destination, labeled, beside where the connection was opened. The connected row also gets the §5.2 `--success` dot, and clicking it re-enters the workspace **without re-dialling** (a second dial would orphan the live connection). |
 | Missing-tools notice | unchanged — the workspace's top strip | Rendered only when a tool is absent, so the usual cost is zero rows. |
 
-**Collapsed state is a rail, not nothing.** With the topbar gone, a zero-width
-collapse would take the expand toggle — and with it every host control — off
-screen. Collapsing now leaves a ~36px rail (`--surface`, right hairline)
-holding the expand toggle and the back arrow, so both stay one click away
-while ~90% of the panel's width still goes to the terminal. It also carries
-whatever the header holds — since §5.3e, its Ports/Usage icons and gear — under
-the rail's rule that it must not offer less than the expanded panel, which is
-why a control promoted out of the menu was added here by hand in §5.3d and why
-§5.3e's icons arrived through one shared component instead.
+**Collapsed state is a rail, not nothing.** A zero-width collapse would take
+the expand toggle — and with it every host control — off screen. Collapsing
+leaves a ~36px rail (`--surface`, right hairline) holding the back arrow, the
+expand toggle, and whatever the header holds (§5.3c–e), under the rail's rule
+that it must not offer less than the expanded panel.
 
 Alignment note: the `SESSIONS` header and the session bar across the splitter
 are both `--topbar-h`, so the window's top row reads as one line broken only
@@ -1042,8 +526,8 @@ terminal gains the 40px the tab strip used to take.
 
 ### 5.5 Overlays — Usage and Ports (`06`, `07`)
 
-Both are header buttons opening `OverlayPanel.vue`. Current backdrop is
-`rgba(0,0,0,0.5)`; the panel has no elevation cue beyond a border.
+Both are header buttons opening `OverlayPanel.vue`. The pre-spec backdrop was
+`rgba(0,0,0,0.5)`; the panel had no elevation cue beyond a border.
 
 - `.overlay-backdrop` → `background: var(--scrim)`, `backdrop-filter: blur(2px)`
 - `.overlay-panel` → `background: var(--surface)`, `border: 1px solid
@@ -1054,7 +538,9 @@ Both are header buttons opening `OverlayPanel.vue`. Current backdrop is
   a mostly-empty rectangle. It is now `max-height`, with the body scrolling
   past the cap. Width is a `size` prop: `lg` = 960px (the wide port-forward
   table), `md` = 720px (anything narrower — a panel wider than its content is
-  just a void with a border around it).
+  just a void with a border around it), `sm` = 480px (short stacked
+  label/control forms, where `md` would stretch every control to twice the
+  width its content needs).
 - **Panel-scoped controls live in the header**, via a named `actions` slot
   rendered beside the close button. A refresh control floating at the top-left
   of the body read as orphaned debris under the title.
@@ -1064,10 +550,11 @@ Both are header buttons opening `OverlayPanel.vue`. Current backdrop is
   `--dur-fast` fade with no scale, because dismissal should feel faster than
   arrival. Overlays used to pop in fully formed in one frame.
 - `.overlay-title` → `--fs-500`/`--fw-semibold`
-- **Remove the duplicated heading.** `07-usage-overlay.png` shows
-  "Provider usage" twice — once as the overlay title, once as the view's own
-  `h2`. `UsageView.vue`'s `h2` and `PortPanelView.vue`'s equivalent should be
-  dropped when hosted in an overlay.
+- **The overlay owns the heading (implemented).** Hosting full views inside
+  `OverlayPanel` used to render "Provider usage" twice. Hosted views now
+  suppress their own title when embedded (`UsageView.vue`'s `embedded` prop —
+  the overlay also takes over the refresh control via the `actions` slot);
+  `PortPanelView.vue` ships no heading of its own.
 - **Usage is a table, not cards (revised — supersedes the `.card` spec).**
   The job of this screen is *comparison* — "who is nearly out?" — and three
   side-by-side cards each laid out their own label/bar/percentage tracks, so
@@ -1113,31 +600,27 @@ Both are header buttons opening `OverlayPanel.vue`. Current backdrop is
 
 ### 5.4b Prompt composer — a floating, movable card (`PromptComposer.vue`)
 
-Behaviour is `docs/COMPOSER.md`'s; this is only where it sits and what it is
-made of. The composer is **not** a docked row and **not** a full-bleed bar: it
-is a card hovering over the session body, inside a `.composer-dock` that is
-inset from that body and transparent to the mouse. **The user drags it and
-resizes it**; what follows is where it starts and what it is made of.
+Behaviour and the full geometry table are `docs/COMPOSER.md`'s (§21); this
+section owns only what DESIGN introduced. The composer is **not** a docked row
+and **not** a full-bleed bar: it is a card hovering over the session body,
+inside a `.composer-dock` that is inset from that body and transparent to the
+mouse, and **the user drags it and resizes it**.
 
-| | |
-|---|---|
-| Inset | `--sp-3` on all four sides, applied to the dock. The gap *is* the floating cue; without it an overlay still reads as welded to the window |
-| Rest | bottom-**right**, 720×240. ≈80 columns of the draft's 13px mono. Terminal output is left-aligned, so resting right and stopping at 720px keeps line starts, the prompt column and the left of tmux's status bar readable beside it |
-| Move | by the header strip (`cursor: move`), clamped fully inside the pane, 12px edge snap on release |
-| Resize | eight grips: four 6px edges, four 14px corners. Floors 360×190, height capped at 80% of the pane |
-| Corners / elevation | `--r-xl` and `0 8px 32px rgba(0,0,0,.5)` — §5.5's `OverlayPanel` treatment, Y offset pulled in from 16px because a card that can sit flush against the bottom of its dock would throw that shadow off the pane and leave its *top* edge, the one with terminal text behind it, unseparated |
-| Surface | `--surface`, fully opaque, `--border` hairline. Never translucent: terminal text bleeding through a prompt field is unreadable for both |
-| Header | `PROMPT` ——— maximize/restore, close. Conventional window order, dismissal last. The card's close and the pinned toggle run the same action; see COMPOSER.md §21.4 for why there are two |
-| Toggle | ONE control opens and closes it: a 28px round icon button (16px mark) pinned near the pane's bottom-right corner, present in both states, so the same pixel alternates down/up. It cannot live on the card — the card moves |
-| Closed | the card is removed and the toggle is all that remains. A 6px accent pip on its corner says a draft or attachment is waiting; the label and the `Ctrl+\`` hint live in its tooltip |
-| At rest | fully opaque `--surface-2` with a `--border-strong` edge (§4.2: a control whose boundary is its only identification) and the card's elevation shadow, inset `--sp-3` inside the dock corner so it floats ON the terminal. An earlier pass had it at `opacity: 0.55` to defer to tmux's status line; it was unfindable, and this is the only way to summon the composer. Hover steps to `--surface-3` |
-| Reserved | **nothing.** The composer is a pure overlay and takes no terminal rows in any state. The row-count guarantee survives because a reserve of zero is still a constant: the terminal is sized by the pane and no composer state can change it. See COMPOSER.md §21.2 |
-
-`--composer-inset` lives on `.session-workspace`, not in `:root`: it describes
-one pane's relationship with the composer, and custom properties inherit, so the
-composer reads it without being handed it. `--composer-rail-h` sat beside it to
-size the strip reserved out of the terminal for the collapsed toggle, and went
-when that strip did.
+- **Opaque surface rule.** `--surface`, `--border` hairline, never
+  translucent: terminal text bleeding through a prompt field is unreadable
+  for both.
+- **Shadow Y-offset.** The card uses §5.5's overlay shadow with the 16px Y
+  offset pulled in to 8px, because a card that can sit flush against the
+  bottom of its dock would throw the longer shadow off the pane and leave its
+  *top* edge — the one with terminal text behind it — unseparated.
+- **Reserved: nothing.** The composer is a pure overlay and takes no terminal
+  rows in any state. The row-count guarantee survives because a reserve of
+  zero is still a constant: the terminal is sized by the pane and no composer
+  state can change it. See COMPOSER.md §21.2.
+- `--composer-inset` is declared on **`.folder-workspace`**, not in `:root`
+  (`FolderWorkspaceView.vue`): it describes one pane's relationship with the
+  composer, and custom properties inherit, so the composer reads it without
+  being handed it.
 
 ### 5.5b Splitter (`02`, `03` · `HostWorkspaceView.vue`)
 
@@ -1167,7 +650,7 @@ existing selectors and the Android `docs/mockups/conversation.html`:
 ### 5.7 Files (`05`)
 
 - `.entry` height `--row-h`, hover `--state-hover`, `.entry.active`
-  `--state-selected` (currently `rgba(137,180,250,.16)`)
+  `--state-selected` (was `rgba(137,180,250,.16)`)
 - **Entry icons — revised.** `.ic` is gone; the row renders
   `<AppIcon :name="icon(e)" :class="icon(e)" />` and the 16px SVG box *is* the
   icon column (the old `1.1rem` width was sized for an emoji). Colours:
@@ -1210,20 +693,6 @@ letters out of the segments it keeps. `src/renderer/fileListView.ts`
 (`buildCrumbs`) owns the rule, is fed a measured width by a `ResizeObserver` in
 `FileTree.vue`, and is unit-tested across widths and depths.
 
-**What this replaces.** `2f684dd` collapsed the path to a fixed four cells
-*and then* ran every survivor through `splitLabel`, so a 250px pane rendered
-
-```
-~ / … /v…previews / olya-…        [search] [edit] [refresh]
-```
-
-for `~/git/red-stamp/tmp/voice-previews/olya-merin` — two truncations of one
-fact stacked, with the folder the user was standing in the one that got cut.
-It is the same failure `b841362` deleted from the session rows. The cause was
-that the collapse was *structural*: four cells is wrong at 180px and wasteful
-at 640px, so character truncation was left to finish a job the collapse should
-have done.
-
 **The ladder**, in order, and each rung has a source:
 
 | | Rung | Why |
@@ -1234,21 +703,16 @@ have done.
 | 4 | Fill ancestors right-to-left, whole names only | A name that does not fit goes to the menu; what remains is always an unbroken run ending at the current folder, because a gap *between* two shown cells names a parent that is not the parent |
 | 5 | Only the current folder ever truncates its text | And only when it alone exceeds the strip. `splitLabel`, so the tail survives — the app's one truncation rule, now applied to one cell instead of four |
 
-At the 180px floor this bottoms out at `… / olya-merin`, which is exactly what
-Carbon prescribes for the narrowest viewport ("start with the overflow first,
-followed by one breadcrumb"), what Atlassian calls the end of its degradation
-ladder ("only the most recent item remains"), and what VS Code exposes as a
-permanent setting (`breadcrumbs.filePath: "last"`).
+At the 180px floor this bottoms out at `… / olya-merin` — Carbon's
+narrowest-viewport prescription ("start with the overflow first, followed by
+one breadcrumb"), Atlassian's ladder end, and VS Code's permanent
+`breadcrumbs.filePath: "last"` setting.
 
-**Rejected.** VS Code's horizontally scrolling strip with the tail pinned
-(`DomScrollableElement` + `reveal(last)`) is the cleanest design in the survey
-and needs an affordance and a gesture this pane cannot spare. Nautilus's
-per-ancestor middle ellipsis (7 characters, `PANGO_ELLIPSIZE_MIDDLE`) is a real
-precedent for the old behaviour but is paid for by a path bar that scrolls;
-dropping the ancestor whole says the same thing without inventing a directory
-name that does not exist. A per-item character cap (Fluent's 30 characters,
-GitLab Pajamas' 128px) assumes a container where 30 characters is a fraction of
-the width; the whole strip here is about 22.
+**Rejected.** VS Code's horizontally scrolling strip (tail pinned) is the
+cleanest design in the survey but needs an affordance and a gesture this pane
+cannot spare; Nautilus's per-ancestor middle ellipsis and Fluent/Pajamas'
+per-item character caps all cut characters where this rule drops whole
+segments.
 
 **Recovery, three ways**, because collapsing this hard is only safe if nothing
 is lost: the `…` opens a menu of the hidden folders, each still a link; the
@@ -1257,20 +721,10 @@ strip's `title` carries the full path; and the editable path bar (pencil, or
 rule — information a user needs in order to *act* has to be on screen, and
 hover is not available to everyone.
 
-**Sources.** NN/g [breadcrumb guidelines](https://www.nngroup.com/articles/breadcrumbs/)
-and [tooltip guidelines](https://www.nngroup.com/articles/tooltip-guidelines/);
-[IBM Carbon breadcrumb](https://carbondesignsystem.com/components/breadcrumb/usage/)
-and [overflow content](https://carbondesignsystem.com/patterns/overflow-content/);
-[Adobe Spectrum](https://spectrum.adobe.com/page/breadcrumbs/);
-[Microsoft Fluent 2](https://fluent2.microsoft.design/components/web/react/core/breadcrumb/usage);
-[WinUI BreadcrumbBar](https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/breadcrumbbar);
-[GitHub Primer](https://primer.style/components/breadcrumbs);
-[Atlassian](https://atlassian.design/components/breadcrumbs/breadcrumbs/usage);
-[USWDS](https://designsystem.digital.gov/components/breadcrumb/);
-[GitLab Pajamas](https://design.gitlab.com/components/breadcrumb/);
-[Grafana's truncation spec](https://github.com/grafana/grafana/issues/62266);
-GNOME Nautilus `src/nautilus-pathbar.c`; VS Code
-`src/vs/base/browser/ui/breadcrumbs/breadcrumbsWidget.ts`.
+**Sources.** NN/g breadcrumb + tooltip guidelines; IBM Carbon (breadcrumb,
+overflow content); Adobe Spectrum; Fluent 2; WinUI BreadcrumbBar; GitHub
+Primer; Atlassian; USWDS; GitLab Pajamas; Grafana's truncation spec; GNOME
+Nautilus `src/nautilus-pathbar.c`; VS Code `breadcrumbsWidget.ts`.
 
 ### 5.7b Document preview — HTML and markdown, one pipeline
 
@@ -1375,98 +829,56 @@ reduced-motion blocks.
 
 ---
 
-## 6. Application plan
+## 6. Enforcement — the design gates are executable
 
-Ordered so that each step is independently shippable and low-risk. **Steps 1–3
-touch only `App.vue` and `TerminalView.vue`** — the two files least likely to
-collide with the in-flight navigation and feature work.
+A rule that lives only in a document decays one locally-reasonable exception
+at a time (which is exactly how the emoji arrived), so the gates run on every
+`npm run test:unit` in `tests/unit/designGates.test.ts`:
 
-| # | File | Change | Risk |
-|---|---|---|---|
-| **1** | `src/renderer/App.vue` → `:root` | Replace the 6-token block with §4.3. Keep `--muted` as an alias so no component breaks. | none — additive |
-| **2** | `src/renderer/App.vue` → `body` | `font-family: var(--font-ui)`; `font-size: var(--fs-300)`; `line-height: var(--lh-300)`; add `-webkit-font-smoothing: antialiased`. Add `@fontsource-variable/inter` dep + `import` in `main.ts`. | low |
-| **3** | `src/renderer/components/TerminalView.vue` | Replace `TERMINAL_OPTIONS` with §3.4; set `.terminal` padding to 8px and background to `var(--term-bg)`. | low — one const, already hoisted |
-| **4** | `src/renderer/App.vue` (unscoped) | Add global `.icon-btn` / `.muted` / `.error` / `.empty` + the `:focus-visible` rule (§5.0–5.1); delete the 7 local `.icon-btn` copies. | medium — touches 7 files |
-| **5** | `SessionTree.vue` | §5.3 — row height, folder header scale, `.dot` → `--success`, split hover from selection. | medium |
-| **6** | `HostWorkspaceView.vue`, `SessionWorkspaceView.vue` | §5.4 — `--topbar-h`/`--tabbar-h`, tab type scale, chip colours → `--success`/`--warning`. | medium |
-| **7** | `OverlayPanel.vue`, `UsageView.vue`, `PortPanelView.vue` | §5.5 — scrim, radius, shadow; drop the duplicated `h2`; replace the 12 raw hexes with status tokens. | medium |
-| **8** | `HostPickerView.vue` | §5.2 — wordmark, card rows, status dot, drop the badge. | low |
-| **9** | `FilesView.vue`, `FileTree.vue`, `ConversationView.vue` | §5.6–5.7 — replace remaining raw hexes and `rgba(137,180,250,…)`. | low |
-
-**Verification gate for each step:** re-run the capture used for §1 and diff
-against `docs/screenshots/`. The driver launches the built app with an isolated
-fake `HOME` so the user's real `~/.ssh/config` is never touched — note that the
-fake profile directory **must contain an `AppData\Roaming` subtree**, or
-Electron fails to resolve `app.getPath('appData')`, `requestSingleInstanceLock()`
-returns false and the app exits silently with code 3.
-
-**Definition of done — two gates.** Both are executed, not remembered:
-`tests/unit/designGates.test.ts` runs them on every `npm run test:unit`, since
-a rule that lives only in a document decays one locally-reasonable exception
-at a time (which is exactly how the emoji arrived).
-
-1. **Colour tokens.**
-   `grep -rE "#[0-9a-fA-F]{6}" src/renderer --include=*.vue`
-   returns hits only in `App.vue` and in `TerminalView.vue`'s Campbell theme.
-
-2. **No character-as-icon** (§5.8).
-   ```
-   grep -rnP "[▸▾▼▶◀◁▷△▽←→↑↓☰⟳✕✖✗✓⌘●📁📄↪🔧📎]" src/renderer --include=*.vue
-   ```
-   returns zero matches **outside** (a) code comments, (b) the genuine-text
-   cases listed in §5.8 — `↑`/`↓` in the composer's shortcut tooltip is the
-   one arrow that legitimately survives, as copy — and (c) `TerminalView.vue`,
-   whose glyphs come from the remote program and from Consolas and are
-   off-limits on principle. The `·` `…` `—` `–` `~` family is exempt by
-   design: that is text.
+1. **Colour tokens.** Raw six-digit hex belongs to the token block in
+   `App.vue` and to `TerminalView.vue`'s Campbell theme — no other renderer
+   `.vue` may carry one, and renderer `.ts` may carry hex only in
+   `themes.ts`. Every component paints from the tokens.
+2. **No character-as-icon** (§5.8). The glyph blacklist must match nothing
+   outside (a) code comments, (b) the genuine-text cases listed in §5.8 —
+   `↑`/`↓` in the composer's shortcut tooltip is the one arrow that
+   legitimately survives, as copy — and (c) `TerminalView.vue`, whose glyphs
+   come from the remote program and from Consolas and are off-limits on
+   principle. The `·` `…` `—` `–` `~` family is exempt by design: that is
+   text.
 
 ---
 
 ## 7. Conflicts and open questions
 
-1. **Copy-on-select contradicts the user's Windows Terminal config.**
-   `TerminalView.vue` was just given copy-on-mouse-up (`onDocumentMouseUp`).
-   The user's `settings.json` sets **`"copyOnSelect": false`** explicitly. The
-   desktop app is now doing the one thing the user turned off in the tool this
-   spec is meant to mirror. Recommend making it opt-in and defaulting to off.
+**1. Copy-on-select contradicts the user's Windows Terminal config.**
+`TerminalView.vue`'s `onDocumentMouseUp` copies the selection on mouse-up.
+The user's `settings.json` sets **`"copyOnSelect": false`** explicitly. The
+desktop app is doing the one thing the user turned off in the tool this
+spec is meant to mirror. Still to make opt-in and default to off.
 
-2. **The clipboard chords do not match the user's keybindings either.**
-   `TerminalView.vue` binds Ctrl/Cmd-**Shift**-C/V. The user's `settings.json`
-   remaps plain **`ctrl+c` → CopyToClipboard** and **`ctrl+v` → PasteFromClipboard**.
-   Windows Terminal makes plain Ctrl-C safe by sending `^C` when there is no
-   selection and copying when there is; if the desktop app adopts the user's
-   binding it must replicate that conditional, or it will break SIGINT. Flagging
-   rather than specifying — it is behaviour, not visual design.
+**2. Clipboard chords** — the terminal binds Ctrl/Cmd-**Shift**-C/V where the
+user's `settings.json` remaps plain `ctrl+c`/`ctrl+v` (with the SIGINT
+conditional plain Ctrl-C requires). The chord inventory and its reasoning
+live in **docs/SHORTCUTS.md**.
 
-3. **`fontSize: 21` is a 62% jump from the current 13.** It is the faithful
-   conversion of 16pt (§3.2) and I recommend shipping it, but it visibly
-   changes terminal density, so it should be a deliberate call rather than a
-   surprise. `--term-font-size` exists to make it one line to revisit.
+**5. Duplicated overlay headings** (§5.5) were a structural artifact of
+hosting full views inside `OverlayPanel`, not a styling bug: the overlay
+supplies the title, so a view carrying its own rendered it twice. Settled
+structurally — hosted views suppress their own heading when embedded
+(`UsageView.vue`'s `embedded` prop); `PortPanelView.vue` ships none.
 
-4. **Agent kind is missing from `SessionSummary`** (§5.3), which blocks both
-   the Android agent-first sort and the agent badges. This is in the
-   `src/shared/types.ts` area another agent is actively changing — worth
-   coordinating rather than adding independently.
-
-5. **Duplicated overlay headings** (§5.5) are a structural artifact of hosting
-   full views inside `OverlayPanel`, not a styling bug; fixing it means the
-   views need to know they are embedded, or the overlay needs to stop rendering
-   a title.
-
-6. **Android parity is deliberately broken in two places**, both on the user's
-   explicit instruction or on desktop-input grounds: mono font is Consolas, not
-   the phone's bundled JetBrains Mono (§2.3); tabs stay underlined rather than
-   becoming a filled segmented control (§5.4).
+**6. Android parity is deliberately broken in two places**, both on the user's
+explicit instruction or on desktop-input grounds: mono font is Consolas, not
+the phone's bundled JetBrains Mono (§2.3); tabs stay underlined rather than
+becoming a filled segmented control (§5.4).
 
 ---
 
 ## 8. Themes — the palette became data
 
 Added when the user asked for a light theme and then for "different themes
-like in VS Code". Everything before this section was written for a
-single-palette app; §3.4 and §4.3 carry pointers here rather than rewrites,
-per this repo's convention of marking superseded reasoning instead of
-deleting it.
+like in VS Code"; §3.4 and §4.3 point here rather than restate.
 
 ### 8.1 The shape: one record per theme, and nothing per-theme anywhere else
 
@@ -1579,24 +991,16 @@ surface it is read on, which is why several sit at ~4.5 there while reading
   light themes cannot use `rgba(0,0,0,.5)` — black at half opacity on white
   reads as a hole, not a lift. Light themes carry soft ink shadows instead.
 - **CodeMirror's `dark` flag follows the theme** (revised — was a known
-  limit). It used to be baked as `{ dark: true }` at definition time, so CM's
-  own base themes kept picking dark-flavoured panel chrome, placeholder tint
-  and selection fallbacks under a light theme. `codeEditorTheme.ts` now builds
-  the chrome once per appearance from ONE shared spec — the CSS is identical,
-  because every value in it is a token, so the two cannot drift — and
-  `codeThemeFor(appearance)` hands back the right one. `CodeEditor.vue` holds
-  it in a `Compartment` and reconfigures on a theme change.
-
-  The mechanism is the point. `compartment.reconfigure()` dispatches a
-  transaction carrying an **effect and no changes**, so the document, the
-  selection, the undo history and the scroll position all survive — and
-  because `docChanged` is false, the update listener does not fire and the
-  files store's **dirty flag is untouched**. Rebuilding the `EditorState`, the
-  obvious alternative, loses all five. The appearance is read from the theme
-  record's DECLARED `appearance` (through `resolveTheme`, so `system` follows
-  the OS), never guessed from a background colour. Pinned by
-  `tests/unit/CodeEditor.test.ts`.
-
+  limit). `codeEditorTheme.ts` builds its chrome once per appearance from ONE
+  shared spec — the CSS is identical, because every value in it is a token —
+  and `CodeEditor.vue` holds it in a `Compartment` and reconfigures on a theme
+  change. The reconfigure dispatches a transaction carrying an **effect and no
+  changes**, so the document, the selection, the undo history, the scroll
+  position and the files store's **dirty flag** all survive (rebuilding the
+  `EditorState`, the obvious alternative, loses all five). The appearance is
+  read from the theme record's DECLARED `appearance` (through `resolveTheme`,
+  so `system` follows the OS), never guessed from a background colour. Pinned
+  by `tests/unit/CodeEditor.test.ts`.
 - **A markdown preview is themed; an HTML preview is not.** The rendered
   markdown document is ours, so it is painted in the app's tokens
   (`src/main/preview/previewStyle.ts`). An HTML file brings its own styling and
