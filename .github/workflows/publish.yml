@@ -24,7 +24,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+# One run per ref at a time: a rapid pair of pushes to main (or new commits on
+# a PR) cancels the stale matrix run instead of queueing 30-45-minute
+# duplicates. Tag refs are unique per release, so this never touches a release
+# build unless the same tag is re-pushed — where cancelling the stale one is
+# what you want.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -41,6 +50,21 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # Electron's postinstall and electron-builder each re-download their
+      # binaries per arch per run otherwise; the npm cache does not cover them.
+      # Paths for other OSes do not exist here and are skipped, so one step
+      # covers the whole matrix.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-electron-
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
@@ -77,6 +101,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-electron-
       - run: npm ci
       # E2E launches Electron, which has no headless mode on Linux; Xvfb is
       # preinstalled on the runner image. The app's own off-screen mode (set by
@@ -139,6 +170,10 @@ jobs:
     needs: [build, smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The only job that talks to GitHub Releases; build and smoke — which run
+    # on every PR — inherit the workflow's read-only default.
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
