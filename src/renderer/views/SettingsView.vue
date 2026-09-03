@@ -32,14 +32,14 @@ import { useSessionsStore } from '../stores/sessions';
 import { useSettingsStore } from '../stores/settings';
 import { useUpdateStore } from '../stores/update';
 import { defaultHostStatus } from '../autoConnect';
+import { canonicalisePath } from '../sessionGrouping';
 import {
-  canonicalisePath,
   inferHome,
   normaliseRootPath,
   OTHER_ROOT,
   rootForPath,
   SESSION_ROOTS_MAX,
-} from '../sessionGrouping';
+} from '../sessionRoots';
 import {
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,

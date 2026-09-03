@@ -26,7 +26,7 @@ import { useConnectionStore } from '../stores/connection';
 import { useProjectsStore } from '../stores/projects';
 import { useSessionsStore } from '../stores/sessions';
 import { useSettingsStore } from '../stores/settings';
-import { groupSessionsIntoRoots } from '../sessionGrouping';
+import { groupSessionsIntoRoots } from '../sessionTree';
 
 const route = useRoute();
 const router = useRouter();

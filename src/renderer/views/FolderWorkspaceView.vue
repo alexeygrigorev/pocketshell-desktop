@@ -78,7 +78,8 @@ import {
   tabAfterClose,
   type WorkspaceTab,
 } from '../../shared/workspaceTabs';
-import { rootHostPath, UNTRACKED_PATH } from '../sessionGrouping';
+import { rootHostPath } from '../sessionRoots';
+import { UNTRACKED_PATH } from '../sessionGrouping';
 import { useFolderTree } from '../folderTree';
 import { parkedAgentLaunch, takeAgentLaunch } from '../pendingAgentLaunch';
 import {

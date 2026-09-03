@@ -7,7 +7,7 @@ import {
   TERMINAL_FONT_SIZE_DEFAULT,
 } from '../fonts';
 import { type FolderOrder, normaliseFolderOrder } from '../folderOrder';
-import { normaliseRootList, normaliseRootPath, SESSION_ROOTS_MAX } from '../sessionGrouping';
+import { normaliseRootList, normaliseRootPath, SESSION_ROOTS_MAX } from '../sessionRoots';
 import { parseThemeChoice, THEME_CHOICE_DEFAULT } from '../themes';
 import { parseZoomPercent, stepZoomPercent, ZOOM_PERCENT_DEFAULT } from '../zoom';
 import { isLaunchableKind, type LaunchableKind } from '../../shared/agentLaunch';

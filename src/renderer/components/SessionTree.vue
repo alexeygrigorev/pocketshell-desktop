@@ -72,12 +72,8 @@ import { isShortcut } from '../../shared/shortcuts';
 import { editingTarget } from '../editingTarget';
 import { useFolderTree } from '../folderTree';
 import { canDropFolderAt, reorderFolders } from '../folderOrder';
-import {
-  rootHeaderParts,
-  rootHostPath,
-  type SessionDirectory,
-  type SessionRootFolder,
-} from '../sessionGrouping';
+import { rootHostPath } from '../sessionRoots';
+import { rootHeaderParts, type SessionDirectory, type SessionRootFolder } from '../sessionTree';
 import type { SessionAgentKind } from '../../shared/types';
 import { errorMessage } from '../../shared/errors';
 import { useStripDrag } from '../useStripDrag';

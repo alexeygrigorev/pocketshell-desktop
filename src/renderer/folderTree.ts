@@ -33,12 +33,8 @@
  */
 import { computed, type ComputedRef } from 'vue';
 import { applyFolderOrder } from './folderOrder';
-import {
-  groupSessionsIntoRoots,
-  inferHome,
-  type SessionDirectory,
-  type SessionRootFolder,
-} from './sessionGrouping';
+import { inferHome } from './sessionRoots';
+import { groupSessionsIntoRoots, type SessionDirectory, type SessionRootFolder } from './sessionTree';
 import { useConnectionStore } from './stores/connection';
 import { useProjectsStore } from './stores/projects';
 import { useSessionsStore } from './stores/sessions';

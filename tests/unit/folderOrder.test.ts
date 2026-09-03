@@ -7,7 +7,7 @@ import {
   normaliseFolderOrder,
   reorderFolders,
 } from '../../src/renderer/folderOrder';
-import { groupSessionsIntoRoots, type SessionRootFolder } from '../../src/renderer/sessionGrouping';
+import { groupSessionsIntoRoots, type SessionRootFolder } from '../../src/renderer/sessionTree';
 import type { SessionSummary } from '../../src/shared/types';
 
 /**

@@ -52,7 +52,7 @@ import { editingTarget } from '../editingTarget';
 import PortPanelView from './PortPanelView.vue';
 import SettingsView from './SettingsView.vue';
 import UsageView from './UsageView.vue';
-import type { SessionDirectory } from '../sessionGrouping';
+import type { SessionDirectory } from '../sessionTree';
 import { usePaneWidth } from '../usePaneWidth';
 
 const route = useRoute();

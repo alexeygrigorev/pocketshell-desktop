@@ -47,7 +47,7 @@
  * unranked folders keep their creation order relative to each other.
  * `Array.prototype.sort` has been required to be stable since ES2019.
  */
-import type { SessionDirectory, SessionRootFolder } from './sessionGrouping';
+import type { SessionDirectory, SessionRootFolder } from './sessionTree';
 
 /**
  * Upper bound on how many hosts an order map may hold, and how many folder keys

@@ -2,26 +2,27 @@ import { describe, it, expect } from 'vitest';
 import {
   UNTRACKED_LABEL,
   UNTRACKED_PATH,
-  bestRootForPath,
   canonicalisePath,
   defaultLabelForPath,
+  groupSessionsByFolder,
+  isAgentSession,
+} from '../../src/renderer/sessionGrouping';
+import {
+  bestRootForPath,
+  directoryKey,
+  inferHome,
   normaliseRootList,
   normaliseRootPath,
   OTHER_LABEL,
   OTHER_ROOT,
-  directoryKey,
-  groupSessionsByFolder,
-  groupSessionsIntoRoots,
-  inferHome,
-  isAgentSession,
   pathWithinRoot,
   resolveRoots,
   rootForPath,
   rootFromSessionName,
   rootHostPath,
   SESSION_ROOTS_MAX,
-  type SessionRootFolder,
-} from '../../src/renderer/sessionGrouping';
+} from '../../src/renderer/sessionRoots';
+import { groupSessionsIntoRoots, type SessionRootFolder } from '../../src/renderer/sessionTree';
 import type { SessionAgentKind, SessionSummary } from '../../src/shared/types';
 
 /** Terse SessionSummary factory — only the fields grouping cares about. */
