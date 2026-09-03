@@ -1,4 +1,39 @@
-# Working rules for agents in this repo
+# PocketShell Desktop — working rules for agents in this repo
+
+## 0. What this project is
+
+Electron desktop port of PocketShell — a tmux-native, agent-aware SSH
+client. It connects to remote dev boxes running tmux plus the `pocketshell`
+helper; sessions are joined through the helper-driven tmux attach model, not
+`tmux -CC` control mode (rationale in `docs/ARCHITECTURE.md` §3).
+
+Layout, three Electron processes plus shared code:
+
+- `src/main/` — Node, privileged. The only place that touches `ssh2`,
+  keys, fs, and the network: `SshService`, `SftpService`, port forwarding,
+  `pocketshell` helper client, ipcMain handlers (`ipc.ts`).
+- `src/preload/` — contextBridge; exposes the typed `window.api` surface.
+- `src/renderer/` — Vue 3 + Pinia + vue-router, xterm.js terminals,
+  CodeMirror editor. Sandboxed: never imports `ssh2`, `fs`, or `net`.
+- `src/shared/` — types and pure logic used by both main and renderer.
+
+Commands: `npm run dev` (watch), `npm run build` (→ `out/`), `npm run
+typecheck` (two tsconfigs: node = main+preload, web = renderer), `npm run
+lint`, `npm run test:unit`, `npm run test:integration` (needs Docker),
+`npm run test:e2e` (Playwright + Electron, needs the Docker compose fleet),
+`npm run smoke` (pre-release gate). Test tiers are described in
+`docs/TESTING.md`.
+
+Docs in `docs/`: `ARCHITECTURE.md` is the deep dive — read the relevant
+section before working in an area; feature docs (`COMPOSER`, `PORTFWD`,
+`SESSIONLIST`, `SHORTCUTS`, `SERVE`, `DESIGN`) record how each subsystem
+works; `BACKLOG.md` holds planned work.
+
+Dependency rule: production `dependencies` is only what is `require()`d
+from disk at runtime (currently just `ssh2`); everything the renderer
+imports is bundled by Vite and belongs in `devDependencies`. See the
+`//dependencies` note in `package.json` — a test fails if the list grows
+without a written reason.
 
 ## 1. Commit regularly, one concern per commit
 
