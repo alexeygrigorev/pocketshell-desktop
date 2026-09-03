@@ -135,11 +135,21 @@ doc landed in; the classes and what was done:
   `LOOPBACK_HOST`, `PERSIST_DEBOUNCE_MS`, `COUNTDOWN_TICK_MS`; the Env panel's
   five references to CSS tokens that never existed were repointed at the real
   ones (a correctness fix — the styles silently never applied).
-- **Rule 2 (oversized functions)** — the audit's >80-line list became
-  extractions: `createWindow`'s behavior wiring, `startSession`'s unique-name
-  branch, `onCustomKey`'s three concerns, `open`/`openFile`'s phases,
-  `showTarget`'s adoption branch, `groupSessionsIntoRoots`' two passes,
-  `scanBufferLine`'s two halves.
+- **Rule 2 (oversized functions)** — `startSession`'s five re-spelled failure
+  results became one builder, and Forwarder's twin `-L`/`-D` listen bodies
+  merged into `listenAndReport`. The rest of the audit's >80-line list was
+  inspected case by case and left, deliberately: `onCustomKey` (147 lines)
+  is ~90% cited why-comment over a flat four-branch ladder — extracting the
+  branches into helpers would scatter each decision record away from the
+  code it argues for; `open`'s and `openFile`'s bulk is the same shape
+  (documented fallback ladders with interleaved staleness tickets, where an
+  extracted helper would need a result enum to say what a `return` used to).
+  They are recorded here as accepted exceptions, to be re-read if the comment
+  mass ever gets separated from the code by extraction anyway. The genuinely
+  procedural oversized function is `createWindow` (~187 lines): extracting
+  its behavior wiring (setWindowOpenHandler, navigation guards,
+  before-input-event) into named functions is filed as the first candidate
+  for the next pure-refactor session.
 
 **Known deviations, recorded on purpose:**
 
