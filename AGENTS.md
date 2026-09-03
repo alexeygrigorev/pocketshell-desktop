@@ -59,3 +59,13 @@ what was just committed, and say so when handing off.
 
 (`npm run dev` watches and rebuilds on its own; the rebuild rule is for the
 build-and-launch workflow.)
+
+## 3. Keep the docs lean
+
+Docs in `docs/` describe current behavior and durable decisions, not
+history. When a change supersedes a doc section, rewrite it in place — do
+not append "superseded" or "revised" narration next to the old text. Give
+every mechanism one home; other docs point at it. Sections that code
+comments cite by number keep their numbers (gaps are fine); a section that
+must shrink to a stub states the current truth and points at where the
+detail lives now.
