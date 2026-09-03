@@ -30,7 +30,7 @@ transforms bytes → data:
 - `AutoForwarder` port-resolution (mirror vs allocate), `PortScanner`
   output parsing (`ss`/`netstat` shapes).
 - Reconnect FSM: given a fake clock + a scripted transport, assert the
-  backoff sequence and the `reconnectNow` wake.
+  backoff sequence and the `retryNow` wake.
 - `TmuxClientPool`: concurrent tab mounts are serialized, and a
   `Channel open failure` can recover by evicting one cached tab and retrying.
 
@@ -53,14 +53,12 @@ Examples:
 - `ForwarderIntegration`: start `python -m http.server 8000` in the
   container via exec, auto-forward, `curl http://localhost:<local>` → 200;
   `-R` round-trip; `-D` SOCKS round-trip. The `flaky-helper` image proves
-  reconnect.
-  **Throughput**: every image from `:ssh` up also runs
-  `tests-docker/traffic-server.py` on **8021** (started by the entrypoint,
-  as `testuser` so `ss -tlnp` can attribute it). It answers
+  reconnect. Every image from `:ssh` up also runs
+  `tests-docker/traffic-server.py` on **8021** (entrypoint-started, as
+  `testuser` so `ss -tlnp` can attribute it): it answers
   `<up> <down> [chunk] [gap_ms]\n` by draining exactly `up` bytes and
-  writing exactly `down`, optionally paced. Without it every listener in
-  the fixture was idle, so the panel's In/Out columns could only read
-  "0 B" and a bug in the byte counters or the rate maths was invisible.
+  writing exactly `down`, optionally paced — without it every fixture
+  listener was idle and a byte-counter or rate-maths bug was invisible.
   The suite asserts exact totals (65 557 out / 262 144 in) and a paced
   1 MiB download whose sampled `rateIn` must land near 512 KiB/s.
   **Rebuild the images after changing it** —
@@ -106,18 +104,19 @@ manual PocketShell demos and for testing host-scoped settings. It is separate
 from the ephemeral fleet below, so it can stay running while unit or
 testcontainer tests execute.
 
+Every `scripts/test-instance.sh` action has a `.ps1` twin
+(`scripts/test-instance.ps1`); where local script execution is restricted,
+run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+.\scripts\test-instance.ps1 <action>` instead. The examples below use Bash
+(Git Bash and WSL both work).
+
 ### Prerequisites
 
 - Docker Desktop with **Linux containers** and Docker Compose v2.
-- An OpenSSH client (`ssh` and `sftp`). Windows 10/11 normally includes it;
-  check with `Get-Command ssh,sftp` in PowerShell.
+- An OpenSSH client (`ssh` and `sftp`). Windows 10/11 normally includes one.
 - Node 20+ if you are running the Electron app from this checkout.
-- Bash, Git Bash, or WSL for the `.sh` commands. PowerShell users can use the
-  checked-in `.ps1` wrapper instead.
 
 ### Build and start
-
-From the repository root, the Bash/Git Bash/WSL workflow is:
 
 ```bash
 bash scripts/test-instance.sh build
@@ -125,20 +124,11 @@ bash scripts/test-instance.sh start
 bash scripts/test-instance.sh status
 ```
 
-The equivalent PowerShell command works even when local script execution is
-restricted:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-instance.ps1 start
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-instance.ps1 status
-```
-
 `start` builds `pocketshell-test:instance` from
 `tests-docker/Dockerfile.instance`, starts Compose service `instance`, and
 waits for its in-container SSH healthcheck. The default host port is **3222**
 so it does not collide with the test fleet's 3202–3206 ports. Override it for
-one run with `POCKETSHELL_SSH_PORT=3322` (PowerShell:
-`$env:POCKETSHELL_SSH_PORT = '3322'`).
+one run with `POCKETSHELL_SSH_PORT=3322`.
 
 The image includes OpenSSH + SFTP, `testuser`, tmux, git, Python 3, `curl`,
 `ss`/`netstat`, Node.js 22/npm, the pinned `pocketshell` and `tmuxctl` helpers,
@@ -158,62 +148,22 @@ checked-in config.
 
 ### Optional real Codex and Claude
 
-The default image intentionally keeps `codex` and `claude` as deterministic
-stubs so normal tests never make provider requests. To install the real CLIs
-in the standalone development instance, start it with the opt-in flag:
-
-```bash
-POCKETSHELL_REAL_AGENTS=true bash scripts/test-instance.sh start
-```
-
-PowerShell:
-
-```powershell
-$env:POCKETSHELL_REAL_AGENTS = 'true'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-instance.ps1 start
-```
-
-The packages are installed at first boot into the named
-`pocketshell-test-instance-agents` volume, mounted at
-`/home/testuser/.agent-tools`. They are not part of the image layer, so a
-container recreation or image rebuild does not discard the installed CLIs.
-The Compose environment also accepts `POCKETSHELL_CODEX_VERSION` and
-`POCKETSHELL_CLAUDE_CODE_VERSION`; leave them at `latest` for a local demo or
-set explicit versions when you need a repeatable install. A normal `start`
-installs a missing or changed requested version. To force-refresh both
-packages (including a newer `latest`), run:
-
-```bash
-bash scripts/test-instance.sh update-agents
-```
-
-PowerShell:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-instance.ps1 update-agents
-```
-
-Keep `POCKETSHELL_REAL_AGENTS=true` in the same shell when running either
-command. Check the result with:
-
-```bash
-ssh pocketshell-local 'node --version; codex --version; claude --version'
-```
-
-Authentication is deliberately a runtime action, never a Docker build input:
-
-```bash
-ssh -t pocketshell-local codex
-ssh -t pocketshell-local claude
-```
-
-Complete each CLI's own sign-in flow. The named
-`pocketshell-test-instance-home` volume keeps the resulting user-scoped
-configuration (`~/.codex`, `~/.claude`, and npm's cache) across `stop`/`start`,
-while the agent volume keeps the installed package tree. `reset` removes both
-volumes. Real CLIs need internet access and the relevant OpenAI/Anthropic
-account or API billing. The normal test fleet continues to use its
-credential-free stubs.
+The default image keeps `codex` and `claude` as deterministic stubs so
+normal tests never make provider requests. Real CLIs are opt-in for the
+standalone instance: start with `POCKETSHELL_REAL_AGENTS=true`. They
+install at first boot into the named `pocketshell-test-instance-agents`
+volume (mounted at `/home/testuser/.agent-tools`) — not the image layer,
+so container recreation or image rebuilds keep them.
+`POCKETSHELL_CODEX_VERSION` and `POCKETSHELL_CLAUDE_CODE_VERSION` pin the
+install (`latest` by default; a normal `start` installs a missing or
+changed pin; `update-agents` force-refreshes both, including a newer
+`latest`). Authentication is deliberately a runtime action, never a Docker
+build input: `ssh -t pocketshell-local codex` (or `claude`) and complete
+each CLI's own sign-in flow. The `pocketshell-test-instance-home` volume
+keeps the resulting `~/.codex`, `~/.claude`, and npm's cache across
+`stop`/`start`; `reset` removes both volumes. Real CLIs need internet
+access and the relevant OpenAI/Anthropic account; the normal test fleet
+continues to use its credential-free stubs.
 
 ### Stop, reset, and inspect
 
@@ -224,26 +174,13 @@ bash scripts/test-instance.sh logs    # follow sshd/fixture logs
 bash scripts/test-instance.sh reset   # delete state volumes and start clean
 ```
 
-The PowerShell wrapper accepts the same actions (`stop`, `shell`, `logs`, and
-`reset`). The Compose volumes `pocketshell-test-instance-home` and
+The named volumes `pocketshell-test-instance-home` and
 `pocketshell-test-instance-agents` preserve files, accounts, helper state and
 the opt-in agent installs across `stop`/`start`; the entrypoint recreates the
 seed tmux sessions after a container restart. `reset` is deliberately
-destructive and removes both named volumes before creating a clean instance.
+destructive — it removes both named volumes before creating a clean instance.
 Use reset after changing the image or when a test needs a pristine remote
-filesystem.
-
-The standalone image uses the checked-in `tests-docker/test_host_key` as its
-SSH host identity, so rebuilding or recreating the container does not change
-the entry in `known_hosts`. This key is a local fixture only. If you reset an
-older instance that was built before this stable key was added, remove its old
-entry once:
-
-```bash
-ssh-keygen -R '[127.0.0.1]:3222'
-```
-
-The raw Compose equivalent is:
+filesystem. The raw Compose equivalent:
 
 ```bash
 docker compose --project-name pocketshell-local \
@@ -266,9 +203,7 @@ Host pocketshell-local
 
 Use a forward-slash absolute path on Windows. Git Bash/WSL can instead use
 `/c/Users/<your-user>/git/pocketshell-electron/tests-docker/test_key`. The
-committed `test_key` is intentionally only a local fixture; never use it for
-AWS, Hetzner, or another real host. PocketShell will apply its normal TOFU
-decision to the container's host key.
+committed `test_key` is a local fixture only — see §3 before using it.
 
 Verify the alias before opening the app:
 
@@ -288,10 +223,6 @@ the fixture file's ACL from PowerShell:
 $key = (Resolve-Path .\tests-docker\test_key).Path
 icacls $key /inheritance:r /grant:r "$($env:USERNAME):(R)"
 ```
-
-The repository normalizes the key to LF line endings. If the key was copied
-outside Git, keep it as an OpenSSH private-key file and do not let an editor
-convert it to a different format.
 
 With the app built (`npm run build`) or running in dev mode (`npm run dev`),
 select `pocketshell-local` in the host picker. Configure root folders there
@@ -349,11 +280,22 @@ stubs: `pocketshell-sessions-list.txt` and
 `pocketshell-usage.ndjson`. The real helper is still installed and exercised;
 the fixture files only make the provider stub deterministic.
 
-### The `test_key`
+### The fixture key (`tests-docker/test_key`)
 
-Committed ed25519 keypair under `tests-docker/`. Used **only** by Docker
-tests. Public half installed as `authorized_keys` in every image; private
-half loaded by the integration tests via `SshKey.Path`.
+Committed ed25519 keypair, used **only** by Docker tests — never point it at
+AWS, Hetzner, or any other real host. The public half is installed as
+`authorized_keys` in every image; the private half is loaded by the
+integration tests via `SshKey.Path` and by the `pocketshell-local` alias
+above. The standalone instance also uses it as its SSH **host identity**, so
+rebuilding or recreating the container does not change the `known_hosts`
+entry. The repository normalizes the key to LF line endings; if you copy it
+outside Git, keep it an OpenSSH private-key file and do not let an editor
+convert it to a different format. Removing the host entry of an instance
+built before this stable key existed:
+
+```bash
+ssh-keygen -R '[127.0.0.1]:3222'
+```
 
 ---
 
@@ -381,8 +323,8 @@ npm run test:integration
 # E2E (needs Docker; builds the app once)
 npm run test:e2e
 
-# Full Docker-backed smoke gate
-scripts/smoke.sh
+# Full Docker-backed smoke gate (also `npm run smoke`)
+bash scripts/smoke.sh
 
 # Build the ephemeral fleet in dependency order, then bring up the E2E target
 bash scripts/build-docker.sh
@@ -390,23 +332,28 @@ docker compose --project-name pocketshell-tests \
   -f tests-docker/docker-compose.yml up -d --wait helper
 docker compose --project-name pocketshell-tests \
   -f tests-docker/docker-compose.yml down --volumes --remove-orphans
-
-# Manual sanity check against the helper container
-ssh -i tests-docker/test_key -p 3205 -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null testuser@127.0.0.1 \
-  'pocketshell sessions list && pocketshell usage --json'
 ```
 
 ---
 
-## 6. CI matrix (target)
+## 6. CI
 
-GitHub Actions:
+`.github/workflows/publish.yml` runs on pushes to `main`, `v*` tags, PRs
+against `main`, and manual dispatch. Three jobs:
 
-1. **on push:** `test:unit` (no Docker) + lint + typecheck.
-2. **on PR:** build Docker fixtures, `test:integration`, build app,
-   `test:e2e`. Upload Playwright traces + Docker logs on failure.
-3. **on tag:** build installers (win/mac/linux) + upload as release
-   artifacts.
+1. **build** — a windows/macos/ubuntu matrix: `npm ci`, typecheck, lint,
+   `test:unit`, then `npm run dist` (`--publish never`); installers upload
+   as workflow artifacts.
+2. **smoke** — the Docker-backed gate: chmods `tests-docker/test_key`
+   (Linux ssh refuses a world-readable private key), installs Electron's
+   system libraries, then `xvfb-run scripts/smoke.sh`, retried once after a
+   teardown + log dump. On failure it uploads Playwright traces and dumps
+   Docker state.
+3. **release** — tag-only (`v*`), gated on build + smoke: downloads the
+   artifacts and creates a **DRAFT** GitHub release with the installers.
+   CI deliberately does not publish; notes are finalized by hand, so a bad
+   tag is fixable before anything is public.
 
-Docker layer caching keeps the helper image rebuild cheap across runs.
+Plain `main` pushes and PRs run build + smoke and stop there, so the
+pipeline is exercised continuously and a release tag never triggers it for
+the first time.
