@@ -18,8 +18,8 @@ Standard hardened Electron: three processes.
                                                                │
 ┌──────────────────────────────────────────────────────────────▼──────────────┐
 │  Main (Node, privileged — the only process that touches ssh2/keys/fs)        │
-│  - SshService, SftpService, PortForwarder, AutoForwarderSupervisor           │
-│  - SshConfigParser, KnownHostsVerifier, PocketshellHelper client             │
+│  - SshService, SftpService, ForwardService, TmuxClientPool                   │
+│  - SshConfigParser, KnownHosts, PocketshellClient                            │
 │  - ConnectionRegistry (connection id → live ssh2 Client)                      │
 │  - PortfwdStore (electron-store); NO keychain — see the rule below           │
 │  - ipcMain handlers                                                          │
@@ -39,13 +39,9 @@ Standard hardened Electron: three processes.
   streams.
 - All connections live in the main process, keyed by an opaque `connectionId`
   the renderer holds.
-- Passphrases are **not stored at all**. One is supplied with a connect
-  call, used by `ssh2`, and forgotten; nothing writes it anywhere. This
-  paragraph used to promise the OS keychain via `keytar`, which was a
-  dependency for a year with no `import` of it anywhere in the app — the
-  package shipped in every installer, was rebuilt natively on every
-  `npm run dist`, and did nothing. It has been removed. Storing passphrases
-  is still a reasonable feature; it is simply not one this app has.
+- Passphrases are **not stored at all**: one is supplied with a connect
+  call, used by `ssh2`, and forgotten; the OS-keychain option (`keytar`)
+  was removed as dead weight — a year-long dependency nothing imported.
 
 ---
 
@@ -54,48 +50,49 @@ Standard hardened Electron: three processes.
 ```
 src/
 ├─ main/
-│  ├─ index.ts                # app/window lifecycle, registers ipc handlers
-│  ├─ ipc.ts                  # ipcMain.handle registrations (the API surface)
-│  ├─ ssh/
-│  │  ├─ SshService.ts        # connect/exec/tail/shell/close (ssh2 wrapper)
-│  │  ├─ ConnectionRegistry.ts# connectionId -> Client + metadata
-│  │  └─ types.ts             # HostConfig, ExecResult, ShellHandle, ...
-│  ├─ ssh-config/
-│  │  ├─ SshConfigParser.ts   # ~/.ssh/config -> HostEntry[]
-│  │  └─ KnownHosts.ts        # parse + verify against ~/.ssh/known_hosts (TOFU)
+│  ├─ index.ts                 # app/window lifecycle, registers ipc handlers
+│  ├─ ipc.ts                   # ipcMain.handle registrations (the API surface)
+│  ├─ log.ts                   # main-process file log
+│  ├─ windowState.ts           # window size/position/maximized across launches
+│  ├─ attachments/             # composer attachments: staging, name sanitising, mime, retention
+│  ├─ helper/                  # PocketshellClient (`pocketshell <cmd>` over an exec
+│  │                           # channel), bootstrap (PATH probe + install), parsers
 │  ├─ portfwd/
-│  │  ├─ Forwarder.ts         # one -L/-R/-D forward (ssh2 forwardOut/forwardIn)
-│  │  ├─ AutoForwarder.ts     # scan-loop + mirror/allocate (extends Android local-only)
-│  │  ├─ AutoForwarderSupervisor.ts  # reconnect FSM (exp backoff 5s->60s)
-│  │  └─ PortScanner.ts       # ss -tlnp -> netstat -> ss
-│  ├─ sftp/
-│  │  └─ SftpService.ts       # list/read/write/mkdir/rename/delete/upload/download
-│  ├─ helper/
-│  │  ├─ PocketshellClient.ts # runs `pocketshell <cmd>` over an SshService exec
-│  │  ├─ bootstrap.ts         # PATH detection + probe sequence + install actions
-│  │  └─ parsers.ts           # sessions-list / enrichment / usage / bootstrap parsers
-│  ├─ portfwd/PortfwdStore.ts # electron-store: forward rules (the only store)
-│  └─ util/                   # logging, errors, shell-quote
-├─ preload/
-│  └─ index.ts                # contextBridge.exposeInMainWorld('api', ...)
+│  │  ├─ Forwarder.ts          # one -L/-R/-D forward (ssh2 forwardOut/forwardIn)
+│  │  ├─ ForwardService.ts     # per-connection forward lifecycle: manual + auto rules
+│  │  ├─ AutoForwarder.ts      # scan loop + mirror/allocate (extends Android local-only)
+│  │  ├─ PortScanner.ts        # ss -tlnp -> netstat -> ss output parsing
+│  │  ├─ scanRemotePorts.ts    # remote listener-scan command assembly + merge
+│  │  ├─ serveCommand.ts       # "serve this folder": command/port/URL construction (pure)
+│  │  ├─ ServeService.ts       # "serve this folder": execution + output classification
+│  │  └─ PortfwdStore.ts       # electron-store: forward rules
+│  ├─ preview/                 # HTML preview of remote files (URL<->path safety, markdown)
+│  ├─ projects/                # project-folder-first sessions: folder pick, clone, name derivation
+│  ├─ sftp/SftpService.ts      # list/read/write/mkdir/rename/delete/upload/download
+│  ├─ ssh/
+│  │  ├─ SshService.ts         # connect/exec/tail/shell/close (ssh2 wrapper)
+│  │  ├─ ConnectionRegistry.ts # connectionId -> Client + metadata
+│  │  ├─ ShellTracker.ts       # live PTY shells by shellId (renderer never holds the channel)
+│  │  └─ TmuxClientPool.ts     # per-session tmux clients; LRU cap, channel budget
+│  ├─ ssh-config/              # SshConfigParser (~/.ssh/config -> HostEntry[]),
+│  │                           # KnownHosts (verify against known_hosts, TOFU)
+│  └─ update/ReleaseChecker.ts # GitHub Releases poll -> newer / current / failed
+├─ preload/index.ts            # contextBridge.exposeInMainWorld('api', ...)
+├─ shared/                     # types + pure logic both processes import: types,
+│                              # channels, reconnectBackoff, shellQuote, composer*, ...
 └─ renderer/
-   ├─ main.ts                 # Vue app bootstrap
-   ├─ App.vue
-   ├─ ipc.ts                  # typed wrapper over window.api
-   ├─ router.ts               # host-picker / host-workspace / folder-workspace
-   ├─ stores/                 # Pinia: connection, sessions, files, agents, usage, forwards
-   ├─ views/
-   │  ├─ HostPickerView.vue
-   │  ├─ HostWorkspaceView.vue# shell: folder panel + right pane
-   │  ├─ FolderWorkspaceView.vue # one folder: a tab per session, then Files
-   │  ├─ FilesView.vue
-   │  ├─ UsageView.vue
-   │  └─ PortPanelView.vue
-   └─ components/
-      ├─ HostList.vue, SessionTree.vue
-      ├─ TerminalView.vue     # xterm.js + attach/detach + resize
-      ├─ FileTree.vue, CodeEditor.vue (CodeMirror), ImagePreview.vue
-      └─ ForwardTable.vue
+   ├─ main.ts, App.vue         # Vue app bootstrap
+   ├─ router.ts                # host-picker / host-workspace / folder-workspace
+   ├─ ipc.ts                   # typed wrapper over window.api
+   ├─ parseStall.ts, xtermWriteBuffer.ts  # xterm stall watchdog + write-loop
+   │                                      # repair (§9.1)
+   ├─ terminalPaths.ts, terminalLinks.ts  # path detection + click -> Files tab
+   ├─ stores/                  # Pinia: connection, sessions, shells, files, projects,
+   │                           # agents (usage rows), composer, forwards, settings, update
+   ├─ views/                   # HostPicker, HostWorkspace, FolderWorkspace, Files, Usage,
+   │                           # PortPanel, EnvPanel, Settings, session placeholder/redirect
+   └─ components/              # TerminalView (xterm.js), SessionTree, FileTree,
+                               # CodeEditor (CodeMirror), PromptComposer, OverlayPanel, ...
 ```
 
 Two `tsconfig.json`s: `tsconfig.node.json` (main + preload, `@types/node`)
@@ -136,35 +133,27 @@ live tab clients and evicts the least-recently-used tab beyond that. If `ssh2`
 reports a channel-open refusal, one LRU client is released and the PTY request
 is retried once; unrelated PTY errors still reach the terminal as errors.
 
-**Why not control mode?** Control mode gives per-pane structured state and
-single-pane rendering — valuable on a phone, less so on a big desktop where
-tiled tmux is perfectly readable. Attach is ~70% less protocol code, no
-VT-escape un-decoding, no `%output` demuxer, and it satisfies the
-requirement: *click a tree node → see the terminal/session view*. A future
-"Per-pane" tab can add control mode as an additive feature without
-rewrites.
+**Why not control mode?** Its per-pane structured state is valuable on a
+phone, less so on a big desktop where tiled tmux is perfectly readable.
+Attach is ~70% less protocol code — no VT-escape un-decoding, no `%output`
+demuxer — and it satisfies the requirement: *click a tree node → see the
+terminal/session view*. Control mode can return later as an additive
+"Per-pane" tab without rewrites.
 
 **PTY contract (matches the Android app):** term `xterm-256color`, initial
 80×24, resized via `setWindow`. The shell channel's stdout → xterm.js
 `write`; xterm.js `onData` → shell stdin. The six-client ceiling leaves room
 on the same SSH connection for exec, SFTP, and forwarding channels.
 
-Paths printed by the remote tool are linkified from the terminal buffer and
-opened in the Files tab. The detector keeps the clickable span to the path
-itself, including when tool output wraps it in call-like punctuation such as
-`Write(docs/runbooks/production-data-migration.md).`; the writer label and
-trailing punctuation are not part of the remote path.
-
-A path a TUI split across rows is read whole. This pane is always a tmux
-client, so nothing in it is ever flagged `isWrapped` — the split is
-reconstructed from geometry instead: the row above full to its last column
-(a plain hard wrap), a box-drawing-gutter continuation (a TUI-wrapped block),
-or — since a report against this app's own CLI, which breaks long tokens at
-the hyphens inside them rather than at the margin — a row ending within a few
-columns of the margin whose last token ends in `-` and whose continuation
-could not have fitted in the columns left free. Each shape is anchored on a
-rooted (`/`, `~/`, `./`, `../`) tail token, which is what keeps prose rows
-from ever being glued together.
+Paths printed by remote tools are linkified from the terminal buffer and
+open in the Files tab (`terminalPaths.ts` holds the detection rules,
+`terminalLinks.ts` the buffer flattening and click handling); the span
+stays on the path itself — writer labels like `Write(...)` and trailing
+punctuation are excluded. A path a TUI split across rows (this pane is
+always a tmux client, so nothing is ever flagged `isWrapped`) is
+reconstructed from geometry — hard wrap, box-gutter continuation,
+near-margin hyphen break — each shape anchored on a rooted (`/`, `~/`,
+`./`, `../`) tail token, so prose rows never glue together.
 
 ---
 
@@ -182,8 +171,9 @@ from ever being glued together.
 | `close(connectionId)` | idempotent; cancels tails, closes forwards/shells, disconnects. |
 
 Key formats: `ssh2` parses PEM / OpenSSH-v1 / PKCS8 directly (ed25519 +
-RSA). PuTTY `.ppk` via a parser if needed later. Passphrases resolved from
-the keychain before connect.
+RSA). PuTTY `.ppk` via a parser if needed later. A passphrase is optional
+connect-call input: the renderer supplies it with `connect`, main hands it
+to `ssh2` once, and nothing stores it (§1).
 
 ---
 
@@ -192,40 +182,39 @@ the keychain before connect.
 Extends the Android local-only model with the two forward types desktop
 users expect:
 
-- **Local `-L`**: `net.createServer` → per-conn `ssh.forwardOut`. Auto-forward
-  loop scans remote ports (`PortScanner`) and mirrors/allocates a local
-  port — same algorithm as Android (mirror if port ∈ [1024,10000] else
-  allocate from 3000..3999, failed-port TTL 60s).
+- **Local `-L`**: `net.createServer` → per-conn `ssh.forwardOut`. The
+  auto-forward loop (`AutoForwarder` + `PortScanner`) scans remote
+  listeners and mirrors/allocates a local port — same algorithm as Android
+  (mirror if port ∈ [1024, 10000], else allocate from [3000, 65535];
+  failed-port TTL 60s, 5s scan interval).
 - **Remote `-R`**: `ssh.forwardIn(remoteHost, remotePort)` → the server
   accepts and channels back via `tcpip` events.
 - **Dynamic `-D` (SOCKS)**: a local SOCKS5 server (`socksv` style) that
   opens `ssh.forwardOut` per SOCKS request.
 
-`AutoForwarderSupervisor` owns reconnect across transport drops: exp
-backoff 5s→60s (capped), 1s health poll, `reconnectNow()` wakes the
-backoff. On drop it tears down the forwarder and lets the new scan loop
-rediscover — matching the Android contract. Manual-toggle and persisted
-remappings survive across reconnects (persisted config), unlike the
-Android in-memory-only manual toggles.
+`ForwardService` owns the per-connection forward lifecycle; rules persist
+in `PortfwdStore`, so manual toggles and persisted remappings survive
+reconnects (unlike the Android in-memory-only manual toggles). Reconnect
+itself is the renderer's job (§9): main only reports the drop, and after
+the new connection is up a fresh scan rediscovers the forward set.
 
 ---
 
 ## 6. Files (SFTP)
 
-`SftpService` over `ssh2`'s own sftp channel (`client.sftp()` → `SFTPWrapper`;
-`ssh2-sftp-client` was in `package.json` for a year and imported by nothing,
-and has been dropped):
+`SftpService` over `ssh2`'s own sftp channel (`client.sftp()` →
+`SFTPWrapper`; the long-unused `ssh2-sftp-client` dependency is gone):
 `list`, `readFile`/`stat`, `createWriteStream`/`writeFile`,
 `mkdir`, `rename`, `delete`, `fastPut`/`fastGet` (upload/download, with
-progress events). The renderer's `CodeEditor` uses CodeMirror 6 (Monaco was
-planned, never imported, and dropped in `c2fe2bb`); save calls
-`window.api.sftp.writeFile`. Binary detection by extension + stat;
-images get an `<img>` preview, other binary offers hex/download.
+progress events). The renderer's `CodeEditor` is CodeMirror 6 (Monaco was
+considered and dropped); save calls `window.api.sftp.writeFile`. Binary
+detection by extension + stat; images get an `<img>` preview, other binary
+offers hex/download.
 
 Why not reuse the helper's `pocketshell env` for editing? It is scoped to
-`.env`/`.envrc` only and writes via stdin. General file editing needs a
-real SFTP channel. The env panel (F16) layers on top for the `.env` case
-to get the helper's secret-via-stdin safety.
+`.env`/`.envrc` and writes via stdin; general editing needs a real SFTP
+channel. The env panel layers that secret-via-stdin safety on for the
+`.env` case.
 
 ---
 
@@ -235,13 +224,16 @@ Pinia stores in the renderer hold **view state only** — never secrets:
 
 | Store | Holds |
 |---|---|
-| `connection` | active connectionId per host, connection/error state, bootstrap result |
+| `connection` | active connectionId per host, connection/error state, bootstrap result, reconnect schedule |
 | `sessions` | per-host `SessionSummary[]`, refresh state |
+| `shells` | which live PTY (shellId) belongs to which session |
 | `projects` | active host `$HOME`, SFTP folder browser, and repository loading state; cleared when the connection id changes |
 | `files` | current path, tree cache, open file buffers |
-| `agents` | per-pane detection + current conversation events |
-| `usage` | per-provider quota rows + last-refresh |
+| `agents` | per-pane detection, conversation events, usage rows |
+| `composer` | per-session composer state: draft text, attachments, send state |
 | `forwards` | per-host forward table + statuses |
+| `settings` | fonts, theme, zoom, folder order, per-host root folders |
+| `update` | release-check status behind the update banner |
 
 Streams (terminal bytes, tail lines, forward bytes) are pushed from main
 to renderer over IPC events keyed by id; the stores subscribe and the
@@ -252,8 +244,9 @@ components render.
 ## 8. Security model
 
 - Renderer is sandboxed; no Node, no filesystem, no network primitives.
-- Private keys and passphrases never cross into the renderer; only
-  connection ids and parsed results do.
+- Private keys never cross into the renderer; a passphrase travels one
+  way, with the connect call, and is never stored. Only connection ids
+  and parsed results come back.
 - `~/.ssh/known_hosts` is **enforced** (unlike the Android `AcceptAll`):
   unknown host → TOFU prompt (accept once / always); mismatch → hard
   block. No silent accept.
@@ -269,64 +262,50 @@ components render.
 
 - `SshService` operations return result objects, never throw for
   expected failures (auth refused, host unreachable, non-zero exit).
-- A transport drop emits a `connection:lost` event; the supervisor runs
-  the backoff reconnect and, on success, re-runs bootstrap + session
-  refresh + re-opens forwards. The UI shows a "Reconnecting…" banner.
+- A transport drop is reported to the renderer as a connection-state
+  `'lost'` event. The connection store's FSM re-dials on the shared
+  backoff (`shared/reconnectBackoff.ts`, 5→10→20→40→60s, capped at
+  `MAX_ATTEMPTS`) and, on success, `connect()` re-runs bootstrap +
+  session refresh + re-opens forwards. The banner shows the countdown;
+  `retryNow()` skips the wait.
 - Tails and shells are torn down on drop and re-established by their
   owners on the new connection (same contract as Android — tail does not
   self-heal).
-
-During replacement, the renderer keeps the workspace mounted on the old
-connection id. Before publishing the new id, the composer store rekeys all
-session records, so drafts and history survive the transport swap without a
-blank intermediate composer. Terminal re-attachment restores focus only when
-its visible pane already owns focus (or the document has no focused control),
-so a reconnect cannot redirect the next character from the prompt composer
-into xterm.
+- During replacement, the composer store rekeys its per-session records
+  to the new connection id before it is published, so drafts and history
+  survive the swap without a blank intermediate composer. Terminal
+  re-attachment restores focus only when the visible pane already owns
+  focus (or the document has no focused control), so a reconnect cannot
+  redirect the next keystroke from the composer into xterm.
 
 ### 9.1 Terminal parse stalls
 
-The renderer's unhandled errors reach the desktop log through
-`diag.log` (renderer/diag.ts), but one failure class needs more than a
-stack trace: xterm's write loop is a `setTimeout` queue, and when a byte
-sequence makes the parser throw — an xterm-internal buffer invariant,
-exposed by region/scroll-heavy TUI output arriving while the terminal is
-being fitted — the xterm 6.0.0 `Buffer.resize`/write ordering bug behind
-`start argument out of range` — the throw kills the loop and the pane fed by
-it silently stops rendering. The thrown error lands in the log, but with no
-pane, no bytes, and no hint that anything but a one-off glitch happened.
+xterm's write loop is a `setTimeout` queue, and one failure class kills
+it: a byte sequence that makes the parser throw — an xterm-internal
+buffer invariant, exposed by region/scroll-heavy TUI output arriving
+mid-fit (the xterm 6.0.0 `Buffer.resize`/write ordering bug behind
+`start argument out of range`). The pane fed by that loop then silently
+stops rendering; the error reaches the desktop log (`renderer/diag.ts`)
+but looks like a one-off glitch.
 
-So every byte a `TerminalView` feeds xterm goes through
-`ParseStallMonitor` (renderer/parseStall.ts), which wraps each chunk
-with the completion callback xterm already supports. A healthy chunk
-parses in microseconds; when the head chunk's callback has not run
-within two seconds the loop is dead, and the monitor reports
-`terminal-stall` with what the root cause is reconstructed from: the
-session and connection, the terminal's buffer state (line count, baseY,
-cursor), the exact stalled bytes in printable and hex form, and how
-much output was queued behind them. The same report drives the diag
-banner, so a frozen pane says so instead of just stopping.
+`ParseStallMonitor` (`renderer/parseStall.ts`) wraps every chunk a
+`TerminalView` feeds xterm with the completion callback xterm already
+supports: no callback within two seconds (`PARSE_STALL_TIMEOUT_MS`) means
+a dead loop, reported as `terminal-stall` with the session and
+connection, buffer state (line count, baseY, cursor), the stalled bytes
+in printable and hex form, and the queue behind them. The diag banner
+shows the same report, so a frozen pane says so instead of just stopping.
 
-Every fit and every incoming chunk also checks the active core buffer's
-`lines.length >= ybase + core.rows` invariant. If xterm has already exposed an
-incomplete viewport, `renderer/xtermWriteBuffer.ts` appends the same blank lines
-that xterm's own resize path uses before another chunk can parse. The helper
-uses `_core.buffers.active` rather than the proposed `term.buffer` API, so it
-does not require `allowProposedApi`; it preserves parser state and needs no
-reset or remote repaint. The focused resize regression lives in
-`tests/unit/xtermWriteBuffer.test.ts`; the fixed-seed stress reproducer remains
-`scripts/xterm-fuzz.mjs`.
-
-Recovery (renderer/xtermWriteBuffer.ts): a stall with a thrown
-unhandled error just before it is a parser death, and
-`resumeWriteBufferAfterError` restarts the loop — the chunk it died on
-is retired, the backlog behind it parses again. That alone does not
-make the pane whole (the dead chunk left the parser mid-escape, and its
-un-parsed tail is gone), so the pane follows with a bounded fresh join
-— the same repair, and the same anti-hammer budget, as a dead geometry
-probe: the one thing that re-initialises both ends of the stream. The
-regression test (tests/unit/xtermWriteBuffer.test.ts) drives the real
+Repair lives in `renderer/xtermWriteBuffer.ts`: every fit and chunk
+checks the active core buffer's `lines.length >= ybase + core.rows`, and
+an incomplete viewport gets the blank lines xterm's own resize path
+appends, before the next chunk parses. It reads `_core.buffers.active`,
+not the proposed `term.buffer` API — no `allowProposedApi`, parser state
+preserved, no reset or repaint. A stall preceded by a thrown unhandled
+error is parser death: `resumeWriteBufferAfterError` restarts the loop
+(dead chunk retired, backlog re-parses), then the pane does a bounded
+fresh join under the same anti-hammer budget as a dead geometry probe.
+Tests: `tests/unit/xtermWriteBuffer.test.ts` drives the real
 `@xterm/headless` internals through the identical sync-throw path;
-`scripts/xterm-fuzz.mjs` is the fuzzer that found the original
-invariant break (seed 32) and is the tool to rerun when upgrading
-xterm.
+`scripts/xterm-fuzz.mjs` is the fuzzer that found the original invariant
+break (seed 32) and the tool to rerun when upgrading xterm.
