@@ -40,6 +40,7 @@ import type { ForwardSpec } from '../../shared/types';
 import type { DiscoveredPort } from '../../main/portfwd/AutoForwarder';
 import type { ForwardState } from '../../main/portfwd/Forwarder';
 import type { ServedFolder } from '../../main/portfwd/ServeService';
+import { formatBytes } from '../../shared/byteSize';
 
 const connection = useConnectionStore();
 const forwards = useForwardsStore();
@@ -335,16 +336,11 @@ async function onClearRemap(row: PortRow): Promise<void> {
   await forwards.clearRemap(connId.value, row.remotePort);
 }
 
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
 
 /** Rate line under a byte count. Sub-1 KB/s is noise; show nothing. */
 function fmtRate(bytesPerSec: number): string {
   if (bytesPerSec < 1024) return '';
-  return `${fmtBytes(bytesPerSec)}/s`;
+  return `${formatBytes(bytesPerSec)}/s`;
 }
 
 function fmtScanTime(epochMs: number | null): string {
@@ -535,13 +531,13 @@ function fmtScanTime(epochMs: number | null): string {
             </td>
 
             <td class="c-bytes">
-              <span class="bytes">{{ row.fwd ? fmtBytes(row.fwd.bytesIn) : '—' }}</span>
+              <span class="bytes">{{ row.fwd ? formatBytes(row.fwd.bytesIn) : '—' }}</span>
               <span v-if="row.fwd && fmtRate(row.fwd.rateIn)" class="rate">
                 {{ fmtRate(row.fwd.rateIn) }}
               </span>
             </td>
             <td class="c-bytes">
-              <span class="bytes">{{ row.fwd ? fmtBytes(row.fwd.bytesOut) : '—' }}</span>
+              <span class="bytes">{{ row.fwd ? formatBytes(row.fwd.bytesOut) : '—' }}</span>
               <span v-if="row.fwd && fmtRate(row.fwd.rateOut)" class="rate">
                 {{ fmtRate(row.fwd.rateOut) }}
               </span>

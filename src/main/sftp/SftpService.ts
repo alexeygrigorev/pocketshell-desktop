@@ -1,6 +1,7 @@
 import type { SFTPWrapper } from 'ssh2';
 import { stat as fsStat } from 'node:fs';
 import type { ConnectionRegistry, ConnectionRecord } from '../ssh/ConnectionRegistry.js';
+import { oversizeMessage } from '../../shared/byteSize.js';
 
 /**
  * SFTP service over an existing ssh2 connection.
@@ -332,12 +333,6 @@ function modeToRwx(m: number): string {
 
 function assertReadable(size: number, maxBytes: number, path: string): void {
   if (size > maxBytes) throw new Error(oversizeMessage(size, maxBytes, path));
-}
-
-/** Same phrasing as AttachmentStager's size refusal, for one voice in the UI. */
-function oversizeMessage(size: number, maxBytes: number, path: string): string {
-  const mb = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
-  return `${path} is ${mb(size)} MB; the limit is ${mb(maxBytes)} MB`;
 }
 
 function localSize(path: string): Promise<number> {

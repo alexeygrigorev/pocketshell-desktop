@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { formatBytes } from '../../shared/byteSize';
 import { ref } from 'vue';
 import { api } from '../ipc';
 import type { ConnectionId } from '../../shared/types';
@@ -1288,14 +1289,6 @@ function stripQuotes(s: string): string {
 /** The containing directory of an absolute path; `/` has no parent but itself. */
 function parentOf(path: string): string {
   return path.replace(/\/[^/]+$/, '') || '/';
-}
-
-/** Human byte size, shared by the binary panel and the listing. */
-export function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-  return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
 /** POSIX join (the remote is always unix, even on a Windows client). */

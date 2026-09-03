@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { oversizeMessage } from '../../shared/byteSize.js';
 
 /**
  * Reads the BYTES of a local file back into the renderer.
@@ -129,14 +130,9 @@ export class LocalFileReader {
     const info = await stat(path);
     if (!info.isFile()) throw new Error(`Not a regular file: ${path}`);
     if (info.size > this.maxBytes) {
-      throw new Error(
-        `${path} is ${formatMb(info.size)} MB; the limit is ${formatMb(this.maxBytes)} MB`,
-      );
+      throw new Error(oversizeMessage(info.size, this.maxBytes, path));
     }
     return readFile(path);
   }
 }
 
-function formatMb(bytes: number): string {
-  return (bytes / (1024 * 1024)).toFixed(1);
-}

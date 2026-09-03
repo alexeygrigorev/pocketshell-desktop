@@ -8,6 +8,7 @@ import {
   type SanitisedName,
 } from './FilenameSanitiser.js';
 import { extensionForMimeType } from './mimeTypes.js';
+import { oversizeMessage } from '../../shared/byteSize.js';
 import { RemoteAttachmentPruner } from './AttachmentRetentionPolicy.js';
 
 /**
@@ -311,14 +312,8 @@ export function sanitiseSource(source: AttachmentSource): SanitisedName {
 
 function assertWithinSizeLimit(size: number, label: string): void {
   if (size > MAX_ATTACHMENT_BYTES) {
-    throw new Error(
-      `${label} is ${formatMb(size)} MB; the limit is ${formatMb(MAX_ATTACHMENT_BYTES)} MB`,
-    );
+    throw new Error(oversizeMessage(size, MAX_ATTACHMENT_BYTES, label));
   }
-}
-
-function formatMb(bytes: number): string {
-  return (bytes / (1024 * 1024)).toFixed(1);
 }
 
 /** Human-facing label for a source, used in per-file error messages. */
