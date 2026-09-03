@@ -224,6 +224,22 @@ describe('scanBufferLine — a path a TUI broke across two rows', () => {
     expect(pathLinks(term, 2, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(TILDE_PNG);
   });
 
+  it('joins a hyphen wrap that left the row short of the margin', () => {
+    // The "event-webinar" case, against this app's own CLI: it wraps long
+    // tokens at the hyphens inside them, so the row above ends a few columns
+    // SHORT of full — the exact-full evidence rule 1 asks for is not there.
+    // The tail still ends in `-`, the hyphen that made the break opportunity,
+    // and `og.png` could not have fitted in the columns left over.
+    const first = '/home/alexey/git/banner-generator/.tmp/issue-312-dtc-banners/output/dtc/event-webinar-';
+    const term = fakeScreen([first, 'og.png'], first.length + 5);
+
+    expect(scanBufferLine(term, 1).text.trimEnd()).toBe(`${first}og.png`);
+    // Asked about the continuation row, too: the walk-up applies the same rule.
+    expect(pathLinks(term, 2, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(
+      `${first}og.png`,
+    );
+  });
+
   it('opens the tilde form without anyone expanding $HOME', () => {
     const first = '    └ ~/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-de1a03f1-2d3f-';
     const term = fakeScreen([first, '4d2d-8a44-c5da743f849e.png'], first.length);
@@ -255,6 +271,24 @@ describe('scanBufferLine — rows that must NOT be joined', () => {
     // be exactly as wide as the window; that is not evidence of anything.
     const first = 'the mount is configured read/write and/';
     expect(scan([first, 'or so the docs claim'], first.length)).toBe(first);
+  });
+
+  it('refuses a nearly full row whose last token is already a whole path', () => {
+    // The hyphen rule asks for a tail that ends in `-` precisely so that a
+    // complete path landing near the margin — the common shape — never picks
+    // up the word the wrapper put on the next row after it.
+    const first = 'downloaded /tmp/out/result.png';
+    expect(scan([first, 'and cleaned the cache'], first.length + 3)).toBe(first);
+  });
+
+  it('refuses a hyphen row whose continuation would have fitted above', () => {
+    // Five columns free, `done` four wide: the wrapper left the row because it
+    // chose to, not because it ran out, so the rows are two lines of one block.
+    expect(scan(['/tmp/nightly-lock-', 'done'], 23)).toBe('/tmp/nightly-lock-');
+  });
+
+  it('refuses a hyphen row that continues as a rooted path of its own', () => {
+    expect(scan(['/tmp/nightly-lock-', '/srv/x.mp3'], 20)).toBe('/tmp/nightly-lock-');
   });
 
   it('refuses two complete paths on consecutive rows', () => {

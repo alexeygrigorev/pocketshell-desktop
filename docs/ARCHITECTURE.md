@@ -155,6 +155,17 @@ itself, including when tool output wraps it in call-like punctuation such as
 `Write(docs/runbooks/production-data-migration.md).`; the writer label and
 trailing punctuation are not part of the remote path.
 
+A path a TUI split across rows is read whole. This pane is always a tmux
+client, so nothing in it is ever flagged `isWrapped` — the split is
+reconstructed from geometry instead: the row above full to its last column
+(a plain hard wrap), a box-drawing-gutter continuation (a TUI-wrapped block),
+or — since a report against this app's own CLI, which breaks long tokens at
+the hyphens inside them rather than at the margin — a row ending within a few
+columns of the margin whose last token ends in `-` and whose continuation
+could not have fitted in the columns left free. Each shape is anchored on a
+rooted (`/`, `~/`, `./`, `../`) tail token, which is what keeps prose rows
+from ever being glued together.
+
 ---
 
 ## 4. SSH service contract

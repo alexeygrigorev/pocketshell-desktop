@@ -28,13 +28,18 @@
  * across two rows arrives here as two rows with `isWrapped` false on both — and
  * a path that spans the break is never seen whole by the detector.
  *
- * Two user reports, both against a Codex TUI, are the shapes {@link joinedRowSkip}
- * reconstructs:
+ * Three user reports are the shapes the rules below reconstruct:
  *
- *   - the TUI wrapped mid-token and continued at column 0 of the next row, i.e.
- *     exactly the hard wrap xterm would have flagged had it done the wrapping;
- *   - the TUI wrapped its own block and prefixed the continuation with its
- *     box-drawing gutter (`  │ `), which has to be dropped as well as joined.
+ *   - the Codex TUI wrapped mid-token and continued at column 0 of the next
+ *     row, i.e. exactly the hard wrap xterm would have flagged had it done the
+ *     wrapping (rule 1);
+ *   - the Codex TUI wrapped its own block and prefixed the continuation with
+ *     its box-drawing gutter (`  │ `), which has to be dropped as well as
+ *     joined (rule 2);
+ *   - this app's own CLI wraps long tokens at the hyphens inside them instead
+ *     of at the margin, so the row above the break ends a few columns SHORT of
+ *     full — `…/event-webinar-` / `og.png` — and rule 1b reads the hyphen as
+ *     the break opportunity it is.
  *
  * Both rules are deliberately narrow, for the reason terminalPaths.ts's header
  * gives: joining two rows that were never one line can only invent a path that
@@ -126,6 +131,18 @@ const MAX_SCAN_CHARS = 2048;
 const MAX_JOIN_ROWS = 8;
 
 /**
+ * How far short of the margin a row may end and still count as having been
+ * wrapped (rule 1b in {@link joinedRowSkip}). Full-to-the-last-column stays
+ * the strong evidence it always was; this admits the weaker shape where the
+ * wrapper broke at a hyphen INSIDE the token and so left the row a few blank
+ * columns short — five in the report this rule is built from. Eight covers
+ * that with room for a slightly longer displaced fragment; the guards at the
+ * rule (hyphen tail, head would not have fitted) are what keep the wider
+ * window from gluing prose together, not the slack itself.
+ */
+const MAX_WRAP_SLACK = 8;
+
+/**
  * The gutter a TUI puts in front of the continuation rows of a block it wrapped
  * itself — `  │ ` in the Codex output the user reported.
  *
@@ -211,6 +228,9 @@ function joinedRowSkip(prev: RowRead, next: RowRead): number | null {
 
   const gutter = GUTTER.exec(next.text);
   if (gutter === null) {
+    const first = next.text.charAt(0);
+    if (first === '' || first === ' ') return null;
+
     // RULE 1 — the hard wrap tmux repainted away.
     //
     // The evidence is geometric and it is the strongest available: the row
@@ -223,9 +243,34 @@ function joinedRowSkip(prev: RowRead, next: RowRead): number | null {
     // a double-width character would not fit in it. Reconstructing that needs a
     // second guess on top of this one, and the cost of being wrong is an
     // underline running through unrelated text.
-    if (prev.lastCol !== prev.width - 1) return null;
-    const first = next.text.charAt(0);
-    return first === '' || first === ' ' ? null : 0;
+    if (prev.lastCol === prev.width - 1) return 0;
+
+    // RULE 1b — the hyphen wrap some TUIs prefer, this app's own CLI among
+    // them: break long tokens at the hyphens inside them rather than at the
+    // margin, which leaves the row above the break a few blank columns short
+    // and rule 1 without its geometric evidence. Four guards, each the reason
+    // a different way of being wrong stays shut:
+    //
+    //   - the row is still NEARLY full ({@link MAX_WRAP_SLACK}). A row that
+    //     stopped halfway down is a paragraph, not a wrap.
+    //   - the tail ends with `-`. That is the break opportunity a hyphen-
+    //     wrapping wrapper used, and the one character whose presence at a
+    //     row's end says the token was cut rather than finished: a whole path
+    //     landing near the margin (`…/result.png` + `and cleaned up`) ends in
+    //     something else and never gets here.
+    //   - the continuation does not start with `/`. `…-` plus `/x` is not a
+    //     path anyone wrote; it is two paths, and the second one is whole
+    //     already.
+    //   - the continuation's first token WOULD NOT HAVE FIT in the columns the
+    //     row left free. That is the wrapper's own arithmetic run backwards,
+    //     the same one rule 2 uses: if the token fit, the row above did not
+    //     end because it ran out of room, so the row below is a new line.
+    if (prev.width - 1 - prev.lastCol > MAX_WRAP_SLACK) return null;
+    if (!tail.endsWith('-')) return null;
+    const head = /^\S+/.exec(next.text)?.[0] ?? '';
+    if (head === '' || head.startsWith('/')) return null;
+    if (prev.lastCol + 1 + head.length <= prev.width) return null;
+    return 0;
   }
 
   // RULE 2 — the TUI wrapped its own block and marked the continuation.
@@ -335,7 +380,8 @@ export function scanBufferLine(term: Terminal, bufferLineNumber: number): Scanne
     // line would break the path back into the two tokens we just went to the
     // trouble of joining. They are dropped rather than emitted. Nothing is lost
     // with them: an `isWrapped` row is full by definition and never gets here,
-    // and rule 1 only fires on a row whose last column is occupied.
+    // rule 1 fires only on a row whose last column is occupied, and rule 1b
+    // leaves behind nothing but the wrap's own blank columns.
     while (chars.length > 0 && chars[chars.length - 1] === ' ') {
       chars.pop();
       cells.pop();
