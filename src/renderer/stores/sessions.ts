@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { api } from '../ipc';
 import type { ConnectionId, SessionSummary } from '../../shared/types';
+import { errorMessage } from '../../shared/errors';
 
 /**
  * Sessions store: the live tmux session tree for the active connection.
@@ -37,7 +38,7 @@ export const useSessionsStore = defineStore('sessions', () => {
     try {
       sessions.value = await api.helper.sessionsList(connectionId, 'activity');
     } catch (e) {
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
     } finally {
       if (!options?.quiet) loading.value = false;
     }

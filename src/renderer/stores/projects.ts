@@ -4,6 +4,7 @@ import { api } from '../ipc';
 import type { ConnectionId } from '../../shared/types';
 import type { DirEntry } from '../../main/sftp/SftpService';
 import type { RepoEntry, ReposScopeState } from '../../main/projects/repos';
+import { errorMessage } from '../../shared/errors';
 import type {
   CloneResult,
   CreateFolderResult,
@@ -191,7 +192,7 @@ export const useProjectsStore = defineStore('projects', () => {
         .sort((a, b) => a.name.localeCompare(b.name));
     } catch (e) {
       if (isCurrent(connectionId, generation) && request === browseRequest) {
-        browseError.value = (e as Error).message;
+        browseError.value = errorMessage(e);
       }
     } finally {
       if (isCurrent(connectionId, generation) && request === browseRequest) {

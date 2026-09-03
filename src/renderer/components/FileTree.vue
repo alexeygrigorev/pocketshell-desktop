@@ -17,6 +17,7 @@ import { listStep, type ListStepKey } from '../../shared/listNavigation';
 import { isShortcut } from '../../shared/shortcuts';
 import { pointAnchor, type Box } from '../../shared/popupPlacement';
 import type { DirEntry } from '../../main/sftp/SftpService';
+import { errorMessage } from '../../shared/errors';
 
 const emit = defineEmits<{
   openFile: [path: string];
@@ -216,7 +217,7 @@ async function downloadEntry(entry: DirEntry): Promise<void> {
     // context menu, so the user's eyes are on the tree when it fails and the
     // footer below it is the message's honest home. Each channel follows
     // where the action was taken, not what kind of action it was.
-    files.error = (e as Error).message;
+    files.error = errorMessage(e);
   }
 }
 
@@ -273,7 +274,7 @@ async function serveFolder(entry: DirEntry): Promise<void> {
     // The main process writes these to be read: "No python3 on the host",
     // "<dir> is not readable on the host", "no free port". The banner is the
     // right surface for them — a folder that did not get served must say so.
-    files.error = (e as Error).message;
+    files.error = errorMessage(e);
   } finally {
     serving.value = null;
   }

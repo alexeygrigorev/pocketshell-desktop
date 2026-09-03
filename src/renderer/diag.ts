@@ -17,6 +17,7 @@
  */
 import { ref } from 'vue';
 import { api } from './ipc';
+import { errorMessage } from '../shared/errors';
 
 /** Where an unhandled error was caught. Drives the desktop-log line only. */
 export type DiagKind = 'render' | 'unhandledrejection' | 'error' | 'terminal-stall';
@@ -58,12 +59,6 @@ export function msSinceLastUnhandledError(): number {
   return lastUnhandledErrorAt === 0 ? Number.POSITIVE_INFINITY : Date.now() - lastUnhandledErrorAt;
 }
 
-function toMessage(error: unknown): string {
-  if (error instanceof Error) return error.message || error.name || 'unknown error';
-  const text = String(error);
-  return text || 'unknown error';
-}
-
 /**
  * Record one unhandled error. Consecutive duplicates collapse into the newest
  * occurrence — same message AND kind counts as the same incident repeating,
@@ -71,7 +66,7 @@ function toMessage(error: unknown): string {
  */
 export function recordDiagError(kind: DiagKind, error: unknown): void {
   lastUnhandledErrorAt = Date.now();
-  const message = toMessage(error);
+  const message = errorMessage(error);
   const stack = error instanceof Error && error.stack ? error.stack : null;
   pushDiag(kind, message, stack);
 }

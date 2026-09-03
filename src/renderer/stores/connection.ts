@@ -12,6 +12,7 @@ import { useFilesStore } from './files';
 import { useSessionsStore } from './sessions';
 import { useProjectsStore } from './projects';
 import { useComposerStore } from './composer';
+import { errorMessage } from '../../shared/errors';
 
 /**
  * Connection store: owns the active connection to a host and its bootstrap
@@ -388,7 +389,7 @@ function startCountdown(retryAt: number): void {
       // `state` at 'connecting' and this store would hold the picker's rows
       // disabled forever with no message anywhere.
       state.value = 'idle';
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
       return false;
     }
     if (result.ok && result.connectionId) {

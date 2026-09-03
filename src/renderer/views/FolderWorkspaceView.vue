@@ -95,6 +95,7 @@ import {
   launchBlocker,
   type LaunchChoice,
 } from '../../shared/agentLaunch';
+import { errorMessage } from '../../shared/errors';
 
 const route = useRoute();
 const connection = useConnectionStore();
@@ -1309,7 +1310,7 @@ async function createSession(choice: LaunchChoice | null): Promise<void> {
   try {
     result = await projects.start(connectionId, path, undefined, 'unique');
   } catch (e) {
-    createError.value = `Could not start a session here: ${(e as Error).message}`;
+    createError.value = `Could not start a session here: ${errorMessage(e)}`;
     return;
   }
   if (!result.ok || !result.sessionName) {
@@ -1594,7 +1595,7 @@ async function confirmStop(): Promise<void> {
     } catch (e) {
       // A rejected invoke is a failed kill like any other. Let it escape and
       // `stopBusy` stays latched — the Stop button dead until remount.
-      createError.value = (e as Error).message;
+      createError.value = errorMessage(e);
       return;
     }
     if (!result.ok && result.code !== 'not-found') {

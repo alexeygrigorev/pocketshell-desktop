@@ -19,6 +19,7 @@
 import { onMounted, ref } from 'vue';
 import { api } from '../ipc';
 import type { ConnectionId, EnvVarRow } from '../../shared/types';
+import { errorMessage } from '../../shared/errors';
 
 const props = defineProps<{
   connectionId: ConnectionId;
@@ -64,7 +65,7 @@ async function load(): Promise<void> {
     const list = await api.agent.envList(props.connectionId, props.dir);
     rows.value = list.map(toRow);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = errorMessage(e);
   } finally {
     loading.value = false;
   }
@@ -84,7 +85,7 @@ async function onReveal(row: EnvRow): Promise<void> {
     row.value = values[row.key] ?? '';
     row.revealed = true;
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = errorMessage(e);
   }
 }
 
@@ -99,7 +100,7 @@ async function onRevealAll(): Promise<void> {
       }
     }
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = errorMessage(e);
   }
 }
 
@@ -122,7 +123,7 @@ async function onSave(row: EnvRow): Promise<void> {
     row.dirty = false;
     row.file = row.file || '.env';
   } catch (e) {
-    saveError.value = `${row.key}: ${(e as Error).message}`;
+    saveError.value = `${row.key}: ${errorMessage(e)}`;
   } finally {
     row.saving = false;
   }
@@ -141,7 +142,7 @@ async function onAdd(): Promise<void> {
     newValue.value = '';
     await load();
   } catch (e) {
-    saveError.value = `${key}: ${(e as Error).message}`;
+    saveError.value = `${key}: ${errorMessage(e)}`;
   } finally {
     adding.value = false;
   }

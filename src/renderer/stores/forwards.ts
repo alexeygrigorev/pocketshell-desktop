@@ -6,6 +6,7 @@ import type { AutoForwarderStatus, DiscoveredPort } from '../../main/portfwd/Aut
 import type { ForwardState } from '../../main/portfwd/Forwarder';
 import type { PortIntent } from '../../main/portfwd/PortfwdStore';
 import type { ServedFolder } from '../../main/portfwd/ServeService';
+import { errorMessage } from '../../shared/errors';
 
 /**
  * Forwards store: everything the port panel renders for the active connection.
@@ -120,7 +121,7 @@ export const useForwardsStore = defineStore('forwards', () => {
       }
       error.value = null;
     } catch (e) {
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
     } finally {
       if (!options.quiet) loading.value = false;
     }
@@ -147,7 +148,7 @@ export const useForwardsStore = defineStore('forwards', () => {
       // The panel calls this from `onMounted`; a rejection here used to be an
       // unhandled rejection paging the diag banner while the panel rendered as
       // if nothing had been asked of it. Route it into the panel's error slot.
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
     }
   }
 
@@ -162,7 +163,7 @@ export const useForwardsStore = defineStore('forwards', () => {
       await api.forwards.refresh(connectionId);
       await sync(connectionId, { quiet: true });
     } catch (e) {
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
     } finally {
       loading.value = false;
     }
@@ -186,7 +187,7 @@ export const useForwardsStore = defineStore('forwards', () => {
       // leaves it truthfully on the old side — the toggle reads as a no-op
       // unless the failure is shown. This is the template's click handler; an
       // escape here would otherwise be a silent one.
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
     }
   }
 
@@ -199,7 +200,7 @@ export const useForwardsStore = defineStore('forwards', () => {
       // The add form folds on `true`, so a rejection reports as `false`: the
       // form stays up over the error instead of the rejection vanishing into
       // an unhandled promise.
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
       return false;
     }
   }
@@ -214,7 +215,7 @@ export const useForwardsStore = defineStore('forwards', () => {
       await api.forwards.remove(connectionId, key);
       await sync(connectionId);
     } catch (e) {
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
     }
   }
 
@@ -290,7 +291,7 @@ export const useForwardsStore = defineStore('forwards', () => {
       await action();
       await sync(connectionId, { quiet: true });
     } catch (e) {
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
     } finally {
       pending.value = null;
     }

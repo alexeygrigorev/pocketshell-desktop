@@ -4,6 +4,7 @@ import { api } from '../ipc';
 import type { ConnectionId } from '../../shared/types';
 import type { UsageRow } from '../../main/helper/parsers';
 import { parseProfileRows, type AgentProfile } from '../../shared/agentLaunch';
+import { errorMessage } from '../../shared/errors';
 
 /**
  * Agents store: the provider-usage dashboard rows, and nothing else.
@@ -50,7 +51,7 @@ export const useAgentsStore = defineStore('agents', () => {
     try {
       usage.value = await api.helper.usage(connectionId);
     } catch (e) {
-      usageError.value = (e as Error).message || 'Could not read this host’s provider usage.';
+      usageError.value = errorMessage(e) || 'Could not read this host’s provider usage.';
     } finally {
       loading.value = false;
     }
@@ -100,7 +101,7 @@ export const useAgentsStore = defineStore('agents', () => {
     } catch (e) {
       if (profilesFor !== connectionId) return;
       profiles.value = [];
-      profilesError.value = (e as Error).message || 'Could not list this host’s agent profiles.';
+      profilesError.value = errorMessage(e) || 'Could not list this host’s agent profiles.';
     } finally {
       if (profilesFor === connectionId) profilesLoading.value = false;
     }

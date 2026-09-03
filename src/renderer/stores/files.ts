@@ -15,6 +15,7 @@ import {
   type FileClass,
   type FileKind,
 } from '../fileKind';
+import { errorMessage } from '../../shared/errors';
 
 /**
  * Files store: the SFTP browser state for the active connection. Holds the
@@ -514,7 +515,7 @@ export const useFilesStore = defineStore('files', () => {
       previewUrl.value = null;
       previewStats.value = null;
       docView.value = 'source';
-      openNote.value = `Preview unavailable: ${(e as Error).message}`;
+      openNote.value = `Preview unavailable: ${errorMessage(e)}`;
     }
   }
 
@@ -627,12 +628,12 @@ export const useFilesStore = defineStore('files', () => {
       // browser, and say why the requested directory was not the one opened.
       try {
         resolved = await api.sftp.realPath(connectionId, '.');
-        note = `Could not open ${wanted}: ${(e as Error).message}`;
+        note = `Could not open ${wanted}: ${errorMessage(e)}`;
       } catch (homeErr) {
         // Home itself is unreachable — the connection is not usable for SFTP
         // at all, and there is nothing to fall back to.
         if (ticket !== navTicket) return;
-        error.value = (homeErr as Error).message;
+        error.value = errorMessage(homeErr);
         return;
       }
     }
@@ -731,7 +732,7 @@ export const useFilesStore = defineStore('files', () => {
       entries.value = listed;
     } catch (e) {
       if (ticket !== navTicket) return;
-      error.value = (e as Error).message;
+      error.value = errorMessage(e);
     } finally {
       // Only the current request owns the spinner; a superseded one must not
       // clear it out from under its successor.
@@ -827,7 +828,7 @@ export const useFilesStore = defineStore('files', () => {
         // Never fall back to the text path on a failed read. The file is
         // whatever it was; all we lost is the ability to show it.
         if (superseded()) return;
-        showBinary(named, (e as Error).message);
+        showBinary(named, errorMessage(e));
         return;
       }
       openSize.value = bytes.length;
@@ -947,7 +948,7 @@ export const useFilesStore = defineStore('files', () => {
       // Into the open file's channel, NOT `error`: the user is looking at the
       // Save button, not at the tree footer. See `fileError` for the audit
       // that moved this.
-      fileError.value = (e as Error).message;
+      fileError.value = errorMessage(e);
       return false;
     } finally {
       saving.value = false;
@@ -969,7 +970,7 @@ export const useFilesStore = defineStore('files', () => {
       // so its failure belongs beside it, in the open file's channel, for the
       // same reason a failed save does. (FileTree's own save-a-row action
       // keeps reporting through `error`: that one is acted on IN the tree.)
-      fileError.value = (e as Error).message;
+      fileError.value = errorMessage(e);
       return null;
     }
   }
@@ -1082,7 +1083,7 @@ export const useFilesStore = defineStore('files', () => {
     try {
       abs = await api.sftp.realPath(connectionId, path);
     } catch (e) {
-      error.value = `Could not open ${path}: ${(e as Error).message}`;
+      error.value = `Could not open ${path}: ${errorMessage(e)}`;
       return;
     }
 
@@ -1092,7 +1093,7 @@ export const useFilesStore = defineStore('files', () => {
       // opens as the directory, which is what clicking one should do.
       type = (await api.sftp.stat(connectionId, abs)).type;
     } catch (e) {
-      error.value = `Could not open ${abs}: ${(e as Error).message}`;
+      error.value = `Could not open ${abs}: ${errorMessage(e)}`;
       return;
     }
 

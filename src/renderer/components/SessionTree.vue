@@ -79,6 +79,7 @@ import {
   type SessionRootFolder,
 } from '../sessionGrouping';
 import type { SessionAgentKind } from '../../shared/types';
+import { errorMessage } from '../../shared/errors';
 
 const props = defineProps<{
   /**
@@ -750,7 +751,7 @@ async function confirmStopFolder(): Promise<void> {
         // on — aborting the loop used to leave the remaining sessions
         // untouched with no report of any kind.
         failed.push(name);
-        if (reason === null) reason = (e as Error).message;
+        if (reason === null) reason = errorMessage(e);
         continue;
       }
       if (!result.ok && result.code !== 'not-found') {
