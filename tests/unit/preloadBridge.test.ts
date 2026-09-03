@@ -41,16 +41,16 @@ const { ipc } = await import('../../src/shared/channels');
 // The preload takes its contextIsolation branch at import time; in a test
 // process the flag is unset, so arm it before the module loads or it installs
 // onto `window` instead of calling exposeInMainWorld.
-process.contextIsolated = true;
+(process as unknown as { contextIsolated: boolean }).contextIsolated = true;
 await import('../../src/preload/index');
 
 const api = (globalThis as Record<string, unknown>).__exposedApi as Record<
   string,
-  Record<string, (...args: never[]) => unknown>
+  Record<string, (...args: unknown[]) => unknown>
 >;
 
 /** Methods that do not forward, with the assertion each one does own. */
-const LOCAL: Record<string, (args: unknown[]) => void> = {
+const LOCAL: Record<string, ((args: unknown[]) => void) | undefined> = {
   'win.setZoom': (args) => expect(setZoomFactor).toHaveBeenCalledWith(args[0]),
 };
 
@@ -60,7 +60,7 @@ function isSubscription(group: string, key: string): boolean {
 }
 
 /** Dummy args good enough for every forward: preload validates nothing. */
-const DUMMY = [1, 'a', { x: 1 }, ['y'], true, null, undefined];
+const DUMMY: unknown[] = [1, 'a', { x: 1 }, ['y'], true, null, undefined];
 
 beforeEach(() => {
   invoke.mockClear();
@@ -78,16 +78,17 @@ describe('preload bridge — every method speaks its declared channel', () => {
   for (const [group, methods] of Object.entries(ipc)) {
     for (const key of Object.keys(methods)) {
       const path = `${group}.${key}`;
-      const expected = (ipc as unknown as Record<string, Record<string, string>>)[group][key];
+      const expected = ((ipc as unknown as Record<string, Record<string, string>>)[group] ?? {})[key] as string;
 
       it(`${path} -> ${expected}`, () => {
-        const fn = api[group]?.[key];
+        const groupApi = api[group];
+        const fn = groupApi?.[key];
         // Receive-only channels (main -> renderer events) have no api method;
         // their renderer half is the derived on<Name> subscription, which the
         // next branch asserts against the same channel.
         if (typeof fn !== 'function') {
-          const subKey = 'on' + key[0].toUpperCase() + key.slice(1);
-          expect(api[group]?.[subKey], `api.${group}.${subKey} exists`).toBeTypeOf('function');
+          const subKey = 'on' + key.charAt(0).toUpperCase() + key.slice(1);
+          expect(groupApi?.[subKey], `api.${group}.${subKey} exists`).toBeTypeOf('function');
           return;
         }
 
@@ -95,7 +96,7 @@ describe('preload bridge — every method speaks its declared channel', () => {
           fn(1.5);
           expect(invoke).not.toHaveBeenCalled();
           expect(send).not.toHaveBeenCalled();
-          LOCAL[path]([1.5]);
+          LOCAL[path]?.([1.5]);
           return;
         }
 
