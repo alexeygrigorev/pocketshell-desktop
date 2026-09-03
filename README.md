@@ -13,7 +13,7 @@ AI agent usage — all in one window.
 PocketShell pairs with a small helper (`pocketshell`) that runs on the machine
 you connect to. The app reads your existing `~/.ssh/config` — no new
 credentials to set up — and the helper tells it about sessions, agents, and
-quota. Your API keys stay on the server; the desktop never holds any.
+quota.
 
 Because every session is a real tmux session, your work doesn't live in the
 app. Close the laptop, come back tomorrow, reconnect — everything is still
@@ -27,13 +27,13 @@ app checks the machine for `tmux` and the `pocketshell` helper and offers to
 install whatever is missing. If the network drops, the app reconnects on its
 own and restores your sessions and port forwards.
 
-**Sessions and terminals.** The session panel lists every tmux session on the
-host with its last activity and a badge showing which agent is running in it —
-Claude Code, Codex, OpenCode. Sessions that share a project folder open
-together as one workspace: a tab per session, plus tabs for browsing files.
-Terminals are fast and real — keystrokes and resize go straight to tmux.
-Click the active tab to rename the session; right-click it to stop it; start a
-new session with an agent of your choice from the workspace's `+` menu.
+**Sessions and terminals.** The session panel lists every tmux session with
+its last activity and a badge showing which agent runs in it — Claude Code,
+Codex, OpenCode. Sessions that share a project folder open together as one
+workspace: a tab per session, plus tabs for browsing files. Keystrokes and
+resize go straight to tmux. Click the active tab to rename the session,
+right-click it to stop it, or start a new one with an agent of your choice
+from the workspace's `+` menu.
 
 **Prompt composer.** A side panel for drafting what you send to your agents —
 multi-line, resizable, with file attachments. Each workspace keeps its own
@@ -53,9 +53,8 @@ speed; forwarded HTTP ports open in your browser with one click. Forward
 setups are remembered per host.
 
 **Usage and environment.** A quota dashboard shows what's left per AI provider
-and when it resets — read from the server helper, so your keys are never
-needed on the desktop. A per-folder env editor lets you inspect and change the
-environment your agents run with.
+and when it resets, read straight from the server helper. A per-folder env
+editor lets you inspect and change the environment your agents run with.
 
 ## Keyboard
 
