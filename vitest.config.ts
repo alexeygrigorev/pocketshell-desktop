@@ -32,7 +32,7 @@ export default defineConfig({
       // Renderer and shared code are covered by the unit suite too (stores,
       // pure modules, mounted components), so the report has to include them
       // or it would silently claim the whole tree is main-only.
-      include: ['src/main/**/*.ts', 'src/renderer/**/*.ts', 'src/shared/**/*.ts'],
+      include: ['src/main/**/*.ts', 'src/preload/**/*.ts', 'src/renderer/**/*.ts', 'src/shared/**/*.ts'],
       exclude: ['**/*.d.ts', 'tests/**', 'src/renderer/env.d.ts'],
     },
   },

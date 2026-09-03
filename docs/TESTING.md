@@ -332,7 +332,35 @@ docker compose --project-name pocketshell-tests \
   -f tests-docker/docker-compose.yml up -d --wait helper
 docker compose --project-name pocketshell-tests \
   -f tests-docker/docker-compose.yml down --volumes --remove-orphans
+
+# Unit tier with a coverage report (text to stdout, HTML under coverage/)
+npm run test:coverage
 ```
+
+### Coverage
+
+`npm run test:coverage` runs the unit tier under the v8 provider with all
+three source trees included (`src/main`, `src/preload`, `src/renderer`,
+`src/shared`) — a report that only watched `src/main` would silently claim
+the renderer was covered when it was merely unmeasured. Baseline
+(2026-09-03): **86.6% statements overall**; renderer/shared sit at 90–100%,
+and the honest gaps are deliberate:
+
+- `main/index.ts` (0%) — the Electron bootstrap: window creation, the
+  single-instance lock, protocol registration. It is what the E2E tier
+  launches, so unit-mocking Electron to raise the number would test the
+  mocks.
+- `SshService`/`SftpService` connection paths — exercised by the Docker
+  integration tier against a real sshd; mocked-channel unit tests there
+  would pin nothing the fixtures don't already.
+- The **preload bridge** (`preloadBridge.test.ts`) and the **IPC
+  registrars** (`ipcRegistrars.test.ts`) are the deliberately-tested
+  boundaries: the walker asserts every bridge method against the channel
+  `shared/channels.ts` declares, and the registrar tests invoke handlers
+  through a mocked `ipcMain` to pin their policies (the session fence, the
+  128 MiB read ceiling, the update URL allow-list). These two suites are the
+  reason a drifted channel name or a weakened clamp now fails in CI instead
+  of at runtime.
 
 ---
 
