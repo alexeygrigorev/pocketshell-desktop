@@ -2,9 +2,13 @@ import { createServer } from 'node:net';
 import type { SshService } from '../ssh/SshService.js';
 import type { ConnectionRegistry } from '../ssh/ConnectionRegistry.js';
 import type { ForwardSpec } from '../../shared/types.js';
+import { LOOPBACK_HOST, MAX_PORT } from '../../shared/net.js';
 import { Forwarder, forwardKey, type ForwardState, type ForwardOrigin } from './Forwarder.js';
 import { scanRemoteListeners, type RemotePort, type ScanResult } from './scanRemotePorts.js';
 import type { PortIntent } from './PortfwdStore.js';
+
+/** How far past the preferred (mirror) port the +1..+999 sweep walks. */
+const MIRROR_SWEEP_DISTANCE = 1_000;
 
 /** Re-exported so the IPC/preload layer imports the type from one place. */
 export type { ForwardState };
@@ -207,7 +211,7 @@ export class AutoForwarder {
     } else if (spec.kind === 'local') {
       this.failedPorts.set(spec.destPort, {
         at: Date.now(),
-        error: `could not bind 127.0.0.1:${spec.listenPort}`,
+        error: `could not bind ${LOOPBACK_HOST}:${spec.listenPort}`,
       });
     }
     this.emit();
@@ -425,9 +429,9 @@ export class AutoForwarder {
 
       const spec: ForwardSpec = {
         kind: 'local',
-        listenHost: '127.0.0.1',
+        listenHost: LOOPBACK_HOST,
         listenPort: localPort,
-        destHost: '127.0.0.1',
+        destHost: LOOPBACK_HOST,
         destPort: rp.port,
       };
       const key = forwardKey(spec);
@@ -448,7 +452,7 @@ export class AutoForwarder {
       } else {
         this.failedPorts.set(rp.port, {
           at: Date.now(),
-          error: `could not bind 127.0.0.1:${localPort}`,
+          error: `could not bind ${LOOPBACK_HOST}:${localPort}`,
         });
       }
     }
@@ -557,9 +561,9 @@ export class AutoForwarder {
    */
   async findAvailableLocalPort(preferred: number): Promise<number | null> {
     if (await this.isLocalPortAvailable(preferred)) return preferred;
-    for (let offset = 1; offset < 1000; offset++) {
+    for (let offset = 1; offset < MIRROR_SWEEP_DISTANCE; offset++) {
       const candidate = preferred + offset;
-      if (candidate > 65535) break;
+      if (candidate > MAX_PORT) break;
       if (await this.isLocalPortAvailable(candidate)) return candidate;
     }
     const [lo, hi] = this.config.localPortRange;
@@ -588,7 +592,7 @@ export class AutoForwarder {
    * a working port on the first try instead of never.
    */
   isLocalPortAvailable(port: number): Promise<boolean> {
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(false);
+    if (!Number.isInteger(port) || port < 1 || port > MAX_PORT) return Promise.resolve(false);
     for (const f of this.forwards.values()) {
       if (f.spec.listenPort === port) return Promise.resolve(false);
     }
@@ -601,7 +605,7 @@ export class AutoForwarder {
       };
       const server = createServer();
       server.once('error', () => done(false));
-      server.listen({ port, host: '127.0.0.1', exclusive: false }, () => {
+      server.listen({ port, host: LOOPBACK_HOST, exclusive: false }, () => {
         server.close(() => done(true));
       });
     });

@@ -268,10 +268,12 @@ export const useComposerStore = defineStore('composer', () => {
   function schedulePersist(): void {
     if (typeof localStorage === 'undefined') return;
     if (persistTimer !== null) clearTimeout(persistTimer);
-    persistTimer = setTimeout(persistNow, 250);
+    persistTimer = setTimeout(persistNow, PERSIST_DEBOUNCE_MS);
   }
 
-  function persistNow(): void {
+  /** Drafts debounce their localStorage write; a keystroke storm costs one write. */
+const PERSIST_DEBOUNCE_MS = 250;
+function persistNow(): void {
     persistTimer = null;
     if (typeof localStorage === 'undefined') return;
     const out: Record<string, PersistedState> = {};

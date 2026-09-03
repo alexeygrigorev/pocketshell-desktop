@@ -20,6 +20,8 @@
  * The address is `IP:PORT`, `[IPv6]:PORT`, `:::PORT`, or `*:PORT`.
  */
 
+import { MAX_PORT } from '../../shared/net.js';
+
 /** One listening TCP port on the remote host. */
 export interface RemotePort {
   port: number;
@@ -220,7 +222,7 @@ function extractPort(addr: string): number | null {
   const tail = addr.slice(colon + 1);
   if (!/^\d+$/.test(tail)) return null;
   const n = Number.parseInt(tail, 10);
-  return n >= 0 && n <= 65535 ? n : null;
+  return n >= 0 && n <= MAX_PORT ? n : null;
 }
 
 /**

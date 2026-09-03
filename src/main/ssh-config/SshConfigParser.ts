@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { LOOPBACK_HOST, MAX_PORT } from '../../shared/net.js';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { ForwardSpec, HostEntry } from '../../shared/types.js';
@@ -203,7 +204,7 @@ function finalizeHost(
 
 function parsePort(value: string): number {
   const n = Number.parseInt(value, 10);
-  return Number.isFinite(n) && n > 0 && n < 65536 ? n : DEFAULT_PORT;
+  return Number.isFinite(n) && n > 0 && n <= MAX_PORT ? n : DEFAULT_PORT;
 }
 
 function parseForward(value: string, kind: ForwardSpec['kind']): ForwardSpec {
@@ -241,10 +242,10 @@ function splitHostPort(part: string): { host: string; port: number } {
     return { host, port: Number.parseInt(portPart, 10) || 0 };
   }
   const colon = part.lastIndexOf(':');
-  if (colon < 0) return { host: '127.0.0.1', port: Number.parseInt(part, 10) || 0 };
+  if (colon < 0) return { host: LOOPBACK_HOST, port: Number.parseInt(part, 10) || 0 };
   const host = part.slice(0, colon);
   const port = Number.parseInt(part.slice(colon + 1), 10) || 0;
-  return { host: host || '127.0.0.1', port };
+  return { host: host || LOOPBACK_HOST, port };
 }
 
 function tildeExpand(p: string): string {

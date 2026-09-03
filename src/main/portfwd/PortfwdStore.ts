@@ -1,4 +1,5 @@
 import Store from 'electron-store';
+import { MAX_PORT } from '../../shared/net.js';
 
 /**
  * Persistence for port-forwarding preferences.
@@ -238,7 +239,7 @@ export function sanitiseState(value: unknown): PortfwdState {
     for (const [key, raw] of Object.entries(src.remaps)) {
       if (!/^\d+$/.test(key)) continue;
       const port = typeof raw === 'number' ? raw : Number.NaN;
-      if (Number.isInteger(port) && port > 0 && port <= 65535) remaps[key] = port;
+      if (Number.isInteger(port) && port > 0 && port <= MAX_PORT) remaps[key] = port;
     }
   }
 
@@ -255,7 +256,7 @@ function sanitisePortList(value: unknown): number[] {
   if (!Array.isArray(value)) return [];
   const out = new Set<number>();
   for (const item of value) {
-    if (typeof item === 'number' && Number.isInteger(item) && item > 0 && item <= 65535) {
+    if (typeof item === 'number' && Number.isInteger(item) && item > 0 && item <= MAX_PORT) {
       out.add(item);
     }
   }

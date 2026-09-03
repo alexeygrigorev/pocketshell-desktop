@@ -1,4 +1,5 @@
 import type { SshService } from '../ssh/SshService.js';
+import { LOOPBACK_HOST } from '../../shared/net.js';
 import type { ForwardService } from './ForwardService.js';
 import type { ShellId } from '../../shared/types.js';
 import { pathAwareCommand } from '../helper/bootstrap.js';
@@ -462,9 +463,9 @@ export class ServeService {
           connectionId,
           forwardKey({
             kind: 'local',
-            listenHost: '127.0.0.1',
+            listenHost: LOOPBACK_HOST,
             listenPort: localPort,
-            destHost: '127.0.0.1',
+            destHost: LOOPBACK_HOST,
             destPort: remotePort,
           }),
         );

@@ -1,4 +1,5 @@
 import { createServer, type Server, type Socket } from 'node:net';
+import { LOOPBACK_HOST } from '../../shared/net.js';
 import type { Client } from 'ssh2';
 import type { ConnectionRegistry } from '../ssh/ConnectionRegistry.js';
 import type { ForwardSpec } from '../../shared/types.js';
@@ -345,7 +346,7 @@ export class Forwarder {
       return;
     }
     client.forwardOut(
-      socket.remoteAddress ?? '127.0.0.1',
+      socket.remoteAddress ?? LOOPBACK_HOST,
       socket.remotePort ?? 0,
       destHost,
       destPort,

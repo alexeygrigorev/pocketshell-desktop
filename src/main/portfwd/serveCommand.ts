@@ -1,4 +1,5 @@
 import { shellQuote, shellQuoteRemotePath } from '../../shared/shellQuote.js';
+import { LOOPBACK_HOST } from '../../shared/net.js';
 import { splitSections } from './PortScanner.js';
 import { LISTENER_SCAN_COMMAND, mergeScanSections } from './scanRemotePorts.js';
 
@@ -86,7 +87,7 @@ const SECTION_DIR = 'PS_SERVE_DIR';
  * separate, explicitly-named, explicitly-confirmed action — never a widening
  * of this constant.
  */
-export const SERVE_BIND_ADDRESS = '127.0.0.1';
+export const SERVE_BIND_ADDRESS = LOOPBACK_HOST;
 
 /**
  * Remote ports the server may land on, inclusive.
@@ -351,7 +352,7 @@ export function serveErrorMessage(outcome: ServeOutcome, dir: string): string {
  * makes the browser resolve relative links against the parent.
  */
 export function serveUrl(localPort: number): string {
-  return `http://127.0.0.1:${localPort}/`;
+  return `http://${LOOPBACK_HOST}:${localPort}/`;
 }
 
 /** The Ports-panel label for a served folder, e.g. `Serving dist/`. */

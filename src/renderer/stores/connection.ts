@@ -209,13 +209,15 @@ export const useConnectionStore = defineStore('connection', () => {
     retryIn.value = 0;
   }
 
-  function startCountdown(retryAt: number): void {
+  /** The auto-reconnect countdown label ticks once a second. */
+const COUNTDOWN_TICK_MS = 1_000;
+function startCountdown(retryAt: number): void {
     stopCountdown();
     const tick = (): void => {
       retryIn.value = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
     };
     tick();
-    countdownTimer = setInterval(tick, 1000);
+    countdownTimer = setInterval(tick, COUNTDOWN_TICK_MS);
   }
 
   /**
