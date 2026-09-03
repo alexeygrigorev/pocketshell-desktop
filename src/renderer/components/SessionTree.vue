@@ -740,17 +740,32 @@ async function confirmStopFolder(): Promise<void> {
   stopBusy.value = true;
   const failed: string[] = [];
   let reason: string | null = null;
-  for (const name of target.sessions) {
-    const result = await projects.killSession(connectionId, name);
-    if (!result.ok && result.code !== 'not-found') {
-      failed.push(name);
-      if (reason === null) reason = result.error ?? null;
-      continue;
+  try {
+    for (const name of target.sessions) {
+      let result: Awaited<ReturnType<typeof projects.killSession>>;
+      try {
+        result = await projects.killSession(connectionId, name);
+      } catch (e) {
+        // A rejected invoke counts as a failed session and the batch moves
+        // on — aborting the loop used to leave the remaining sessions
+        // untouched with no report of any kind.
+        failed.push(name);
+        if (reason === null) reason = (e as Error).message;
+        continue;
+      }
+      if (!result.ok && result.code !== 'not-found') {
+        failed.push(name);
+        if (reason === null) reason = result.error ?? null;
+        continue;
+      }
+      composer.forget(composer.targetKey(connectionId, name));
     }
-    composer.forget(composer.targetKey(connectionId, name));
+  } finally {
+    // Whatever the batch did, the latch must lift: a `stopBusy` left true
+    // disables the Stop action until the component remounts.
+    stopBusy.value = false;
+    stopping.value = null;
   }
-  stopBusy.value = false;
-  stopping.value = null;
   if (failed.length) {
     const names = failed.map((name) => `"${name}"`).join(', ');
     stopError.value = `Could not stop ${names} in ${target.label}.` + (reason ? ` ${reason}` : '');

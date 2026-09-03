@@ -1587,16 +1587,27 @@ async function confirmStop(): Promise<void> {
     return;
   }
   stopBusy.value = true;
-  const result = await projects.killSession(connectionId, session);
-  stopBusy.value = false;
-  stopping.value = null;
-  if (!result.ok && result.code !== 'not-found') {
-    createError.value = result.error ?? `Could not stop "${session}".`;
-    return;
+  try {
+    let result: Awaited<ReturnType<typeof projects.killSession>>;
+    try {
+      result = await projects.killSession(connectionId, session);
+    } catch (e) {
+      // A rejected invoke is a failed kill like any other. Let it escape and
+      // `stopBusy` stays latched — the Stop button dead until remount.
+      createError.value = (e as Error).message;
+      return;
+    }
+    if (!result.ok && result.code !== 'not-found') {
+      createError.value = result.error ?? `Could not stop "${session}".`;
+      return;
+    }
+    selectAfterClose(session);
+    openedSessions.value = openedSessions.value.filter((name) => name !== session);
+    composer.forget(composer.targetKey(connectionId, session));
+  } finally {
+    stopBusy.value = false;
+    stopping.value = null;
   }
-  selectAfterClose(session);
-  openedSessions.value = openedSessions.value.filter((name) => name !== session);
-  composer.forget(composer.targetKey(connectionId, session));
   await sessions.refresh(connectionId);
 }
 

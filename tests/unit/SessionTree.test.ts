@@ -759,6 +759,23 @@ describe('SessionTree — stopping every session in a folder', () => {
     await wrapper.get('.stop-error button').trigger('click');
     expect(wrapper.find('.stop-error').exists()).toBe(false);
   });
+
+  it('a rejected kill counts as a failed session and the batch continues', async () => {
+    // The invoke underneath the store can REJECT (the transport dies mid-kill),
+    // which used to escape the loop: the remaining sessions were never
+    // attempted and `stopBusy` stayed latched, disabling the Stop action until
+    // remount.
+    killSession.mockRejectedValueOnce(new Error('channel closed'));
+    const wrapper = await open(FOLDER);
+    await openStopConfirm(wrapper);
+    await wrapper.get('.stop-confirm .btn-danger').trigger('click');
+    await flush(wrapper);
+
+    expect(killSession).toHaveBeenCalledTimes(2);
+    const error = wrapper.get('.stop-error').text();
+    expect(error).toContain('Could not stop "git-dataqna" in dataqna.');
+    expect(error).toContain('channel closed');
+  });
 });
 
 /**
