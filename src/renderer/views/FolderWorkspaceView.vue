@@ -1352,6 +1352,15 @@ async function createSession(choice: LaunchChoice | null): Promise<void> {
   if (choice) armLaunch(created, choice);
 }
 
+// Monotonic within the workspace, never a length-derived index: closing tab 2
+// and adding one would otherwise reuse its id and inherit its directory.
+// The counter rides behind Date.now() because tab ids persist to
+// workspaceState: a bare counter restarts with the app and could collide with
+// a restored id, while two tabs minted inside the SAME millisecond (a scripted
+// drop, a double action) would collide on the timestamp alone and the second
+// would silently replace the first in `filesTabs`.
+let filesTabSeq = 0;
+
 /**
  * Another Files tab, with its own directory memory.
  *
@@ -1365,10 +1374,8 @@ async function createSession(choice: LaunchChoice | null): Promise<void> {
  */
 function addFilesTab(seed?: string | null): void {
   addAnchor.value = null;
-  // Monotonic within the workspace, never a length-derived index: closing tab 2
-  // and adding one would otherwise reuse its id and inherit its directory.
   const next = {
-    id: `${folderKey.value}::files:${Date.now()}`,
+    id: `${folderKey.value}::files:${Date.now()}:${++filesTabSeq}`,
     path: seed ?? summary.value?.path ?? folderPath.value,
   };
   filesTabs.value = [...filesTabs.value, next];
