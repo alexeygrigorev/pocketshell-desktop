@@ -341,7 +341,7 @@ export const useFilesStore = defineStore('files', () => {
     // moment the path is recovered the key changes, so the FIRST visit after
     // the fix opens at the recovered directory rather than at a home
     // remembered from before it. See docs on the null-path bug.
-    return `${connectionId} ${session ?? ''}`;
+    return `${connectionId}\x00${session ?? ''}`;
   }
 
   /**
@@ -1054,7 +1054,7 @@ export const useFilesStore = defineStore('files', () => {
       positions.clear();
       return;
     }
-    const prefix = `${connectionId} `;
+    const prefix = `${connectionId}\x00`;
     for (const key of [...positions.keys()]) {
       if (key.startsWith(prefix)) positions.delete(key);
     }
