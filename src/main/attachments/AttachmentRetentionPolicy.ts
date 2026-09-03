@@ -20,6 +20,8 @@
  * {@link RemoteAttachmentPruner} touches the network.
  */
 
+import { shellQuoteRemotePath } from '../../shared/shellQuote.js';
+
 /** Keep at least this many of the newest attachments per scope. */
 export const DEFAULT_KEEP_NEWEST = 20;
 
@@ -160,7 +162,7 @@ export function buildDeleteCommands(
     const paths = batch.map((n) => `~/${remoteDir}/${n}`);
     if (dryRun) {
       commands.push(
-        `printf 'would-delete\\t%s\\n' ${paths.map(shellQuoteLiteral).join(' ')}`,
+        `printf 'would-delete\\t%s\\n' ${paths.map(shellQuoteRemotePath).join(' ')}`,
       );
     } else {
       const deleteArgs = paths.map(shellQuoteRemotePath).join(' ');
@@ -179,24 +181,6 @@ export function parseDeletedCount(stdout: string): number {
     if (Number.isFinite(n)) total += n;
   }
   return total;
-}
-
-function shellQuoteLiteral(value: string): string {
-  return `'${value.split("'").join("'\\''")}'`;
-}
-
-/**
- * Quote a remote path while leaving a leading `~/` unquoted so the
- * shell still performs tilde expansion (quoting the whole thing would
- * make `rm` look for a literal `~` directory).
- */
-function shellQuoteRemotePath(path: string): string {
-  if (path === '~') return '~';
-  if (path.startsWith('~/')) {
-    const rest = path.slice(2);
-    return rest === '' ? '~/' : `~/${shellQuoteLiteral(rest)}`;
-  }
-  return shellQuoteLiteral(path);
 }
 
 /** The slice of the SSH service the pruner needs. */

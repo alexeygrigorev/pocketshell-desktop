@@ -108,8 +108,11 @@ describe('buildDeleteCommands', () => {
   const dir = '.pocketshell/attachments/main';
 
   it('emits a tilde-expandable rm with a receipt', () => {
+    // Quoting goes through src/shared/shellQuote.ts, the one escape the rest
+    // of the repo standardizes on — it emits `$HOME` unquoted where the old
+    // local copy kept `~`. Any POSIX shell expands the two identically.
     expect(buildDeleteCommands(dir, ['a.png', 'b.png'], false, 50)).toEqual([
-      `rm -f -- ~/'${dir}/a.png' ~/'${dir}/b.png' && printf 'deleted\\t2\\n'`,
+      `rm -f -- $HOME/'${dir}/a.png' $HOME/'${dir}/b.png' && printf 'deleted\\t2\\n'`,
     ]);
   });
 
@@ -122,7 +125,7 @@ describe('buildDeleteCommands', () => {
 
   it('single-quotes names containing shell metacharacters', () => {
     const [command] = buildDeleteCommands(dir, ["it's $(rm -rf ~).png"], false, 50);
-    expect(command).toContain(`~/'${dir}/it'\\''s $(rm -rf ~).png'`);
+    expect(command).toContain(`$HOME/'${dir}/it'\\''s $(rm -rf ~).png'`);
   });
 
   it('drops names that could steer rm outside the directory', () => {
