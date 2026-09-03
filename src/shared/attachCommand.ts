@@ -117,10 +117,19 @@ export function shellSingleQuote(value: string): string {
  * it into the format string, so a name containing a `%` cannot turn into a
  * conversion specifier.
  *
+ * The optional [socketPath] is a hint from session enrichment. `null` means
+ * the default tmux socket is known; `undefined` means no hint is available.
+ * A non-undefined hint is tried directly first, then falls back to the full
+ * socket sweep if the session moved after listing.
+ *
  * The sweep variables are `__ps_*` and live inside the subshell, so nothing
  * leaks into the login shell the user lands in afterwards.
  */
-export function sessionAttachCommand(sessionName: string, ttyVar?: string): string {
+export function sessionAttachCommand(
+  sessionName: string,
+  ttyVar?: string,
+  socketPath?: string | null,
+): string {
   const name = shellSingleQuote(sessionName);
   const target = shellSingleQuote(`=${sessionName}`);
   const failure =
@@ -132,11 +141,19 @@ export function sessionAttachCommand(sessionName: string, ttyVar?: string): stri
     'for __ps_s in "${TMUX_TMPDIR:-/tmp}"/tmux-$(id -u)/*; do ' +
     '[ -S "$__ps_s" ] || continue; ' +
     `if tmux -S "$__ps_s" has-session -t ${target} 2>/dev/null; then __ps_sock=$__ps_s; break; fi; done; `;
-  const join =
+  const locatedJoin =
     'if [ -n "$__ps_sock" ]; then ' +
     `tmux -S "$__ps_sock" attach-session -t ${target}; ` +
     `else tmuxctl ${name}; fi`;
-  return `( PATH="${USER_BIN_PATH}:$PATH"; ${handshake}${locate}${join} ) || printf '${failure}' ${name}`;
+  const directJoin =
+    socketPath === undefined
+      ? null
+      : `${socketPath === null ? 'tmux' : `tmux -S ${shellSingleQuote(socketPath)}`} ` +
+        `attach-session -t ${target} 2>/dev/null`;
+  const join = directJoin
+    ? `(${directJoin}) || (${locate}${locatedJoin})`
+    : `${locate}${locatedJoin}`;
+  return `( PATH="${USER_BIN_PATH}:$PATH"; ${handshake}${join} ) || printf '${failure}' ${name}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -138,6 +138,10 @@ export class PocketshellClient {
    * simply not in the map yet and gets asked about on the next refresh.
    */
   private readonly sessionPathCacheByConnection = new Map<string, Map<string, string>>();
+  private readonly sessionSocketPathsByConnection = new Map<
+    string,
+    Map<string, string | null>
+  >();
   private readonly repoRoots = new Map<string, Map<string, string | null>>();
 
   /**
@@ -656,8 +660,18 @@ export class PocketshellClient {
     // iteration produced, and one stale socket whose server has died would
     // otherwise throw away every row the healthy ones printed. Same reasoning
     // the worktree probe already uses: parse what came back.
+    const enrichment = parseSessionEnrichment(res.stdout);
+    let socketPaths = this.sessionSocketPathsByConnection.get(connectionId);
+    if (!socketPaths) {
+      socketPaths = new Map<string, string | null>();
+      this.sessionSocketPathsByConnection.set(connectionId, socketPaths);
+    }
+    for (const [sessionName, details] of enrichment) {
+      socketPaths.set(sessionName, details.socketPath);
+    }
+
     return {
-      enrichment: parseSessionEnrichment(res.stdout),
+      enrichment,
       exitCode: res.exitCode,
       stdout: res.stdout,
       stderr: res.stderr,
@@ -704,6 +718,15 @@ export class PocketshellClient {
     const hit = findEnrichment(probe.enrichment, name);
     if (hit) return { status: 'found', socketPath: hit.socketPath };
     return { status: 'absent' };
+  }
+
+  /**
+   * Return the socket path most recently reported by session enrichment.
+   * `undefined` means this connection has not reported the session yet;
+   * `null` is a known session on the default tmux socket.
+   */
+  cachedSessionSocketPath(connectionId: string, sessionName: string): string | null | undefined {
+    return this.sessionSocketPathsByConnection.get(connectionId)?.get(sessionName);
   }
 
   /**

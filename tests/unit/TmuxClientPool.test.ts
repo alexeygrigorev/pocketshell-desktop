@@ -252,6 +252,54 @@ describe('TmuxClientPool', () => {
     expect(harness.peakShellOpens()).toBe(1);
   });
 
+  it('does not wait for the optional server locator before opening a PTY', async () => {
+    let resolveLocation!: (
+      result: { status: 'found'; socketPath: string | null },
+    ) => void;
+    const location = new Promise<{ status: 'found'; socketPath: string | null }>((resolve) => {
+      resolveLocation = resolve;
+    });
+    const helper = {
+      locateSession: () => location,
+    } as unknown as PocketshellClient;
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh, helper);
+
+    const attach = pool.attach('c1', 'alpha', sink);
+    const result = await Promise.race([
+      attach,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 50)),
+    ]);
+
+    expect(result).not.toBeNull();
+    expect((result as { shellId: ShellId }).shellId).toBe(harness.opened[0]);
+
+    resolveLocation({ status: 'found', socketPath: '/tmp/tmux-1000/tmuxctl-alpha' });
+    await location;
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    harness.answerExecWith({ stdout: '', stderr: '', exitCode: 0 });
+    await pool.redraw((result as { shellId: ShellId }).shellId);
+    expect(harness.execCalls[0]).toContain('-S');
+  });
+
+  it('uses the cached session socket on the first attach', async () => {
+    const socketPath = '/tmp/tmux-1000/tmuxctl-alpha';
+    const helper = {
+      cachedSessionSocketPath: () => socketPath,
+      locateSession: async () => ({ status: 'found' as const, socketPath }),
+    } as unknown as PocketshellClient;
+    const harness = makeSsh();
+    const pool = new TmuxClientPool(harness.ssh, helper);
+
+    await pool.attach('c1', 'alpha', sink);
+
+    const command = opens(harness.calls)[0]!.detail;
+    const direct = `tmux -S '${socketPath}' attach-session -t '=alpha'`;
+    expect(command).toContain(direct);
+    expect(command.indexOf(direct)).toBeLessThan(command.indexOf('for __ps_s'));
+    expect(harness.execCalls).toHaveLength(0);
+  });
+
   it('retries a channel-ceiling failure after evicting one cached tab', async () => {
     const harness = makeSsh();
     const pool = new TmuxClientPool(harness.ssh);

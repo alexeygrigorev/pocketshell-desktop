@@ -126,12 +126,15 @@ maintainer:
 
 `TmuxClientPool` keeps one tmux client per visited session, keyed beneath the
 SSH connection. Attach requests on one connection are serialized so PTYs that
-are still opening count toward the channel budget. The optional tmux-server
-locator runs before the PTY request, avoiding a race between its short-lived
-exec channel and the shell channel. A connection keeps at most six live tab
-clients and evicts the least-recently-used tab beyond that. If `ssh2` reports a
-channel-open refusal, one LRU client is released and the PTY request is retried
-once; unrelated PTY errors still reach the terminal as errors.
+are still opening count toward the channel budget. The session-list enrichment
+result is retained as an attach hint: when present, the join tries that socket
+directly, with the socket sweep and `tmuxctl` kept as a stale-hint fallback.
+When no cached hint is available, the optional tmux-server locator runs after
+the PTY channel opens and updates the client in the background, so opening a
+tab does not wait for another SSH round trip. A connection keeps at most six
+live tab clients and evicts the least-recently-used tab beyond that. If `ssh2`
+reports a channel-open refusal, one LRU client is released and the PTY request
+is retried once; unrelated PTY errors still reach the terminal as errors.
 
 **Why not control mode?** Control mode gives per-pane structured state and
 single-pane rendering — valuable on a phone, less so on a big desktop where

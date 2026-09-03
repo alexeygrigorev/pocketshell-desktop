@@ -748,20 +748,13 @@ export class TmuxClientPool {
     opts: AttachSessionOptions,
   ): Promise<AttachSessionResult> {
     const ttyVar = clientTtyVar(this.tokenFor(connectionId, sessionName));
-    // Where is this session's tmux server? Run the optional enrichment probe
-    // BEFORE opening the PTY. It is a short-lived SSH channel, and starting it
-    // concurrently with the shell made the two requests race for the last
-    // MaxSessions slot. A failed probe is only an optimisation failure: the
-    // join continues with the legacy bare-tmux spelling.
-    let socketPath: string | null = null;
-    if (this.helper) {
-      try {
-        const located = await this.helper.locateSession(connectionId, sessionName);
-        if (located.status === 'found') socketPath = located.socketPath;
-      } catch {
-        // The locator is advisory. The PTY join is still useful without it.
-      }
-    }
+    const hintedSocketPath = this.cachedSocketPath(connectionId, sessionName);
+    // The session-server locator is advisory: it only aims later redraw and
+    // geometry commands. It must not sit in front of the PTY open, because a
+    // multi-socket probe is a full SSH exec round trip and the terminal can
+    // start joining before that answer exists. Starting it only AFTER the PTY
+    // channel has opened also avoids the MaxSessions race that ruled out the
+    // old concurrent version.
     // The callbacks need the id of the shell they belong to, and the id only
     // exists once `openTrackedShell` resolves. A `const` captured from the
     // enclosing scope would be in its temporal dead zone for any byte that
@@ -773,7 +766,7 @@ export class TmuxClientPool {
     // so rather than so bytes get dropped.
     let id: ShellId | null = null;
     const shellId = await this.ssh.openTrackedShell(connectionId, {
-      command: sessionAttachCommand(sessionName, ttyVar),
+      command: sessionAttachCommand(sessionName, ttyVar, hintedSocketPath),
       cols: opts.cols,
       rows: opts.rows,
       onData: (data) => {
@@ -799,11 +792,39 @@ export class TmuxClientPool {
       shellId,
       session: sessionName,
       ttyVar,
-      socketPath,
+      socketPath: hintedSocketPath ?? null,
       useOrder: ++this.useClock,
       lastUsedAt: Date.now(),
     });
+    if (hintedSocketPath === undefined) {
+      this.locateSocketPath(connectionId, sessionName, shellId);
+    }
     return { shellId, switched: false };
+  }
+
+  private cachedSocketPath(connectionId: string, sessionName: string): string | null | undefined {
+    const helper = this.helper;
+    if (!helper || typeof helper.cachedSessionSocketPath !== 'function') return undefined;
+    return helper.cachedSessionSocketPath(connectionId, sessionName);
+  }
+
+  /** Fill in the optional tmux-server aim without delaying the terminal join. */
+  private locateSocketPath(connectionId: string, sessionName: string, shellId: ShellId): void {
+    if (!this.helper) return;
+    void this.helper
+      .locateSession(connectionId, sessionName)
+      .then((located) => {
+        if (located.status !== 'found') return;
+        // A rename or a connection drop may have removed/re-keyed this record
+        // while the advisory probe was in flight. Find it by the stable PTY id
+        // and only update a client that is still ours.
+        const held = this.clientForShell(shellId);
+        if (held) held.socketPath = located.socketPath;
+      })
+      .catch(() => {
+        // The locator is an optimisation. The join and its legacy bare-tmux
+        // fallback remain useful when the probe cannot answer.
+      });
   }
 
   /**

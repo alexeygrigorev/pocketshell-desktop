@@ -167,6 +167,31 @@ describe('sessionAttachCommand', () => {
   });
 });
 
+describe('sessionAttachCommand with a cached socket path', () => {
+  it('tries the known socket before starting the multi-socket sweep', () => {
+    const command = sessionAttachCommand(
+      'git-red-stamp-sound',
+      undefined,
+      '/tmp/tmux-1000/tmuxctl-git-red-stamp-sound',
+    );
+    const direct =
+      "tmux -S '/tmp/tmux-1000/tmuxctl-git-red-stamp-sound' attach-session -t '=git-red-stamp-sound'";
+
+    expect(command).toContain(direct);
+    expect(command.indexOf(direct)).toBeLessThan(command.indexOf('for __ps_s'));
+    // A stale list hint still gets the old exact socket sweep as a recovery
+    // arm; it is after the direct attach and therefore not on the normal path.
+    expect(command).toContain("has-session -t '=git-red-stamp-sound'");
+  });
+
+  it('uses a known default socket without treating it as an unknown guess', () => {
+    const command = sessionAttachCommand('main', undefined, null);
+
+    expect(command).toContain("tmux attach-session -t '=main'");
+    expect(command).toContain('for __ps_s');
+  });
+});
+
 describe('shellSingleQuote', () => {
   it('wraps a plain value', () => {
     expect(shellSingleQuote('main')).toBe("'main'");
