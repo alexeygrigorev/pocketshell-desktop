@@ -372,13 +372,23 @@ export const useConnectionStore = defineStore('connection', () => {
     error.value = null;
     activeHost.value = host;
     lastKeyPath.value = privateKeyPath;
-    const result = await api.ssh.connect({
-      host: host.hostname,
-      port: host.port,
-      user: host.user || '',
-      privateKeyPath: privateKeyPath ?? host.identityFile ?? undefined,
-      tofuDecision: 'accept-always',
-    });
+    let result: Awaited<ReturnType<typeof api.ssh.connect>>;
+    try {
+      result = await api.ssh.connect({
+        host: host.hostname,
+        port: host.port,
+        user: host.user || '',
+        privateKeyPath: privateKeyPath ?? host.identityFile ?? undefined,
+        tofuDecision: 'accept-always',
+      });
+    } catch (e) {
+      // A rejected invoke is a failed dial, not an exception to bubble: leave
+      // `state` at 'connecting' and this store would hold the picker's rows
+      // disabled forever with no message anywhere.
+      state.value = 'idle';
+      error.value = (e as Error).message;
+      return false;
+    }
     if (result.ok && result.connectionId) {
       // Do this while the picker still owns the connection attempt. Once the
       // new id is exposed, HostWorkspaceView can render the persisted ON
@@ -390,9 +400,16 @@ export const useConnectionStore = defineStore('connection', () => {
       connectionId.value = result.connectionId;
       state.value = 'connected';
       // Fire bootstrap in the background; the UI surfaces it when it lands.
-      void api.helper.bootstrap(result.connectionId).then((b) => {
-        bootstrap.value = b;
-      });
+      // A rejection (the link dropped right after connect) is swallowed:
+      // `bootstrap` staying null keeps the missing-tools strip quiet, which
+      // beats an unhandled rejection paging the diag banner for a connection
+      // that is already gone.
+      void api.helper
+        .bootstrap(result.connectionId)
+        .then((b) => {
+          bootstrap.value = b;
+        })
+        .catch(() => undefined);
       return true;
     }
     state.value = 'idle';

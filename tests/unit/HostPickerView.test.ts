@@ -322,4 +322,20 @@ describe('HostPickerView — reloads SSH config on demand', () => {
     expect(wrapper.findAll('.host-name').map((item) => item.text())).toEqual(['hetzner']);
     expect(wrapper.get('.error').text()).toContain('Could not reload ~/.ssh/config: permission denied');
   });
+
+  it('a mount-time config failure reports itself instead of reading as "no hosts"', async () => {
+    // The same rejection used to abort `onMounted` before the auto-connect
+    // decision ran, and the picker fell through to its "No hosts found" empty
+    // state — a load failure dressed up as an empty config file.
+    listConfigHosts.mockRejectedValue(new Error('permission denied'));
+    const wrapper = mount(HostPickerView, {
+      global: { stubs: { OverlayPanel: true, SettingsView: true } },
+    });
+    await flush(wrapper);
+
+    expect(wrapper.get('.error').text()).toContain('Could not read ~/.ssh/config');
+    expect(wrapper.text()).not.toContain('No hosts found');
+    // The decision still ran (on an empty list): nothing was dialled.
+    expect(sshConnect).not.toHaveBeenCalled();
+  });
 });

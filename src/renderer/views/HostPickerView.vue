@@ -98,7 +98,17 @@ onMounted(async () => {
   // identity on it and deliberately does not reset it on unmount (mount order
   // during a route swap is not something to depend on).
   api.win.setTitle(windowTitle(null));
-  await connection.loadHosts();
+  try {
+    await connection.loadHosts();
+  } catch {
+    // A mount-time failure must not take auto-connect down with it: a
+    // rejected read of ~/.ssh/config used to abort this handler before
+    // `decideAutoConnect` ran, and the picker then rendered its "no hosts
+    // found" empty state for what is really a load failure. Report it in the
+    // same slot the reload path uses and let the decision run on whatever
+    // loaded.
+    hostReloadError.value = 'Could not read ~/.ssh/config';
+  }
   const decision = decideAutoConnect({
     defaultHost: settings.defaultHost,
     hosts: connection.hosts,
@@ -117,8 +127,14 @@ async function runAutoConnect(host: HostEntry): Promise<void> {
   // Cancellation lives inside `dial` now: a cancelled attempt reports false
   // (and has already hung up on a late success), so this stays a plain
   // succeeded-or-not question and a cancelled auto-connect cannot navigate.
-  const ok = await dial(host);
-  autoConnecting.value = false;
+  let ok = false;
+  try {
+    ok = await dial(host);
+  } finally {
+    // `finally`, not the line after: if the dial ever throws, the latch must
+    // still lift or the picker's rows stay disabled until remount.
+    autoConnecting.value = false;
+  }
   if (ok) enterWorkspace(host);
 }
 

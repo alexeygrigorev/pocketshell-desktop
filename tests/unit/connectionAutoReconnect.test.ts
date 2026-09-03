@@ -306,3 +306,20 @@ describe('connection store — the automatic reconnect FSM', () => {
     expect(sshConnect).not.toHaveBeenCalled();
   });
 });
+
+describe('connection store connect — a rejected invoke', () => {
+  it('reports failure and returns to idle instead of sticking at "connecting"', async () => {
+    // The IPC layer does not promise never to reject: a transport error can
+    // surface as a rejected invoke rather than an `{ ok: false }` result. The
+    // store used to let that escape, leaving `state` at 'connecting' forever —
+    // the picker's rows disabled, no error anywhere.
+    const connection = useConnectionStore();
+    sshConnect.mockRejectedValueOnce(new Error('channel open failed'));
+
+    const ok = await connection.connect(HOST);
+
+    expect(ok).toBe(false);
+    expect(connection.state).toBe('idle');
+    expect(connection.error).toBe('channel open failed');
+  });
+});
