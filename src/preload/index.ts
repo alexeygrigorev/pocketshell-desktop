@@ -49,6 +49,18 @@ import type {
 /** Listener deregistrator returned by event subscriptions. */
 export type Unsubscribe = () => void;
 
+/**
+ * The one subscription shape every `on*` wrapper below shares: register a
+ * listener that drops the IpcRendererEvent and hands the payload to
+ * [handler], return the unsubscribe closure. Spelled once so copy number ten
+ * cannot get the cleanup subtly wrong.
+ */
+function subscribe<T>(channel: string, handler: (payload: T) => void): Unsubscribe {
+  const listener = (_evt: IpcRendererEvent, payload: T): void => handler(payload);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
 const api = {
   win: {
     /**
@@ -84,11 +96,8 @@ const api = {
      * see them (see src/shared/zoomKeys.ts). The payload is an INTENT, not a
      * value: the renderer owns the number. Returns an unsubscribe fn.
      */
-    onZoomCommand: (handler: (command: ZoomCommand) => void): Unsubscribe => {
-      const listener = (_evt: IpcRendererEvent, command: ZoomCommand): void => handler(command);
-      ipcRenderer.on(ipc.win.zoomCommand, listener);
-      return () => ipcRenderer.removeListener(ipc.win.zoomCommand, listener);
-    },
+    onZoomCommand: (handler: (command: ZoomCommand) => void): Unsubscribe =>
+      subscribe(ipc.win.zoomCommand, handler),
   },
 
   app: {
@@ -97,11 +106,8 @@ const api = {
      * main/index.ts). Payload-free — the fact itself is the message. Returns
      * an unsubscribe fn.
      */
-    onResumed: (handler: () => void): Unsubscribe => {
-      const listener = (): void => handler();
-      ipcRenderer.on(ipc.app.resumed, listener);
-      return () => ipcRenderer.removeListener(ipc.app.resumed, listener);
-    },
+    onResumed: (handler: () => void): Unsubscribe =>
+      subscribe(ipc.app.resumed, handler),
   },
 
   ssh: {
@@ -146,14 +152,7 @@ const api = {
      */
     onState: (
       listener: (payload: { connectionId: string; state: ConnectionState }) => void,
-    ): (() => void) => {
-      const handler = (
-        _e: unknown,
-        payload: { connectionId: string; state: ConnectionState },
-      ): void => listener(payload);
-      ipcRenderer.on(ipc.ssh.state, handler);
-      return () => ipcRenderer.removeListener(ipc.ssh.state, handler);
-    },
+    ): (() => void) => subscribe(ipc.ssh.state, listener),
   },
 
   shell: {
@@ -236,22 +235,13 @@ const api = {
     close: (shellId: ShellId): Promise<boolean> => ipcRenderer.invoke(ipc.shell.close, shellId),
 
     /** Subscribe to terminal stdout bytes. Returns an unsubscribe fn. */
-    onData: (handler: (payload: { shellId: ShellId; data: Uint8Array }) => void): Unsubscribe => {
-      const listener = (_evt: IpcRendererEvent, payload: { shellId: ShellId; data: Uint8Array }) =>
-        handler(payload);
-      ipcRenderer.on(ipc.shell.data, listener);
-      return () => ipcRenderer.removeListener(ipc.shell.data, listener);
-    },
+    onData: (handler: (payload: { shellId: ShellId; data: Uint8Array }) => void): Unsubscribe =>
+      subscribe(ipc.shell.data, handler),
 
     /** Subscribe to shell-exit events. Returns an unsubscribe fn. */
-    onExited: (handler: (payload: { shellId: ShellId; exitCode: number }) => void): Unsubscribe => {
-      const listener = (
-        _evt: IpcRendererEvent,
-        payload: { shellId: ShellId; exitCode: number },
-      ) => handler(payload);
-      ipcRenderer.on(ipc.shell.exited, listener);
-      return () => ipcRenderer.removeListener(ipc.shell.exited, listener);
-    },
+    onExited: (
+      handler: (payload: { shellId: ShellId; exitCode: number }) => void,
+    ): Unsubscribe => subscribe(ipc.shell.exited, handler),
   },
 
   helper: {
@@ -370,11 +360,8 @@ const api = {
       ipcRenderer.invoke(ipc.projects.killSession, connectionId, name),
 
     /** Subscribe to clone lifecycle events. Returns an unsubscribe fn. */
-    onCloneProgress: (handler: (progress: CloneProgress) => void): Unsubscribe => {
-      const listener = (_evt: IpcRendererEvent, progress: CloneProgress) => handler(progress);
-      ipcRenderer.on(ipc.projects.cloneProgress, listener);
-      return () => ipcRenderer.removeListener(ipc.projects.cloneProgress, listener);
-    },
+    onCloneProgress: (handler: (progress: CloneProgress) => void): Unsubscribe =>
+      subscribe(ipc.projects.cloneProgress, handler),
   },
 
   sftp: {
@@ -461,14 +448,7 @@ const api = {
     /** Subscribe to transfer-progress events. Returns an unsubscribe fn. */
     onProgress: (
       handler: (payload: { transferId: string } & TransferProgress) => void,
-    ): Unsubscribe => {
-      const listener = (
-        _evt: IpcRendererEvent,
-        payload: { transferId: string } & TransferProgress,
-      ) => handler(payload);
-      ipcRenderer.on(ipc.sftp.progress, listener);
-      return () => ipcRenderer.removeListener(ipc.sftp.progress, listener);
-    },
+    ): Unsubscribe => subscribe(ipc.sftp.progress, handler),
   },
 
   /**
@@ -510,14 +490,7 @@ const api = {
      */
     onChanged: (
       handler: (payload: { connectionId: string; served: ServedFolder[] }) => void,
-    ): Unsubscribe => {
-      const listener = (
-        _evt: IpcRendererEvent,
-        payload: { connectionId: string; served: ServedFolder[] },
-      ) => handler(payload);
-      ipcRenderer.on(ipc.serve.changed, listener);
-      return () => ipcRenderer.removeListener(ipc.serve.changed, listener);
-    },
+    ): Unsubscribe => subscribe(ipc.serve.changed, handler),
   },
 
   /**
@@ -579,20 +552,7 @@ const api = {
         missing: number;
         capped: boolean;
       }) => void,
-    ): (() => void) => {
-      const listener = (
-        _e: unknown,
-        payload: {
-          token: string;
-          loaded: number;
-          blocked: number;
-          missing: number;
-          capped: boolean;
-        },
-      ): void => handler(payload);
-      ipcRenderer.on(ipc.preview.stats, listener);
-      return () => ipcRenderer.removeListener(ipc.preview.stats, listener);
-    },
+    ): (() => void) => subscribe(ipc.preview.stats, handler),
   },
 
   forwards: {
@@ -684,14 +644,7 @@ const api = {
     /** Subscribe to forward-state snapshots. Returns an unsubscribe fn. */
     onStates: (
       handler: (payload: { connectionId: string; states: ForwardState[] }) => void,
-    ): Unsubscribe => {
-      const listener = (
-        _evt: IpcRendererEvent,
-        payload: { connectionId: string; states: ForwardState[] },
-      ) => handler(payload);
-      ipcRenderer.on(ipc.forwards.states, listener);
-      return () => ipcRenderer.removeListener(ipc.forwards.states, listener);
-    },
+    ): Unsubscribe => subscribe(ipc.forwards.states, handler),
   },
 
   attachments: {
