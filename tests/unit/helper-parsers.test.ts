@@ -432,6 +432,25 @@ describe('parseUsageNdjson', () => {
         ['weekly', 85.0, '2026-09-03T14:04:58Z'],
       ],
     });
+
+    // Reset credits ride in `details` under a per-provider key — codex
+    // `reset_credits_available`, grok `resets_available` — normalized into
+    // one count; providers without the concept are null, not 0.
+    expect(out.map((r) => r.resets_available)).toEqual([null, 1, null, 1, null]);
+  });
+
+  it('reads the resets count from either detail key, or says nothing', () => {
+    const line = (keys: string) =>
+      `{"provider":"x","status":"ok","error":null,"details":{${keys}},"windows":{"weekly":{"percent_remaining":1.0,"reset_at":null}}}`;
+    const rows = (keys: string) => parseUsageNdjson(line(keys))[0]!;
+
+    expect(rows('"reset_credits_available":2').resets_available).toBe(2);
+    expect(rows('"resets_available":1').resets_available).toBe(1);
+    // Spent is a fact worth showing; only ABSENCE is null.
+    expect(rows('"reset_credits_available":0').resets_available).toBe(0);
+    // A provider with no resets concept, or a count that is not a number.
+    expect(rows('').resets_available).toBeNull();
+    expect(rows('"resets_available":"1"').resets_available).toBeNull();
   });
 
   it('keeps all three windows of a provider like go, shortest first', () => {

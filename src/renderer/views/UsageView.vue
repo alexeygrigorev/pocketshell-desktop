@@ -16,6 +16,8 @@
 // monthly); windows the provider does not have are dropped upstream, so the
 // panel never shows a "not reported" placeholder for a window that does not
 // exist. A window label (`5h`/`7d`/`weekly`/`monthly`) is always present.
+// A `resets_available` count (codex's reset credits, grok's restok tokens)
+// renders as a plain per-provider note line when the provider has one.
 //
 // A null percentage is NOT an empty row. It means the meter is unknown, not
 // that the provider has nothing to say: the reset time is still real and is
@@ -89,6 +91,17 @@ function pctWidth(p: number): string {
 }
 function pctText(p: number): string {
   return `${p.toFixed(0)}%`;
+}
+
+/**
+ * The "how many full resets can I still spend" line — codex's reset credits,
+ * grok's restok tokens — normalized by the parser into one count. Null when
+ * the provider has no such concept (claude, copilot, zai), so no line.
+ */
+function resetsNote(row: UsageRow): string | null {
+  const n = row.resets_available;
+  if (typeof n !== 'number' || !Number.isFinite(n)) return null;
+  return `${n} reset${n === 1 ? '' : 's'} available`;
 }
 
 /**
@@ -214,6 +227,11 @@ async function onRefresh(): Promise<void> {
         <p v-if="!windowsOf(row).length" class="note unreported">
           {{ row.error || 'not reported' }}
         </p>
+
+        <!-- The spendable full-reset count, when the provider reports one:
+             the fact that answers "am I out, and can I do anything about
+             it?" — a resource, so it reads as a plain count, not an alarm. -->
+        <p v-if="resetsNote(row)" class="note">{{ resetsNote(row) }}</p>
 
         <p v-if="blockNote(row)" class="note">{{ blockNote(row) }}</p>
       </template>

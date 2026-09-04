@@ -138,6 +138,17 @@ describe('UsageView states', () => {
     expect(wrapper.text()).not.toContain('`');
   });
 
+  it('shows the resets count when the provider reports one, nothing when not', async () => {
+    usage.mockResolvedValue([
+      { ...ROW, provider: 'codex', resets_available: 1 },
+      { ...ROW, provider: 'claude' },
+    ]);
+    const wrapper = await show();
+
+    const notes = wrapper.findAll('.note').map((c) => c.text());
+    expect(notes).toEqual(['1 reset available']);
+  });
+
   it('shows the failure, not the empty-state accusation, when the fetch rejects', async () => {
     usage.mockRejectedValue(new Error('helper not found on host'));
     const wrapper = await show();

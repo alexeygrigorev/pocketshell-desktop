@@ -45,6 +45,14 @@ export interface UsageRow {
   windows: UsageWindow[];
   error: string | null;
   details: Record<string, unknown>;
+  /**
+   * How many "full reset" credits the provider reports (codex's reset
+   * credits, grok's restok tokens) — null when the provider has no such
+   * concept, 0 when it does and the credit is spent. The helper spells the
+   * count under two different detail keys, one per provider; this is the
+   * normalized view of both, so consumers print one field.
+   */
+  resets_available: number | null;
 }
 
 /**
@@ -69,6 +77,17 @@ function termRank(label: string): number {
   // A future label degrades to the end of the list, in emission order, not
   // to the wrong slot.
   return 3;
+}
+
+/**
+ * The resets count, read from whichever detail key the provider's record
+ * speaks (codex `reset_credits_available`, grok `resets_available`) and
+ * taken only when it is a real number — a string or absent key means the
+ * provider has nothing to say, which is null's job.
+ */
+function resetsAvailable(details: Record<string, unknown> | undefined): number | null {
+  const n = details?.['reset_credits_available'] ?? details?.['resets_available'];
+  return typeof n === 'number' && Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -118,7 +137,7 @@ function normalizeUsageRow(row: WireRow): UsageRow {
       window: label ?? generic,
     }))
     .sort((a, b) => termRank(a.window) - termRank(b.window));
-  return { ...row, windows };
+  return { ...row, windows, resets_available: resetsAvailable(row.details) };
 }
 
 /** Parse `pocketshell usage --json` (one JSON object per line). */
