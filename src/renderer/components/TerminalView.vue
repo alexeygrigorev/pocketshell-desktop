@@ -30,9 +30,11 @@
 // is what stops a re-attach closing a PTY main was about to hand back.
 //
 // Clipboard: selecting with the mouse copies on mouse-up (see onDocumentMouseUp);
-// RIGHT-CLICK pastes into the shell. Neither paste CHORD does — Ctrl/Cmd-V and
-// Ctrl/Cmd-Shift-V are both claimed for the prompt composer and leave as
-// `paste-into-composer` (see onCustomKey).
+// a drag when the remote TUI owns the mouse is copied instead through tmux's
+// OSC 52 yank (see the handler in onMounted and osc52.ts). RIGHT-CLICK pastes
+// into the shell. Neither paste CHORD does — Ctrl/Cmd-V and Ctrl/Cmd-Shift-V
+// are both claimed for the prompt composer and leave as `paste-into-composer`
+// (see onCustomKey).
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Terminal, type IDisposable, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -40,6 +42,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api } from '../ipc';
 import { useShellsStore } from '../stores/shells';
 import { createPathLinkProvider } from '../terminalLinks';
+import { decodeOsc52SetClipboard } from '../osc52';
 import { useSettingsStore } from '../stores/settings';
 import { resolveMonoStack } from '../fonts';
 import { resolveTheme } from '../themes';
@@ -1020,6 +1023,18 @@ onMounted(async () => {
     term.registerLinkProvider(
       createPathLinkProvider(term, () => ({ sessionName: targetSession.value })),
     ),
+    // OSC 52 -> clipboard. The receiving half of the tmux drag gesture: with
+    // mouse reporting on, a drag selects IN TMUX and releasing yanks and
+    // dismisses the highlight (why the selection "disappears"), offering the
+    // text to this terminal as `ESC ] 52 ; Pc ; Pt BEL`. Answering it is what
+    // turns that gesture into a real copy; see osc52.ts for what is refused.
+    // Bound once against the terminal's lifetime, like everything else in
+    // this array — the handler reads no per-session state.
+    term.parser.registerOscHandler(52, (data) => {
+      const text = decodeOsc52SetClipboard(data);
+      if (text) void copyToClipboard(text);
+      return true;
+    }),
   ];
   term.attachCustomKeyEventHandler(onCustomKey);
   containerEl.value?.addEventListener('mousedown', onTerminalMouseDown);

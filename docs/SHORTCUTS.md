@@ -22,6 +22,17 @@ everywhere: every call site in the app spells the test
 | *any printable key* | Opens the composer with the keystroke | Not a chord. Gated on the `typingOpensComposer` setting and on the composer being closed. |
 | right-click | Paste into the shell | Not a chord, and now the ONLY route to the shell's own paste. |
 | mouse-up after a drag | Copy the selection | Ditto. |
+| drag, release — mouse reporting ON | Copy, via tmux's yank | tmux paints the selection itself and dismisses it on release, so the highlight "disappears"; the yank reaches the pane as OSC 52 and lands in the clipboard. See below. |
+
+**A drag has two owners, decided by mouse reporting.** With it off, xterm runs
+the selection and the mouse-up row above copies it. With it on — an agent TUI
+turned the mouse on — the drag selects IN TMUX instead (terminalLinks.ts,
+"Clicking while the remote app owns the mouse"): tmux paints the highlight,
+and releasing runs its copy-and-cancel, which is why the highlight vanishes
+under the hand. The yank is not lost: tmux offers it to the outer terminal as
+`ESC ] 52 ; … ` (OSC 52), and the pane's handler (`osc52.ts`) writes it to the
+clipboard — drag-then-release is a copy both ways. Shift+drag bypasses mouse
+reporting and always takes the local path.
 
 **Both paste chords go to the composer; the split is keyboard-vs-mouse, not
 chord-vs-chord** — `Ctrl+Shift+V` is the chord every terminal emulator trains

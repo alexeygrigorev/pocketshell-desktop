@@ -72,6 +72,11 @@ vi.mock('@xterm/xterm', () => ({
     registerLinkProvider(): { dispose: () => void } {
       return { dispose: () => {} };
     }
+    parser = {
+      registerOscHandler(): { dispose: () => void } {
+        return { dispose: () => {} };
+      },
+    };
     attachCustomKeyEventHandler(): void {}
   },
 }));

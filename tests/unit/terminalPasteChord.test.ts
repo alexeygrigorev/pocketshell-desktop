@@ -118,6 +118,11 @@ vi.mock('@xterm/xterm', () => ({
     registerLinkProvider(): { dispose: () => void } {
       return { dispose: () => {} };
     }
+    parser = {
+      registerOscHandler(): { dispose: () => void } {
+        return { dispose: () => {} };
+      },
+    };
     attachCustomKeyEventHandler(fn: (e: KeyboardEvent) => boolean): void {
       customKeyHandler = fn;
     }
