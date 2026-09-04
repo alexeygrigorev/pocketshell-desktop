@@ -157,8 +157,9 @@ belong to WebLinksAddon and are never extended across a row break. A path
 a TUI split across rows (this pane is always a tmux client, so nothing is
 ever flagged `isWrapped`) is reconstructed from geometry — hard wrap,
 box-gutter continuation, near-margin hyphen break — each shape anchored on
-a rooted (`/`, `~/`, `./`, `../`, `file:///`) tail token, so prose rows
-never glue together.
+a tail token that is itself a path by the detector's standard (rooted,
+`file:///`, or a relative one with two or more slashes — one slash is
+`and/or` prose), so prose rows never glue together.
 
 ---
 
@@ -213,8 +214,9 @@ the new connection is up a fresh scan rediscovers the forward set.
 `mkdir`, `rename`, `delete`, `fastPut`/`fastGet` (upload/download, with
 progress events). The renderer's `CodeEditor` is CodeMirror 6 (Monaco was
 considered and dropped); save calls `window.api.sftp.writeFile`. Binary
-detection by extension + stat; images get an `<img>` preview, other binary
-offers hex/download.
+detection by extension + stat; images get an `<img>` preview with a zoom
+bar — Fit / 100% / slider over a scrollable pane, pure arithmetic in
+`src/renderer/imageZoom.ts` — other binary offers hex/download.
 
 Why not reuse the helper's `pocketshell env` for editing? It is scoped to
 `.env`/`.envrc` and writes via stdin; general editing needs a real SFTP

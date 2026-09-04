@@ -16,13 +16,22 @@
 // `worker-src` falls back to it), which is exactly what Monaco's language
 // services need — the dev-works/packaged-dies failure. See the header of
 // components/CodeEditor.vue for the probe output.
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useFilesStore, hasPreview, isEditable } from '../stores/files';
 import { formatBytes } from '../../shared/byteSize';
 import { useSettingsStore } from '../stores/settings';
 import { resolveTheme } from '../themes';
 import { isShortcut } from '../../shared/shortcuts';
+import {
+  fitPercent,
+  formatImageZoom,
+  IMAGE_ZOOM_MAX,
+  IMAGE_ZOOM_MIN,
+  sliderToZoom,
+  stepImageZoom,
+  zoomToSlider,
+} from '../imageZoom';
 import FileTree from '../components/FileTree.vue';
 import OverlayPanel from '../components/OverlayPanel.vue';
 import EnvPanelView from './EnvPanelView.vue';
@@ -355,6 +364,119 @@ const previewNote = computed(() => {
   }
   return parts.join(' · ');
 });
+
+// ---------------------------------------------------------------------------
+// Image zoom
+// ---------------------------------------------------------------------------
+/**
+ * The image viewer's zoom, shared by the −/+ pair, the slider and the
+ * Fit / 100% buttons through ONE number: `zoomOverride` when the user has
+ * named a percentage, otherwise the measured fit answer. Nothing stores Fit
+ * — it is a function of the decoded size and the pane, so a stored value
+ * would go stale the moment the tree splitter moved; it is recomputed and
+ * the picture follows the pane.
+ *
+ * State lives HERE, not in the store, deliberately: it is inspection state
+ * for the file on screen, not a preference and not browsing position. A new
+ * `openUrl` (a different file, or close) resets to Fit, and so does leaving
+ * the tab — the Files tab is behind a `v-if`, and what survives that is the
+ * store's `RememberedPosition`, which is about WHERE you are, not how you
+ * were looking.
+ */
+/** Decoded size of the open image, from the `<img>` load event. */
+const imageNatural = ref<{ w: number; h: number } | null>(null);
+/** CSS size of the pane the image sits in, from a ResizeObserver. */
+const imagePane = ref<{ w: number; h: number } | null>(null);
+/** Manual zoom in percent of natural size; null = Fit mode. */
+const zoomOverride = ref<number | null>(null);
+
+const imageFit = computed(() => {
+  const n = imageNatural.value;
+  const p = imagePane.value;
+  if (!n || !p) return null;
+  return fitPercent(n.w, n.h, p.w, p.h);
+});
+const imageZoom = computed(() => zoomOverride.value ?? imageFit.value);
+const imageZoomLabel = computed(() =>
+  imageZoom.value == null ? '' : formatImageZoom(imageZoom.value),
+);
+const zoomSliderValue = computed(() =>
+  imageZoom.value == null ? 0 : zoomToSlider(imageZoom.value),
+);
+const isFit = computed(() => zoomOverride.value === null);
+const isActualSize = computed(() => zoomOverride.value === 100);
+const canZoomIn = computed(() => imageZoom.value != null && imageZoom.value < IMAGE_ZOOM_MAX);
+const canZoomOut = computed(() => imageZoom.value != null && imageZoom.value > IMAGE_ZOOM_MIN);
+
+/**
+ * Explicit pixel width — the one style the image needs in every mode, which
+ * is why the old `max-width`/`max-height` CSS is gone: a manual zoom has to
+ * be allowed to EXCEED the pane (and scroll), and a constraint that only
+ * shrinks cannot express that. Height follows the aspect ratio.
+ */
+const imageStyle = computed(() => {
+  const n = imageNatural.value;
+  if (!n || imageZoom.value == null) return undefined;
+  return { width: `${(n.w * imageZoom.value) / 100}px` };
+});
+
+function onImageLoad(e: Event): void {
+  const img = e.target as HTMLImageElement;
+  imageNatural.value = img.naturalWidth > 0 ? { w: img.naturalWidth, h: img.naturalHeight } : null;
+}
+
+function zoomIn(): void {
+  if (imageZoom.value != null) zoomOverride.value = stepImageZoom(imageZoom.value, 1);
+}
+function zoomOut(): void {
+  if (imageZoom.value != null) zoomOverride.value = stepImageZoom(imageZoom.value, -1);
+}
+function zoomActualSize(): void {
+  zoomOverride.value = 100;
+}
+function zoomFit(): void {
+  zoomOverride.value = null;
+}
+function onZoomSlider(e: Event): void {
+  zoomOverride.value = sliderToZoom(Number((e.target as HTMLInputElement).value));
+}
+
+// A new URL is a new file: the decoded size and the zoom are about the old
+// one. (Fit mode is the default, so resetting the override alone is not
+// enough — the stale natural size must not size the next image.)
+watch(
+  () => files.openUrl,
+  () => {
+    zoomOverride.value = null;
+    imageNatural.value = null;
+  },
+);
+
+/**
+ * The pane is MEASURED, not assumed: `fitPercent` needs the scroll area's
+ * CSS box, which changes under the splitter drag, a window resize and the
+ * tree pane's own width. The observer is (re)bound by watching the template
+ * ref — the element exists only while an image is open, and a watcher on a
+ * ref fires exactly when Vue assigns it.
+ *
+ * The `typeof` guard is for jsdom, which has no ResizeObserver; the tests
+ * stub one, but a bare import-time `new` would still be the wrong place —
+ * the element can simply not be there yet.
+ */
+const imagePaneEl = ref<HTMLElement | null>(null);
+let imagePaneObserver: ResizeObserver | null = null;
+watch(imagePaneEl, (el) => {
+  imagePaneObserver?.disconnect();
+  imagePaneObserver = null;
+  imagePane.value = null;
+  if (!el || typeof ResizeObserver === 'undefined') return;
+  imagePaneObserver = new ResizeObserver((entries) => {
+    const box = entries[0]?.contentRect;
+    if (box) imagePane.value = { w: box.width, h: box.height };
+  });
+  imagePaneObserver.observe(el);
+});
+onUnmounted(() => imagePaneObserver?.disconnect());
 </script>
 
 <template>
@@ -490,7 +612,7 @@ const previewNote = computed(() => {
              changes, the previewed page's own path — which names a directory
              on the user's server — should not be the thing that leaks first. -->
         <div v-else-if="hasPreview(files.openMode)" class="html-view">
-          <div class="html-bar">
+          <div class="viewer-bar">
             <div class="seg" role="group" aria-label="Document view">
               <button
                 type="button"
@@ -592,8 +714,64 @@ const previewNote = computed(() => {
           />
         </div>
 
+        <!-- Image: a toolbar over a scrolling canvas. Three named states —
+             Fit (the default, computed from the decoded size and the pane,
+             never stored), 100% (one file pixel per CSS pixel) and any
+             manual percentage, where the pane scrolls — all written through
+             the one `zoomOverride` ref; bounds, ladder and slider mapping
+             live in imageZoom.ts with their tests. -->
         <div v-else-if="files.openMode === 'image'" class="viewer image-viewer">
-          <img v-if="files.openUrl" class="image" :src="files.openUrl" :alt="openName" />
+          <div class="viewer-bar">
+            <div class="seg" role="group" aria-label="Zoom step">
+              <button type="button" title="Zoom out" :disabled="!canZoomOut" @click="zoomOut">
+                −
+              </button>
+              <button type="button" title="Zoom in" :disabled="!canZoomIn" @click="zoomIn">
+                +
+              </button>
+            </div>
+            <input
+              class="zoom-slider"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              :value="zoomSliderValue"
+              :disabled="!imageNatural"
+              aria-label="Zoom"
+              :aria-valuetext="imageZoomLabel"
+              @input="onZoomSlider"
+            />
+            <span class="zoom-label">{{ imageZoomLabel }}</span>
+            <div class="seg bar-end" role="group" aria-label="Fit or actual size">
+              <button
+                type="button"
+                :class="{ active: isFit }"
+                title="Fit to window"
+                @click="zoomFit"
+              >
+                Fit
+              </button>
+              <button
+                type="button"
+                :class="{ active: isActualSize }"
+                title="Actual size (100%)"
+                @click="zoomActualSize"
+              >
+                100%
+              </button>
+            </div>
+          </div>
+          <div ref="imagePaneEl" class="image-scroll">
+            <img
+              v-if="files.openUrl"
+              class="image"
+              :src="files.openUrl"
+              :alt="openName"
+              :style="imageStyle"
+              @load="onImageLoad"
+            />
+          </div>
         </div>
 
         <!-- The single honest terminus. Everything that is not text and
@@ -775,7 +953,10 @@ const previewNote = computed(() => {
   display: flex;
   flex-direction: column;
 }
-.html-bar {
+/* One control strip for every viewer that has controls: the HTML/markdown
+   bar and the image zoom bar share the mechanism, so they share the class —
+   same height, same gaps, same surface. */
+.viewer-bar {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
@@ -873,16 +1054,39 @@ const previewNote = computed(() => {
   min-height: 0;
   border: none;
 }
-.image-viewer {
-  align-items: center;
-  justify-content: center;
-  padding: var(--sp-4);
+/* The image canvas: a scroll area, because a manual zoom is ALLOWED to
+   exceed the pane — that is what zooming into a large image is. `display:
+   flex` on the scroll container plus `margin: auto` on the image centers a
+   picture smaller than the pane WITHOUT the top-left clipping that plain
+   flex centering inflicts once the content overflows: with margin auto the
+   overflow scrolls back to the top-left corner like any document. */
+.image-scroll {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
+  display: flex;
+  padding: var(--sp-4);
 }
 .image {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+  margin: auto;
+}
+/* The slider rides on Chromium's native range control (this is Electron, so
+   there is exactly one engine to paint it), tinted with the app accent —
+   custom track/thumb pseudo-elements would buy nothing but ~40 lines to
+   maintain. Log-scaled by the component's mapping, not here. */
+.zoom-slider {
+  flex: 0 1 180px;
+  accent-color: var(--accent);
+}
+.zoom-label {
+  flex: none;
+  min-width: 5ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-secondary);
+}
+.bar-end {
+  margin-left: auto;
 }
 .binary-panel {
   align-items: center;
