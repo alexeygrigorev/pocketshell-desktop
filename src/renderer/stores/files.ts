@@ -32,8 +32,8 @@ import { errorMessage } from '../../shared/errors';
  *
  *   text            -> `openContent`, editable, savable
  *   image/audio/pdf -> `openUrl`, an object URL over a Blob with a real mime
- *   html/markdown   -> BOTH: `openContent` for the editor and `previewUrl`
- *                      for a sandboxed frame, with `docView` saying which
+ *   html/markdown/  -> BOTH: `openContent` for the editor and `previewUrl`
+ *   svg                for a sandboxed frame, with `docView` saying which
  *                      one is on screen
  *   binary          -> `openNote`, a sentence and a download button
  *
@@ -101,20 +101,22 @@ const MAX_DOCUMENT_BYTES = 32 * 1024 * 1024;
  * half-regression the brief warned about.
  */
 export function isEditable(mode: OpenMode | null): boolean {
-  return mode === 'text' || mode === 'html' || mode === 'markdown';
+  return mode === 'text' || mode === 'html' || mode === 'markdown' || mode === 'svg';
 }
 
 /**
  * Kinds shown as BOTH a render and their source.
  *
- * The pair `html` and `markdown` is not a coincidence and is not likely to
- * grow: these are the two formats whose whole point is what they look like
- * when something renders them, and which are still ordinary text files that a
- * person opens a file browser to fix a typo in. Everything else is one or the
- * other.
+ * The trio `html`, `markdown` and `svg` is not a coincidence: these are the
+ * formats whose whole point is what they look like when something renders
+ * them, and which are still ordinary text files that a person opens a file
+ * browser to fix a typo in. Everything else is one or the other. (This
+ * comment used to claim the pair was "not likely to grow"; SVG proved the
+ * shape — text source, visual render, renderable with no code of its own
+ * run — is the definition of the set, and it joined through the same door.)
  */
 export function hasPreview(mode: OpenMode | null): boolean {
-  return mode === 'html' || mode === 'markdown';
+  return mode === 'html' || mode === 'markdown' || mode === 'svg';
 }
 
 /** Everything a remembered session keeps while its tab is unmounted. */
@@ -265,25 +267,30 @@ export const useFilesStore = defineStore('files', () => {
   /**
    * Does this source pull a sub-resource off a remote origin?
    *
-   * Three patterns, because markdown has a syntax of its own for the same
-   * fact. The third — `![alt](https://…)` — is not an edge case in this repo's
-   * world: a README's first three lines are usually shields.io badges, every
-   * one of them a remote image, and without this the preview would paint a row
-   * of broken-image icons under a toolbar reporting nothing wrong.
+   * Four patterns, because the formats that reach here spell the same fact
+   * in three different syntaxes. The third — `![alt](https://…)` — is not an
+   * edge case in this repo's world: a README's first three lines are usually
+   * shields.io badges, every one of them a remote image, and without this the
+   * preview would paint a row of broken-image icons under a toolbar reporting
+   * nothing wrong. The fourth is SVG's spelling — `<image>` and `<use>` carry
+   * their reference in `href` (or `xlink:href`), which none of the HTML or
+   * markdown patterns would catch, and an SVG whose bitmap lives on a CDN
+   * renders with exactly the hole the flag exists to explain.
    *
-   * The markdown pattern matches IMAGES only (`![…]`), never links (`[…]`),
-   * which is the same line the HTML patterns already draw and for the same
-   * reason: an `<a href="https://…">` or a `[spec](https://…)` is a citation,
-   * nothing about it fails to load, and saying "remote resources are not
-   * loaded" because a document cites a source would be its own small lie. A
-   * reference-style image is therefore missed, deliberately — its definition
-   * line is indistinguishable from a link's.
+   * Every pattern matches RESOURCES only, never links, and for the same
+   * reason each time: an `<a href="https://…">`, a `[spec](https://…)` or an
+   * SVG `<a>` is a citation, nothing about it fails to load, and saying
+   * "remote resources are not loaded" because a document cites a source would
+   * be its own small lie. A reference-style markdown image is therefore
+   * missed, deliberately — its definition line is indistinguishable from a
+   * link's.
    */
   function referencesRemote(source: string): boolean {
     return (
       /\bsrc\s*=\s*["']?https?:/i.test(source) ||
       /<link\b[^>]*\bhref\s*=\s*["']?https?:/i.test(source) ||
-      /!\[[^\]]*\]\(\s*<?https?:/i.test(source)
+      /!\[[^\]]*\]\(\s*<?https?:/i.test(source) ||
+      /<(?:image|use)\b[^>]*\bhref\s*=\s*["']?https?:/i.test(source)
     );
   }
 
@@ -501,7 +508,9 @@ export const useFilesStore = defineStore('files', () => {
       const { token, url } =
         openMode.value === 'markdown'
           ? await api.preview.openMarkdown(connectionId, path, currentPreviewStyle())
-          : await api.preview.openHtml(connectionId, path);
+          : openMode.value === 'svg'
+            ? await api.preview.openSvg(connectionId, path)
+            : await api.preview.openHtml(connectionId, path);
       if (isSuperseded()) {
         api.preview.release(token);
         return;
@@ -844,10 +853,10 @@ export const useFilesStore = defineStore('files', () => {
         // read for the source and one for the render, and they can briefly
         // disagree only if the file changes on the host between them.
         if (bytes.length > MAX_TEXT_BYTES) {
+          const label = cls.kind === 'html' ? 'HTML' : cls.kind === 'svg' ? 'SVG' : 'Markdown';
           showBinary(
             cls,
-            `${cls.kind === 'html' ? 'HTML' : 'Markdown'} file is ` +
-              `${formatBytes(bytes.length)}, too large to open here.`,
+            `${label} file is ${formatBytes(bytes.length)}, too large to open here.`,
           );
           return;
         }
@@ -915,8 +924,8 @@ export const useFilesStore = defineStore('files', () => {
   }
 
   /**
-   * Save the open file back to the host. Text, HTML and markdown — the kinds
-   * that have an editor behind them; nothing else is editable.
+   * Save the open file back to the host. Text, HTML, markdown and SVG — the
+   * kinds that have an editor behind them; nothing else is editable.
    */
   async function save(connectionId: ConnectionId): Promise<boolean> {
     if (!openPath.value || !isEditable(openMode.value)) return false;

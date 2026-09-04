@@ -66,7 +66,7 @@ src/
 │  │  ├─ serveCommand.ts       # "serve this folder": command/port/URL construction (pure)
 │  │  ├─ ServeService.ts       # "serve this folder": execution + output classification
 │  │  └─ PortfwdStore.ts       # electron-store: forward rules
-│  ├─ preview/                 # HTML preview of remote files (URL<->path safety, markdown)
+│  ├─ preview/                 # document preview of remote HTML/markdown/SVG (URL<->path safety)
 │  ├─ projects/                # project-folder-first sessions: folder pick, clone, name derivation
 │  ├─ sftp/SftpService.ts      # list/read/write/mkdir/rename/delete/upload/download
 │  ├─ ssh/
@@ -216,7 +216,10 @@ progress events). The renderer's `CodeEditor` is CodeMirror 6 (Monaco was
 considered and dropped); save calls `window.api.sftp.writeFile`. Binary
 detection by extension + stat; images get an `<img>` preview with a zoom
 bar — Fit / 100% / slider over a scrollable pane, pure arithmetic in
-`src/renderer/imageZoom.ts` — other binary offers hex/download.
+`src/renderer/imageZoom.ts` — other binary offers hex/download. HTML,
+markdown and SVG are documents, not binaries: each opens with a
+Preview/Source toggle over the sandboxed `psview:` frame served by
+`src/main/preview/` — DESIGN.md §5.7b holds the reasoning.
 
 Why not reuse the helper's `pocketshell env` for editing? It is scoped to
 `.env`/`.envrc` and writes via stdin; general editing needs a real SFTP

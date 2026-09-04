@@ -494,8 +494,8 @@ const api = {
   },
 
   /**
-   * The Files tab's document preview — HTML files, and markdown rendered to
-   * HTML in main.
+   * The Files tab's document preview — HTML files, SVG files, and markdown
+   * rendered to HTML in main.
    *
    * Note what is NOT here: no way to read a preview's bytes, list its
    * directory, or change its root. The renderer receives a URL and puts it in
@@ -527,6 +527,15 @@ const api = {
       style: { palette: Record<string, string>; appearance: 'dark' | 'light' },
     ): Promise<{ token: string; url: string }> =>
       ipcRenderer.invoke(ipc.preview.openMarkdown, connectionId, path, style),
+
+    /**
+     * Mint a preview of one remote SVG file. Same shape and same guarantees
+     * as {@link openHtml} — the bytes are served untouched at
+     * `image/svg+xml`, and the frame's sandbox and CSP are what make a
+     * document format that can carry script safe to show.
+     */
+    openSvg: (connectionId: string, path: string): Promise<{ token: string; url: string }> =>
+      ipcRenderer.invoke(ipc.preview.openSvg, connectionId, path),
 
     /**
      * Revoke a preview. Fire-and-forget: it runs on the way out of a file,

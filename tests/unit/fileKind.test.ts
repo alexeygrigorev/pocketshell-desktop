@@ -117,16 +117,25 @@ describe('classifyByName', () => {
     expect(classifyByName('/x/.markdown').kind).toBe('text');
   });
 
+  it('routes an SVG to the document view — a drawing and a source file', () => {
+    // SVG was text-only for a long time on the argument that people edit it
+    // more than they look at it. The toggle keeps that argument's second half
+    // (the source is one click away and still highlights) while answering the
+    // first: an `.svg` in a file browser is also, often, a picture someone
+    // wants to SEE.
+    expect(classifyByName('/x/logo.svg')).toEqual({ kind: 'svg', mime: 'image/svg+xml' });
+    expect(classifyByName('/x/icon.SVG').kind).toBe('svg');
+  });
+
   it('leaves page TEMPLATES as plain text, not as pages', () => {
     // A `.php` or a `.vue` contains markup but is source for a page rather
     // than a page: previewing one renders a broken document full of
     // unexecuted directives, which is strictly worse than showing the source
-    // the user can actually reason about. Same for a stylesheet or an SVG,
-    // which are edited far more often than they are looked at here.
+    // the user can actually reason about. Same for a stylesheet — it is
+    // edited far more often than it is looked at here.
     expect(classifyByName('/x/index.php').kind).toBe('text');
     expect(classifyByName('/x/App.vue').kind).toBe('text');
     expect(classifyByName('/x/main.css').kind).toBe('text');
-    expect(classifyByName('/x/logo.svg').kind).toBe('text');
   });
 
   it('says "unknown" for a name it cannot place — never "text"', () => {

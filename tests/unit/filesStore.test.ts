@@ -48,6 +48,8 @@ const openMarkdown =
       style: { palette: Record<string, string>; appearance: string },
     ) => Promise<{ token: string; url: string }>
   >();
+const openSvg =
+  vi.fn<(connectionId: string, path: string) => Promise<{ token: string; url: string }>>();
 const releasePreview = vi.fn<(token: string) => void>();
 /** The store's own stats subscriber, captured so a test can push counts at it. */
 let statsListener: ((stats: {
@@ -78,6 +80,7 @@ vi.mock('../../src/renderer/ipc', () => ({
         path: string,
         style: { palette: Record<string, string>; appearance: string },
       ) => openMarkdown(connectionId, path, style),
+      openSvg: (connectionId: string, path: string) => openSvg(connectionId, path),
       release: (token: string) => releasePreview(token),
       onStats: (handler: (stats: never) => void) => {
         statsListener = handler as typeof statsListener;
@@ -118,18 +121,22 @@ beforeEach(() => {
   saveAs.mockReset();
   openHtml.mockReset();
   openMarkdown.mockReset();
+  openSvg.mockReset();
   releasePreview.mockReset();
   list.mockResolvedValue([]);
   writeFile.mockResolvedValue(true);
   // A fresh token per call: main mints one per preview, and a test that could
-  // not tell two apart could not tell whether a save re-minted at all. Both
-  // verbs share the counter so a test can assert which one was reached.
+  // not tell two apart could not tell whether a save re-minted at all. All
+  // three verbs share the counter so a test can assert which one was reached.
   let minted = 0;
   openHtml.mockImplementation((_c, path) =>
     Promise.resolve({ token: `tok${++minted}`, url: `psview://tok${path}` }),
   );
   openMarkdown.mockImplementation((_c, path) =>
     Promise.resolve({ token: `md${++minted}`, url: `psview://md${path}` }),
+  );
+  openSvg.mockImplementation((_c, path) =>
+    Promise.resolve({ token: `svg${++minted}`, url: `psview://svg${path}` }),
   );
   created.length = 0;
   revoked.length = 0;
@@ -917,6 +924,91 @@ describe('files store openFile() on markdown', () => {
     files.closeFile();
     expect(files.openHasScripts).toBe(false);
     expect(files.openHasRemoteRefs).toBe(false);
+  });
+});
+
+/**
+ * SVG: the third kind with two presentations, and the first to join after
+ * the pipeline was built.
+ *
+ * What the store actually decides for SVG is the open verb (its own, no
+ * palette) and the remote-resource spelling (`href` on `<image>`/`<use>`
+ * rather than `src` on `<img>`). Everything else — buffer, dirty flag, save,
+ * revocation — is the `hasPreview` code the HTML cases exercise, so it is
+ * asserted here only where SVG plausibly differs.
+ */
+describe('files store openFile() on SVG', () => {
+  const openSvgFile = async (name: string, source: string) => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: source.length });
+    readBinary.mockResolvedValue(new TextEncoder().encode(source));
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/art');
+    await files.openFile(CONN, name);
+    return files;
+  };
+
+  it('previews a drawing AND keeps its source in the editor buffer', async () => {
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"></svg>';
+    const files = await openSvgFile('logo.svg', source);
+
+    expect(files.openMode).toBe('svg');
+    expect(files.openMime).toBe('image/svg+xml');
+    expect(files.openContent).toBe(source);
+    expect(files.previewUrl).toBe('psview://svg/home/u/art/logo.svg');
+    expect(files.docView).toBe('preview');
+    // The palette travels for markdown only; an SVG brings its own styling.
+    expect(openSvg).toHaveBeenCalledWith(CONN, '/home/u/art/logo.svg');
+    expect(openHtml).not.toHaveBeenCalled();
+    expect(openMarkdown).not.toHaveBeenCalled();
+  });
+
+  it('stays editable: an edit saves and re-mints the drawing', async () => {
+    const files = await openSvgFile('logo.svg', '<svg></svg>');
+    const firstToken = files.previewToken;
+
+    files.setContent('<svg><!-- touched --></svg>');
+    expect(await files.save(CONN)).toBe(true);
+
+    expect(writeFile).toHaveBeenCalledWith(CONN, '/home/u/art/logo.svg', '<svg><!-- touched --></svg>');
+    expect(releasePreview).toHaveBeenCalledWith(firstToken);
+    expect(files.previewToken).not.toBe(firstToken);
+    expect(openSvg).toHaveBeenCalledTimes(2);
+  });
+
+  it("flags an SVG's own spelling of remote resources", async () => {
+    // `<image>` and `<use>` carry their reference in `href` — which none of
+    // the HTML/markdown patterns read — and a drawing whose bitmap lives on
+    // a CDN renders with exactly the hole the note exists to explain.
+    const image = await openSvgFile('i.svg', '<image href="https://cdn.example/t.png"/>');
+    expect(image.openHasRemoteRefs).toBe(true);
+
+    const xlink = await openSvgFile('x.svg', '<use xlink:href="https://cdn.example/i.svg"/>');
+    expect(xlink.openHasRemoteRefs).toBe(true);
+
+    // An `<a>` is a citation, the same line the HTML cases draw.
+    const link = await openSvgFile('l.svg', '<a href="https://example.com/"><text>docs</text></a>');
+    expect(link.openHasRemoteRefs).toBe(false);
+  });
+
+  it('says scripts are not run when the SVG carries any', async () => {
+    // SVG rendered as a document (not through <img>) can carry executable
+    // script; the frame refuses it, and the toolbar is what says so.
+    const files = await openSvgFile('busy.svg', '<svg><script>alert(1)</script></svg>');
+    expect(files.openHasScripts).toBe(true);
+  });
+
+  it('refuses an oversized SVG without transferring it', async () => {
+    realPath.mockImplementation((_c, p) => Promise.resolve(p));
+    stat.mockResolvedValue({ size: MAX_TEXT_BYTES + 1 });
+    const files = useFilesStore();
+    await files.open(CONN, '/home/u/art');
+
+    await files.openFile(CONN, 'huge.svg');
+
+    expect(files.openMode).toBe('binary');
+    expect(readBinary).not.toHaveBeenCalled();
+    expect(openSvg).not.toHaveBeenCalled();
   });
 });
 

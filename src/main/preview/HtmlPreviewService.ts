@@ -22,6 +22,10 @@ import { sanitiseAppearance, sanitisePalette, type PreviewStyle } from './previe
  * markdownDocument.ts, and {@link openMarkdown} below). The class keeps its
  * name because what it serves is still HTML: markdown is an INPUT format that
  * has become HTML by the time any of the reasoning below applies to it.
+ * SVG is the third input (see {@link openSvg}) and the one that needs
+ * nothing at all done to it: its bytes are already a document Chromium
+ * renders, so it is served untouched at its own content type, under the same
+ * CSP and sandbox as everything else here.
  *
  * ## Why a scheme and not a blob URL
  *
@@ -87,12 +91,15 @@ import { sanitiseAppearance, sanitisePalette, type PreviewStyle } from './previe
  *             untouched, which is what makes `<link href="style.css">` and
  *             every indirection under it resolve on their own.
  *   markdown  the bytes are source for a document, and are converted here.
+ *   svg       the bytes are already a document Chromium renders, served
+ *             untouched at `image/svg+xml` — exactly the html treatment with
+ *             a different content type.
  *
  * The mode is a property of the PREVIEW rather than of each request, and that
  * is the load-bearing part: it is what decides whether a `.md` file the frame
  * asks for next is a document to render or a file to hand over as-is.
  */
-export type PreviewMode = 'html' | 'markdown';
+export type PreviewMode = 'html' | 'markdown' | 'svg';
 
 /** Everything one live preview knows about itself. */
 interface Preview {
@@ -349,6 +356,26 @@ export class HtmlPreviewService {
   }
 
   /**
+   * Mint a preview of one remote SVG file.
+   *
+   * A third verb rather than a reuse of {@link open} because the MODE is not
+   * the same: an `.svg` entry document must be served as `image/svg+xml` (a
+   * document the frame renders as a drawing), not as `text/html`, and the
+   * distinction is per-preview by design. It takes no style for the same
+   * reason an HTML preview does not: the file brings its own.
+   *
+   * Everything that makes an HTML preview safe makes this one safe, because
+   * SVG rendered as a DOCUMENT (rather than through `<img>`) can do most of
+   * what a page can: a `<script>` inside it would run, an `<image href>` or
+   * a stylesheet `@import` would fetch, an `<a>` would navigate. The empty
+   * sandbox, the per-response CSP and the containment checks are exactly as
+   * load-bearing here as they are for a page.
+   */
+  async openSvg(connectionId: string, path: string): Promise<{ token: string; url: string }> {
+    return this.mint(connectionId, path, 'svg', null);
+  }
+
+  /**
    * The shared body of both verbs: resolve, bound, and hand back a capability.
    *
    * The root is resolved with `realpath` HERE rather than being taken as
@@ -487,9 +514,10 @@ export class HtmlPreviewService {
     // any other, and it is already bounded by the same containment checks as an
     // image would be. A `docs/` folder therefore browses as a small site.
     //
-    // What it does NOT do is render markdown found under an HTML preview: there
-    // the user opened a real page, and a `.md` it happens to reference is a
-    // file that page asked for, not a document the user chose to read.
+    // What it does NOT do is render markdown found under an HTML or SVG
+    // preview: there the user opened a real page (or a drawing), and a `.md`
+    // it happens to reference is a file that document asked for, not a
+    // document the user chose to read.
     const rendered = renderIfMarkdown(preview, real, bytes);
 
     return new Response(rendered.bytes, {

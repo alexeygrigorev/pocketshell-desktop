@@ -170,19 +170,20 @@ export const ipc = {
     changed: 'serve:event:changed', // event: { connectionId, served[] }
   },
   /**
-   * The Files tab's document preview. `openHtml` / `openMarkdown` mint a
-   * capability — a one-off token plus the `psview://` URL to frame — and
-   * `release` revokes it, so a closed file's frame cannot go on reading the
-   * host. See src/main/preview/HtmlPreviewService.ts.
+   * The Files tab's document preview. `openHtml` / `openMarkdown` /
+   * `openSvg` mint a capability — a one-off token plus the `psview://` URL
+   * to frame — and `release` revokes it, so a closed file's frame cannot go
+   * on reading the host. See src/main/preview/HtmlPreviewService.ts.
    *
-   * Two open verbs rather than one with a flag, because they do not take the
-   * same arguments: markdown is converted in main and therefore needs the
-   * app's palette, while an HTML file brings its own styling and must not be
-   * given ours.
+   * Three open verbs rather than one with a flag, because they do not take
+   * the same arguments: markdown is converted in main and therefore needs the
+   * app's palette, while an HTML or SVG file brings its own styling and must
+   * not be given ours.
    */
   preview: {
     openHtml: 'preview:openHtml',
     openMarkdown: 'preview:openMarkdown',
+    openSvg: 'preview:openSvg',
     release: 'preview:release',
     /**
      * Main -> renderer: how many assets that preview has loaded, refused as

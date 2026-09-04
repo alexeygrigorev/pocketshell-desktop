@@ -482,3 +482,64 @@ describe('HtmlPreviewService.openMarkdown', () => {
   });
 });
 
+
+/**
+ * SVG: the third input format, and the one that needs nothing done to it.
+ *
+ * The assertions that matter are the two that would make serving an SVG
+ * dangerous if either broke: it is served at its OWN content type (a drawing,
+ * not a page), and it is served under the same response policy as a page —
+ * because an SVG rendered as a document can carry `<script>` and remote
+ * references, and the CSP plus sandbox are the only things standing between
+ * those and the renderer process.
+ */
+describe('HtmlPreviewService.openSvg', () => {
+  const ART = {
+    ...SITE,
+    '/home/u/art/logo.svg':
+      '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16"/></svg>',
+    '/home/u/art/texture.png': 'PNGDATA',
+  };
+  const ART_DIRS = ['/home/u/art', '/home/u', '/etc'];
+
+  it('serves the bytes untouched, as an SVG document', async () => {
+    const service = makeService(fakeSftp({ files: ART, dirs: ART_DIRS }));
+    const { url } = await service.openSvg('c1', '/home/u/art/logo.svg');
+
+    const res = await handle(url);
+
+    expect(res.status).toBe(200);
+    // Not `text/html`: the frame must render a drawing, and the charset must
+    // travel for the same reason it travels on a page.
+    expect(res.headers.get('Content-Type')).toBe('image/svg+xml; charset=utf-8');
+    expect(await res.text()).toContain('<rect width="16" height="16"/>');
+  });
+
+  it('carries the same no-network, no-script policy the page preview does', async () => {
+    // The assertion that makes "it is only a logo" fail as an argument: an
+    // SVG document can carry `<script>`, and the response policy is what
+    // refuses it — not the file extension.
+    const service = makeService(fakeSftp({ files: ART, dirs: ART_DIRS }));
+    const { url } = await service.openSvg('c1', '/home/u/art/logo.svg');
+
+    const csp = (await handle(url)).headers.get('Content-Security-Policy') ?? '';
+
+    expect(csp).toContain("script-src 'none'");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain('sandbox');
+    expect(csp).not.toMatch(/https?:/);
+  });
+
+  it('resolves the assets the drawing names inside its folder', async () => {
+    // A texture or an external sprite sheet referenced relatively is the case
+    // that kills the blob-URL alternative: a blob has no path to resolve
+    // against, so `<image href="texture.png">` would silently not paint.
+    const service = makeService(fakeSftp({ files: ART, dirs: ART_DIRS }));
+    const { url } = await service.openSvg('c1', '/home/u/art/logo.svg');
+
+    const png = await handle(new URL('texture.png', url).href);
+
+    expect(png.status).toBe(200);
+    expect(png.headers.get('Content-Type')).toBe('image/png');
+  });
+});

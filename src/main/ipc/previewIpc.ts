@@ -35,6 +35,17 @@ export function registerPreviewIpc(ctx: IpcContext): void {
       return preview.openMarkdown(connectionId, path, style ?? {});
     },
   );
+  // SVG, like HTML, needs nothing but the path: the file brings its own
+  // styling, is served untouched at its own content type, and is bounded by
+  // the same CSP, sandbox and containment checks — which for an SVG document
+  // is not decoration, because a `<script>` inside one would run if any of
+  // them were dropped (see HtmlPreviewService.openSvg).
+  ipcMain.handle(
+    ipc.preview.openSvg,
+    async (_evt, connectionId: string, path: string): Promise<{ token: string; url: string }> => {
+      return preview.openSvg(connectionId, path);
+    },
+  );
   // `send`, not `invoke`, on the renderer side: releasing is fire-and-forget
   // and happens on the way out of a file, where awaiting an IPC round trip
   // would put a hop inside a close handler for no observable benefit.

@@ -726,9 +726,9 @@ overflow content); Adobe Spectrum; Fluent 2; WinUI BreadcrumbBar; GitHub
 Primer; Atlassian; USWDS; GitLab Pajamas; Grafana's truncation spec; GNOME
 Nautilus `src/nautilus-pathbar.c`; VS Code `breadcrumbsWidget.ts`.
 
-### 5.7b Document preview — HTML and markdown, one pipeline
+### 5.7b Document preview — HTML, markdown and SVG, one pipeline
 
-The Files tab shows two kinds as BOTH a render and their source, behind one
+The Files tab shows three kinds as BOTH a render and their source, behind one
 segmented control (`docView`, `Preview` / `Source`). The render is an
 `<iframe sandbox="">` on the `psview:` scheme main serves; the source is the
 same CodeEditor every other text file gets, with the same buffer, dirty flag
@@ -754,7 +754,22 @@ is argued in `src/main/preview/markdownDocument.ts`.
 | Heading anchors | Slugged from heading text, deduplicated per document, so a table of contents works — a fragment link needs no script and no network |
 | Code blocks | Styled in `--term-bg`/`--term-fg` so a fence matches the editor beside it. **Not** syntax-highlighted: the editor is one click away |
 
-**Known limits, both shared with the HTML preview.** Clicking an *external*
+**SVG joined through the same door and needs nothing done to it.** Its bytes
+are already a document Chromium renders, so they are served untouched at
+`image/svg+xml` — the HTML treatment with a different content type. That is
+also why SVG must NOT be reasoned about as "only a picture": rendered as a
+document (rather than through `<img>`) an SVG can carry `<script>`, fetch
+remote references through `<image href>` / `<use href>`, and navigate — every
+one refused by the same sandbox and CSP that guard a page, which is why they
+are as load-bearing for a logo as for a web page. The frame paints on
+`--term-bg`, the image viewer's ground, because most SVGs leave their own
+background transparent. Relative references to sibling files resolve, the
+same way a page's stylesheet does; remote ones are flagged in the toolbar
+("remote resources are not loaded"), keyed on the SVG spellings. The source
+toggle keeps what the classifier used to offer on its own: an `.svg` edits as
+XML with highlighting, losslessly.
+
+**Known limits, all shared with the HTML preview.** Clicking an *external*
 link empties the frame — the CSP refuses the navigation, which is correct, and
 Chromium paints its own error page with no scripts available to intercept the
 click first; the Reload button restores it. And the preview always renders the
@@ -1001,11 +1016,12 @@ surface it is read on, which is why several sit at ~4.5 there while reading
   read from the theme record's DECLARED `appearance` (through `resolveTheme`,
   so `system` follows the OS), never guessed from a background colour. Pinned
   by `tests/unit/CodeEditor.test.ts`.
-- **A markdown preview is themed; an HTML preview is not.** The rendered
+- **A markdown preview is themed; an HTML or SVG preview is not.** The rendered
   markdown document is ours, so it is painted in the app's tokens
   (`src/main/preview/previewStyle.ts`). An HTML file brings its own styling and
   is deliberately left alone — a page that looked different here from how it
-  looks in a browser would be a lie about the file. Because CSS custom
+  looks in a browser would be a lie about the file, and the same holds for an
+  SVG drawing. Because CSS custom
   properties do not cascade across a frame boundary, the token VALUES travel:
   the renderer resolves them out of computed style and main writes them into
   the generated document's own `:root`, re-validating every one. A theme switch

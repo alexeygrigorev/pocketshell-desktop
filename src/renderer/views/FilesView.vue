@@ -555,7 +555,7 @@ onUnmounted(() => imagePaneObserver?.disconnect());
           @update:model-value="files.setContent"
         />
 
-        <!-- HTML and markdown: the two kinds with two presentations.
+        <!-- HTML, markdown and SVG: the three kinds with two presentations.
              ==================================================================
              MARKDOWN GOES THROUGH THE SAME PIPELINE, converted to HTML in main
              before a byte is served (src/main/preview/markdownDocument.ts).
@@ -565,6 +565,16 @@ onUnmounted(() => imagePaneObserver?.disconnect());
              one genuinely new decision — that the converter passes raw HTML
              through instead of escaping it — is argued in that file, and it
              rests on exactly the two mechanisms named here.
+
+             SVG ALSO GOES THROUGH THE PIPELINE UNCHANGED, served as-is at
+             `image/svg+xml` (src/main/preview/HtmlPreviewService.ts). It is
+             the one that makes the machinery here look least optional: an SVG
+             rendered as a document — not through `<img>` — can carry
+             `<script>` and remote references, so the empty sandbox and the
+             CSP are as load-bearing for a logo as they are for a page. The
+             source toggle is what keeps this from being a downgrade: SVG is
+             XML, the editor round-trips it losslessly with highlighting, and
+             the render is the presentation that did not exist here before.
 
              The `sandbox` attribute below is EMPTY on purpose and must stay
              that way. An empty sandbox is the maximally restrictive one: the
@@ -650,15 +660,20 @@ onUnmounted(() => imagePaneObserver?.disconnect());
             </span>
           </div>
 
-          <!-- `.md-frame` only changes what shows THROUGH the document while it
-               loads: a markdown preview paints its own themed ground, so a
-               white frame would flash white on a dark theme for exactly as long
-               as the SFTP read takes. An HTML page is left on white — see the
-               rule below for why that is not a token. -->
+          <!-- `.md-frame`/`.svg-frame` only change what shows THROUGH the
+               document while it loads: a markdown or SVG preview paints its
+               own ground (the app's for markdown, the image viewer's for a
+               drawing), so a white frame would flash white on a dark theme
+               for exactly as long as the SFTP read takes. An HTML page is
+               left on white — see the rule below for why that is not a
+               token. -->
           <iframe
             v-if="files.docView === 'preview' && files.previewUrl"
             class="html-frame"
-            :class="{ 'md-frame': files.openMode === 'markdown' }"
+            :class="{
+              'md-frame': files.openMode === 'markdown',
+              'svg-frame': files.openMode === 'svg',
+            }"
             sandbox=""
             referrerpolicy="no-referrer"
             :src="files.previewUrl"
@@ -1046,6 +1061,17 @@ onUnmounted(() => imagePaneObserver?.disconnect());
    the same token the generated stylesheet uses for its own body. */
 .md-frame {
   background: var(--bg);
+}
+/* An SVG preview is a DRAWING, not a page, so the reasoning above inverts the
+   way markdown's does — but to a different token. Most SVGs leave their
+   background transparent and expect to sit on whatever the viewer paints, so
+   the honest ground is the one every other picture in this tab sits on: the
+   image viewer's `--term-bg`. White would be a plausible reading of "a browser
+   shows it on white", but it would make dark-stroked icons invisible while
+   looking exactly like a broken file, and the app has already answered this
+   question for pictures. */
+.svg-frame {
+  background: var(--term-bg);
 }
 /* The PDF plugin fills the pane; it brings its own chrome and scrolling. */
 .pdf {

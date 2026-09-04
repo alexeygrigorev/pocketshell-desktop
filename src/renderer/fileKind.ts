@@ -76,6 +76,20 @@ export type FileKind =
    * Source, which a mode called `html` would have quietly broken.
    */
   | 'markdown'
+  /**
+   * An SVG document: the same two presentations `html` and `markdown` get,
+   * served through the same pipeline.
+   *
+   * SVG is text AND a picture, which is the exact shape that earned HTML its
+   * toggle. It is its own kind rather than a flavour of `html` because the
+   * bytes are served at their own content type (`image/svg+xml`, as a
+   * drawing, not as a page) and because the source half must keep opening
+   * with XML highlighting — an `.svg` called HTML would quietly lose both.
+   * Rendered as a document an SVG can carry `<script>` and remote
+   * references, so it travels under exactly the same sandbox and CSP as a
+   * page; see src/main/preview/HtmlPreviewService.ts.
+   */
+  | 'svg'
   /** Opaque bytes: the binary panel, with a download button. */
   | 'binary'
   /** Not placeable from the name alone — sniff the bytes. */
@@ -106,7 +120,7 @@ const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
   'log', 'out', 'err', 'diff', 'patch',
   'json', 'jsonl', 'ndjson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'properties', 'env',
   'csv', 'tsv',
-  'xml', 'css', 'scss', 'sass', 'less', 'svg',
+  'xml', 'css', 'scss', 'sass', 'less',
   'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte',
   // `.mdx` is JSX inside markdown — source for a page, the way `.vue` beside
   // it is, so it edits rather than previews. Listed explicitly now that
@@ -184,10 +198,7 @@ const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Audio extensions. `.svg` is an image but is also XML, and is deliberately
- * classified as TEXT above — a user who opens an SVG in a file browser is far
- * more often editing it than looking at it, and the editor round-trips it
- * losslessly while an `<img>` would not let them change anything.
+ * Audio extensions.
  */
 const AUDIO_EXTENSIONS: ReadonlySet<string> = new Set([
   'mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav', 'wave', 'aiff', 'aif',
@@ -210,6 +221,13 @@ export function classifyByName(path: string): FileClass {
   const mime = mimeTypeForExtension(ext);
   if (ext === 'pdf') return { kind: 'pdf', mime: mime ?? 'application/pdf' };
   if (HTML_EXTENSIONS.has(ext)) return { kind: 'html', mime: mime ?? 'text/html' };
+  // Before the text set, for the same ordering reason `html` is: an `.svg`
+  // is XML and would be a perfectly serviceable member of TEXT_EXTENSIONS —
+  // it was one for a long time. What it has that a stylesheet does not is a
+  // second presentation, so it gets the toggle rather than the editor alone;
+  // the editor half of that toggle is what the old text-only answer was, one
+  // click away instead of the only answer.
+  if (ext === 'svg') return { kind: 'svg', mime: mime ?? 'image/svg+xml' };
   if (isMarkdownPath(path)) return { kind: 'markdown', mime: mime ?? 'text/markdown' };
   if (AUDIO_EXTENSIONS.has(ext)) return { kind: 'audio', mime: mime ?? 'audio/mpeg' };
   if (IMAGE_EXTENSIONS.has(ext)) return { kind: 'image', mime: mime ?? 'image/png' };
