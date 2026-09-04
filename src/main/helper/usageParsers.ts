@@ -10,21 +10,21 @@
 // ---------------------------------------------------------------------------
 
 /**
- * One quota window. `percent_remaining` is NULLABLE on helper 0.4.44: a
- * provider with no short-term window at all (codex, grok) emits
- * `{"percent_remaining": null, "reset_at": null, "window": null}` rather than
- * omitting the object. Callers must guard before formatting it.
+ * One quota window, resolved for display. `percent_remaining` is NULLABLE:
+ * a window can be real and still report no meter (zai's 5h window has a
+ * percent but no reset on some hosts; others report the reverse). Callers
+ * must guard before formatting either field.
  */
 export interface UsageWindow {
   percent_remaining: number | null;
   reset_at: string | null;
   /**
-   * Window label, e.g. `5h` / `7d` / `weekly` / `monthly`. Always present on
-   * 0.4.44 — null when the provider has no window of that term, never absent
-   * (see v0.4.44-usage.ndjson, where codex and copilot carry an explicit
-   * `"window": null`).
+   * Human label, e.g. `5h` / `7d` / `weekly` / `monthly`. Never empty on a
+   * parsed row: the key is the label except when it is the slot's own name
+   * (`short_term`/`long_term`), and those fall back to the generic
+   * short-term/long-term wording here, so consumers can print it as-is.
    */
-  window: string | null;
+  window: string;
 }
 
 export interface UsageRow {
@@ -33,62 +33,92 @@ export interface UsageRow {
   // autocomplete while still accepting values a newer helper may add. A bare
   // `| string` would absorb the literals and enforce nothing.
   status: 'ok' | 'limited' | 'blocked' | 'error' | (string & {});
-  short_term: UsageWindow;
-  long_term: UsageWindow;
+  /**
+   * The windows this provider actually has, shortest term first — codex and
+   * grok carry a single weekly window, copilot a single monthly one, go three
+   * (5h + weekly + monthly). Windows the helper reports as empty (both
+   * fields null) are DROPPED rather than carried as "not reported" rows: a
+   * rendered row reads as a meter, and a meter that is not there is not the
+   * same fact as a meter at zero. Same rule for the synthesized 100%-no-reset
+   * filler the helper emits beside copilot's real monthly window.
+   */
+  windows: UsageWindow[];
   error: string | null;
   details: Record<string, unknown>;
-  /**
-   * The raw per-window map the installed helper actually emits (`5h`, `7d`,
-   * `weekly`, `monthly`, `short_term` — keys, not a fixed pair). Only
-   * `parseUsageNdjson` reads it, folding it into `short_term`/`long_term`
-   * below; kept on the type so the parser's cast is honest about the wire.
-   */
-  windows?: Record<string, Partial<UsageWindow> | undefined>;
 }
 
 /**
- * Which slot a `windows` key feeds. The observed keys and the fallback rule
- * both come from host captures (v0.4.44-usage-windows.ndjson): copilot's map
- * carries a literal `short_term`, zai's a `5h`+`weekly` pair, grok's a lone
- * `weekly`. An unrecognized key fills whichever slot is still empty, so a
- * future label degrades to the wrong column rather than vanishing.
+ * The wire, which is not one shape but three a host can speak: the 0.4.44
+ * top-level pair, the keyed `windows` map the installed helper now emits
+ * (`5h`, `7d`, `weekly`, `monthly`, `short_term` — keys, not a fixed pair),
+ * and any mix of the two. Only `normalizeUsageRow` reads it.
  */
-const SHORT_TERM_WINDOW_KEYS = new Set(['5h', 'short_term']);
-const LONG_TERM_WINDOW_KEYS = new Set(['7d', 'weekly', 'monthly', 'long_term']);
+interface WireRow extends Omit<UsageRow, 'windows'> {
+  short_term?: Partial<UsageWindow> | null;
+  long_term?: Partial<UsageWindow> | null;
+  windows?: Record<string, Partial<UsageWindow> | undefined>;
+}
 
-/** The shape a 0.4.44 row already used for "no window in this band". */
-const EMPTY_WINDOW: UsageWindow = { percent_remaining: null, reset_at: null, window: null };
+/** Which term a window label sits in, for the shortest-first display order. */
+function termRank(label: string): number {
+  if (label === '5h' || label === 'short_term' || label === 'short-term') return 0;
+  if (label === '7d' || label === 'weekly' || label === 'long_term' || label === 'long-term') {
+    return 1;
+  }
+  if (label === 'monthly') return 2;
+  // A future label degrades to the end of the list, in emission order, not
+  // to the wrong slot.
+  return 3;
+}
 
 /**
- * Rebuild `short_term`/`long_term` from a `windows` map. The helper still
+ * Rebuild the row's window list from either wire shape. The helper still
  * self-reports 0.4.44 while quse's record underneath it moved from the
- * top-level pair to a keyed map, and a
- * row consumed raw has no `short_term` at all — a consumer that indexes it
- * throws. Rows already carrying the pair pass through untouched; a slot the
- * map says nothing about becomes the explicit-nulls EMPTY_WINDOW.
+ * top-level pair to a keyed map, and a row consumed raw has neither a
+ * `windows` array nor (on the map shape) a `short_term` at all — a consumer
+ * that indexes it throws.
  */
-function normalizeUsageRow(row: UsageRow): UsageRow {
-  if (row.short_term || row.long_term) return row;
-  const windows = row.windows;
-  if (!windows || typeof windows !== 'object') return row;
-  let short_term: UsageWindow | null = null;
-  let long_term: UsageWindow | null = null;
-  for (const [key, w] of Object.entries(windows)) {
-    if (!w || typeof w !== 'object') continue;
-    const win: UsageWindow = {
+function normalizeUsageRow(row: WireRow): UsageRow {
+  const candidates: { label: string | null; generic: string; w: Partial<UsageWindow> }[] = [];
+  // The pair, when the row carries it, wins over the map — that priority is
+  // what kept pair-shaped rows byte-stable across the map's arrival.
+  if (row.short_term && typeof row.short_term === 'object') {
+    candidates.push({ label: row.short_term.window ?? null, generic: 'short-term', w: row.short_term });
+  }
+  if (row.long_term && typeof row.long_term === 'object') {
+    candidates.push({ label: row.long_term.window ?? null, generic: 'long-term', w: row.long_term });
+  }
+  if (!candidates.length && row.windows && typeof row.windows === 'object') {
+    for (const [key, w] of Object.entries(row.windows)) {
+      if (!w || typeof w !== 'object') continue;
+      // The key is the human label (`5h`, `7d`) — except when it is the
+      // slot's own name, which must never reach the screen as "short_term".
+      candidates.push({
+        label: key === 'short_term' || key === 'long_term' ? null : key,
+        generic: key === 'long_term' ? 'long-term' : 'short-term',
+        w,
+      });
+    }
+  }
+
+  // A window with neither a meter nor a reset is the helper's way of saying
+  // "the provider has no such window" — not a row to render.
+  const withData = candidates.filter(
+    ({ w }) => w.percent_remaining != null || w.reset_at != null,
+  );
+  // An UNNAMED window is data with nowhere to point (copilot's filler). Keep
+  // one only when the row names nothing at all — then the generic slot
+  // wording is the honest label.
+  const anyNamed = withData.some(({ label }) => label !== null);
+  const windows = withData
+    .filter(({ label }) => label !== null || !anyNamed)
+    .map(({ label, generic, w }) => ({
       percent_remaining: typeof w.percent_remaining === 'number' ? w.percent_remaining : null,
       reset_at: typeof w.reset_at === 'string' ? w.reset_at : null,
-      // The key is the human label (`5h`, `7d`) — except when it is the slot's
-      // own name, which reads as "short_term" on screen. Null sends those to
-      // the consumer's generic short-term/long-term wording instead.
-      window: key === 'short_term' || key === 'long_term' ? null : key,
-    };
-    if (!short_term && SHORT_TERM_WINDOW_KEYS.has(key)) short_term = win;
-    else if (!long_term && LONG_TERM_WINDOW_KEYS.has(key)) long_term = win;
-    else if (!short_term) short_term = win;
-    else if (!long_term) long_term = win;
-  }
-  return { ...row, short_term: short_term ?? EMPTY_WINDOW, long_term: long_term ?? EMPTY_WINDOW };
+      window: label ?? generic,
+    }))
+    .sort((a, b) => termRank(a.window) - termRank(b.window));
+  return { ...row, windows };
 }
 
 /** Parse `pocketshell usage --json` (one JSON object per line). */
@@ -98,7 +128,9 @@ export function parseUsageNdjson(stdout: string): UsageRow[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      out.push(normalizeUsageRow(JSON.parse(trimmed) as UsageRow));
+      const parsed: unknown = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      out.push(normalizeUsageRow(parsed as WireRow));
     } catch {
       // skip malformed lines
     }

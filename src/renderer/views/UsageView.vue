@@ -10,24 +10,24 @@
 // glance. It also holds at 1 provider and at 6+ without reflowing into a
 // ragged grid, and provider rows cannot end up different heights.
 //
-// DATA SHAPE (helper 0.4.44, see parsers.ts): `percent_remaining` is null for
-// codex and grok, `reset_at` can be null independently, and `window` carries a
-// human label (`5h`/`7d`/`weekly`/`monthly`) that beats the generic
-// short-term/long-term wording when present. The installed helper now emits a
-// keyed `windows` map rather than the top-level pair; `parseUsageNdjson` folds
-// it into `short_term`/`long_term` before rows get here.
+// DATA SHAPE (see usageParsers.ts): each row carries `windows` — the windows
+// that provider ACTUALLY has, shortest first. Copilot reports one monthly
+// window, codex and grok a single weekly one, go three (5h + weekly +
+// monthly); windows the provider does not have are dropped upstream, so the
+// panel never shows a "not reported" placeholder for a window that does not
+// exist. A window label (`5h`/`7d`/`weekly`/`monthly`) is always present.
 //
 // A null percentage is NOT an empty row. It means the meter is unknown, not
 // that the provider has nothing to say: the reset time is still real and is
 // usually the more useful fact anyway ("codex resets in 2h"). So when the
-// percentage is missing the reset becomes the row's primary content. Only when
-// BOTH are missing is the row genuinely quiet. Never coerce null to 0 — a
-// 0%-wide bar reads as "quota exhausted" when the truth is "not reported".
+// percentage is missing the reset becomes the row's primary content. Never
+// coerce null to 0 — a 0%-wide bar reads as "quota exhausted" when the truth
+// is "not reported".
 import { computed, onMounted } from 'vue';
 import { useConnectionStore } from '../stores/connection';
 import { useAgentsStore } from '../stores/agents';
 import AppIcon from '../components/AppIcon.vue';
-import type { UsageRow, UsageWindow } from '../../main/helper/usageParsers';
+import type { UsageRow } from '../../main/helper/usageParsers';
 
 const props = defineProps<{
   /**
@@ -64,22 +64,19 @@ function hasPct(p: number | null | undefined): p is number {
   return typeof p === 'number' && Number.isFinite(p);
 }
 
-function toWindow(w: UsageWindow | null | undefined, fallback: string): WindowRow {
-  // Guard, not tidiness: a row without this window used to throw right here —
-  // during render, which aborts the patch and leaves the whole panel blank
-  // (the "click Usage and nothing happens" report). An unreported row is the
-  // honest degradation; see the header comment on null percentages.
-  if (!w) return { label: fallback, pct: null, reset: null };
-  return {
-    label: (w.window ?? '').trim() || fallback,
-    pct: hasPct(w.percent_remaining) ? w.percent_remaining : null,
-    reset: w.reset_at ?? null,
-  };
-}
-
-/** Always two rows per provider, so the row rhythm never depends on the data. */
+/**
+ * One row per window the provider reported. The parser guarantees a non-empty
+ * label and drops windows the provider does not have; the guards here are for
+ * rows that bypassed it (a store fed by something other than
+ * `parseUsageNdjson` must degrade to a quiet row, not a thrown render).
+ */
 function windowsOf(row: UsageRow): WindowRow[] {
-  return [toWindow(row.short_term, 'short-term'), toWindow(row.long_term, 'long-term')];
+  const list = Array.isArray(row.windows) ? row.windows : [];
+  return list.map((w) => ({
+    label: (w?.window ?? '').trim() || '—',
+    pct: hasPct(w?.percent_remaining) ? w.percent_remaining : null,
+    reset: w?.reset_at ?? null,
+  }));
 }
 
 function pctColor(p: number): string {
@@ -171,18 +168,18 @@ async function onRefresh(): Promise<void> {
       <template v-for="(row, i) in agents.usage" :key="row.provider">
         <div v-if="i > 0" class="divider" />
 
-        <template v-for="(w, j) in windowsOf(row)" :key="j">
-          <span class="cell provider-cell">
-            <template v-if="j === 0">
-              <span class="provider">{{ row.provider }}</span>
-              <!-- Badge only when the state is NOT ok: a row of "ok" chips is
-                   noise, and the meter already says so when it is fine. -->
-              <span v-if="row.status !== 'ok'" :class="['status', row.status]">
-                {{ row.status }}
-              </span>
-            </template>
+        <!-- The identity cell leads every provider group ONCE, whatever the
+             provider's window count — 1, 2, 3, or (an errored row) none. -->
+        <span class="cell provider-cell">
+          <span class="provider">{{ row.provider }}</span>
+          <!-- Badge only when the state is NOT ok: a row of "ok" chips is
+               noise, and the meter already says so when it is fine. -->
+          <span v-if="row.status !== 'ok'" :class="['status', row.status]">
+            {{ row.status }}
           </span>
+        </span>
 
+        <template v-for="(w, j) in windowsOf(row)" :key="j">
           <span class="cell window">{{ w.label }}</span>
 
           <span class="cell remaining">
@@ -195,7 +192,7 @@ async function onRefresh(): Promise<void> {
               </span>
               <span class="pct" :style="{ color: pctColor(w.pct) }">{{ pctText(w.pct) }}</span>
             </template>
-            <!-- The meter is unknown; the row is not. See the header comment. -->
+            <!-- The meter is unknown, not the window; see the header comment. -->
             <span v-else class="unreported">not reported</span>
           </span>
 
@@ -210,6 +207,13 @@ async function onRefresh(): Promise<void> {
             </span>
           </span>
         </template>
+
+        <!-- A provider whose every window came back empty (an errored row, a
+             helper that reported nothing usable): one quiet line, so the
+             provider still appears in the comparison instead of vanishing. -->
+        <p v-if="!windowsOf(row).length" class="note unreported">
+          {{ row.error || 'not reported' }}
+        </p>
 
         <p v-if="blockNote(row)" class="note">{{ blockNote(row) }}</p>
       </template>
@@ -333,8 +337,13 @@ h2 {
   background: var(--error-soft);
 }
 
-/* ---- column 2: which window ------------------------------------------- */
+/* ---- columns 2-4: pinned, not auto-placed ------------------------------ */
+/* A provider's window count varies (go has three, codex one, an errored row
+   none); pinning each cell to its column lets the grid assemble any count —
+   the identity cell always leads, and auto-placement cannot pull a meter up
+   into the column a missing window left free. */
 .window {
+  grid-column: 2;
   font-size: var(--fs-200);
   color: var(--fg-secondary);
   font-variant-numeric: tabular-nums;
@@ -342,6 +351,7 @@ h2 {
 
 /* ---- column 3: the meters, this screen's primary content --------------- */
 .remaining {
+  grid-column: 3;
   gap: var(--sp-3);
 }
 /* 8px on a --bg well: the bars ARE the content here, and the old 6px bar on a
@@ -379,6 +389,7 @@ h2 {
 
 /* ---- column 4: reset times -------------------------------------------- */
 .resets {
+  grid-column: 4;
   justify-content: flex-end;
 }
 /* Secondary by default: it must not compete with the meter next to it. */

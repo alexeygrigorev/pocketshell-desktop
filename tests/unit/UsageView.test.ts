@@ -34,12 +34,14 @@ const UsageView = (await import('../../src/renderer/views/UsageView.vue')).defau
 const { useConnectionStore } = await import('../../src/renderer/stores/connection');
 const { useAgentsStore } = await import('../../src/renderer/stores/agents');
 
-/** One well-formed 0.4.44 row — enough for the table to render a provider. */
+/** One well-formed parsed row — enough for the table to render a provider. */
 const ROW = {
   provider: 'claude',
   status: 'ok',
-  short_term: { percent_remaining: 62, reset_at: null, window: '5h' },
-  long_term: { percent_remaining: 80, reset_at: null, window: 'weekly' },
+  windows: [
+    { percent_remaining: 62, reset_at: null, window: '5h' },
+    { percent_remaining: 80, reset_at: null, window: 'weekly' },
+  ],
   error: null,
   details: {},
 };
@@ -76,29 +78,48 @@ describe('UsageView states', () => {
     expect(wrapper.find('.usage-table').exists()).toBe(false);
   });
 
-  it('renders the table once rows arrive', async () => {
+  it('renders the table once rows arrive, one row per window', async () => {
     usage.mockResolvedValue([ROW]);
     const wrapper = await show();
 
     expect(wrapper.find('.usage-table').exists()).toBe(true);
     expect(wrapper.text()).toContain('claude');
+    // Both of the provider's windows render, in the order the parser sent.
+    expect(wrapper.findAll('.window').map((c) => c.text())).toEqual(['5h', 'weekly']);
     expect(wrapper.text()).not.toContain('no usage data');
     expect(wrapper.find('.error').exists()).toBe(false);
   });
 
-  it('renders a raw windows-map row as unreported instead of throwing', async () => {
-    // What the installed helper actually emits — no short_term/long_term pair.
-    // Before the view guarded `toWindow`, this row threw during render and the
-    // whole panel stayed blank (the "click Usage, nothing happens" bug); the
-    // parser now normalizes it upstream, and this pins the view's own net.
+  it('renders all three windows of a provider like go', async () => {
+    // The row that broke the old fixed short/long pair: a provider with three
+    // quota windows. The view must render one row each, not fold two.
     usage.mockResolvedValue([
       {
-        provider: 'claude',
+        provider: 'go',
         status: 'ok',
+        windows: [
+          { percent_remaining: 97, reset_at: '2026-09-04T16:20:00Z', window: '5h' },
+          { percent_remaining: 75, reset_at: '2026-09-06T15:00:00Z', window: 'weekly' },
+          { percent_remaining: 41, reset_at: '2026-09-30T00:00:00Z', window: 'monthly' },
+        ],
         error: null,
         details: {},
-        windows: { '5h': { percent_remaining: 94, reset_at: '2026-08-27T20:20:00Z' } },
       },
+    ]);
+    const wrapper = await show();
+
+    expect(wrapper.findAll('.window').map((c) => c.text())).toEqual(['5h', 'weekly', 'monthly']);
+    expect(wrapper.text()).toContain('go');
+  });
+
+  it('degrades a row without a windows list to a quiet line instead of throwing', async () => {
+    // What a store fed by something OTHER than parseUsageNdjson could deliver
+    // — no `windows` at all. Before the view guarded, this row threw during
+    // render and the whole panel stayed blank (the "click Usage and nothing
+    // happens" bug); the parser now normalizes upstream, and this pins the
+    // view's own net: the provider still appears, as one quiet line.
+    usage.mockResolvedValue([
+      { provider: 'claude', status: 'ok', error: null, details: {} },
     ]);
     const wrapper = await show();
 

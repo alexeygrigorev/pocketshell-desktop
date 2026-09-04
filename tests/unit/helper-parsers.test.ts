@@ -338,79 +338,151 @@ describe('parseUsageNdjson', () => {
     expect(out.map((u) => u.provider)).toEqual(['a', 'b']);
   });
 
-  it('parses the real 0.4.44 shape: null percentages and window labels', () => {
+  /** One row's window labels + percents, the shape every usage test reads. */
+  const shape = (rows: ReturnType<typeof parseUsageNdjson>) =>
+    rows.map((r) => ({
+      provider: r.provider,
+      windows: r.windows.map((w) => [w.window, w.percent_remaining, w.reset_at] as const),
+    }));
+
+  it('parses the real 0.4.44 pair shape into the windows each provider has', () => {
     const out = parseUsageNdjson(readV44('v0.4.44-usage.ndjson'));
     expect(out.map((u) => u.provider)).toEqual(['claude', 'codex', 'copilot', 'grok', 'zai']);
 
-    const claude = out[0]!;
-    expect(claude.short_term.percent_remaining).toBe(92.0);
-    expect(claude.short_term.window).toBe('5h');
-    expect(claude.long_term.window).toBe('7d');
+    // claude really has both a 5h and a 7d window; the pair maps onto the
+    // list one-to-one, shortest first.
+    expect(shape(out)[0]).toEqual({
+      provider: 'claude',
+      windows: [
+        ['5h', 92.0, '2026-08-24T11:59:59Z'],
+        ['7d', 91.0, '2026-08-27T14:59:59Z'],
+      ],
+    });
 
-    // A provider with no short-term window emits nulls rather than omitting
-    // the object — anything formatting this MUST guard.
-    const codex = out[1]!;
-    expect(codex.short_term.percent_remaining).toBeNull();
-    expect(codex.short_term.reset_at).toBeNull();
-    expect(codex.long_term.percent_remaining).toBe(90.0);
+    // codex has NO 5h window: its null short_term slot is the helper saying
+    // "no such window", so it is dropped — not carried as a "not reported"
+    // placeholder row for a meter that does not exist.
+    expect(shape(out)[1]).toEqual({
+      provider: 'codex',
+      windows: [['7d', 90.0, '2026-08-31T00:45:22Z']],
+    });
 
-    // `status` stays `ok` even for an exhausted provider; the percentage is
+    // copilot has ONLY a monthly window. The 100%-no-reset short_term beside
+    // it is a synthesized filler (the real number is premium_percent_remaining
+    // = 100 in details), and its null window label is nowhere to point a
+    // meter — dropped, leaving the one window the plan actually has.
+    expect(shape(out)[2]).toEqual({
+      provider: 'copilot',
+      windows: [['monthly', 100.0, '2026-09-01T00:00:00Z']],
+    });
+
+    // grok: a lone weekly. `status` stays `ok` even at 0% — the percentage is
     // the signal, not the status string.
     expect(out[3]!.status).toBe('ok');
-    expect(out[3]!.long_term.percent_remaining).toBe(0.0);
+    expect(shape(out)[3]).toEqual({
+      provider: 'grok',
+      windows: [['weekly', 0.0, '2026-08-25T00:08:17Z']],
+    });
+
+    // zai's 5h window has a percent but NO reset: both fields are guarded
+    // independently, and a real window is never dropped for one null field.
+    expect(shape(out)[4]).toEqual({
+      provider: 'zai',
+      windows: [
+        ['5h', 100.0, null],
+        ['weekly', 0.0, '2026-08-24T14:04:58Z'],
+      ],
+    });
   });
 
-  it('folds the installed helper\'s windows map into short_term/long_term', () => {
+  it('reads the installed helper\'s keyed windows map the same way', () => {
     // Captured verbatim from the host the user actually runs (still
     // self-reported as 0.4.44): the rows carry a keyed `windows` map and NO
     // top-level pair. Consumed raw, `row.short_term` is undefined — the render
     // throw that blanked the usage panel.
     const out = parseUsageNdjson(readV44('v0.4.44-usage-windows.ndjson'));
-    expect(out.map((u) => u.provider)).toEqual(['claude', 'codex', 'copilot', 'grok', 'zai']);
 
-    // The map key becomes the window label.
-    const claude = out[0]!;
-    expect(claude.short_term).toEqual({
-      percent_remaining: 93,
-      reset_at: '2026-08-27T20:20:00Z',
-      window: '5h',
+    // The map key becomes the window label, one entry per real window.
+    expect(shape(out)[0]).toEqual({
+      provider: 'claude',
+      windows: [
+        ['5h', 93, '2026-08-27T20:20:00Z'],
+        ['7d', 98, '2026-09-03T15:00:00Z'],
+      ],
     });
-    expect(claude.long_term).toEqual({
-      percent_remaining: 98,
-      reset_at: '2026-09-03T15:00:00Z',
-      window: '7d',
+    expect(shape(out)[1]).toEqual({
+      provider: 'codex',
+      windows: [['7d', 92.0, '2026-09-03T16:26:47Z']],
     });
-
-    // codex reports only a 7d window: the empty slot is explicit nulls, the
-    // shape the pair-shaped rows already established for "no such window".
-    const codex = out[1]!;
-    expect(codex.short_term).toEqual({ percent_remaining: null, reset_at: null, window: null });
-    expect(codex.long_term.window).toBe('7d');
-    expect(codex.long_term.percent_remaining).toBe(92.0);
-
-    // copilot's map carries a literal `short_term` key — it must land in the
-    // short-term slot, beside `monthly` as the long term. The slot-named keys
-    // carry no label of their own (null → the consumer's generic wording),
-    // so "short_term" never reaches the screen.
-    const copilot = out[2]!;
-    expect(copilot.short_term).toEqual({
-      percent_remaining: 100,
-      reset_at: null,
-      window: null,
+    // copilot's map carries a literal `short_term` key beside `monthly` — the
+    // synthesized filler again (real number: premium_percent_remaining 90.3).
+    // It is unnamed data, dropped so copilot shows its one monthly window.
+    expect(shape(out)[2]).toEqual({
+      provider: 'copilot',
+      windows: [['monthly', 90.3, '2026-09-01T00:00:00Z']],
     });
-    expect(copilot.long_term.window).toBe('monthly');
-
-    // grok: a lone `weekly` is a long term, leaving the short slot empty.
-    expect(out[3]!.long_term.window).toBe('weekly');
-    expect(out[3]!.short_term).toEqual({ percent_remaining: null, reset_at: null, window: null });
-
-    // zai: `5h` + `weekly`, one each side.
-    const zai = out[4]!;
-    expect(zai.short_term.window).toBe('5h');
-    expect(zai.long_term.window).toBe('weekly');
+    expect(shape(out)[3]).toEqual({
+      provider: 'grok',
+      windows: [['weekly', 30.0, '2026-09-01T00:08:17Z']],
+    });
+    expect(shape(out)[4]).toEqual({
+      provider: 'zai',
+      windows: [
+        ['5h', 84.0, null],
+        ['weekly', 85.0, '2026-09-03T14:04:58Z'],
+      ],
+    });
   });
 
-  it('leaves a row that already carries the pair untouched', () => {
+  it('keeps all three windows of a provider like go, shortest first', () => {
+    // The row that broke the old short_term/long_term fold: a provider with
+    // THREE windows (go: 5h + weekly + monthly) had its third silently
+    // dropped once both slots filled. Shape per the user's host report —
+    // synthetic line, map deliberately listed longest-first.
+    const line =
+      '{"provider":"go","status":"ok","error":null,"details":{},"windows":{' +
+      '"monthly":{"percent_remaining":41.0,"reset_at":"2026-09-30T00:00:00Z"},' +
+      '"weekly":{"percent_remaining":75.0,"reset_at":"2026-09-06T15:00:00Z"},' +
+      '"5h":{"percent_remaining":97.0,"reset_at":"2026-09-04T16:20:00Z"}}}';
+    expect(shape(parseUsageNdjson(line))).toEqual([
+      {
+        provider: 'go',
+        windows: [
+          ['5h', 97.0, '2026-09-04T16:20:00Z'],
+          ['weekly', 75.0, '2026-09-06T15:00:00Z'],
+          ['monthly', 41.0, '2026-09-30T00:00:00Z'],
+        ],
+      },
+    ]);
+  });
+
+  it('keeps a window with a reset but no meter, and drops rows with no window at all', () => {
+    // A real window can report only its reset — "not reported" beside a real
+    // reset time is a fact; both-null is not a window.
+    const line =
+      '{"provider":"go","status":"ok","error":null,"details":{},"windows":{' +
+      '"5h":{"percent_remaining":null,"reset_at":"2026-09-04T16:20:00Z"},' +
+      '"weekly":{"percent_remaining":null,"reset_at":null},' +
+      '"monthly":{"percent_remaining":41.0,"reset_at":null}}}';
+    expect(shape(parseUsageNdjson(line))).toEqual([
+      {
+        provider: 'go',
+        windows: [
+          ['5h', null, '2026-09-04T16:20:00Z'],
+          ['monthly', 41.0, null],
+        ],
+      },
+    ]);
+
+    // Every window null → an empty list. The view renders such a provider as
+    // one quiet line; it must not fabricate slots.
+    const empty =
+      '{"provider":"x","status":"error","error":"quse expired","details":{},' +
+      '"windows":{"5h":{"percent_remaining":null,"reset_at":null}}}';
+    expect(parseUsageNdjson(empty)[0]!.windows).toEqual([]);
+  });
+
+  it('prefers the top-level pair when a row carries both shapes', () => {
     const row = {
       provider: 'claude',
       status: 'ok',
@@ -421,8 +493,26 @@ describe('parseUsageNdjson', () => {
       windows: { monthly: { percent_remaining: 99 } },
     };
     const out = parseUsageNdjson(JSON.stringify(row));
-    expect(out[0]!.short_term.percent_remaining).toBe(1);
-    expect(out[0]!.long_term.percent_remaining).toBe(2);
+    expect(out[0]!.windows.map((w) => w.window)).toEqual(['5h', '7d']);
+    expect(out[0]!.windows.map((w) => w.percent_remaining)).toEqual([1, 2]);
+  });
+
+  it('names unnamed windows with the generic slot wording, never the raw key', () => {
+    // A row where every surviving window is unnamed (old helper, null window
+    // labels): the slot's own wording stands in, so "short_term" never
+    // reaches the screen.
+    const row = {
+      provider: 'mystery',
+      status: 'ok',
+      short_term: { percent_remaining: 50, reset_at: null, window: null },
+      long_term: { percent_remaining: 60, reset_at: '2026-09-10T00:00:00Z', window: null },
+      error: null,
+      details: {},
+    };
+    expect(parseUsageNdjson(JSON.stringify(row))[0]!.windows.map((w) => w.window)).toEqual([
+      'short-term',
+      'long-term',
+    ]);
   });
 });
 
