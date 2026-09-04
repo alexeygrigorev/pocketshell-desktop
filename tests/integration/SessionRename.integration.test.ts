@@ -139,7 +139,13 @@ describeDocker('rename really renames', () => {
     const second = await after.attach(connectionId, 'rename-b', { cols: 80, rows: 24, ...sink });
     expect(second.switched).toBe(false);
     const acc = await waitForOutput(second.shellId, 'MARK-RENAME-A');
-    expect(acc).not.toContain('[PocketShell]');
+    // The failure line names the session, and that naming is what the
+    // assertion keys on — not the bare label. The join command is typed into
+    // a login shell, so its own text is echoed back whether the join succeeds
+    // or fails, and that echo carries "[PocketShell]" inside the printf
+    // fallback it contains. Only a real failure prints the session's name
+    // into the format; the echo holds a literal %s there instead.
+    expect(acc).not.toContain('could not join session rename-b');
 
     // tmux agrees: one session, carrying the new name.
     const sessions = await ssh.exec(
