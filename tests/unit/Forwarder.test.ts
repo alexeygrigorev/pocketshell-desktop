@@ -242,6 +242,13 @@ describe('stop() with a live connection', () => {
     const client: Socket = await new Promise((resolve) => {
       const s = connect({ port: 8463, host: '127.0.0.1' }, () => resolve(s));
     });
+    // The stop destroys the forward's side of this connection mid-flight, so
+    // the OS may answer with a reset instead of an EOF — delivered to this
+    // socket as an ECONNRESET on read. That is the teardown working, not a
+    // failure, and without a listener the 'error' event surfaces as an
+    // unhandled exception after the test has passed (observed on macOS, where
+    // destroy-with-pending-data resets reliably).
+    client.on('error', () => {});
     const clientClosed = new Promise<void>((resolve) => client.once('close', resolve));
 
     const timeout = (ms: number): Promise<'pending'> =>
