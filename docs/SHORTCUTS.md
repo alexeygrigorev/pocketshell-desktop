@@ -206,8 +206,11 @@ something in this app is a key the user is asking about.
 
 `Chord` is `{ ctrl, alt, shift, key }`, matched on `KeyboardEvent.key` — the
 character the layout produced — for the reason `zoomKeys.ts` sets out at length.
-Its stored spelling is `Ctrl+Shift+V`, modifiers in a fixed order so that one
-chord has exactly one string and cannot appear twice in an override map.
+One character folds on purpose: on the Russian layout the backquote keycap is
+engraved `ё`, so `ё`/`Ё` canonicalise to `` ` `` and `Ctrl+Ё` is `composer.toggle`
+exactly as `Ctrl+\`` is; the capture field stores the one canonical spelling
+either way. Its stored spelling is `Ctrl+Shift+V`, modifiers in a fixed order so
+that one chord has exactly one string and cannot appear twice in an override map.
 
 ### 2.1 Surfaces, and what "same surface" means
 

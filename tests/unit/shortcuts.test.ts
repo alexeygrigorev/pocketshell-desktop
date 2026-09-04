@@ -88,6 +88,19 @@ describe('chords — spelling', () => {
     expect(chordFromEvent({ key: ' ' }).key).toBe('Space');
   });
 
+  it('folds the Russian Ё into the backquote key it is printed on', () => {
+    // On ЙЦУКЕН the backquote keycap is engraved ё, so Ctrl+Ё is what a
+    // Russian user presses for the VS Code panel chord — no other key on that
+    // layout produces Ctrl+`.
+    expect(chordFromEvent({ key: 'ё', ctrlKey: true }).key).toBe('`');
+    expect(chordFromEvent({ key: 'Ё', ctrlKey: true }).key).toBe('`');
+    expect(chordMatches(chord('Ctrl+`'), { key: 'ё', ctrlKey: true })).toBe(true);
+    // The stored spelling stays canonical, so one chord has one map key.
+    expect(chordToString(parseChord('Ctrl+Ё')!)).toBe('Ctrl+`');
+    // One alias, not a rule about Cyrillic: letters stay themselves.
+    expect(chordFromEvent({ key: 'а', ctrlKey: true }).key).toBe('А');
+  });
+
   it('spells arrows as words, never as glyphs', () => {
     // designGates.test.ts bans glyph-as-icon in renderer templates, and a
     // shortcut list is exactly where that rule would be quietly widened.
@@ -516,6 +529,16 @@ describe('isShortcut — the shape every call site becomes', () => {
     expect(isShortcut(moved, 'terminal.copySelection', { key: 'C', ctrlKey: true, shiftKey: true })).toBe(
       false,
     );
+  });
+
+  it('opens the composer from the Russian layout backquote key', () => {
+    // The user report behind the Ё alias: Ctrl+Ё must fire composer.toggle
+    // exactly as Ctrl+` does on a US layout.
+    expect(isShortcut(bindings, 'composer.toggle', { key: 'ё', ctrlKey: true })).toBe(true);
+    // Shift is still part of the chord, alias or no alias.
+    expect(
+      isShortcut(bindings, 'composer.toggle', { key: 'Ё', ctrlKey: true, shiftKey: true }),
+    ).toBe(false);
   });
 
   it('falls back to the defaults rather than to no binding at all', () => {

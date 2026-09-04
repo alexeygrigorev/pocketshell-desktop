@@ -41,7 +41,9 @@
  * documented exception in this app — the numeric keypad's `+`/`-`/`0` — belongs
  * to the zoom matcher, which is a main-process concern and stays there; this
  * registry names those chords for the LIST without claiming to be their
- * implementation. See {@link ShortcutSpec.owner}.
+ * implementation. See {@link ShortcutSpec.owner}. The one CHARACTER alias —
+ * Russian Ё folding to `` ` `` — works in mirror image and is
+ * {@link LAYOUT_ALIASES}'s to explain.
  *
  * ---------------------------------------------------------------------------
  * THE SHIFTED-PUNCTUATION CAVEAT, STATED RATHER THAN HIDDEN
@@ -197,22 +199,53 @@ export interface ChordKeyInput {
 }
 
 /**
+ * Characters that canonicalise to another key's token, because the layout
+ * prints a different character on the same keycap.
+ *
+ * One entry, and the reason it is not the position-matching mistake the file
+ * header warns about: on the Russian ЙЦУКЕН layout the backquote key prints
+ * Ё — the keycap is engraved ё — so a Russian user pressing the VS Code panel
+ * chord produces `Ctrl+Ё`, and no other key on that layout produces
+ * `` Ctrl+` ``. Matching the character as reported would leave the app's most
+ * pressed chord dead there; folding the character into the token of the keycap
+ * it belongs to keeps matching, capture and parse on one vocabulary. It also
+ * means the rebinding field — which captures through the same function —
+ * stores `Ctrl+\`` for a Ё keypress: one spelling per chord, not one per
+ * layout.
+ *
+ * The list stops there on purpose. Aliasing Cyrillic LETTERS to the Latin
+ * letters printed at the same positions (а→F, …) WOULD be position matching
+ * wearing a disguise: it turns unrelated typing into shortcuts, which is the
+ * exact failure `key`-matching exists to avoid. Ё qualifies because its US
+ * counterpart is a punctuation key with no letter of its own, so the alias
+ * takes nothing away — no binding holds Ё, and nothing else changes meaning.
+ */
+const LAYOUT_ALIASES: Readonly<Record<string, string>> = {
+  Ё: '`',
+};
+
+/**
  * The canonical spelling of a key token.
  *
  * Letters are upper-cased because a browser reports `v` or `V` for the same
  * physical key depending on Shift and Caps Lock, and the existing call sites
- * already test both spellings by hand (`e.key === 'V' || e.key === 'v'`). A
- * bare space becomes `Space` so a chord string can use `+` as its separator
- * without a token that is invisible in a config file. Named keys keep the DOM's
- * own spelling — `Escape`, `ArrowUp`, `Backspace` — so there is one vocabulary
+ * already test both spellings by hand (`e.key === 'V' || e.key === 'v'`). A bare
+ * space becomes `Space` so a chord string can use `+` as its separator without a
+ * token that is invisible in a config file. Named keys keep the DOM's own
+ * spelling — `Escape`, `ArrowUp`, `Backspace` — so there is one vocabulary
  * rather than a translation layer nobody can remember the direction of.
+ * Layout-printed stand-ins fold last, after the upper-case has had its turn —
+ * {@link LAYOUT_ALIASES}.
  */
 export function canonicalKey(key: string): string {
   if (key === ' ' || key === 'Space' || key === 'Spacebar') return 'Space';
   // `Array.from` rather than `.length`, so an astral character counts as one
   // and is not truncated into half a surrogate pair.
   const chars = Array.from(key);
-  if (chars.length === 1) return key.toUpperCase();
+  if (chars.length === 1) {
+    const upper = key.toUpperCase();
+    return LAYOUT_ALIASES[upper] ?? upper;
+  }
   return key;
 }
 
