@@ -1008,7 +1008,8 @@ onMounted(async () => {
     // gives an EARLIER provider priority over a later one for the same cells
     // and drops intersecting lower-priority links, so a URL stays a web link
     // even if the path detector were fooled by one. It is not — terminalPaths
-    // rejects any token containing `://` before it peels anything — but two
+    // rejects any http(s) token before it peels anything, and a `file://`
+    // token is a path for the Files tab, not a web link — but two
     // independent guarantees are worth having for a thing this easy to get
     // subtly wrong.
     //

@@ -149,11 +149,16 @@ Paths printed by remote tools are linkified from the terminal buffer and
 open in the Files tab (`terminalPaths.ts` holds the detection rules,
 `terminalLinks.ts` the buffer flattening and click handling); the span
 stays on the path itself — writer labels like `Write(...)` and trailing
-punctuation are excluded. A path a TUI split across rows (this pane is
-always a tmux client, so nothing is ever flagged `isWrapped`) is
-reconstructed from geometry — hard wrap, box-gutter continuation,
-near-margin hyphen break — each shape anchored on a rooted (`/`, `~/`,
-`./`, `../`) tail token, so prose rows never glue together.
+punctuation are excluded. A `file:///` URL is the same link wearing a
+scheme: the detector strips the scheme and opens the path (the file is on
+the SSH host, so it must not travel to a browser) while underlining the
+whole URL; `file://host/…` and any http(s) URL are left alone — web links
+belong to WebLinksAddon and are never extended across a row break. A path
+a TUI split across rows (this pane is always a tmux client, so nothing is
+ever flagged `isWrapped`) is reconstructed from geometry — hard wrap,
+box-gutter continuation, near-margin hyphen break — each shape anchored on
+a rooted (`/`, `~/`, `./`, `../`, `file:///`) tail token, so prose rows
+never glue together.
 
 ---
 

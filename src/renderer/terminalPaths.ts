@@ -140,6 +140,28 @@ const HOSTNAME_LIKE = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}$/i;
 const HAS_EXTENSION = /\.[A-Za-z0-9_-]{1,16}$/;
 
 /**
+ * A `file://` URL is a path wearing a scheme, and everything it names is on
+ * the machine this terminal is attached to — so it is this detector's to
+ * claim, and the Files tab is where a click lands. WebLinksAddon cannot take
+ * it (its regex admits only http/https) and opening it as a LOCAL file would
+ * be wrong twice over: the renderer is sandboxed, and the file is not local.
+ *
+ * Only the empty-authority form (`file:///…`) passes. A program printing a
+ * URL for a file of its own always prints that form, while `file://host/path`
+ * stripped of its scheme is a hostname wearing a path, and would resolve to
+ * the wrong place if it resolved at all.
+ *
+ * The path under the scheme is read LITERALLY, without percent-decoding: what
+ * a CLI prints in a `Saved to:` line is the raw filesystem path, and decoding
+ * would corrupt a name that genuinely holds `%20`.
+ */
+export function stripFileScheme(token: string): string | null {
+  if (!token.startsWith('file://')) return null;
+  const path = token.slice('file://'.length);
+  return path.startsWith('/') ? path : null;
+}
+
+/**
  * Every path-looking token in `line`, left to right.
  *
  * Tokens are whitespace-separated runs, which is the whole reason paths with
@@ -161,8 +183,10 @@ export function findPaths(line: string): PathMatch[] {
 
 /** Peel one whitespace-delimited token down to a path, or reject it. */
 function matchToken(token: string, base: number): PathMatch | null {
-  // A URL is never a path, and this check comes FIRST — before any peeling —
-  // so no part of one can survive to be examined on its own. Without it,
+  // A URL is never a path — with one exception: `file://` IS one, the path
+  // under a scheme, and {@link stripFileScheme} below hands it to the rules
+  // whole. For everything else this check comes FIRST — before any peeling —
+  // so no part of a URL can survive to be examined on its own. Without it,
   // `https://host/a=b/c.txt` would lose its scheme to the `key=value` rule
   // below and re-emerge as the perfectly path-shaped `b/c.txt`.
   //
@@ -170,8 +194,10 @@ function matchToken(token: string, base: number): PathMatch | null {
   // other half is registration order: WebLinksAddon registers its provider
   // first and xterm gives an earlier provider priority over a later one for
   // the same cells, so even a URL shape this rule failed to recognise stays
-  // the web link it already was.
-  if (token.includes('://')) return null;
+  // the web link it already was. (WebLinksAddon's regex never matches
+  // `file://` at all, so a file URL has only ever had this detector to
+  // claim it.)
+  if (token.includes('://') && stripFileScheme(token) === null) return null;
 
   let start = 0;
   const end = token.length;
@@ -237,9 +263,14 @@ function matchCandidate(
     if (suffix[3] !== undefined) columnNo = Number(suffix[3]);
   }
 
-  if (!isPath(candidate, suffix !== null)) return null;
+  // A `file://` URL is validated and opened as the path under its scheme,
+  // while start/end keep spanning the whole URL: the underline has to cover
+  // what the user reads, exactly as it covers a `:12:5` suffix it will not
+  // open.
+  const path = stripFileScheme(candidate) ?? candidate;
+  if (!isPath(path, suffix !== null)) return null;
 
-  const match: PathMatch = { start: base + start, end: base + end, path: candidate };
+  const match: PathMatch = { start: base + start, end: base + end, path };
   if (lineNo !== undefined) match.line = lineNo;
   if (columnNo !== undefined) match.column = columnNo;
   return match;

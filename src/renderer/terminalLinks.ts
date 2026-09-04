@@ -97,7 +97,7 @@
  * for drag-selection in this pane.
  */
 import type { IBuffer, IBufferCell, ILink, ILinkProvider, Terminal } from '@xterm/xterm';
-import { findPaths } from './terminalPaths';
+import { findPaths, stripFileScheme } from './terminalPaths';
 import { useFilesStore } from './stores/files';
 import { useSessionsStore } from './stores/sessions';
 
@@ -163,7 +163,9 @@ const GUTTER = /^ {0,8}[│┃] /;
  * false-positive suite is built from — `and/or`, `client/server`, `w/o`, `y/N`,
  * `9/10` — is unanchored, so a row ending in one of them is never a row we will
  * glue anything onto. Joining is only ever done in service of a path, and only
- * when the row above already committed to being one.
+ * when the row above already committed to being one. A `file:///` tail reaches
+ * it de-schemed — {@link stripFileScheme} runs first — so it counts as the
+ * rooted path it is.
  */
 const ROOTED = /^(?:\/|~\/|\.\/|\.\.\/)/;
 
@@ -223,10 +225,14 @@ function readRow(buf: IBuffer, y: number, scratch: IBufferCell): RowRead | null 
 function joinedRowSkip(prev: RowRead, next: RowRead): number | null {
   if (prev.lastCol < 0) return null;
   const tail = /\S+$/.exec(prev.text.trimEnd())?.[0] ?? '';
-  if (!ROOTED.test(tail)) return null;
-  // A URL belongs to WebLinksAddon and is never extended across a row break:
-  // gluing a second row onto one would produce a link to a host nobody named.
-  if (tail.includes('://')) return null;
+  // An http(s) URL belongs to WebLinksAddon and is never extended across a
+  // row break: gluing a second row onto one would produce a link to a host
+  // nobody named. A `file://` URL is the opposite case — the detector strips
+  // its scheme and claims it as a path — and the TUIs wrap long file URLs
+  // mid-token exactly like any other path, so it joins under the same rules.
+  const asPath = stripFileScheme(tail);
+  if (tail.includes('://') && asPath === null) return null;
+  if (!ROOTED.test(asPath ?? tail)) return null;
 
   const gutter = GUTTER.exec(next.text);
   if (gutter === null) {
@@ -435,8 +441,9 @@ export function pathLinks(
  * providers in registration order and drops a lower-priority link that
  * intersects a higher-priority one, so registering second is what guarantees a
  * URL stays a web link even if the path detector were ever to be fooled by one.
- * (It is not: terminalPaths.ts rejects any token containing `://` outright.
- * The ordering is the belt to that pair of braces.)
+ * (It is not: terminalPaths.ts rejects any http(s) token outright, and a
+ * `file://` token is not a web link at all — the detector strips its scheme and
+ * opens the path.)
  */
 export function createPathLinkProvider(
   term: Terminal,

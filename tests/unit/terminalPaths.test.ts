@@ -140,6 +140,46 @@ describe('findPaths — the Codex TUI output, verbatim from the user', () => {
   });
 });
 
+describe('findPaths — a file:// URL', () => {
+  /**
+   * The "Saved to:" line, reported sitting dead in the pane: WebLinksAddon
+   * admits only http/https, and this detector refused every `://` — so
+   * nothing underlined it and there was nowhere to click. The file it names
+   * is on the SSH host like everything else in the pane, so a file URL is a
+   * path wearing a scheme: opened in the Files tab, underlined whole.
+   */
+  const SAVED_TO =
+    'file:///home/alexey/.codex/generated_images/01a06bad-05a4-7fc0-bf41-d63ece15252c/exec-aca3c94d-2a2f-4150-a501-cd1e2fd26db9.png';
+
+  it('matches one and opens the path under the scheme', () => {
+    expect(paths(`Saved to: ${SAVED_TO}`)).toEqual([
+      '/home/alexey/.codex/generated_images/01a06bad-05a4-7fc0-bf41-d63ece15252c/exec-aca3c94d-2a2f-4150-a501-cd1e2fd26db9.png',
+    ]);
+  });
+
+  it('underlines the whole URL, scheme included', () => {
+    expect(spans(SAVED_TO)).toEqual([SAVED_TO]);
+  });
+
+  it('refuses the non-empty-authority form, which names no path on this box', () => {
+    // `file://host/share/x.png` de-schemed is `host/share/x.png` — a hostname
+    // wearing a path, which would resolve somewhere wrong if it resolved at
+    // all. A program printing a URL for its own file prints `file:///`.
+    expect(paths('file://host/share/x.png')).toEqual([]);
+  });
+
+  it('refuses one whose path breaks the ordinary rules', () => {
+    // The colon rule survives the de-scheming: `/tmp/a:8080` is not a name.
+    expect(paths('file:///tmp/a:8080/x.png')).toEqual([]);
+  });
+
+  it('reads the path literally, without percent-decoding', () => {
+    // A `Saved to:` line prints the raw filesystem path, so decoding `%20`
+    // would corrupt a name that genuinely holds it.
+    expect(paths('file:///tmp/my%20file.mp3')).toEqual(['/tmp/my%20file.mp3']);
+  });
+});
+
 describe('findPaths — shapes that are paths', () => {
   it('matches an absolute path', () => {
     expect(paths('wrote /home/alexey/notes.md')).toEqual(['/home/alexey/notes.md']);

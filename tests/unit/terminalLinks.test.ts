@@ -257,6 +257,52 @@ describe('scanBufferLine — a path a TUI broke across two rows', () => {
 });
 
 /**
+ * The "Saved to:" report: a `file://` URL that runs to the right margin and
+ * continues at column 0. It was dead on arrival — WebLinksAddon's regex
+ * admits only http(s), and before the URL guard learned about `file://` the
+ * join rules refused the break exactly as they refuse a web link's. The URL
+ * is remote bytes like everything else in the pane: the path under its
+ * scheme lives on the SSH host, and the Files tab is where a click lands.
+ */
+describe('scanBufferLine — a file:// URL a TUI broke across two rows', () => {
+  const FIRST_ROW =
+    'file:///home/alexey/.codex/generated_images/01a06bad-05a4-7fc0-bf41-d63ece15252c/exec-ac';
+  const SECOND_ROW = 'a3c94d-2a2f-4150-a501-cd1e2fd26db9.png';
+  const FULL = `${FIRST_ROW}${SECOND_ROW}`;
+  const PATH = FULL.slice('file://'.length);
+
+  it('joins the hard wrap and linkifies the whole URL', () => {
+    const term = fakeScreen([FIRST_ROW, SECOND_ROW], FIRST_ROW.length);
+    const links = pathLinks(term, 1, () => ({ sessionName: 'git-foo' }));
+
+    expect(links[0]?.text).toBe(FULL);
+    // From the first cell of row 1 to the last cell of row 2, scheme included.
+    expect(links[0]?.range).toEqual({
+      start: { x: 1, y: 1 },
+      end: { x: SECOND_ROW.length, y: 2 },
+    });
+    // Hovered on the continuation row instead: the same logical line.
+    expect(pathLinks(term, 2, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(FULL);
+  });
+
+  it('opens the path under the scheme, not the URL itself', () => {
+    const term = fakeScreen([FIRST_ROW, SECOND_ROW], FIRST_ROW.length);
+    const files = useFilesStore();
+
+    pathLinks(term, 1, () => ({ sessionName: 'git-foo' }))[0]?.activate(CLICK, FULL);
+
+    expect(files.reveal).toBe(PATH);
+  });
+
+  it('still refuses to extend an http URL across the same break', () => {
+    const first = 'saved https://example.com/a/b.png';
+    const scan = (rows: string[], width: number): string =>
+      scanBufferLine(fakeScreen(rows, width), 1).text.trimEnd();
+    expect(scan([first, 'and cleaned up'], first.length)).toBe(first);
+  });
+});
+
+/**
  * The other half of the joining rules, and the half that decides whether this
  * feature is trustworthy: two rows that merely follow one another must stay two
  * lines. A join that should not have happened invents a path nothing can open
