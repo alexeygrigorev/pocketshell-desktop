@@ -46,6 +46,7 @@ import OverlayPanel from '../components/OverlayPanel.vue';
 import SessionTree from '../components/SessionTree.vue';
 import HostPanelButtons from '../components/HostPanelButtons.vue';
 import { type HostPanel } from '../hostPanels';
+import { requestWorkspaceFocus } from '../workspaceFocus';
 import { useFolderTree } from '../folderTree';
 import { adjacentIndex } from '../../shared/listNavigation';
 import { editingTarget } from '../editingTarget';
@@ -330,7 +331,15 @@ const { folders } = useFolderTree();
  * and the point of the navigation is to move to the new tab.
  */
 function onSelectFolder(folder: SessionDirectory, session?: string): void {
-  if (folder.key === activeFolder.value && session === undefined) return;
+  if (folder.key === activeFolder.value && session === undefined) {
+    // A bare re-click of the open row: nothing to navigate to — same folder,
+    // same route — but it is still "take me to this workspace", so the
+    // keyboard goes to the pane in front, the same landing every fresh
+    // arrival gets. Through the workspace's own registration
+    // (workspaceFocus.ts): this view cannot focus a terminal it does not own.
+    requestWorkspaceFocus();
+    return;
+  }
   // `void`: vue-router rejects the returned promise on an aborted or
   // redirected navigation, and neither is an error here. Same convention as
   // src/main/index.ts's `void mainWindow.loadURL(...)`.

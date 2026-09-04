@@ -77,7 +77,10 @@ const { useProjectsStore } = await import('../../src/renderer/stores/projects');
 const { useFilesStore } = await import('../../src/renderer/stores/files');
 
 const stubs = {
-  TerminalView: { template: '<div class="stub-terminal" />' },
+  // `focus` is part of the real TerminalView's exposed surface and is what a
+  // folder arrival asks of the pane in front; missing it would be a TypeError
+  // at the call site, not a silent skip.
+  TerminalView: { template: '<div class="stub-terminal" />', methods: { focus: () => undefined } },
   PromptComposer: { template: '<div class="stub-composer" />' },
   FilesView: { template: '<div class="stub-files" />' },
   OverlayPanel: { template: '<div><slot /></div>' },

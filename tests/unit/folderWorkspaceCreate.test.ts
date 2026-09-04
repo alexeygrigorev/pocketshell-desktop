@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { reactive } from 'vue';
@@ -93,7 +93,7 @@ const CHOICE: LaunchChoice = {
 };
 
 /** A session row of the shape `helper.sessionsList` returns. */
-function row(name: string, created = 1): unknown {
+function row(name: string, created = 1): Record<string, unknown> {
   return {
     name,
     created,
@@ -175,11 +175,22 @@ async function flush(times = 6): Promise<void> {
 }
 
 /** Mount the workspace on a folder that already holds one session, `git-x`. */
+// Every wrapper this file mounts. A view left mounted across tests is not
+// inert: it stays registered for focus requests (workspaceFocus.ts) and its
+// folderKey/query watchers fire on the next test's route and store resets,
+// splattering focus calls into that test's assertions.
+const mounted: VueWrapper[] = [];
+
 async function openWorkspace(): Promise<VueWrapper> {
   const wrapper = mount(FolderWorkspaceView, { global: { stubs } });
+  mounted.push(wrapper);
   await flush();
   return wrapper;
 }
+
+afterEach(() => {
+  while (mounted.length) mounted.pop()?.unmount();
+});
 
 /** `+` -> "New session…" -> the stub's [what] button. */
 async function createVia(wrapper: VueWrapper, what: 'shell' | 'agent'): Promise<void> {
@@ -236,8 +247,9 @@ describe('the folder workspace + menu creates a session', () => {
     expect(wrapper.find('nav.tabs button.active').text().trim()).toBe('Terminal 2');
     expect(barError(wrapper)).toBeNull();
     // The keyboard follows the tab: the create ends in the new pane, not back
-    // on the `+` button the dialog restored focus to.
-    expect(terminalFocusCalls).toEqual(['git-x-2']);
+    // on the `+` button the dialog restored focus to. The first entry is the
+    // mount's own arrival focus on the tab that was in front.
+    expect(terminalFocusCalls).toEqual(['git-x', 'git-x-2']);
   });
 
   it('launches the agent in the NEW session, not in the one that was in front', async () => {
@@ -256,8 +268,8 @@ describe('the folder workspace + menu creates a session', () => {
     expect(shellInput).not.toHaveBeenCalled();
     // The keyboard is already in the new pane; the launch typing is server-side
     // and does not depend on it, but the user is looking at the session they
-    // asked for either way.
-    expect(terminalFocusCalls).toEqual(['git-x-2']);
+    // asked for either way. First entry is the mount's arrival focus.
+    expect(terminalFocusCalls).toEqual(['git-x', 'git-x-2']);
 
     // The new tab's TerminalView joins and publishes its shell.
     shells.register('git-x-2', 'shell-2');
@@ -287,9 +299,9 @@ describe('the folder workspace + menu creates a session', () => {
 
     // The whole point: not a byte into the terminal the user was working in.
     expect(shellInput).not.toHaveBeenCalled();
-    // Nothing was created, so nothing is focused either — the keyboard stays
-    // where the dialog left it.
-    expect(terminalFocusCalls).toEqual([]);
+    // Nothing was created, so the only focus ever asked for is the mount's
+    // own arrival focus on the tab that was already in front.
+    expect(terminalFocusCalls).toEqual(['git-x']);
     expect(barError(wrapper)).toContain('git-x');
     expect(barError(wrapper)).toContain('already open');
     expect(tabLabels(wrapper)).toEqual(['Terminal']);
@@ -348,7 +360,7 @@ describe('the folder workspace + menu creates a session', () => {
   it('selects and focuses the queried tab when the open folder is handed a new session', async () => {
     const wrapper = await openWorkspace();
     expect(tabLabels(wrapper)).toEqual(['Terminal']);
-    expect(terminalFocusCalls).toEqual([]);
+    expect(terminalFocusCalls).toEqual(['git-x']);
 
     useSessionsStore().sessions = [row('git-x'), row('git-x-2', 2)] as never;
     route.params = { name: 'host', folder: '~/git/x' };
@@ -357,15 +369,15 @@ describe('the folder workspace + menu creates a session', () => {
 
     expect(tabLabels(wrapper)).toEqual(['Terminal', 'Terminal 2']);
     expect(wrapper.find('nav.tabs button.active').text().trim()).toBe('Terminal 2');
-    expect(terminalFocusCalls).toEqual(['git-x-2']);
+    expect(terminalFocusCalls).toEqual(['git-x', 'git-x-2']);
   });
 
   /**
    * The same hand-off arriving at a folder that was NOT open: a mount, so
    * `loadFolderState` does the selecting from `?tab=` and — the half this pins —
-   * the focusing. The guard refuses to fire when the query names a tab the bar
-   * does not have yet: mount with the session list still empty and the first-tab
-   * fallback must NOT be focused in the new session's name.
+   * the focusing. The panel refreshed the session list before navigating, so
+   * the bar already shows the queried tab at load time and the arrival focus
+   * lands on it, not on the first-tab fallback.
    */
   it('focuses the queried tab on a cold arrival when the bar already shows it', async () => {
     useSessionsStore().sessions = [row('git-x'), row('git-x-2', 2)] as never;
@@ -377,5 +389,50 @@ describe('the folder workspace + menu creates a session', () => {
     expect(tabLabels(wrapper)).toEqual(['Terminal', 'Terminal 2']);
     expect(wrapper.find('nav.tabs button.active').text().trim()).toBe('Terminal 2');
     expect(terminalFocusCalls).toEqual(['git-x-2']);
+  });
+
+  /**
+   * A panel row click for a folder that is NOT open: the `folderKey` watch
+   * reloads the workspace, and the arrival focus is what lands the keyboard in
+   * the new folder's pane instead of leaving it wherever the previous folder
+   * had put it.
+   */
+  it('puts the keyboard in the pane when the panel opens a different folder', async () => {
+    useSessionsStore().sessions = [
+      row('git-x'),
+      { ...row('git-y', 2), path: '/home/me/git/y' },
+    ] as never;
+
+    const wrapper = await openWorkspace();
+    expect(tabLabels(wrapper)).toEqual(['Terminal']);
+    expect(terminalFocusCalls).toEqual(['git-x']);
+
+    route.params = { name: 'host', folder: '~/git/y' };
+    await flush();
+
+    expect(tabLabels(wrapper)).toEqual(['Terminal']);
+    expect(wrapper.find('nav.tabs button.active').text().trim()).toBe('Terminal');
+    expect(terminalFocusCalls).toEqual(['git-x', 'git-y']);
+  });
+
+  /**
+   * The registration behind the panel's already-open row re-click: the mounted
+   * workspace advertises its focus (workspaceFocus.ts), a request lands in the
+   * pane in front, and unmounting the workspace revokes the slot so a stale
+   * registration can never focus a dead component tree.
+   */
+  it('answers a focus request while mounted and stops answering after unmount', async () => {
+    const { requestWorkspaceFocus } = await import('../../src/renderer/workspaceFocus');
+    const wrapper = await openWorkspace();
+    expect(terminalFocusCalls).toEqual(['git-x']);
+
+    requestWorkspaceFocus();
+    await flush(2);
+    expect(terminalFocusCalls).toEqual(['git-x', 'git-x']);
+
+    wrapper.unmount();
+    requestWorkspaceFocus();
+    await flush(2);
+    expect(terminalFocusCalls).toEqual(['git-x', 'git-x']);
   });
 });

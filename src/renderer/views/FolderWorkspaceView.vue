@@ -46,6 +46,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { api } from '../ipc';
+import { registerWorkspaceFocus, unregisterWorkspaceFocus } from '../workspaceFocus';
 import { useConnectionStore } from '../stores/connection';
 import { useSessionsStore } from '../stores/sessions';
 import { useProjectsStore } from '../stores/projects';
@@ -440,14 +441,15 @@ function loadFolderState(): void {
   const active = activeTab.value?.id ?? null;
   if (active !== null) mru.value = pushMru(mru.value, active);
   persist();
-  // An arrival that NAMES a tab is the session panel's create hand-off
-  // (`?tab=<session>`, SessionTree's `onSessionStarted`): the selection above
-  // already landed on it, so the keyboard is the remaining half of "open the
-  // folder on the new session". Guarded on the named tab actually being the
-  // one in front — at a cold mount the session list may still be loading, and
-  // focusing `activeTab`'s first-tab fallback would put the keystrokes in the
-  // wrong pane.
-  if (active !== null && active === route.query['tab']) void focusActiveTab();
+  // Every arrival at a folder is "take me to this workspace" — a row click in
+  // the panel, a `Ctrl+↑`/`Ctrl+↓` step, the session panel's `?tab=` hand-off,
+  // the first open from the empty state — and each one used to land with the
+  // keyboard wherever it had been, which is the same defect a tab click had
+  // (bc86cf7): the first keystrokes went nowhere the user was looking. So the
+  // keyboard goes to the pane in front. At a cold mount the bar is still empty
+  // and this no-ops — `focusActiveTab` finds no tab rather than trusting the
+  // first-tab fallback, so a boot restore never grabs focus on a guess.
+  void focusActiveTab();
 }
 
 /**
@@ -949,6 +951,22 @@ async function focusActiveTab(): Promise<void> {
   }
   filesRef.value?.focus?.();
 }
+
+/**
+ * The host workspace asks for this when the user clicks THIS folder's row in
+ * the panel while already inside it: there is no navigation to arrive with
+ * (same folder, same route), but the click is still "take me to this
+ * workspace", so the keyboard lands the way a fresh arrival's does. Registered
+ * for the mount's lifetime (workspaceFocus.ts) — the one channel the host may
+ * use, and unmounting it must revoke. The wrapper is one function handed to
+ * both ends so the slot can tell its own registration from any other, and it
+ * stays `void`: the registry's contract is a synchronous ask.
+ */
+const requestFocus = (): void => {
+  void focusActiveTab();
+};
+onMounted(() => registerWorkspaceFocus(requestFocus));
+onBeforeUnmount(() => unregisterWorkspaceFocus(requestFocus));
 
 // ---------------------------------------------------------------------------
 // Rename
