@@ -440,6 +440,14 @@ function loadFolderState(): void {
   const active = activeTab.value?.id ?? null;
   if (active !== null) mru.value = pushMru(mru.value, active);
   persist();
+  // An arrival that NAMES a tab is the session panel's create hand-off
+  // (`?tab=<session>`, SessionTree's `onSessionStarted`): the selection above
+  // already landed on it, so the keyboard is the remaining half of "open the
+  // folder on the new session". Guarded on the named tab actually being the
+  // one in front — at a cold mount the session list may still be loading, and
+  // focusing `activeTab`'s first-tab fallback would put the keystrokes in the
+  // wrong pane.
+  if (active !== null && active === route.query['tab']) void focusActiveTab();
 }
 
 /**
@@ -1221,6 +1229,30 @@ watch(
 );
 
 /**
+ * A create in the folder that is ALREADY open changes only the route query.
+ *
+ * `onMounted` and the `folderKey` watch do not fire — the same route-reuse fact
+ * the parked-launch watcher above works around — so the panel's hand-off,
+ * `?tab=<session>`, selected nothing: the agent case has its own watcher, and
+ * this is the plain shell's. HostWorkspaceView's `onSelectFolder` states the
+ * intent this completes — a navigation that names a session exists to move to
+ * the new tab — and {@link goToTab} brings the keyboard with the selection, the
+ * way a click would. A tab already in front declines (a folder change selected
+ * it while loading state, and {@link loadFolderState} owns that arrival's
+ * focus), and a name that is not on the bar yet is ignored rather than raced:
+ * the panel refreshes the session list before navigating, so a miss means the
+ * session is gone, not slow.
+ */
+watch(
+  () => route.query['tab'],
+  (routed) => {
+    if (typeof routed !== 'string' || routed === activeTab.value?.id) return;
+    if (!tabs.value.some((tab) => tab.kind === 'session' && tab.session === routed)) return;
+    goToTab(routed);
+  },
+);
+
+/**
  * Create a session here, and launch [choice] in it once its PTY exists.
  *
  * [choice] is null for a plain shell. It arrives already validated — the
@@ -1334,6 +1366,12 @@ async function createSession(choice: LaunchChoice | null): Promise<void> {
   // pane this mounts is the PTY the launch waits for, and there is no `await`
   // between the two, so the watcher cannot fire against anything else.
   if (choice) armLaunch(created, choice);
+  // The dialog's OverlayPanel hands focus back to the `+` that opened it as it
+  // unmounts, so without this the user's first keystrokes go to that button. A
+  // create that ends in a new tab ends the way a tab click does: keyboard in
+  // the pane. `focusActiveTab` resolves after `nextTick`, so it lands after the
+  // panel's restore — the terminal wins the hand-off, not the button.
+  void focusActiveTab();
 }
 
 // Monotonic within the workspace, never a length-derived index: closing tab 2

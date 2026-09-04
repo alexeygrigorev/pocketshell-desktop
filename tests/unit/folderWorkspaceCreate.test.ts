@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { mount, type VueWrapper } from '@vue/test-utils';
-import { ref } from 'vue';
+import { reactive } from 'vue';
 import type { LaunchChoice } from '../../src/shared/agentLaunch';
 
 /**
@@ -31,10 +31,14 @@ import type { LaunchChoice } from '../../src/shared/agentLaunch';
  * controls from here would make this file fail whenever a label moved.
  */
 
-const route = ref({ params: { name: 'host', folder: '~/git/x' }, query: {} });
+// Reactive and mutated in place, the way vue-router's own current-route object
+// behaves: the view captures `useRoute()`'s return at setup, so a test that
+// swapped a fresh object in could never simulate a query-only navigation —
+// the real router updates the SAME object the component is holding.
+const route = reactive({ params: { name: 'host', folder: '~/git/x' }, query: {} });
 
 vi.mock('vue-router', () => ({
-  useRoute: () => route.value,
+  useRoute: () => route,
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
@@ -130,8 +134,32 @@ const LaunchStub = {
     '</div>',
 };
 
+/**
+ * Focus requests the workspace makes against its panes, by session name.
+ *
+ * The one thing a stubbed terminal can still be honest about is whether
+ * `focus()` was asked for and on whose behalf; the real TerminalView turns that
+ * into an xterm focus, which jsdom could not observe anyway.
+ */
+const terminalFocusCalls: string[] = [];
+
+const TerminalStub = {
+  props: { sessionKey: { type: String, default: null } },
+  // Both methods the workspace calls through the ref map; missing either would
+  // be a TypeError at the call site, not a silent skip.
+  setup(props: { sessionKey?: string | null }) {
+    return {
+      focus: (): void => {
+        terminalFocusCalls.push(props.sessionKey ?? '?');
+      },
+      resyncDisplay: (): void => {},
+    };
+  },
+  template: '<div class="stub-terminal" />',
+};
+
 const stubs = {
-  TerminalView: { template: '<div class="stub-terminal" />' },
+  TerminalView: TerminalStub,
   PromptComposer: { template: '<div class="stub-composer" />' },
   FilesView: { template: '<div class="stub-files" />' },
   OverlayPanel: { template: '<div><slot /></div>' },
@@ -182,6 +210,9 @@ beforeEach(() => {
   startSession.mockReset();
   sessionsList.mockReset();
   shellInput.mockReset();
+  terminalFocusCalls.length = 0;
+  route.params = { name: 'host', folder: '~/git/x' };
+  route.query = {};
   useConnectionStore().connectionId = 'conn-1';
   useProjectsStore().home = '/home/me';
   useSessionsStore().sessions = [row('git-x')] as never;
@@ -204,6 +235,9 @@ describe('the folder workspace + menu creates a session', () => {
     expect(tabLabels(wrapper)).toEqual(['Terminal', 'Terminal 2']);
     expect(wrapper.find('nav.tabs button.active').text().trim()).toBe('Terminal 2');
     expect(barError(wrapper)).toBeNull();
+    // The keyboard follows the tab: the create ends in the new pane, not back
+    // on the `+` button the dialog restored focus to.
+    expect(terminalFocusCalls).toEqual(['git-x-2']);
   });
 
   it('launches the agent in the NEW session, not in the one that was in front', async () => {
@@ -220,6 +254,10 @@ describe('the folder workspace + menu creates a session', () => {
     // Nothing is typed until the NEW pane comes up: the launch is waiting on a
     // shell that does not exist yet.
     expect(shellInput).not.toHaveBeenCalled();
+    // The keyboard is already in the new pane; the launch typing is server-side
+    // and does not depend on it, but the user is looking at the session they
+    // asked for either way.
+    expect(terminalFocusCalls).toEqual(['git-x-2']);
 
     // The new tab's TerminalView joins and publishes its shell.
     shells.register('git-x-2', 'shell-2');
@@ -249,6 +287,9 @@ describe('the folder workspace + menu creates a session', () => {
 
     // The whole point: not a byte into the terminal the user was working in.
     expect(shellInput).not.toHaveBeenCalled();
+    // Nothing was created, so nothing is focused either — the keyboard stays
+    // where the dialog left it.
+    expect(terminalFocusCalls).toEqual([]);
     expect(barError(wrapper)).toContain('git-x');
     expect(barError(wrapper)).toContain('already open');
     expect(tabLabels(wrapper)).toEqual(['Terminal']);
@@ -295,5 +336,46 @@ describe('the folder workspace + menu creates a session', () => {
     expect(shellInput).not.toHaveBeenCalled();
     expect(barError(wrapper)).toContain('git-elsewhere');
     expect(tabLabels(wrapper)).toEqual(['Terminal']);
+  });
+
+  /**
+   * The session panel's create hand-off for a PLAIN shell, arriving at a folder
+   * that is already open: only the route query changes, so neither `onMounted`
+   * nor the `folderKey` watch runs, and before the query watcher existed the
+   * new tab was not even selected. The panel refreshed the session list before
+   * navigating, which is why the store here already holds the new row.
+   */
+  it('selects and focuses the queried tab when the open folder is handed a new session', async () => {
+    const wrapper = await openWorkspace();
+    expect(tabLabels(wrapper)).toEqual(['Terminal']);
+    expect(terminalFocusCalls).toEqual([]);
+
+    useSessionsStore().sessions = [row('git-x'), row('git-x-2', 2)] as never;
+    route.params = { name: 'host', folder: '~/git/x' };
+    route.query = { tab: 'git-x-2' };
+    await flush();
+
+    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Terminal 2']);
+    expect(wrapper.find('nav.tabs button.active').text().trim()).toBe('Terminal 2');
+    expect(terminalFocusCalls).toEqual(['git-x-2']);
+  });
+
+  /**
+   * The same hand-off arriving at a folder that was NOT open: a mount, so
+   * `loadFolderState` does the selecting from `?tab=` and — the half this pins —
+   * the focusing. The guard refuses to fire when the query names a tab the bar
+   * does not have yet: mount with the session list still empty and the first-tab
+   * fallback must NOT be focused in the new session's name.
+   */
+  it('focuses the queried tab on a cold arrival when the bar already shows it', async () => {
+    useSessionsStore().sessions = [row('git-x'), row('git-x-2', 2)] as never;
+    route.params = { name: 'host', folder: '~/git/x' };
+    route.query = { tab: 'git-x-2' };
+
+    const wrapper = await openWorkspace();
+
+    expect(tabLabels(wrapper)).toEqual(['Terminal', 'Terminal 2']);
+    expect(wrapper.find('nav.tabs button.active').text().trim()).toBe('Terminal 2');
+    expect(terminalFocusCalls).toEqual(['git-x-2']);
   });
 });
