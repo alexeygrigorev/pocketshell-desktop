@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { findPaths, type PathMatch } from '../../src/renderer/terminalPaths';
+import {
+  continuesPath,
+  findPaths,
+  type PathMatch,
+} from '../../src/renderer/terminalPaths';
 
 /**
  * The path detector's rules, one false positive at a time.
@@ -177,6 +181,55 @@ describe('findPaths — a file:// URL', () => {
     // A `Saved to:` line prints the raw filesystem path, so decoding `%20`
     // would corrupt a name that genuinely holds it.
     expect(paths('file:///tmp/my%20file.mp3')).toEqual(['/tmp/my%20file.mp3']);
+  });
+});
+
+describe('continuesPath — the tail a join rule may glue a row onto', () => {
+  // The guard applies the detector's own standard, because the two must never
+  // disagree about a token the user can already see underlined: rooted, or a
+  // relative path with two or more slashes. The one-slash shapes are prose —
+  // the false-positive suite above — and refusing them is what keeps a prose
+  // row from picking up the row below it.
+  it('accepts a rooted tail, absolute or tilde or explicit', () => {
+    expect(continuesPath('/tmp/out/')).toBe(true);
+    expect(continuesPath('~/.codex/generated_images/')).toBe(true);
+    expect(continuesPath('./assets/')).toBe(true);
+    expect(continuesPath('../shared/')).toBe(true);
+    // A bare `~/` is home, and `~/` plus the fragment that follows is a path
+    // the moment the rows are joined — the old guard admitted it too.
+    expect(continuesPath('~/')).toBe(true);
+  });
+
+  it('accepts a relative tail with two or more slashes', () => {
+    // The montage report: the TUI echoed a command whose relative path broke
+    // at the margin mid-token, and the rows had to be rejoined.
+    expect(continuesPath('assets/images/exam-questions-generator/')).toBe(true);
+    expect(continuesPath('src/main/ipc')).toBe(true);
+  });
+
+  it('refuses `src/main`, by the same single-slash rule the detector applies', () => {
+    // The whole point of borrowing the detector's standard: a tail the
+    // detector would not link on its own row never earns a join either.
+    expect(continuesPath('src/main')).toBe(false);
+  });
+
+  it('accepts a file:// URL, which the detector opens de-schemed', () => {
+    expect(continuesPath('file:///tmp/out/exec-ac')).toBe(true);
+  });
+
+  it('refuses the one-slash prose shapes', () => {
+    expect(continuesPath('and/')).toBe(false);
+    expect(continuesPath('w/o')).toBe(false);
+    expect(continuesPath('client/server')).toBe(false);
+    expect(continuesPath('9/10')).toBe(false);
+  });
+
+  it('refuses words and fragments that are not paths at all', () => {
+    expect(continuesPath('quizgen-landing-page.png')).toBe(false);
+    expect(continuesPath('montage')).toBe(false);
+    // A bare `/` names nothing, so unlike the old regex guard this one
+    // refuses to glue a row onto it.
+    expect(continuesPath('/')).toBe(false);
   });
 });
 

@@ -363,3 +363,31 @@ function countChar(s: string, ch: string): number {
   for (let i = 0; i < s.length; i++) if (s.charAt(i) === ch) n++;
   return n;
 }
+
+/**
+ * Is [token] a path a continuation row could be glued onto — the join rules'
+ * answer to "unambiguously a path SO FAR".
+ *
+ * The standard it applies is the detector's own, because the two must never
+ * disagree about a token the user can already see underlined: a root anchor
+ * (`/`, `~/`, `./`, `../`, a `file:///` scheme) or two or more slashes. That
+ * last clause is what admits RELATIVE paths — `assets/images/exam/` is the
+ * shape agent TUIs print in the commands they echo, and their wraps break
+ * mid-token exactly like an absolute path's. One slash stays out: `and/or`,
+ * `w/o`, `client/server`, `9/10` are prose, and a prose row ending in one
+ * must never pick up the row below it.
+ */
+export function continuesPath(token: string): boolean {
+  const match = matchCandidate(token, 0, 0, token.length);
+  if (match === null) return false;
+  const p = match.path;
+  if (
+    p.startsWith('/') ||
+    p.startsWith('~/') ||
+    p.startsWith('./') ||
+    p.startsWith('../')
+  ) {
+    return true;
+  }
+  return countChar(p, '/') >= 2;
+}

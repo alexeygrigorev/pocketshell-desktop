@@ -97,7 +97,7 @@
  * for drag-selection in this pane.
  */
 import type { IBuffer, IBufferCell, ILink, ILinkProvider, Terminal } from '@xterm/xterm';
-import { findPaths, stripFileScheme } from './terminalPaths';
+import { continuesPath, findPaths, stripFileScheme } from './terminalPaths';
 import { useFilesStore } from './stores/files';
 import { useSessionsStore } from './stores/sessions';
 
@@ -154,20 +154,6 @@ const MAX_WRAP_SLACK = 8;
  * rule glue together two rows of a table.
  */
 const GUTTER = /^ {0,8}[│┃] /;
-
-/**
- * A token that is unambiguously a path SO FAR: anchored by `/`, `~/`, `./` or
- * `../`.
- *
- * This is the load-bearing guard on both join rules. Everything the detector's
- * false-positive suite is built from — `and/or`, `client/server`, `w/o`, `y/N`,
- * `9/10` — is unanchored, so a row ending in one of them is never a row we will
- * glue anything onto. Joining is only ever done in service of a path, and only
- * when the row above already committed to being one. A `file:///` tail reaches
- * it de-schemed — {@link stripFileScheme} runs first — so it counts as the
- * rooted path it is.
- */
-const ROOTED = /^(?:\/|~\/|\.\/|\.\.\/)/;
 
 /** One flattened logical line, plus the cell each character came from. */
 export interface ScannedLine {
@@ -232,7 +218,12 @@ function joinedRowSkip(prev: RowRead, next: RowRead): number | null {
   // mid-token exactly like any other path, so it joins under the same rules.
   const asPath = stripFileScheme(tail);
   if (tail.includes('://') && asPath === null) return null;
-  if (!ROOTED.test(asPath ?? tail)) return null;
+  // The shape guard is the detector's own standard, not a stricter local one:
+  // it used to demand a ROOTED tail, and every relative path failed it — the
+  // rows of `assets/images/exam/` + `quizgen-landing-page.png` stayed two
+  // lines, the row above kept a link to the truncated directory, and the
+  // filename fragment got nothing.
+  if (!continuesPath(asPath ?? tail)) return null;
 
   const gutter = GUTTER.exec(next.text);
   if (gutter === null) {

@@ -303,6 +303,57 @@ describe('scanBufferLine — a file:// URL a TUI broke across two rows', () => {
 });
 
 /**
+ * The "Ran montage" report: the agent TUI echoed a shell command whose
+ * RELATIVE path broke at the margin mid-token, with the block's `│ ` gutter
+ * on every continuation row. The join guard used to demand a rooted
+ * (`/`, `~/`, `./`) tail, which every relative path fails — so the row above
+ * kept a link to the truncated directory (clicking it opened the wrong
+ * thing) and the filename fragment on the next row got nothing.
+ */
+describe('scanBufferLine — a relative path a TUI broke across two rows', () => {
+  const DIR =
+    'assets/images/ai-engineering-buildcamp-cohort-3-projects/exam-questions-generator/';
+  const FULL = `${DIR}quizgen-landing-page.png`;
+  const ROWS = ['• Ran montage \\', `│ ${DIR}`, '│ quizgen-landing-page.png \\'];
+
+  it('joins the gutter continuation and linkifies the whole relative path', () => {
+    const term = fakeScreen(ROWS, `│ ${DIR}`.length);
+    const links = pathLinks(term, 2, () => ({ sessionName: 'git-foo' }));
+
+    // One link, from `assets/` through `.png` — not a directory on row one
+    // and a bare word on row two. The bullet line above the block stays
+    // separate: its tail is `\`, which is no path to continue.
+    expect(links.map((l) => l.text)).toEqual([FULL]);
+  });
+
+  it('opens the relative path for the session cwd to resolve', () => {
+    const term = fakeScreen(ROWS, `│ ${DIR}`.length);
+    const files = useFilesStore();
+    const sessions = useSessionsStore();
+    sessions.sessions = [
+      { name: 'git-foo', created: 0, activity: 0, attached: true, path: '~/git/camp' },
+    ];
+
+    pathLinks(term, 2, () => ({ sessionName: 'git-foo' }))[0]?.activate(CLICK, FULL);
+
+    expect(files.reveal).toBe(
+      'git/camp/assets/images/ai-engineering-buildcamp-cohort-3-projects/exam-questions-generator/quizgen-landing-page.png',
+    );
+  });
+
+  it('joins a margin wrap of a relative path with no gutter at all', () => {
+    // The same command echoed without the block gutter: the row is full to
+    // its last column, the hard-wrap evidence rule 1 reads.
+    const first = 'montage assets/images/exam-questions-generator/';
+    const term = fakeScreen([first, 'quizgen-landing-page.png \\'], first.length);
+
+    expect(pathLinks(term, 1, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(
+      'assets/images/exam-questions-generator/quizgen-landing-page.png',
+    );
+  });
+});
+
+/**
  * The other half of the joining rules, and the half that decides whether this
  * feature is trustworthy: two rows that merely follow one another must stay two
  * lines. A join that should not have happened invents a path nothing can open
@@ -313,8 +364,12 @@ describe('scanBufferLine — rows that must NOT be joined', () => {
     scanBufferLine(fakeScreen(rows, width), 1).text.trimEnd();
 
   it('refuses a full row whose last token is not an anchored path', () => {
-    // `and/` is the false-positive suite's own shape. A row can end in one and
-    // be exactly as wide as the window; that is not evidence of anything.
+    // `and/` is the false-positive suite's own shape — and by the detector's
+    // own trailing-slash standard it is even a "directory" — but with ONE
+    // slash it is just as much `and/or` cut at the margin, so continuesPath
+    // refuses it and a row ending in one picks up nothing. A row can end in
+    // one and be exactly as wide as the window; that is not evidence of
+    // anything.
     const first = 'the mount is configured read/write and/';
     expect(scan([first, 'or so the docs claim'], first.length)).toBe(first);
   });
