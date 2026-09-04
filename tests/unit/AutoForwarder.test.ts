@@ -329,15 +329,19 @@ describe('local port allocation', () => {
     // the user toggles it on. A remap alone changes the port CHOICE, not the
     // policy decision.
     const ssh = new ScriptedSsh().push([19840]);
-    const fwd = new AutoForwarder(ssh.asService(), 'conn-1', registry, {
-      remappings: { 19840: 3000 },
-    });
+    const fwd = new AutoForwarder(ssh.asService(), 'conn-1', registry, {});
     forwarders.push(fwd);
+    // The remap target must be a port this machine can actually bind — the
+    // Python's headline 3000 is a popular dev port and is not always free.
+    const local = await fwd.findAvailableLocalPort(3000);
+    expect(local).not.toBeNull();
+    await fwd.setRemap(19840, local!);
+
     await fwd.refresh();
     expect(fwd.snapshot()).toHaveLength(0);
 
     await fwd.setIntent(19840, 'force-on');
-    expect(fwd.snapshot()[0]).toMatchObject({ listenPort: 3000, destPort: 19840 });
+    expect(fwd.snapshot()[0]).toMatchObject({ listenPort: local, destPort: 19840 });
   });
 });
 
