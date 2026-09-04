@@ -152,7 +152,7 @@ describe('FilesView image zoom', () => {
     await mountImage('blob:x');
     await decode(1000, 500);
     const slider = wrapper!.find('input[type="range"]');
-    slider.element.value = '45';
+    (slider.element as HTMLInputElement).value = '45';
     await slider.trigger('input');
     await nextTick();
     // The slider's mapping is the pure module's job; the bar's job is that
