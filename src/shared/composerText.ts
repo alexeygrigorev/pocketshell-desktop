@@ -190,3 +190,50 @@ export function insertAtCaret(text: string, caret: number, insert: string): [str
   const at = Math.max(0, Math.min(caret, text.length));
   return [text.slice(0, at) + insert + text.slice(at), at + insert.length];
 }
+
+/**
+ * A draft of FEWER than this many characters is handed to the terminal by a
+ * dismissal (docs/COMPOSER.md §12.2). The limit is "less than five", as the
+ * user asked for it: two or three characters read as keystrokes, five read as
+ * a prompt.
+ */
+export const FLUSH_DRAFT_CHAR_LIMIT = 5;
+
+/** The facts a flush decision reads, straight off a composer session state. */
+export interface FlushCandidate {
+  draft: string;
+  attachments: number;
+  error: string | null;
+  sendInFlight: boolean;
+  uploadingCount: number;
+}
+
+/**
+ * Whether dismissing the composer should hand its draft to the terminal
+ * (docs/COMPOSER.md §12.2).
+ *
+ * The user's rule, in as many words: start typing, press Esc, and what was
+ * typed should go to the terminal to continue typing there — but only while
+ * "it should be less than 5 characters put in composer". A two- or
+ * three-letter draft is almost always a shell command (`ls`, `htop`) that the
+ * typing intercept caught on its way to the pane, and a dismissal hands it
+ * back; a longer draft is a PROMPT, work a dismissal never moves.
+ *
+ * Every refusal below is load-bearing:
+ *
+ *  - empty or whitespace-only — nothing to hand over, and spaces at a shell
+ *    prompt are noise;
+ *  - five or more characters (counted by code point, like `isTypingKey`) —
+ *    the rule itself;
+ *  - containing a line break — writing one would SUBMIT whatever precedes it,
+ *    which is a send wearing a flush's clothes;
+ *  - attachments, an error banner, a send or an upload in flight — the
+ *    composer is mid-something, so the dismissal is an ordinary one.
+ */
+export function canFlushDraftToTerminal(s: FlushCandidate): boolean {
+  if (s.draft.length === 0 || s.draft.trim() === '') return false;
+  if (s.draft.includes('\n')) return false;
+  if (Array.from(s.draft).length >= FLUSH_DRAFT_CHAR_LIMIT) return false;
+  if (s.attachments > 0) return false;
+  return s.error === null && !s.sendInFlight && s.uploadingCount === 0;
+}

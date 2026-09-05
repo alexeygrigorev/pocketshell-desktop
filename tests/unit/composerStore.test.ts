@@ -908,3 +908,37 @@ describe('history recall (§28)', () => {
     expect(composer.recallOlder(KEY)).toBe('repeat me');
   });
 });
+
+describe('flushToTerminal — a short draft goes back to the shell on a close (§12.2)', () => {
+  it('hands the draft to the write, clears it, and stands the intercept down', () => {
+    composer.setDraft(KEY, 'ls');
+    const written: string[] = [];
+    expect(composer.flushToTerminal(KEY, (text) => written.push(text))).toBe(true);
+    expect(written).toEqual(['ls']);
+    expect(composer.states[KEY]?.draft).toBe('');
+    expect(composer.terminalOwnsTyping).toBe(true);
+  });
+
+  it('keeps the draft when there is nowhere to put it', () => {
+    composer.setDraft(KEY, 'ls');
+    expect(composer.flushToTerminal(KEY, null)).toBe(false);
+    expect(composer.states[KEY]?.draft).toBe('ls');
+    expect(composer.terminalOwnsTyping).toBe(false);
+  });
+
+  it('keeps a prompt-sized draft — a dismissal never moves real work', () => {
+    composer.setDraft(KEY, 'explain this build failure');
+    const written: string[] = [];
+    expect(composer.flushToTerminal(KEY, (text) => written.push(text))).toBe(false);
+    expect(written).toEqual([]);
+    expect(composer.states[KEY]?.draft).toBe('explain this build failure');
+  });
+
+  it('summoning the composer again re-arms the intercept', () => {
+    composer.setDraft(KEY, 'ls');
+    composer.flushToTerminal(KEY, () => {});
+    expect(composer.terminalOwnsTyping).toBe(true);
+    composer.setMode('docked');
+    expect(composer.terminalOwnsTyping).toBe(false);
+  });
+});

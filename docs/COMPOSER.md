@@ -471,7 +471,7 @@ once for the app rather than once per session.
 | `docked` | click the **same** fixed toggle / `Ctrl+\`` / `Ctrl+Shift+K` / `Ctrl+Shift+↓` | `hidden` |
 | `docked` | `Ctrl+Shift+↑` / the header's maximize button / double-click the header | `expanded` |
 | `expanded` | `Ctrl+Shift+↓` / the header's restore button | `docked` |
-| any non-hidden | `Escape` (§12.2) | `hidden`, draft kept, focus to the terminal |
+| any non-hidden | `Escape` (§12.2) | `hidden`, focus to the terminal; draft kept — unless short enough for the hand-off (§12.2) |
 | any | **successful** send | unchanged — the card stays open and focused (§12.3); with `closeComposerOnSend` (§26.2), `hidden`, from which typing re-opens the last open mode |
 | any | failed send | unchanged, banner shown |
 | any | session switch | **unchanged.** The panel does not open or close because you changed session; only which draft it shows changes |
@@ -486,8 +486,28 @@ once for the app rather than once per session.
    command is not a reason to lose the whole composer.
 2. **Otherwise** — close it, and hand focus back to the terminal.
 
-**Escape never clears the draft.** That is Discard's job and Discard's alone
-(§4.3), and it survives every close.
+**Escape never destroys work.** Discard is the only control that throws work
+away (§4.3), and a close keeps the draft — with one deliberate exception that
+MOVES work rather than destroying it:
+
+**The short-draft hand-off.** A user close — Escape, `Ctrl+\``, the toggle, the
+card's close, shrink past `docked` — with a draft of fewer than five
+characters hands that text to the pane: written raw into the PTY, no Enter,
+the draft cleared, and the typing intercept (§26.1) stood down until the
+composer is next summoned. The user's rule, in as many words: start typing,
+press Esc, and what was typed should be at the prompt to continue typing
+there — but only while it is under five characters. Two or three characters
+are keystrokes the intercept borrowed on their way to the pane — a shell
+command put back where it was heading; five or more are a prompt, and a
+dismissal never moves one. The rest of the gate lives with the pure helpers
+(`canFlushDraftToTerminal`, §14): single-line only, because a written line
+break would SUBMIT whatever precedes it, and never with attachments, a
+failure banner, or a send/upload in flight. No registered shell, or the
+connection down, means no hand-off either — moving text to nowhere is losing
+it, so the close is an ordinary one and the draft stays. The mechanism's home
+is the store's `flushToTerminal(key, write)`, the same injected-transport
+shape as `send`; the stood-down state is the store's `terminalOwnsTyping`,
+cleared the moment the panel is summoned again.
 
 **Clicking outside closes it — but only when it is empty.** Implemented with
 three guards, each of which is the whole safety of the feature:
@@ -508,21 +528,26 @@ three guards, each of which is the whole safety of the feature:
   would close on its press and let its own click re-open, which reads as
   nothing happening.
 
-It does **not** suppress the typing intercept — nothing does (§26.1). A click
-elsewhere is incidental — the user reached for the terminal, not against the
-composer — and the composer was empty, so nothing was lost; typing afterwards
-almost certainly means they want it back. The rule that falls out, and the one
-to keep in mind when adding any future dismissal:
+It does **not** suppress the typing intercept — the hand-off above is the only
+close that does, and a click-outside can never be one: it fires on an EMPTY
+composer only (§26.1). A click elsewhere is incidental — the user reached for
+the terminal, not against the composer — and the composer was empty, so
+nothing was lost; typing afterwards almost certainly means they want it back.
+The rule that falls out, and the one to keep in mind when adding any future
+dismissal:
 
-> **A dismissal — click or key — only puts the view away. It never also speaks
-> for the next keystroke.**
+> **A dismissal puts the view away. It speaks for the next keystroke only when
+> it has somewhere to put the user's text — the hand-off's text sitting at the
+> prompt. Silence without that visible fact is the hatch that was removed, and
+> it stays removed.**
 
 It does not move focus either: the click already decided where focus goes. One
 press, one meaning — and the only meaning is close.
 
 | Closed by | Means | Next keystroke |
 |---|---|---|
-| **the user** — Escape, `Ctrl+\``, `Ctrl+Shift+K`, `Ctrl+Shift+↓`, the toggle, the card's close | "put it away" | **re-opens** the composer, carrying that character |
+| **the user**, empty or long draft — Escape, `Ctrl+\``, `Ctrl+Shift+K`, `Ctrl+Shift+↓`, the toggle, the card's close | "put it away" | **re-opens** the composer, carrying that character |
+| **the user**, short draft — the same keys | "put this back where I was typing" | **the shell keeps them**: the text is at the prompt and the intercept stands down until the composer is summoned again |
 | **a delivered send** (`closeComposerOnSend`, §26.2) | "that one's away, next?" | **re-opens** the composer, carrying that character |
 
 All four user-close routes behave identically, which is the point: a user who
@@ -1205,18 +1230,22 @@ an answer to:
    out of the way as a floating panel; type into it whenever you want it back.
 2. **The setting**, for turning the behaviour off entirely.
 
-**Nothing suppresses the intercept.** Earlier designs armed a suppression from a
-dismissal and then from a press in the terminal; the user hit both as ordinary
-static — in a terminal-centric app, clicking into the terminal is how you focus
-the window, scroll output and select a path, not a declaration of shell intent —
-and reported typing opening the composer "sometimes" with nothing on screen
-saying why. So the hatch was removed outright: the intercept's only conditions
-are the setting and `mode === 'hidden'`, both visible on screen, and a close
-only puts the view away (§12.2). The cost is real and accepted: with the setting
-on and the panel closed, every printable keystroke opens the composer, so a
-shell command always starts with a summons (`Ctrl+\``, or the toggle) or with
-opening the card first — option 1 above. The user types prompts for a living
-here and chose that trade in as many words.
+**What suppresses the intercept, and the one thing that may.** Earlier designs
+armed a suppression from a dismissal and then from a press in the terminal; the
+user hit both as ordinary static — in a terminal-centric app, clicking into the
+terminal is how you focus the window, scroll output and select a path, not a
+declaration of shell intent — and reported typing opening the composer "sometimes"
+with nothing on screen saying why. So the hatch was removed outright: the
+intercept's conditions stay visible on screen — the setting, the composer being
+closed, the active tab being a session. The ONE exception is
+`terminalOwnsTyping`, armed only by §12.2's short-draft hand-off: that close
+PUT the user's text at the prompt, so re-catching the next keystroke would
+fight the words it just delivered — a fact on screen, not a silent hatch. It
+clears the moment the composer is summoned again. The cost is real and
+accepted: with the setting on and the panel closed, every printable keystroke
+opens the composer, so a shell command always starts with a summons (`Ctrl+\``,
+or the toggle) or with opening the card first — option 1 above. The user types
+prompts for a living here and chose that trade in as many words.
 
 ### 26.2 `closeComposerOnSend`
 

@@ -1696,14 +1696,21 @@ const filesRef = ref<{ focus?: () => void } | null>(null);
 
 /**
  * Whether the terminal should withhold printable keystrokes instead of sending
- * them to the shell (docs/COMPOSER.md §26). The two halves of the condition
- * live here rather than in either component: the SETTING is app-level, and
- * "only while the composer is closed" is a fact about the composer.
+ * them to the shell (docs/COMPOSER.md §26). The halves of the condition live
+ * here rather than in either component: the SETTING is app-level, and "only
+ * while the composer is closed" is a fact about the composer.
+ *
+ * `terminalOwnsTyping` is the short-draft hand-off (§12.2): the composer just
+ * put its draft at the shell prompt, so typing belongs to the pane until the
+ * composer is summoned again — re-catching the next keystroke would fight the
+ * text it just put there. Opening the panel clears the flag in the store, so
+ * this returns on its own.
  */
 const interceptTyping = computed(
   () =>
     settings.typingOpensComposer &&
     composer.mode === 'hidden' &&
+    !composer.terminalOwnsTyping &&
     activeTab.value?.kind === 'session',
 );
 

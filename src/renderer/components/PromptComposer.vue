@@ -975,6 +975,13 @@ function openComposer(): void {
  * The focus half is not a nicety: the terminal has to be usable the instant the
  * card is gone, and the toggle keeps focus otherwise.
  *
+ * A SHORT draft goes with it (§12.2): a dismissal hands anything under five
+ * characters to the pane, raw and unsubmitted, so the keystrokes the typing
+ * intercept borrowed are put back where the user was typing and continue
+ * there. The store stands the intercept down for the same reason — with `ls`
+ * sitting at the prompt, the next printable key must reach the shell, not be
+ * re-caught. A long draft is a prompt: work the dismissal never moves.
+ *
  * `dismiss` rather than `setMode('hidden')` because everything routed here is
  * the USER putting the composer away — Escape, the chord, the toggle, the
  * card's close — and that is a fact worth naming even though it changes nothing
@@ -983,9 +990,20 @@ function openComposer(): void {
  * The focus half is what keeps the terminal usable across the close. Escape
  * hands the keyboard back to the pane, so every NON-printable key (Ctrl-C, the
  * arrows, Enter, tmux's prefix) reaches the shell immediately; a printable one
- * brings the panel back, carrying the character.
+ * brings the panel back, carrying the character — unless a hand-off just put
+ * text at the prompt, in which case typing keeps going to the shell until the
+ * composer is summoned again (§12.2, §26.1).
  */
 function hideComposer(): void {
+  const shellId = shells.shellIdFor(props.sessionName);
+  composer.flushToTerminal(
+    key.value,
+    // Nowhere to put the text — no registered shell, or the connection is
+    // down — means no hand-off: an ordinary dismissal keeps the draft.
+    props.connected === false || shellId === null
+      ? null
+      : (text) => void api.shell.input(shellId, text),
+  );
   composer.dismiss();
   emit('focus-terminal');
 }
@@ -1010,11 +1028,13 @@ function hideComposer(): void {
  *
  * It does NOT suppress the typing intercept, and that is the interesting call.
  * Escape and the chord are gestures aimed AT the composer and mean "leave me
- * alone", but they still only put the card away: typing afterwards means the
- * same thing it means from any other closed state (§26.1). A click elsewhere is
- * incidental — the user reached for the terminal, not against the composer —
- * and the composer was empty, so nothing was lost. The split is: a CLICK
- * dismisses the view, and nothing at all dismisses the intent.
+ * alone"; a dismissal still only puts the card away — the ONE exception is a
+ * short draft, which `hideComposer` hands to the pane (§12.2) — and this
+ * handler, which fires on an EMPTY composer only, can never be that exception.
+ * A click elsewhere is incidental — the user reached for the terminal, not
+ * against the composer — and the composer was empty, so nothing was lost. The
+ * split is: a CLICK dismisses the view, and nothing at all dismisses the
+ * intent.
  *
  * It does not move focus either. The click already decided where focus goes;
  * stealing it back to the terminal would fight the user's own pointer.
@@ -1201,10 +1221,12 @@ function onGlobalKey(e: KeyboardEvent): void {
   } else if (isShortcut(bindings, 'composer.shrink', e)) {
     const wasOpen = mode.value !== 'hidden';
     composer.shrink();
-    // Shrinking past `docked` closes it, and a close hands focus back. Read the
-    // store directly: `mode.value` was narrowed by the line above and TS cannot
-    // see that `shrink()` changed it.
-    if (wasOpen && composer.mode === 'hidden') emit('focus-terminal');
+    // Shrinking past `docked` closes it, and a close is a close: routed through
+    // `hideComposer` so the short-draft hand-off (§12.2) and the focus move are
+    // the same ones Escape and the chord get. Read the store directly:
+    // `mode.value` was narrowed by the line above and TS cannot see that
+    // `shrink()` changed it.
+    if (wasOpen && composer.mode === 'hidden') hideComposer();
   } else if (isShortcut(bindings, 'composer.attach', e)) {
     void onAttachClick();
   } else {

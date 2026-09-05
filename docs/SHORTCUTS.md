@@ -19,7 +19,7 @@ everywhere: every call site in the app spells the test
 | `Ctrl+V` | Put the clipboard in the composer | Costs readline's `quoted-insert`. `Ctrl+Alt+V` is left alone — that is AltGr. |
 | `Ctrl+Shift+V` | Put the clipboard in the composer | The same command. It used to paste into the shell; see below. |
 | `Ctrl+Shift+C` | Copy the selection | Only when there is a selection; falls through otherwise. |
-| *any printable key* | Opens the composer with the keystroke | Not a chord. Gated on the `typingOpensComposer` setting and on the composer being closed. |
+| *any printable key* | Opens the composer with the keystroke | Not a chord. Gated on the `typingOpensComposer` setting and on the composer being closed — and stood down after a short-draft hand-off (COMPOSER.md §12.2) until the panel is summoned again. |
 | right-click | Paste into the shell | Not a chord, and now the ONLY route to the shell's own paste. |
 | mouse-up after a drag | Copy the selection | Ditto. |
 | drag, release — mouse reporting ON | Copy, via tmux's yank | tmux paints the selection itself and dismisses it on release, so the highlight "disappears"; the yank reaches the pane as OSC 52 and lands in the clipboard. See below. |
@@ -115,7 +115,7 @@ In the draft textarea (`onDraftKeydown`):
 | `Enter`, `Ctrl+Enter` | Send |
 | `Shift+Enter` | Newline |
 | `Ctrl+Shift+Backspace` | Discard the draft |
-| `Escape` | The ladder: close the slash dropdown, else close the panel |
+| `Escape` | The ladder: close the slash dropdown, else close the panel — handing a short draft (under five characters) to the pane, unsubmitted (COMPOSER.md §12.2) |
 | `Up` / `Down` / `Tab` / `Enter` | Move and accept in the slash-command dropdown, while it is open |
 
 ### 1.5 The annotate surface — `DoodleCanvas.vue`

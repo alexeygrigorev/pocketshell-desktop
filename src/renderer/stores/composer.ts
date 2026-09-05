@@ -6,6 +6,7 @@ import {
   appendAttachmentPaths,
   appendSeededPrompt,
   attachmentDisplayName,
+  canFlushDraftToTerminal,
   COMPOSER_STRINGS,
   insertCommandText,
 } from '../../shared/composerText';
@@ -200,6 +201,15 @@ export const useComposerStore = defineStore('composer', () => {
    * display on every render.
    */
   const geometry = ref<ComposerGeometry>(restoredLayout.geometry);
+  /**
+   * Whether the typing intercept (docs/COMPOSER.md §26.1) is standing down
+   * because the composer just handed a short draft to the pane (§12.2): the
+   * shell is where the user's typing belongs until they summon the composer
+   * again. App-level like `mode` — it describes the keyboard, not a session —
+   * and deliberately NOT persisted: it is a gesture, like the recall cursor,
+   * not a preference.
+   */
+  const terminalOwnsTyping = ref(false);
 
   // -------------------------------------------------------------------------
   // Persistence — the desktop replacement for SavedStateHandle (:2544, :2558).
@@ -880,9 +890,56 @@ function persistNow(): void {
   // open on the next is the bug this shape removes.
   // -------------------------------------------------------------------------
 
+  /**
+   * Hand a SHORT draft to the pane, raw and unsubmitted, on a user close
+   * (docs/COMPOSER.md §12.2). Returns whether it flushed.
+   *
+   * The user's flow: a keystroke at a closed composer is caught by the typing
+   * intercept, they type a few more, then decide this was a shell command
+   * after all — Esc, and the text should be sitting at the prompt with typing
+   * continuing in the pane, not re-caught by the intercept. So a dismissal
+   * through here moves the text (`write`, injected exactly like `send`'s
+   * `deliver`, so the transport stays in the component), clears the draft, and
+   * stands the typing intercept down until the composer is next summoned.
+   *
+   * `write === null` means there is nowhere to put the text — no registered
+   * shell, or the connection is down. Nothing is cleared and the dismissal is
+   * an ordinary one, because moving text to NOWHERE is losing it, and Escape
+   * never destroys work (§4.3).
+   */
+  function flushToTerminal(key: string, write: ((text: string) => void) | null): boolean {
+    const s = states.value[key];
+    if (!s || write === null) return false;
+    if (
+      !canFlushDraftToTerminal({
+        draft: s.draft,
+        attachments: s.attachments.length,
+        error: s.error,
+        sendInFlight: s.sendInFlight,
+        uploadingCount: s.uploadingCount,
+      })
+    ) {
+      return false;
+    }
+    const text = s.draft;
+    // Written directly rather than through `setDraft`: there is no error to
+    // clear (the gate just refused one) and the recall browse below is the
+    // only side action wanted.
+    s.draft = '';
+    s.caret = 0;
+    endRecall(s);
+    terminalOwnsTyping.value = true;
+    write(text);
+    schedulePersist();
+    return true;
+  }
+
   function setMode(next: ComposerMode): void {
     if (next !== 'hidden') {
       lastOpenMode.value = next;
+      // Summoning the composer takes the keyboard back: whatever a hand-off
+      // (§12.2) stood down is re-armed by simply opening the panel again.
+      terminalOwnsTyping.value = false;
     }
     mode.value = next;
     schedulePersist();
@@ -892,13 +949,14 @@ function persistNow(): void {
    * Close it BECAUSE THE USER SAID SO — Escape, `Ctrl+\``, the toggle, the
    * card's close.
    *
-   * Typing brings it back carrying the character: closing is a statement about
-   * the panel, never about the next keystroke. **It is kept as its own action
-   * rather than a bare `setMode('hidden')`** so the user-close path can be
-   * given behaviour again without hunting down four call sites — the two ways
-   * the composer closes are different facts about the world even when they
-   * produce the same state, which is precisely what the flag's own comment says
-   * went wrong when they last shared a boolean.
+   * Typing brings it back carrying the character — unless `flushToTerminal`
+   * just put a short draft at the prompt on the way out (§12.2), in which case
+   * the shell keeps the keyboard until the panel is summoned again. **The
+   * action is kept as its own rather than a bare `setMode('hidden')`** so the
+   * user-close path can be given behaviour again without hunting down four
+   * call sites — the two ways the composer closes are different facts about
+   * the world even when they produce the same state, which is precisely what
+   * the flag's own comment says went wrong when they last shared a boolean.
    */
   function dismiss(): void {
     setMode('hidden');
@@ -949,6 +1007,7 @@ function persistNow(): void {
     mode,
     lastOpenMode,
     geometry,
+    terminalOwnsTyping,
     targetKey,
     ensure,
     setDraft,
@@ -968,6 +1027,7 @@ function persistNow(): void {
     canSend,
     composedPayload,
     send,
+    flushToTerminal,
     markDelivered,
     restoreFailedSend,
     setConnectionDegraded,

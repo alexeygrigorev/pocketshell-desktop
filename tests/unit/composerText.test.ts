@@ -3,6 +3,7 @@ import {
   appendAttachmentPaths,
   appendSeededPrompt,
   attachmentDisplayName,
+  canFlushDraftToTerminal,
   insertAtCaret,
   insertCommandText,
   isTypingKey,
@@ -352,5 +353,54 @@ describe('insertAtCaret — the keystroke that opened the composer is not lost',
 
   it('survives a negative caret', () => {
     expect(insertAtCaret('abc', -5, 'z')).toEqual(['zabc', 1]);
+  });
+});
+
+describe('canFlushDraftToTerminal — a short draft goes back to the shell (§12.2)', () => {
+  const flushable = (draft: string, extra: Partial<Parameters<typeof canFlushDraftToTerminal>[0]> = {}) =>
+    canFlushDraftToTerminal({
+      draft,
+      attachments: 0,
+      error: null,
+      sendInFlight: false,
+      uploadingCount: 0,
+      ...extra,
+    });
+
+  it('hands a two-character command back', () => {
+    expect(flushable('ls')).toBe(true);
+  });
+
+  it('hands a four-character draft back — "less than 5 characters"', () => {
+    expect(flushable('htop')).toBe(true);
+  });
+
+  it('keeps a five-character draft — the rule itself', () => {
+    expect(flushable('hello')).toBe(false);
+  });
+
+  it('counts by code point, like isTypingKey', () => {
+    expect(flushable('👍👍👍👍')).toBe(true);
+    expect(flushable('👍👍👍👍👍')).toBe(false);
+  });
+
+  it('keeps nothing: an empty or whitespace-only draft is not handed over', () => {
+    expect(flushable('')).toBe(false);
+    expect(flushable('  ')).toBe(false);
+  });
+
+  it('refuses a line break, which would submit whatever precedes it', () => {
+    expect(flushable('ls\n')).toBe(false);
+    expect(flushable('a\nb')).toBe(false);
+  });
+
+  it('refuses when an attachment is staged — the pane needs the tile, not the text', () => {
+    expect(flushable('ls', { attachments: 1 })).toBe(false);
+  });
+
+  it('refuses mid-send, mid-upload, and behind a failure banner', () => {
+    expect(flushable('ls', { sendInFlight: true })).toBe(false);
+    expect(flushable('ls', { uploadingCount: 2 })).toBe(false);
+    expect(flushable('ls', { error: 'Not sent.' })).toBe(false);
   });
 });
