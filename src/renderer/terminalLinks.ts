@@ -44,10 +44,14 @@
  *     token instead of to the margin — `…vectorize-agent/` / `diagrams` —
  *     which is the same shape with the slash as the opportunity, so rule 1b
  *     takes both characters;
- *   - the same CLI also leaves up to ELEVEN columns short, not the five the
- *     hyphen report first showed — `…work-chronicle-` / `overview.png` — so
- *     the slack bound is derived from the displaced fragment rather than
- *     measured off one report.
+ *   - the same CLI also breaks tokens when the row is nowhere near the pane's
+ *     margin — `…work-chronicle-` / `overview.png` sat a dozen columns short
+ *     in a wider window — because tmux keeps rows painted at the width they
+ *     were RENDERED at, and the window has since been resized. No fixed
+ *     "how far short of the margin" bound survives that; rule 1b's fit
+ *     arithmetic therefore runs against the render width inferred from the
+ *     fullest nearby row ({@link inferWrapWidth}), never against the pane's
+ *     live width.
  *
  * Both rules are deliberately narrow, for the reason terminalPaths.ts's header
  * gives: joining two rows that were never one line can only invent a path that
@@ -141,22 +145,6 @@ const MAX_SCAN_CHARS = 2048;
 const MAX_JOIN_ROWS = 8;
 
 /**
- * How far short of the margin a row may end and still count as having been
- * wrapped (rule 1b in {@link joinedRowSkip}). Full-to-the-last-column stays
- * the strong evidence it always was; this admits the weaker shape where the
- * wrapper broke at a break opportunity INSIDE the token — a hyphen or a slash
- * — and so left the row blank columns short. The slack is then bounded by the
- * displaced fragment itself: the wrapper breaks at the last opportunity that
- * FITS, so the fragment after it did not fit, and `slack < head.length` — the
- * same arithmetic the head-fit guard below runs in the other direction. The
- * longest fragment a report has pinned is `overview.png`, twelve wide, so
- * eleven covers every shape seen; the guards at the rule (break character in
- * the tail, head would not have fitted) are what keep the window from gluing
- * prose together, not the slack itself.
- */
-const MAX_WRAP_SLACK = 11;
-
-/**
  * The gutter a TUI puts in front of the continuation rows of a block it wrapped
  * itself — `  │ ` in the Codex output the user reported.
  *
@@ -213,14 +201,48 @@ function readRow(buf: IBuffer, y: number, scratch: IBufferCell): RowRead | null 
 }
 
 /**
+ * The render width the rows around a hover were painted at.
+ *
+ * THE PANE'S CURRENT WIDTH IS NOT EVIDENCE. This pane is a tmux client and
+ * tmux keeps history rows painted at the width they were rendered at: the
+ * window can be resized — or a CLI can wrap at its own narrower width — after
+ * the fact, so a row can sit ANY distance short of the live margin. What
+ * survives both is the rows themselves: the fullest row within the join
+ * window is the best surviving measurement of the width its neighbours were
+ * wrapped at. Rule 1b's fit guard below runs against this, never against
+ * `prev.width`.
+ *
+ * The window matches {@link MAX_JOIN_ROWS} in each direction — the same rows
+ * the reconstruction walk may consume, and no more. Rows cannot exceed the
+ * pane, so the result is a sane width even when the neighbourhood is all
+ * short lines: there the estimate degrades to the hovered block's own widest
+ * row, and the fit guard degenerates to the lexical tail/head checks alone —
+ * the deliberate fallback, not a bug.
+ */
+function inferWrapWidth(buf: IBuffer, y0: number, scratch: IBufferCell): number {
+  let width = 1;
+  const from = Math.max(0, y0 - MAX_JOIN_ROWS);
+  for (let y = from; y <= y0 + MAX_JOIN_ROWS; y++) {
+    const row = readRow(buf, y, scratch);
+    if (row === null) break;
+    if (row.lastCol + 1 > width) width = row.lastCol + 1;
+  }
+  return width;
+}
+
+/**
  * Does [next] continue [prev], even though xterm did not flag it wrapped?
+ *
+ * [wrapWidth] is the inferred render width ({@link inferWrapWidth}) — the
+ * width the fit arithmetic below is measured against, never the pane's live
+ * width.
  *
  * @returns how many leading CELLS of [next] to drop before joining (0 for a
  *   plain wrap, the gutter's width for a gutter-marked one), or null for "these
  *   are two different lines" — which is the answer this function is built to
  *   give, and gives for everything it is not certain about.
  */
-function joinedRowSkip(prev: RowRead, next: RowRead): number | null {
+function joinedRowSkip(prev: RowRead, next: RowRead, wrapWidth: number): number | null {
   if (prev.lastCol < 0) return null;
   const tail = /\S+$/.exec(prev.text.trimEnd())?.[0] ?? '';
   // An http(s) URL belongs to WebLinksAddon and is never extended across a
@@ -260,31 +282,30 @@ function joinedRowSkip(prev: RowRead, next: RowRead): number | null {
     // the token itself offers, rather than at the margin: hyphens (this app's
     // own CLI) and slashes (the markdown-rendering CLI of the "Cloudflare
     // diagrams" report) are the two characters terminal wrappers are seen to
-    // break at. Filling up to the last opportunity that fits leaves the row
-    // above a few blank columns short and rule 1 without its geometric
-    // evidence; the opportunity character stays at the tail's end, and that is
-    // the one trace of a cut — rather than finished — token a row carries.
-    // Four guards, each the reason a different way of being wrong stays shut:
+    // break at. The opportunity character stays at the tail's end, and that
+    // is the one trace of a cut — rather than finished — token a row carries.
+    // Three guards, each the reason a different way of being wrong stays
+    // shut:
     //
-    //   - the row is still NEARLY full ({@link MAX_WRAP_SLACK}). A row that
-    //     stopped halfway down is a paragraph, not a wrap.
     //   - the tail ends with `-` or `/`. That is the break opportunity the
     //     wrapper used, and the only evidence a row's end carries that the
-    //     token was cut rather than finished: a whole path landing near the
-    //     margin (`…/result.png` + `and cleaned up`) ends in something else
-    //     and never gets here.
+    //     token was cut rather than finished: a whole path landing anywhere
+    //     (`…/result.png` + `and cleaned up`) ends in something else and
+    //     never gets here.
     //   - the continuation does not start with `/`. `…-` or `…/` plus `/x` is
     //     not a path anyone wrote; it is two paths, and the second one is
     //     whole already.
-    //   - the continuation's first token WOULD NOT HAVE FIT in the columns the
-    //     row left free. That is the wrapper's own arithmetic run backwards,
-    //     the same one rule 2 uses: if the token fit, the wrapper would have
-    //     put it there, so the row below is a new line.
-    if (prev.width - 1 - prev.lastCol > MAX_WRAP_SLACK) return null;
+    //   - the continuation's first token WOULD NOT HAVE FIT at the render
+    //     width ({@link inferWrapWidth}). That is the wrapper's own arithmetic
+    //     run backwards: if the token fit, the wrapper would have put it
+    //     there, so the row below is a new line. Where the neighbourhood gives
+    //     no wider row, the estimate falls back to the block itself and this
+    //     guard stops constraining — the tail and head checks then carry the
+    //     rule alone, which is the price of surviving resizes.
     if (!tail.endsWith('-') && !tail.endsWith('/')) return null;
     const head = /^\S+/.exec(next.text)?.[0] ?? '';
     if (head === '' || head.startsWith('/')) return null;
-    if (prev.lastCol + 1 + head.length <= prev.width) return null;
+    if (prev.lastCol + 1 + head.length <= wrapWidth) return null;
     return 0;
   }
 
@@ -324,6 +345,9 @@ export function scanBufferLine(term: Terminal, bufferLineNumber: number): Scanne
   const chars: string[] = [];
   const cells: { x: number; y: number }[] = [];
   const scratch = buf.getNullCell();
+  // One inference per flattening, before any join decision: every
+  // reconstruction below measures its fit arithmetic against this width.
+  const wrapWidth = inferWrapWidth(buf, bufferLineNumber - 1, scratch);
 
   // Walk up to the row the logical line STARTS on. A row is a continuation of
   // the one above it when it is flagged wrapped, or when the rules above can
@@ -343,7 +367,7 @@ export function scanBufferLine(term: Terminal, bufferLineNumber: number): Scanne
     const above = readRow(buf, y - 1, scratch);
     const here = readRow(buf, y, scratch);
     if (above === null || here === null) break;
-    if (joinedRowSkip(above, here) === null) break;
+    if (joinedRowSkip(above, here, wrapWidth) === null) break;
     joined++;
     y--;
   }
@@ -388,7 +412,7 @@ export function scanBufferLine(term: Terminal, bufferLineNumber: number): Scanne
     const here = readRow(buf, y, scratch);
     const below = readRow(buf, y + 1, scratch);
     if (here === null || below === null) break;
-    const continues = joinedRowSkip(here, below);
+    const continues = joinedRowSkip(here, below, wrapWidth);
     if (continues === null) break;
     // A row a TUI wrapped itself stops short of the margin, so the cells after
     // it read as spaces — and a run of spaces in the middle of the flattened

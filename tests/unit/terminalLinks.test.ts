@@ -291,8 +291,8 @@ describe('scanBufferLine — a path a TUI broke across two rows', () => {
     // The "work-chronicle" report, transcribed from the pane: the CLI breaks
     // the token at its last hyphen that fits, and what did not fit is the
     // whole of `overview.png` — twelve characters — so the row above ends
-    // NINE columns short. The old slack bound of eight refused exactly this,
-    // which is why the fragment kept its link and the head got nothing.
+    // NINE columns short of the pane. The fit is measured against the render
+    // width the rows themselves set (the widest is 87), not the pane.
     const FIRST =
       'assets/images/ai-engineering-buildcamp-cohort-3-projects/work-chronicle/work-chronicle-';
     const term = fakeScreen([FIRST, 'overview.png'], FIRST.length + 9);
@@ -303,15 +303,19 @@ describe('scanBufferLine — a path a TUI broke across two rows', () => {
     expect(pathLinks(term, 2, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(joined);
   });
 
-  it('refuses a hyphen wrap that left more columns free than the fragment needs', () => {
-    // Thirteen columns free and `overview.png` twelve wide: the fragment WOULD
-    // have fitted above, so no break-opportunity wrapper produced these rows
-    // — the slack bound and the head-fit guard are the same arithmetic.
+  it('joins after the pane was resized wider than the render width', () => {
+    // The same report on the user's actual window: the rows were painted at
+    // ~87 columns and the pane is now 130, so every distance-to-the-margin
+    // reading is meaningless — tmux keeps rows painted at their render width.
+    // The fullest nearby row IS that width, and `overview.png` did not fit
+    // inside it, so the rows still reconstruct.
     const FIRST =
       'assets/images/ai-engineering-buildcamp-cohort-3-projects/work-chronicle/work-chronicle-';
-    const term = fakeScreen([FIRST, 'overview.png'], FIRST.length + 13);
+    const term = fakeScreen(['• Done. I used the attached image', '', FIRST, 'overview.png'], 130);
+    const joined = `${FIRST}overview.png`;
 
-    expect(scanBufferLine(term, 1).text.trimEnd()).toBe(FIRST);
+    expect(scanBufferLine(term, 3).text.trimEnd()).toBe(joined);
+    expect(pathLinks(term, 3, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(joined);
   });
 
   it('opens the tilde form without anyone expanding $HOME', () => {
@@ -457,9 +461,13 @@ describe('scanBufferLine — rows that must NOT be joined', () => {
   });
 
   it('refuses a hyphen row whose continuation would have fitted above', () => {
-    // Five columns free, `done` four wide: the wrapper left the row because it
-    // chose to, not because it ran out, so the rows are two lines of one block.
-    expect(scan(['/tmp/nightly-lock-', 'done'], 23)).toBe('/tmp/nightly-lock-');
+    // The block's own context sets the render width: `done` is four wide and
+    // the fullest row nearby is 27, so `done` had room — the wrapper left the
+    // row because it chose to, not because it ran out, and these rows are two
+    // lines of one block.
+    expect(
+      scan(['/tmp/nightly-lock-', 'done', 'queued locks released today'], 27),
+    ).toBe('/tmp/nightly-lock-');
   });
 
   it('refuses a hyphen row that continues as a rooted path of its own', () => {
@@ -467,20 +475,29 @@ describe('scanBufferLine — rows that must NOT be joined', () => {
   });
 
   it('refuses a slash row whose continuation would have fitted above', () => {
-    // The slash shape of the hyphen guard above: three columns free, `ok` two
-    // wide — the wrapper left the row by choice, so these are two lines.
-    expect(scan(['wrote assets/img/', 'ok'], 20)).toBe('wrote assets/img/');
+    // The slash shape of the hyphen guard above: the block's context sets the
+    // render width at 27 and `ok` is two wide — the wrapper left the row by
+    // choice, so these are two lines.
+    expect(scan(['wrote assets/img/', 'ok', 'and pruned the stale copies'], 27)).toBe(
+      'wrote assets/img/',
+    );
   });
 
   it('refuses a slash row that continues as a rooted path of its own', () => {
     expect(scan(['assets/img/', '/srv/x.mp3'], 13)).toBe('assets/img/');
   });
 
-  it('refuses a slash row that stopped well short of the margin', () => {
-    // Halfway down the window there is no wrap to reconstruct, slash tail or
-    // not: a paragraph that happens to end in a directory name must not pick
-    // up the line below it.
-    expect(scan(['wrote assets/images/exam/', 'quizgen-landing-page.png'], 40)).toBe(
+  it('refuses a slash row whose fragment had room at the render width', () => {
+    // A paragraph that happens to end in a directory name must not pick up
+    // the line below it. The paragraph's own fuller rows set the render width
+    // at 50, and `quizgen-landing-page.png` — twenty-four wide — fits in the
+    // columns the row above left free: a word wrap, not a mid-token cut.
+    const rows = [
+      'the nightly build wrote all of its rendered assets',
+      'wrote assets/images/exam/',
+      'quizgen-landing-page.png',
+    ];
+    expect(scanBufferLine(fakeScreen(rows, 60), 2).text.trimEnd()).toBe(
       'wrote assets/images/exam/',
     );
   });
