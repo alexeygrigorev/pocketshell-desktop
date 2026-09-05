@@ -240,6 +240,53 @@ describe('scanBufferLine — a path a TUI broke across two rows', () => {
     );
   });
 
+  it('joins a slash wrap that left the row short of the margin', () => {
+    // The "Cloudflare diagrams" report, transcribed from the pane: a
+    // markdown-rendering CLI fills each row up to the last `/` inside the long
+    // path token instead of to the margin, so rule 1's exact-full evidence is
+    // missing and the tail ends in `/`, not the `-` rule 1b was first written
+    // for. Both breaks of the report reconstruct, whichever row the mouse is
+    // over.
+    const FIRST = 'Example: Cloudflare diagrams (2026/2026-06-17-cloudflare-workers-vectorize-agent/';
+    const SECOND = 'diagrams) and its README (2026/2026-06-17-cloudflare-workers-vectorize-agent/';
+    const THIRD = 'README.md:9).';
+    const term = fakeScreen([FIRST, SECOND, THIRD], FIRST.length + 3);
+    const joined = `${FIRST}${SECOND}${THIRD}`;
+
+    expect(scanBufferLine(term, 1).text.trimEnd()).toBe(joined);
+    expect(scanBufferLine(term, 3).text.trimEnd()).toBe(joined);
+  });
+
+  it('linkifies both report paths across their breaks, from the middle row', () => {
+    const FIRST = 'Example: Cloudflare diagrams (2026/2026-06-17-cloudflare-workers-vectorize-agent/';
+    const SECOND = 'diagrams) and its README (2026/2026-06-17-cloudflare-workers-vectorize-agent/';
+    const THIRD = 'README.md:9).';
+    const term = fakeScreen([FIRST, SECOND, THIRD], FIRST.length + 3);
+
+    const links = pathLinks(term, 2, () => ({ sessionName: 'git-foo' }));
+    // The whole of each path, not the directory the first row of it ended at;
+    // the `:9` suffix underlines and the `(` and `).` do not.
+    expect(links.map((l) => l.text)).toEqual([
+      '2026/2026-06-17-cloudflare-workers-vectorize-agent/diagrams',
+      '2026/2026-06-17-cloudflare-workers-vectorize-agent/README.md:9',
+    ]);
+    // From the `2026` on the first row (after the `(`) into `diagrams` on the
+    // second — the cells, not the string offsets.
+    expect(links[0]?.range).toEqual({ start: { x: 31, y: 1 }, end: { x: 8, y: 2 } });
+
+    const files = useFilesStore();
+    const sessions = useSessionsStore();
+    sessions.sessions = [
+      { name: 'git-foo', created: 0, activity: 0, attached: true, path: '~/git/vect' },
+    ];
+    links[1]?.activate(CLICK, links[1].text);
+    // Relative, so the session's cwd resolves it — the file, not the
+    // `-agent/` directory the row above ends at.
+    expect(files.reveal).toBe(
+      'git/vect/2026/2026-06-17-cloudflare-workers-vectorize-agent/README.md',
+    );
+  });
+
   it('opens the tilde form without anyone expanding $HOME', () => {
     const first = '    └ ~/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-de1a03f1-2d3f-';
     const term = fakeScreen([first, '4d2d-8a44-c5da743f849e.png'], first.length);
@@ -390,6 +437,25 @@ describe('scanBufferLine — rows that must NOT be joined', () => {
 
   it('refuses a hyphen row that continues as a rooted path of its own', () => {
     expect(scan(['/tmp/nightly-lock-', '/srv/x.mp3'], 20)).toBe('/tmp/nightly-lock-');
+  });
+
+  it('refuses a slash row whose continuation would have fitted above', () => {
+    // The slash shape of the hyphen guard above: three columns free, `ok` two
+    // wide — the wrapper left the row by choice, so these are two lines.
+    expect(scan(['wrote assets/img/', 'ok'], 20)).toBe('wrote assets/img/');
+  });
+
+  it('refuses a slash row that continues as a rooted path of its own', () => {
+    expect(scan(['assets/img/', '/srv/x.mp3'], 13)).toBe('assets/img/');
+  });
+
+  it('refuses a slash row that stopped well short of the margin', () => {
+    // Halfway down the window there is no wrap to reconstruct, slash tail or
+    // not: a paragraph that happens to end in a directory name must not pick
+    // up the line below it.
+    expect(scan(['wrote assets/images/exam/', 'quizgen-landing-page.png'], 40)).toBe(
+      'wrote assets/images/exam/',
+    );
   });
 
   it('refuses two complete paths on consecutive rows', () => {

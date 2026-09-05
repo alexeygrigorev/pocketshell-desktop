@@ -156,7 +156,8 @@ whole URL; `file://host/…` and any http(s) URL are left alone — web links
 belong to WebLinksAddon and are never extended across a row break. A path
 a TUI split across rows (this pane is always a tmux client, so nothing is
 ever flagged `isWrapped`) is reconstructed from geometry — hard wrap,
-box-gutter continuation, near-margin hyphen break — each shape anchored on
+box-gutter continuation, near-margin break at a hyphen or slash inside the
+token — each shape anchored on
 a tail token that is itself a path by the detector's standard (rooted,
 `file:///`, or a relative one with two or more slashes — one slash is
 `and/or` prose), so prose rows never glue together.
