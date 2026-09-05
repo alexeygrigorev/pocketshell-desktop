@@ -29,12 +29,13 @@
 // The ask-then-adopt order in `showTarget` stays too. It costs nothing, and it
 // is what stops a re-attach closing a PTY main was about to hand back.
 //
-// Clipboard: selecting with the mouse copies on mouse-up (see onDocumentMouseUp);
-// a drag when the remote TUI owns the mouse is copied instead through tmux's
-// OSC 52 yank (see the handler in onMounted and osc52.ts). RIGHT-CLICK pastes
-// into the shell. Neither paste CHORD does — Ctrl/Cmd-V and Ctrl/Cmd-Shift-V
-// are both claimed for the prompt composer and leave as `paste-into-composer`
-// (see onCustomKey).
+// Clipboard: a drag always selects IN THIS PANE (terminalMouseSelection.ts
+// forces that even while the remote owns the mouse) and copies on mouse-up
+// (see onDocumentMouseUp). SHIFT+drag — and a tmux keyboard yank — select in
+// tmux instead, and the yank comes back as OSC 52 (see the handler in
+// onMounted and osc52.ts). RIGHT-CLICK pastes into the shell. Neither paste
+// CHORD does — Ctrl/Cmd-V and Ctrl/Cmd-Shift-V are both claimed for the
+// prompt composer and leave as `paste-into-composer` (see onCustomKey).
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Terminal, type IDisposable, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -44,6 +45,7 @@ import { useShellsStore } from '../stores/shells';
 import { createPathLinkProvider } from '../terminalLinks';
 import { PathHighlighter } from '../terminalPathHighlights';
 import { decodeOsc52SetClipboard } from '../osc52';
+import { forceLocalMouseSelection } from '../terminalMouseSelection';
 import { useSettingsStore } from '../stores/settings';
 import { resolveMonoStack } from '../fonts';
 import { resolveTheme, terminalLinkTint } from '../themes';
@@ -1036,13 +1038,15 @@ onMounted(async () => {
       () => ({ sessionName: targetSession.value }),
       () => terminalLinkTint(resolveTheme(settings.theme).terminal),
     ),
-    // OSC 52 -> clipboard. The receiving half of the tmux drag gesture: with
-    // mouse reporting on, a drag selects IN TMUX and releasing yanks and
-    // dismisses the highlight (why the selection "disappears"), offering the
-    // text to this terminal as `ESC ] 52 ; Pc ; Pt BEL`. Answering it is what
-    // turns that gesture into a real copy; see osc52.ts for what is refused.
-    // Bound once against the terminal's lifetime, like everything else in
-    // this array — the handler reads no per-session state.
+    // OSC 52 -> clipboard. The receiving half of the tmux gesture: a
+    // SHIFT+drag (plain drag selects in THIS pane now — terminalMouseSelection.ts)
+    // selects in tmux copy-mode, and releasing yanks and dismisses the
+    // highlight, offering the text to this terminal as
+    // `ESC ] 52 ; Pc ; Pt BEL`. A tmux keyboard yank (prefix+[ … y) arrives
+    // the same way. Answering it is what turns either into a real copy; see
+    // osc52.ts for what is refused. Bound once against the terminal's
+    // lifetime, like everything else in this array — the handler reads no
+    // per-session state.
     term.parser.registerOscHandler(52, (data) => {
       const text = decodeOsc52SetClipboard(data);
       if (text) void copyToClipboard(text);
@@ -1050,6 +1054,20 @@ onMounted(async () => {
     }),
   ];
   term.attachCustomKeyEventHandler(onCustomKey);
+  // A plain drag must select in this pane even while the remote owns the
+  // mouse — that ownership is exactly what made a selection's highlight
+  // vanish under the hand (tmux dismissed it on drag-end), which the user
+  // read as "I can't select code". terminalMouseSelection.ts documents the
+  // private-API lever and its Shift escape hatch. A patch that could not
+  // apply is REPORTED rather than silent, because the failure shape is an
+  // xterm upgrade silently handing the old vanishing gesture back.
+  if (!forceLocalMouseSelection(term)) {
+    recordDiagDetail(
+      'terminal-selection',
+      'could not force local mouse selection — xterm internals changed',
+      { expected: '_core._selectionService.shouldForceSelection' },
+    );
+  }
   containerEl.value?.addEventListener('mousedown', onTerminalMouseDown);
   containerEl.value?.addEventListener('contextmenu', onTerminalContextMenu);
   document.addEventListener('mouseup', onDocumentMouseUp);

@@ -22,17 +22,24 @@ everywhere: every call site in the app spells the test
 | *any printable key* | Opens the composer with the keystroke | Not a chord. Gated on the `typingOpensComposer` setting and on the composer being closed — and stood down after a short-draft hand-off (COMPOSER.md §12.2) until the panel is summoned again. |
 | right-click | Paste into the shell | Not a chord, and now the ONLY route to the shell's own paste. |
 | mouse-up after a drag | Copy the selection | Ditto. |
-| drag, release — mouse reporting ON | Copy, via tmux's yank | tmux paints the selection itself and dismisses it on release, so the highlight "disappears"; the yank reaches the pane as OSC 52 and lands in the clipboard. See below. |
+| drag, release — mouse reporting ON | Select in the pane; copy on release | The same local selection as with reporting off (terminalMouseSelection.ts). The highlight persists. |
+| Shift+drag — mouse reporting ON | Select in TMUX instead | tmux paints its copy-mode highlight, and releasing yanks it; the yank reaches the pane as OSC 52 and lands in the clipboard, while tmux dismisses the highlight. |
 
-**A drag has two owners, decided by mouse reporting.** With it off, xterm runs
-the selection and the mouse-up row above copies it. With it on — an agent TUI
-turned the mouse on — the drag selects IN TMUX instead (terminalLinks.ts,
-"Clicking while the remote app owns the mouse"): tmux paints the highlight,
-and releasing runs its copy-and-cancel, which is why the highlight vanishes
-under the hand. The yank is not lost: tmux offers it to the outer terminal as
-`ESC ] 52 ; … ` (OSC 52), and the pane's handler (`osc52.ts`) writes it to the
-clipboard — drag-then-release is a copy both ways. Shift+drag bypasses mouse
-reporting and always takes the local path.
+**A drag has two owners, decided by mouse reporting AND by Shift.** Plain
+drag always takes the LOCAL path — xterm's own selection, copied on mouse-up —
+because the remote-owned path took that gesture away and the user read the
+result ("I select some code and the highlight disappears") as selection being
+broken. terminalMouseSelection.ts is what forces it: with mouse reporting on,
+xterm consults `SelectionService.shouldForceSelection` before reporting a
+mousedown, and the pane replaces that predicate so plain button-1 forces the
+local selection service while Shift leaves the event to the remote. Wheel and
+hover-motion reporting never pass through the predicate, so tmux keeps
+scrolling pane history under the wheel. On the Shift path tmux paints the
+highlight and its drag-end (`copy-pipe; cancel`) dismisses it on release —
+the vanishing highlight now marks the explicit hand-off, and the yank is not
+lost: tmux offers it to the outer terminal as `ESC ] 52 ; … ` (OSC 52), and
+the pane's handler (`osc52.ts`) writes it to the clipboard. A tmux keyboard
+yank (`prefix+[` … `y`) arrives the same way.
 
 **Both paste chords go to the composer; the split is keyboard-vs-mouse, not
 chord-vs-chord** — `Ctrl+Shift+V` is the chord every terminal emulator trains

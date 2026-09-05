@@ -101,14 +101,15 @@
  * is overridden by the later and equally specific `.xterm .xterm-cursor-pointer`
  * in xterm's own stylesheet.
  *
- * What the user ALSO gets is the same click delivered to the remote program, so
- * tmux may move its cursor or select the pane under the pointer on the way. The
- * conventional bypass suppresses that and leaves the link working: off macOS,
- * `SelectionService.shouldForceSelection` returns `event.shiftKey`, and
- * `bindMouse`'s mousedown handler returns before `sendEvent` when it is true.
- * So a plain click follows the link (and nudges the TUI), and Shift-click
- * follows it cleanly — the same modifier that already bypasses mouse reporting
- * for drag-selection in this pane.
+ * What the user ALSO used to get was the same click delivered to the remote
+ * program, so tmux could move its cursor or select the pane under the pointer
+ * on the way. That side effect is gone for plain clicks:
+ * terminalMouseSelection.ts replaces `SelectionService.shouldForceSelection`,
+ * the predicate `bindMouse`'s mousedown handler consults before `sendEvent`,
+ * so a plain button-1 press is never reported and follows the link cleanly.
+ * SHIFT is the deliberate hand-off: a Shift-click is reported to tmux and
+ * still follows the link, because the linkifier's listener on the descendant
+ * runs regardless.
  */
 import type { IBuffer, IBufferCell, ILink, ILinkProvider, Terminal } from '@xterm/xterm';
 import { continuesPath, findPaths, stripFileScheme } from './terminalPaths';

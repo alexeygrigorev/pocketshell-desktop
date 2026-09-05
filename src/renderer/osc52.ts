@@ -3,17 +3,17 @@
  *
  * ## Why the pane wants this
  *
- * The pane is a tmux client and the agent TUIs inside it turn mouse reporting
- * on, so a plain drag selects IN TMUX (see terminalLinks.ts, "Clicking while
- * the remote app owns the mouse"): tmux paints the highlight, and releasing
- * the mouse runs its copy-and-cancel — the highlight vanishes, which reads as
- * "my selection disappeared" even though the yank succeeded. The text's way
- * out of the remote box is the escape sequence tmux offers the outer terminal
- * (`set-clipboard` defaults to `external`): `ESC ] 52 ; Pc ; Pt BEL`, with Pt
- * the yanked text as base64. Nothing here answered that sequence, so a
- * drag-release landed nowhere the user could paste from. This decoder is the
- * answer: TerminalView registers it as an OSC 52 handler and writes what it
- * returns to the system clipboard, making drag-then-release an actual copy.
+ * The pane is a tmux client, and a SHIFT+drag (plain drag selects in THIS pane
+ * now — terminalMouseSelection.ts) or a tmux keyboard yank (`prefix+[` … `y`)
+ * selects in TMUX: tmux paints the highlight, and the gesture's end runs its
+ * copy — the drag-end also cancels copy-mode, so the highlight vanishes, which
+ * is the vanishing that once read as "my selection disappeared" on the plain
+ * path. The text's way out of the remote box is the escape sequence tmux
+ * offers the outer terminal (`set-clipboard` defaults to `external`):
+ * `ESC ] 52 ; Pc ; Pt BEL`, with Pt the yanked text as base64. Nothing here
+ * answered that sequence, so such a yank landed nowhere the user could paste
+ * from. This decoder is the answer: TerminalView registers it as an OSC 52
+ * handler and writes what it returns to the system clipboard.
  *
  * The same sequence is how ANY remote program (an agent among them) may set
  * the local clipboard. That is the feature and also the risk surface, so the

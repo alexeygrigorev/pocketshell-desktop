@@ -20,7 +20,12 @@ import { api } from './ipc';
 import { errorMessage } from '../shared/errors';
 
 /** Where an unhandled error was caught. Drives the desktop-log line only. */
-export type DiagKind = 'render' | 'unhandledrejection' | 'error' | 'terminal-stall';
+export type DiagKind =
+  | 'render'
+  | 'unhandledrejection'
+  | 'error'
+  | 'terminal-stall'
+  | 'terminal-selection';
 
 export interface DiagEntry {
   kind: DiagKind;
