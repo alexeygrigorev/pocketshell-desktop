@@ -207,25 +207,46 @@ function readRow(buf: IBuffer, y: number, scratch: IBufferCell): RowRead | null 
  * tmux keeps history rows painted at the width they were rendered at: the
  * window can be resized — or a CLI can wrap at its own narrower width — after
  * the fact, so a row can sit ANY distance short of the live margin. What
- * survives both is the rows themselves: the fullest row within the join
- * window is the best surviving measurement of the width its neighbours were
- * wrapped at. Rule 1b's fit guard below runs against this, never against
- * `prev.width`.
+ * survives both is the rows themselves: the fullest row of the hovered row's
+ * own block is the best surviving measurement of the width its neighbours
+ * were wrapped at. Rule 1b's fit guard below runs against this, never
+ * against `prev.width`.
  *
- * The window matches {@link MAX_JOIN_ROWS} in each direction — the same rows
- * the reconstruction walk may consume, and no more. Rows cannot exceed the
- * pane, so the result is a sane width even when the neighbourhood is all
- * short lines: there the estimate degrades to the hovered block's own widest
- * row, and the fit guard degenerates to the lexical tail/head checks alone —
- * the deliberate fallback, not a bug.
+ * "Block" is the contiguous run of non-blank rows around the hover, and the
+ * walk stops at the first blank row in each direction: blocks separated by a
+ * blank were wrapped independently, and rows beyond it say nothing about this
+ * one's width. That bound is what keeps the estimate honest in exactly the
+ * pane this was rebuilt for — the agent CLI's footer draws `Worked for 23m
+ * 29s ────────` to the PANE's own width a row or two below the text, and one
+ * such row collected into a whole-window maximum would drag the inferred
+ * width back up to the pane, reverting every guard to the live-width
+ * arithmetic this exists to escape. A row of one repeated character (a bare
+ * `────` rule or `====` bar) is refused as decoration as well, and ends the
+ * walk the way a blank does: what lies beyond it is a different block anyway.
+ *
+ * The window is capped at {@link MAX_JOIN_ROWS} rows per direction — the same
+ * rows the reconstruction walk may consume. Rows cannot exceed the pane, so
+ * the result is a sane width even when the block is all short lines: there
+ * the estimate degrades to the hovered block's own widest row, and the fit
+ * guard degenerates to the lexical tail/head checks alone — the deliberate
+ * fallback, not a bug.
  */
 function inferWrapWidth(buf: IBuffer, y0: number, scratch: IBufferCell): number {
   let width = 1;
-  const from = Math.max(0, y0 - MAX_JOIN_ROWS);
-  for (let y = from; y <= y0 + MAX_JOIN_ROWS; y++) {
-    const row = readRow(buf, y, scratch);
-    if (row === null) break;
+  const collect = (row: RowRead): boolean => {
+    if (row.lastCol < 0) return false;
+    const trimmed = row.text.trim();
+    if (trimmed.length >= 4 && /^(.)\1+$/.exec(trimmed) !== null) return false;
     if (row.lastCol + 1 > width) width = row.lastCol + 1;
+    return true;
+  };
+  for (let y = y0, steps = 0; y >= 0 && steps <= MAX_JOIN_ROWS; y--, steps++) {
+    const row = readRow(buf, y, scratch);
+    if (row === null || !collect(row)) break;
+  }
+  for (let y = y0 + 1, steps = 0; steps <= MAX_JOIN_ROWS; y++, steps++) {
+    const row = readRow(buf, y, scratch);
+    if (row === null || !collect(row)) break;
   }
   return width;
 }

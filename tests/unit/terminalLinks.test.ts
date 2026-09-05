@@ -329,7 +329,7 @@ describe('scanBufferLine — a path a TUI broke across two rows', () => {
       'diagram-creator/SKILL.md) and rubric (/home/alexey/git/diagram-creator/skills/diagram-',
       'creator/rubric.md) with a strict axis-alignment gate.',
     ];
-    const term = fakeScreen(ROWS, ROWS[0].length);
+    const term = fakeScreen(ROWS, ROWS[0]?.length ?? 0);
     const links = pathLinks(term, 1, () => ({ sessionName: 'git-foo' }));
 
     expect(links.map((l) => l.text)).toEqual([
@@ -340,6 +340,43 @@ describe('scanBufferLine — a path a TUI broke across two rows', () => {
     // row three — 1-based, inclusive, the opening `(` never underlined.
     expect(links[0]?.range).toEqual({ start: { x: 48, y: 1 }, end: { x: 24, y: 2 } });
     expect(links[1]?.range).toEqual({ start: { x: 39, y: 2 }, end: { x: 17, y: 3 } });
+  });
+
+  it('joins with a full-width footer rule two rows below the block', () => {
+    // The user's actual pane: the CLI's footer draws `Worked for 23m 29s ────`
+    // to the PANE's own width a couple of rows under the path. Collected into
+    // a whole-window maximum, that row measures the pane (120) and the fit
+    // guard refuses the join again. The blank between block and footer bounds
+    // the inference at the block itself, and `overview.png` did not fit in it.
+    const FIRST =
+      'assets/images/ai-engineering-buildcamp-cohort-3-projects/work-chronicle/work-chronicle-';
+    const rows = [
+      '• Done. I used the attached image, cropped the side borders, and added it as:',
+      '',
+      FIRST,
+      'overview.png',
+      '',
+      'Worked for 23m 29s ──────────────────────────────────────────────────────────────────────',
+    ];
+    const term = fakeScreen(rows, 120);
+    const joined = `${FIRST}overview.png`;
+
+    expect(scanBufferLine(term, 3).text.trimEnd()).toBe(joined);
+    expect(pathLinks(term, 3, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(joined);
+  });
+
+  it('does not let a bare fill rule beside the block set the render width', () => {
+    // Same poison without the blank: a rule is decoration drawn to the pane,
+    // so the walk refuses it rather than collecting it — and ends there,
+    // because what lies beyond a separator is a different block anyway.
+    const FIRST =
+      'assets/images/ai-engineering-buildcamp-cohort-3-projects/work-chronicle/work-chronicle-';
+    const term = fakeScreen(
+      ['──────────────────────────────────────────────────────────────────────────', FIRST, 'overview.png'],
+      100,
+    );
+
+    expect(scanBufferLine(term, 2).text.trimEnd()).toBe(`${FIRST}overview.png`);
   });
 
   it('opens the tilde form without anyone expanding $HOME', () => {

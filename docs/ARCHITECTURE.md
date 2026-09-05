@@ -160,12 +160,12 @@ box-gutter continuation, break at a hyphen or slash inside the token —
 each shape anchored on
 a tail token that is itself a path by the detector's standard (rooted,
 `file:///`, or a relative one with two or more slashes — one slash is
-`and/or` prose), so prose rows never glue together. The fit arithmetic
-("the continuation would not have fitted") is measured against the
-render width inferred from the fullest nearby row, not the pane's live
-width: tmux keeps rows painted at the width they were rendered at, so a
-resized window proves nothing about the margins those rows were
-written under.
+`and/or` prose), so prose rows never glue together. The fit arithmetic ("the continuation would not have fitted") is
+measured against the render width inferred from the fullest row of the
+surrounding block — blank rows bound the block, and fill-rule decoration
+drawn to the pane's width is refused — not against the pane's live width:
+tmux keeps rows painted at the width they were rendered at, so a resized
+window proves nothing about the margins those rows were written under.
 
 ---
 
