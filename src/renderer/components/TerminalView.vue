@@ -42,10 +42,11 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api } from '../ipc';
 import { useShellsStore } from '../stores/shells';
 import { createPathLinkProvider } from '../terminalLinks';
+import { PathHighlighter } from '../terminalPathHighlights';
 import { decodeOsc52SetClipboard } from '../osc52';
 import { useSettingsStore } from '../stores/settings';
 import { resolveMonoStack } from '../fonts';
-import { resolveTheme } from '../themes';
+import { resolveTheme, terminalLinkTint } from '../themes';
 import { isTypingKey } from '../../shared/composerText';
 import { isShortcut } from '../../shared/shortcuts';
 import { ParseStallMonitor, type ParseStallReport } from '../parseStall';
@@ -1022,6 +1023,18 @@ onMounted(async () => {
     // stack a second provider.
     term.registerLinkProvider(
       createPathLinkProvider(term, () => ({ sessionName: targetSession.value })),
+    ),
+    // At-rest highlight for those same links, and the reason the hover layer
+    // alone was not enough: the remote CLI colours and underlines its file
+    // references itself, but only the FIRST row of a path its own wrapper
+    // broke across rows — so the view at rest kept showing a path highlighted
+    // halfway no matter what the hover reconstructs. This re-derives the
+    // whole link on every row the renderer touches and blocks it in the
+    // theme's own selection tint (terminalPathHighlights.ts).
+    new PathHighlighter(
+      term,
+      () => ({ sessionName: targetSession.value }),
+      () => terminalLinkTint(resolveTheme(settings.theme).terminal),
     ),
     // OSC 52 -> clipboard. The receiving half of the tmux drag gesture: with
     // mouse reporting on, a drag selects IN TMUX and releasing yanks and

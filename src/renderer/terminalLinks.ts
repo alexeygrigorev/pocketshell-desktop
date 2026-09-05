@@ -62,20 +62,22 @@
  * ## Appearance
  *
  * A path link is decorated exactly like the http links this terminal already
- * has: pointer cursor and an underline, both on hover only. That is not a
- * shrug — it is the whole decoration vocabulary xterm's link API offers
- * (`ILinkDecorations` is documented as "what to show when HOVERING"), and it is
- * the right vocabulary here anyway. Colouring a path would mean overriding a
- * colour the remote program chose, which is precisely what docs/DESIGN.md §3
- * protects by transcribing the Campbell palette rather than inventing one. The
- * underline inherits the cell's own foreground, so a path printed green
- * underlines green and the terminal keeps saying what the program said.
+ * has: pointer cursor and an underline, both on hover only — the decoration
+ * vocabulary xterm's link provider API offers. The underline inherits the
+ * cell's own foreground, so a path printed green underlines green and the
+ * terminal keeps saying what the program said.
  *
- * Persistent highlighting — every path underlined at rest — would need
- * `Terminal.registerDecoration`, which anchors an overlay to a buffer MARKER.
- * Under tmux that is not viable: tmux repaints whole rows constantly and lives
- * on the alternate screen, so markers would decorate cells whose contents have
- * since changed, and every repaint would mean re-scanning the viewport.
+ * Hover is not the layer the user judges by, though. The remote CLI colours
+ * and underlines its file references itself, and when ITS wrapper breaks a
+ * path across rows the underline covers only the first row's fragment — so
+ * at rest a path read as highlighted halfway no matter how well the join
+ * worked. Persistent highlighting therefore exists as its own layer:
+ * terminalPathHighlights.ts blocks the whole joined path in the theme's
+ * selection tint, re-derived from the buffer for every row the renderer
+ * touches — the rescan is what answers the marker-staleness objection that
+ * once kept this hover-only. The tint is the theme's own selection colour
+ * solidified over the terminal ground (themes.ts terminalLinkTint): no new
+ * palette values, per docs/DESIGN.md §3.
  *
  * ## Clicking while the remote app owns the mouse
  *
@@ -454,7 +456,32 @@ export function scanBufferLine(term: Terminal, bufferLineNumber: number): Scanne
   return { text: chars.join(''), cells };
 }
 
-/** The links for one buffer line. Exported for testing without a live terminal. */
+/**
+ * 1-based column one past the last non-blank cell of the buffer line [y]
+ * (1-based), or 1 for a blank line.
+ *
+ * The at-rest highlighter clamps the intermediate rows of a multi-row link
+ * with this: a reconstructed row stops short of the pane, the link's range
+ * records only its two endpoints, and the cells between a fragment's last
+ * character and the margin are padding the tint must not cover.
+ */
+export function lastTextColumn(term: Terminal, y: number): number {
+  const buffer = term.buffer.active;
+  const line = buffer.getLine(y - 1);
+  if (!line) return 1;
+  const scratch = buffer.getNullCell();
+  let end = 1;
+  for (let x = 0; x < line.length; x++) {
+    const cell = line.getCell(x, scratch);
+    if (!cell || cell.getWidth() === 0) continue;
+    const content = cell.getChars();
+    if (content !== '' && content !== ' ') end = x + 1;
+  }
+  return end;
+}
+
+/**
+ * The links for one buffer line. Exported for testing without a live terminal. */
 export function pathLinks(
   term: Terminal,
   bufferLineNumber: number,

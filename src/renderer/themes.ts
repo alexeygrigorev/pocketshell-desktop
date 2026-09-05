@@ -745,3 +745,34 @@ export function resolveTheme(choice: string): ThemeSpec {
 export function setSystemPrefersLightForTest(value: boolean): void {
   systemPrefersLight.value = value;
 }
+
+/**
+ * The at-rest block tint behind linked paths in the terminal (see
+ * terminalPathHighlights.ts): this theme's own selection tint composited over
+ * the terminal ground and solidified. The xterm decoration API takes only
+ * `#RRGGBB`, while `selectionBackground` is written with alpha so real
+ * selections keep the text readable — compositing it over `background`
+ * reproduces exactly the colour a selection paints there, per theme, with no
+ * new palette values. Both inputs are this file's palette entries; the
+ * defaults only guard a palette that dropped one.
+ */
+export function terminalLinkTint(palette: ITheme): string {
+  return blendOver(palette.background ?? '#000000', palette.selectionBackground ?? 'rgba(255, 255, 255, 0.2)');
+}
+
+function blendOver(ground: string, overlay: string): string {
+  const rgba = /^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/.exec(overlay);
+  if (rgba === null) return ground;
+  const hex6 = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(ground);
+  const hex3 = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(ground);
+  const channels = hex6 !== null
+    ? [1, 2, 3].map((i) => parseInt(hex6[i] ?? '0', 16))
+    : hex3 !== null
+      ? [1, 2, 3].map((i) => parseInt(hex3[i] ?? '0', 16) * 17)
+      : [0, 0, 0];
+  const alpha = Number(rgba[4] ?? 1);
+  return `#${[0, 1, 2]
+    .map((i) => Math.round(Number(rgba[i + 1]) * alpha + (channels[i] ?? 0) * (1 - alpha)))
+    .map((n) => n.toString(16).padStart(2, '0'))
+    .join('')}`;
+}

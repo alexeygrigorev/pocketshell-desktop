@@ -166,6 +166,12 @@ surrounding block — blank rows bound the block, and fill-rule decoration
 drawn to the pane's width is refused — not against the pane's live width:
 tmux keeps rows painted at the width they were rendered at, so a resized
 window proves nothing about the margins those rows were written under.
+The highlight is two layers: the hover underline from the link
+provider, and an at-rest block tint (`terminalPathHighlights.ts`) that
+re-derives decorations for every row the renderer touches, so a path
+reads as one highlighted span at rest even when the remote CLI's own
+underline stopped at its first row; the tint is each theme's selection
+colour solidified over the terminal ground.
 
 ---
 
