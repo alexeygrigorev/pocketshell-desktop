@@ -28,7 +28,7 @@
  * across two rows arrives here as two rows with `isWrapped` false on both — and
  * a path that spans the break is never seen whole by the detector.
  *
- * Four user reports are the shapes the rules below reconstruct:
+ * Five user reports are the shapes the rules below reconstruct:
  *
  *   - the Codex TUI wrapped mid-token and continued at column 0 of the next
  *     row, i.e. exactly the hard wrap xterm would have flagged had it done the
@@ -43,7 +43,11 @@
  *   - a markdown-rendering CLI fills the row up to the last `/` inside the
  *     token instead of to the margin — `…vectorize-agent/` / `diagrams` —
  *     which is the same shape with the slash as the opportunity, so rule 1b
- *     takes both characters.
+ *     takes both characters;
+ *   - the same CLI also leaves up to ELEVEN columns short, not the five the
+ *     hyphen report first showed — `…work-chronicle-` / `overview.png` — so
+ *     the slack bound is derived from the displaced fragment rather than
+ *     measured off one report.
  *
  * Both rules are deliberately narrow, for the reason terminalPaths.ts's header
  * gives: joining two rows that were never one line can only invent a path that
@@ -141,13 +145,16 @@ const MAX_JOIN_ROWS = 8;
  * wrapped (rule 1b in {@link joinedRowSkip}). Full-to-the-last-column stays
  * the strong evidence it always was; this admits the weaker shape where the
  * wrapper broke at a break opportunity INSIDE the token — a hyphen or a slash
- * — and so left the row a few blank columns short: five in the hyphen report
- * this rule is built from, three in the slash one. Eight covers both with
- * room for a slightly longer displaced fragment; the guards at the rule
- * (break character in the tail, head would not have fitted) are what keep the
- * wider window from gluing prose together, not the slack itself.
+ * — and so left the row blank columns short. The slack is then bounded by the
+ * displaced fragment itself: the wrapper breaks at the last opportunity that
+ * FITS, so the fragment after it did not fit, and `slack < head.length` — the
+ * same arithmetic the head-fit guard below runs in the other direction. The
+ * longest fragment a report has pinned is `overview.png`, twelve wide, so
+ * eleven covers every shape seen; the guards at the rule (break character in
+ * the tail, head would not have fitted) are what keep the window from gluing
+ * prose together, not the slack itself.
  */
-const MAX_WRAP_SLACK = 8;
+const MAX_WRAP_SLACK = 11;
 
 /**
  * The gutter a TUI puts in front of the continuation rows of a block it wrapped

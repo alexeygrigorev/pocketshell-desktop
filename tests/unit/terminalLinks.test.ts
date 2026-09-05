@@ -287,6 +287,33 @@ describe('scanBufferLine — a path a TUI broke across two rows', () => {
     );
   });
 
+  it('joins a hyphen wrap whose leftover columns run to eleven', () => {
+    // The "work-chronicle" report, transcribed from the pane: the CLI breaks
+    // the token at its last hyphen that fits, and what did not fit is the
+    // whole of `overview.png` — twelve characters — so the row above ends
+    // NINE columns short. The old slack bound of eight refused exactly this,
+    // which is why the fragment kept its link and the head got nothing.
+    const FIRST =
+      'assets/images/ai-engineering-buildcamp-cohort-3-projects/work-chronicle/work-chronicle-';
+    const term = fakeScreen([FIRST, 'overview.png'], FIRST.length + 9);
+    const joined = `${FIRST}overview.png`;
+
+    expect(scanBufferLine(term, 1).text.trimEnd()).toBe(joined);
+    // Hovered on the continuation row: the same logical line.
+    expect(pathLinks(term, 2, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(joined);
+  });
+
+  it('refuses a hyphen wrap that left more columns free than the fragment needs', () => {
+    // Thirteen columns free and `overview.png` twelve wide: the fragment WOULD
+    // have fitted above, so no break-opportunity wrapper produced these rows
+    // — the slack bound and the head-fit guard are the same arithmetic.
+    const FIRST =
+      'assets/images/ai-engineering-buildcamp-cohort-3-projects/work-chronicle/work-chronicle-';
+    const term = fakeScreen([FIRST, 'overview.png'], FIRST.length + 13);
+
+    expect(scanBufferLine(term, 1).text.trimEnd()).toBe(FIRST);
+  });
+
   it('opens the tilde form without anyone expanding $HOME', () => {
     const first = '    └ ~/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-de1a03f1-2d3f-';
     const term = fakeScreen([first, '4d2d-8a44-c5da743f849e.png'], first.length);
