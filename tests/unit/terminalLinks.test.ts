@@ -318,6 +318,30 @@ describe('scanBufferLine — a path a TUI broke across two rows', () => {
     expect(pathLinks(term, 3, () => ({ sessionName: 'git-foo' }))[0]?.text).toBe(joined);
   });
 
+  it('joins two paths that wrap on consecutive rows of one summary', () => {
+    // The "diagram-creator" report: two absolute paths in one bulleted line,
+    // each wrapped at the pane — the first after `skills/`, the second at the
+    // hyphen inside `diagram-` — and sharing the middle row. Both reconstruct
+    // and both span their breaks, the `)` and ` and rubric (` prose staying
+    // outside every range.
+    const ROWS = [
+      '- Updated the canonical diagram-creator skill (/home/alexey/git/diagram-creator/skills/',
+      'diagram-creator/SKILL.md) and rubric (/home/alexey/git/diagram-creator/skills/diagram-',
+      'creator/rubric.md) with a strict axis-alignment gate.',
+    ];
+    const term = fakeScreen(ROWS, ROWS[0].length);
+    const links = pathLinks(term, 1, () => ({ sessionName: 'git-foo' }));
+
+    expect(links.map((l) => l.text)).toEqual([
+      '/home/alexey/git/diagram-creator/skills/diagram-creator/SKILL.md',
+      '/home/alexey/git/diagram-creator/skills/diagram-creator/rubric.md',
+    ]);
+    // The first runs from row one into row two, the second from row two into
+    // row three — 1-based, inclusive, the opening `(` never underlined.
+    expect(links[0]?.range).toEqual({ start: { x: 48, y: 1 }, end: { x: 24, y: 2 } });
+    expect(links[1]?.range).toEqual({ start: { x: 39, y: 2 }, end: { x: 17, y: 3 } });
+  });
+
   it('opens the tilde form without anyone expanding $HOME', () => {
     const first = '    └ ~/.codex/generated_images/01a03e3d-62c0-70c1-83aa-2597285478fd/exec-de1a03f1-2d3f-';
     const term = fakeScreen([first, '4d2d-8a44-c5da743f849e.png'], first.length);
