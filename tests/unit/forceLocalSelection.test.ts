@@ -108,6 +108,12 @@ describe('forceLocalMouseSelection — the predicate', () => {
 
 /** Set by the fake terminal; holds the service the component must have patched. */
 let selectionService: { shouldForceSelection: (e: MouseEvent) => boolean } | null = null;
+/** What the fake terminal answers about its selection — driven per test. */
+let fakeSelection = { has: false, text: '' };
+/** Every fake terminal instance the component mounted. */
+const terminals: unknown[] = [];
+/** The clipboard writer the component is handed; asserted per test. */
+const writeText = vi.fn(async () => {});
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
@@ -120,10 +126,10 @@ vi.mock('@xterm/xterm', () => ({
     write(): void {}
     dispose(): void {}
     hasSelection(): boolean {
-      return false;
+      return fakeSelection.has;
     }
     getSelection(): string {
-      return '';
+      return fakeSelection.text;
     }
     onData(): { dispose: () => void } {
       return { dispose: () => {} };
@@ -143,6 +149,7 @@ vi.mock('@xterm/xterm', () => ({
     constructor() {
       selectionService = { shouldForceSelection: stockShouldForce };
       (this as { _core?: unknown })._core = { _selectionService: selectionService };
+      terminals.push(this);
     }
   },
 }));
@@ -179,6 +186,13 @@ describe('TerminalView applies the patch at mount', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     selectionService = null;
+    fakeSelection = { has: false, text: '' };
+    terminals.length = 0;
+    writeText.mockClear();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText: vi.fn(async () => ''), writeText },
+    });
   });
 
   it('replaces the selection predicate on the terminal it mounts', async () => {
@@ -193,6 +207,58 @@ describe('TerminalView applies the patch at mount', () => {
     expect(selectionService!.shouldForceSelection).not.toBe(stockShouldForce);
     expect(selectionService!.shouldForceSelection(mouse(false))).toBe(true);
     expect(selectionService!.shouldForceSelection(mouse(true))).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('copies a forced-path drag on mouse-up, even though xterm stopped the mousedown', async () => {
+    // The forced-local mousedown is answered by xterm's SelectionService with
+    // `stopPropagation()` — verified against xterm 6.0.0's handleMouseDown. A
+    // bubble-phase listener on this component's container therefore never ran,
+    // `selecting` stayed unarmed, and a completed drag selected on screen
+    // without ever reaching the clipboard — the copy-paste use case this pane
+    // exists for. The listener must be CAPTURE-phase to survive that.
+    const TerminalView = (await import('../../src/renderer/components/TerminalView.vue')).default;
+    const wrapper = mount(TerminalView, {
+      props: { connectionId: 'conn-1', sessionKey: 'main' },
+      attachTo: document.body,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Stand in for xterm's selection layer: a child whose mousedown handler
+    // stops propagation, exactly as SelectionService.handleMouseDown does on
+    // the forced path.
+    const child = document.createElement('div');
+    child.addEventListener('mousedown', (e) => e.stopPropagation());
+    (wrapper.element as HTMLElement).appendChild(child);
+
+    const mousedown = new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true });
+    child.dispatchEvent(mousedown);
+    // xterm holds the selection the drag produced by the time the button
+    // comes up.
+    fakeSelection = { has: true, text: 'DRAGGED CODE' };
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(writeText).toHaveBeenCalledWith('DRAGGED CODE');
+    wrapper.unmount();
+  });
+
+  it('does not copy on a mouse-up with no armed drag', async () => {
+    // The gate that keeps an unrelated click elsewhere from re-copying a
+    // stale selection — pinned here so the capture-phase change above cannot
+    // quietly become "copy on every mouse-up".
+    const TerminalView = (await import('../../src/renderer/components/TerminalView.vue')).default;
+    const wrapper = mount(TerminalView, {
+      props: { connectionId: 'conn-1', sessionKey: 'main' },
+      attachTo: document.body,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    fakeSelection = { has: true, text: 'STALE' };
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(writeText).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 });

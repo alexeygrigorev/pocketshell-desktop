@@ -785,6 +785,14 @@ async function pasteFromClipboard(): Promise<void> {
   }
 }
 
+/**
+ * Arms the mouse-up copy. Bound in the CAPTURE phase (see the addEventListener
+ * in onMounted): xterm's own mousedown handling on a forced-local selection —
+ * the plain-drag path terminalMouseSelection.ts installs — calls
+ * `stopPropagation()`, which would swallow a bubble-phase listener on this
+ * container and leave `selecting` unarmed, so a completed drag would select on
+ * screen and never reach the clipboard.
+ */
 function onTerminalMouseDown(e: MouseEvent): void {
   if (e.button === 0) selecting = true;
 }
@@ -1068,7 +1076,7 @@ onMounted(async () => {
       { expected: '_core._selectionService.shouldForceSelection' },
     );
   }
-  containerEl.value?.addEventListener('mousedown', onTerminalMouseDown);
+  containerEl.value?.addEventListener('mousedown', onTerminalMouseDown, true);
   containerEl.value?.addEventListener('contextmenu', onTerminalContextMenu);
   document.addEventListener('mouseup', onDocumentMouseUp);
 
@@ -1155,7 +1163,7 @@ function scheduleFit(): void {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWindowResize);
   document.removeEventListener('mouseup', onDocumentMouseUp);
-  containerEl.value?.removeEventListener('mousedown', onTerminalMouseDown);
+  containerEl.value?.removeEventListener('mousedown', onTerminalMouseDown, true);
   containerEl.value?.removeEventListener('contextmenu', onTerminalContextMenu);
   stopProbing();
   stallMonitor?.dispose();
